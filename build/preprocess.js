@@ -469,8 +469,8 @@ function offsetPolyline(points, side) {
     }
 
     let mult = 0;
-    if (side === 'E' || side === 'N') mult = 1;
-    else if (side === 'W' || side === 'S') mult = -1;
+    if (side === 'E' || side === 'N') mult = -1;
+    else if (side === 'W' || side === 'S') mult = 1;
 
     result.push([
       Math.round((valid[i][0] + nx * offset * mult) * 1e6) / 1e6,
