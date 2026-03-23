@@ -204,6 +204,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
       <div class="mode-tab" data-mode="free-today" onclick="setMode('free-today')">Free Today</div>
       <div class="mode-tab" data-mode="free-between" onclick="setMode('free-between')">Free Between</div>
       <div class="mode-tab" data-mode="smart-score" onclick="setMode('smart-score')">Smart Score</div>
+      <div class="mode-tab" data-mode="park-until" onclick="setMode('park-until')">Park Until</div>
     </div>
 
     <div class="asp-banner" id="aspBanner"></div>
@@ -233,10 +234,27 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
         </div>
         <div style="font-size:12px;color:#666">🔴 Bad → 🟡 OK → 🟢 Great</div>
       </div>
+      <!-- Park Until controls -->
+      <div id="parkUntilControls" style="display:none">
+        <div class="filter-row">
+          <div><label>Park until date</label><input type="date" id="puDate"></div>
+          <div><label>Park until time</label><input type="time" id="puTime" value="09:00"></div>
+        </div>
+        <div style="font-size:12px;color:#666;margin-top:4px">Shows blocks safe from <strong>now</strong> until target time</div>
+      </div>
     </div>
 
     <div class="legend" id="legend"></div>
     <div class="stats" id="stats"></div>
+
+    <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee">
+      <button id="parkCarBtn" onclick="parkCarHere()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
+      <div id="carInfoBar" style="display:none;margin-top:6px;padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:12px;color:#1e40af">
+        <div id="carInfoText"></div>
+        <button onclick="clearCarPin()" style="margin-top:4px;padding:4px 10px;border:1px solid #ddd;border-radius:6px;background:white;cursor:pointer;font-size:11px;color:#dc2626">Clear</button>
+      </div>
+      <div id="carParkUntilInfo" style="display:none;margin-top:6px;padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:12px;color:#166534"></div>
+    </div>
   </div>
 </div>
 
@@ -675,6 +693,15 @@ async function startMap(lat, lng, zoom) {
   document.getElementById('fbStartDate').value = dateStr;
   document.getElementById('fbEndDate').value = dateStr;
 
+  // Park Until defaults: tomorrow at 9:00 AM
+  const tomorrow = new Date(et);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  document.getElementById('puDate').value = toETDateStr(tomorrow);
+  document.getElementById('puTime').value = '09:00';
+
+  // Restore car pin from localStorage
+  restoreCarPin();
+
   // Start loading visible tiles
   loadVisibleTiles();
 
@@ -695,8 +722,10 @@ function setMode(mode) {
   const ftc = document.getElementById('freeTodayControls');
   const fbc = document.getElementById('freeBetweenControls');
   const ssc = document.getElementById('smartScoreControls');
+  const puc = document.getElementById('parkUntilControls');
 
   ssc.style.display = 'none';
+  puc.style.display = 'none';
   if (mode === 'signs') {
     fc.style.display = 'none';
   } else if (mode === 'free-today') {
@@ -712,6 +741,11 @@ function setMode(mode) {
     ftc.style.display = 'none';
     fbc.style.display = 'none';
     ssc.style.display = 'block';
+  } else if (mode === 'park-until') {
+    fc.style.display = 'block';
+    ftc.style.display = 'none';
+    fbc.style.display = 'none';
+    puc.style.display = 'block';
   }
   updateMap();
 }
@@ -749,7 +783,10 @@ function updateMap() {
     renderFreeBetweenMode();
   } else if (currentMode === 'smart-score') {
     renderSmartScoreMode();
+  } else if (currentMode === 'park-until') {
+    renderParkUntilMode();
   }
+  updateCarParkUntilInfo();
 }
 
 function renderSignsMode() {
@@ -1134,6 +1171,389 @@ function showBlockInfo(seg) {
   document.getElementById('infoPanel').style.display = 'block';
 }
 
+// ==== Park Until Mode ====
+function renderParkUntilMode() {
+  const puDateStr = document.getElementById('puDate').value;
+  const puTimeStr = document.getElementById('puTime').value;
+  if (!puDateStr || !puTimeStr) return;
+
+  const et = nowET();
+  const nowDay = et.getDay();
+  const nowMin = et.getHours() * 60 + et.getMinutes();
+  const nowDateStr = toETDateStr(et);
+
+  const [th, tm] = puTimeStr.split(':').map(Number);
+  const targetMin = th * 60 + tm;
+  const targetParts = puDateStr.split('-');
+  const targetDate = new Date(+targetParts[0], +targetParts[1] - 1, +targetParts[2]);
+  const targetDay = targetDate.getDay();
+
+  const targetTimeLabel = fmtTime(targetMin);
+  const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
+  // Collect all dates in the window for ASP suspension checking
+  const windowDates = [];
+  let walkDate = new Date(et.getFullYear(), et.getMonth(), et.getDate());
+  const endDateObj = new Date(targetDate);
+  while (walkDate <= endDateObj) {
+    windowDates.push({ dateStr: toETDateStr(walkDate), dayOfWeek: walkDate.getDay(), date: new Date(walkDate) });
+    walkDate.setDate(walkDate.getDate() + 1);
+  }
+
+  // Show ASP suspension banner if any date in window is suspended
+  const suspendedDates = windowDates.filter(d => isASPSuspended(d.dateStr));
+  const banner = document.getElementById('aspBanner');
+  if (suspendedDates.length > 0) {
+    banner.textContent = `🚫🧹 ASP Suspended on: ${suspendedDates.map(d => d.dateStr).join(', ')}`;
+    banner.style.display = 'block';
+  }
+
+  // Legend for park-until
+  const legendEl = document.getElementById('legend');
+  legendEl.innerHTML = [
+    { color: '#22c55e', label: 'Safe to park' },
+    { color: '#ef4444', label: 'Has restrictions' },
+  ].map(i => `<div class="legend-item"><div class="legend-dot" style="background:${i.color}"></div>${i.label}</div>`).join('');
+
+  let safeCount = 0, unsafeCount = 0;
+
+  segmentLayers.forEach(seg => {
+    const result = checkParkUntilSafety(seg, windowDates, nowDay, nowMin, targetDay, targetMin, nowDateStr);
+    seg._parkUntilResult = result;
+
+    if (result.safe) {
+      seg.layer.setStyle({ color: '#22c55e', weight: 5, opacity: 0.85 });
+      safeCount++;
+    } else {
+      const dominantCat = seg.dominantCategory || mostRestrictiveCategory(seg.rules);
+      const catColor = (CATEGORIES[dominantCat] || CATEGORIES.UNKNOWN).color;
+      seg.layer.setStyle({ color: catColor, weight: 5, opacity: 0.3 });
+      unsafeCount++;
+    }
+  });
+
+  const el = document.getElementById('stats');
+  el.innerHTML = `<span style="color:#22c55e;font-weight:600">${safeCount}</span> blocks safe until ${puDateStr} ${targetTimeLabel} | <span style="color:#ef4444;font-weight:600">${unsafeCount}</span> blocks have restrictions`;
+}
+
+function checkParkUntilSafety(seg, windowDates, nowDay, nowMin, targetDay, targetMin, nowDateStr) {
+  const rules = seg.rules || [];
+  if (rules.length === 0) return { safe: true, conflicts: [] };
+
+  const conflicts = [];
+
+  for (const rule of rules) {
+    const cat = rule.category;
+
+    if (isASPCategory(cat)) {
+      // Check each date in window for ASP activity
+      for (const wd of windowDates) {
+        if (!isASPDayForCategory(cat, wd.dayOfWeek)) continue;
+        if (isASPSuspended(wd.dateStr)) continue;
+
+        // Determine time window for this specific day
+        let dayStartMin = 0, dayEndMin = 1440;
+        if (wd === windowDates[0]) dayStartMin = nowMin; // first day: from now
+        if (wd === windowDates[windowDates.length - 1]) dayEndMin = targetMin; // last day: until target
+
+        // Check if rule's time ranges overlap this day's window
+        if (rule.timeRanges && rule.timeRanges.length > 0) {
+          for (const tr of rule.timeRanges) {
+            let ruleActive = false;
+            if (tr.start < tr.end) {
+              ruleActive = tr.start < dayEndMin && tr.end > dayStartMin;
+            } else {
+              // Overnight range
+              ruleActive = (tr.start < dayEndMin) || (tr.end > dayStartMin);
+            }
+            if (ruleActive) {
+              const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              conflicts.push({
+                rule: CATEGORIES[cat]?.label || cat,
+                day: dayNames[wd.dayOfWeek],
+                date: wd.dateStr,
+                time: `${fmtTime(tr.start)}-${fmtTime(tr.end)}`
+              });
+            }
+          }
+        } else if (rule.anytime) {
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          conflicts.push({ rule: CATEGORIES[cat]?.label || cat, day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: 'All day' });
+        } else {
+          // Has days but no time ranges = all day on those days
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          conflicts.push({ rule: CATEGORIES[cat]?.label || cat, day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: 'All day' });
+        }
+      }
+    } else if (cat === 'METERED') {
+      // Check if metered hours overlap
+      for (const wd of windowDates) {
+        let dayStartMin = 0, dayEndMin = 1440;
+        if (wd === windowDates[0]) dayStartMin = nowMin;
+        if (wd === windowDates[windowDates.length - 1]) dayEndMin = targetMin;
+
+        if (rule.anytime) {
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          conflicts.push({ rule: 'Metered', day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: 'All day', metered: true });
+          continue;
+        }
+        if (!rule.days || !rule.days.includes(wd.dayOfWeek)) continue;
+        if (rule.timeRanges && rule.timeRanges.length > 0) {
+          for (const tr of rule.timeRanges) {
+            let overlap = false;
+            if (tr.start < tr.end) {
+              overlap = tr.start < dayEndMin && tr.end > dayStartMin;
+            } else {
+              overlap = (tr.start < dayEndMin) || (tr.end > dayStartMin);
+            }
+            if (overlap) {
+              const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              conflicts.push({ rule: 'Metered', day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: `${fmtTime(tr.start)}-${fmtTime(tr.end)}`, metered: true });
+            }
+          }
+        } else {
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          conflicts.push({ rule: 'Metered', day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: 'All day', metered: true });
+        }
+      }
+    } else if (['NO_PARKING','NO_STANDING','TRUCK_LOADING','SPECIAL'].includes(cat)) {
+      for (const wd of windowDates) {
+        let dayStartMin = 0, dayEndMin = 1440;
+        if (wd === windowDates[0]) dayStartMin = nowMin;
+        if (wd === windowDates[windowDates.length - 1]) dayEndMin = targetMin;
+
+        if (rule.anytime) {
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          conflicts.push({ rule: CATEGORIES[cat]?.label || cat, day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: 'All day' });
+          continue;
+        }
+        if (!rule.days || !rule.days.includes(wd.dayOfWeek)) continue;
+        if (rule.timeRanges && rule.timeRanges.length > 0) {
+          for (const tr of rule.timeRanges) {
+            let overlap = false;
+            if (tr.start < tr.end) {
+              overlap = tr.start < dayEndMin && tr.end > dayStartMin;
+            } else {
+              overlap = (tr.start < dayEndMin) || (tr.end > dayStartMin);
+            }
+            if (overlap) {
+              const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+              conflicts.push({ rule: CATEGORIES[cat]?.label || cat, day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: `${fmtTime(tr.start)}-${fmtTime(tr.end)}` });
+            }
+          }
+        } else {
+          const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+          conflicts.push({ rule: CATEGORIES[cat]?.label || cat, day: dayNames[wd.dayOfWeek], date: wd.dateStr, time: 'All day' });
+        }
+      }
+    }
+  }
+
+  // For metered-only conflicts (no other restrictions), treat as "has restrictions" but show in blue
+  const nonMeteredConflicts = conflicts.filter(c => !c.metered);
+  if (nonMeteredConflicts.length === 0 && conflicts.length > 0) {
+    // Only metered conflicts
+    return { safe: false, conflicts, meteredOnly: true };
+  }
+
+  return { safe: conflicts.length === 0, conflicts };
+}
+
+// ==== My Car Pin ====
+let carMarker = null;
+
+function createCarIcon() {
+  return L.divIcon({
+    html: '<div style="font-size:24px;line-height:30px;text-align:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3))">🚗</div>',
+    className: '',
+    iconSize: [30, 30],
+    iconAnchor: [15, 15]
+  });
+}
+
+// Create a high z-index pane for the car marker
+map.createPane('carPin');
+map.getPane('carPin').style.zIndex = 700;
+
+function addCarMarker(lat, lng) {
+  if (carMarker) {
+    map.removeLayer(carMarker);
+  }
+  carMarker = L.marker([lat, lng], {
+    icon: createCarIcon(),
+    draggable: true,
+    pane: 'carPin'
+  }).addTo(map);
+
+  carMarker.on('dragend', function() {
+    const pos = carMarker.getLatLng();
+    localStorage.setItem('parkmap_car_lat', pos.lat);
+    localStorage.setItem('parkmap_car_lng', pos.lng);
+    updateCarInfoBar(pos.lat, pos.lng);
+    updateCarParkUntilInfo();
+  });
+
+  updateCarInfoBar(lat, lng);
+}
+
+function parkCarHere() {
+  const center = map.getCenter();
+  const lat = center.lat;
+  const lng = center.lng;
+  localStorage.setItem('parkmap_car_lat', lat);
+  localStorage.setItem('parkmap_car_lng', lng);
+  addCarMarker(lat, lng);
+  updateCarParkUntilInfo();
+}
+
+function clearCarPin() {
+  if (carMarker) {
+    map.removeLayer(carMarker);
+    carMarker = null;
+  }
+  localStorage.removeItem('parkmap_car_lat');
+  localStorage.removeItem('parkmap_car_lng');
+  document.getElementById('carInfoBar').style.display = 'none';
+  document.getElementById('carParkUntilInfo').style.display = 'none';
+}
+
+function updateCarInfoBar(lat, lng) {
+  document.getElementById('carInfoText').textContent = `Your car: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+  document.getElementById('carInfoBar').style.display = 'block';
+}
+
+function restoreCarPin() {
+  const lat = parseFloat(localStorage.getItem('parkmap_car_lat'));
+  const lng = parseFloat(localStorage.getItem('parkmap_car_lng'));
+  if (!isNaN(lat) && !isNaN(lng)) {
+    addCarMarker(lat, lng);
+  }
+}
+
+function findClosestSegment(lat, lng) {
+  let closest = null;
+  let closestDist = Infinity;
+  for (const seg of segmentLayers) {
+    const latlngs = seg.layer.getLatLngs();
+    for (const pt of latlngs) {
+      const d = (pt.lat - lat) ** 2 + (pt.lng - lng) ** 2;
+      if (d < closestDist) {
+        closestDist = d;
+        closest = seg;
+      }
+    }
+  }
+  return closest;
+}
+
+function updateCarParkUntilInfo() {
+  const el = document.getElementById('carParkUntilInfo');
+  if (currentMode !== 'park-until' || !carMarker) {
+    el.style.display = 'none';
+    return;
+  }
+
+  const pos = carMarker.getLatLng();
+  const seg = findClosestSegment(pos.lat, pos.lng);
+  if (!seg) {
+    el.style.display = 'none';
+    return;
+  }
+
+  const puDateStr = document.getElementById('puDate').value;
+  const puTimeStr = document.getElementById('puTime').value;
+  const [th, tm] = (puTimeStr || '09:00').split(':').map(Number);
+  const targetTimeLabel = fmtTime(th * 60 + tm);
+
+  const result = seg._parkUntilResult;
+  if (!result) {
+    el.style.display = 'none';
+    return;
+  }
+
+  const blockLabel = seg.blockKey;
+  if (result.safe) {
+    el.innerHTML = `🚗 Your car is on <strong>${blockLabel}</strong> — <span style="color:#16a34a;font-weight:600">✅ Safe</span> until ${puDateStr} ${targetTimeLabel}`;
+  } else {
+    const firstConflict = result.conflicts[0];
+    el.innerHTML = `🚗 Your car is on <strong>${blockLabel}</strong> — <span style="color:#dc2626;font-weight:600">⚠️ Unsafe</span>: ${firstConflict.rule} on ${firstConflict.day} ${firstConflict.date} at ${firstConflict.time}`;
+  }
+  el.style.display = 'block';
+}
+
+// ==== Park Until Info Panel ====
+const _origShowBlockInfo = showBlockInfo;
+
+// Override showBlockInfo to add Park Until info
+showBlockInfo = function(seg) {
+  // Build standard info
+  const sideLabel = { E: 'East', W: 'West', N: 'North', S: 'South' }[seg.side] || seg.side;
+  let html = `<h3>${seg.blockKey}</h3>`;
+  html += `<div style="margin-bottom:8px">Side: <strong>${sideLabel}</strong></div>`;
+
+  // Smart Score info
+  if (currentMode === 'smart-score' && seg._smartScore) {
+    const ss = seg._smartScore;
+    const color = scoreToColor(ss.score);
+    html += `<div style="margin-bottom:8px;padding:8px;background:${color}15;border:1px solid ${color}40;border-radius:6px">`;
+    html += `<div style="font-size:16px;font-weight:700;color:${color}">Score: ${ss.score}/100</div>`;
+    html += `<div style="font-size:12px;color:#555;margin-top:2px">${ss.reason}</div>`;
+    html += `</div>`;
+  }
+
+  // Park Until info
+  if (currentMode === 'park-until' && seg._parkUntilResult) {
+    const pu = seg._parkUntilResult;
+    const puDateStr = document.getElementById('puDate').value;
+    const puTimeStr = document.getElementById('puTime').value;
+    const [th, tm] = (puTimeStr || '09:00').split(':').map(Number);
+    const targetTimeLabel = fmtTime(th * 60 + tm);
+
+    if (pu.safe) {
+      html += `<div style="margin-bottom:8px;padding:8px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px">`;
+      html += `<div style="font-size:14px;font-weight:700;color:#16a34a">✅ Safe to park until ${puDateStr} ${targetTimeLabel}</div>`;
+      html += `</div>`;
+    } else {
+      html += `<div style="margin-bottom:8px;padding:8px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px">`;
+      html += `<div style="font-size:14px;font-weight:700;color:#dc2626">⚠️ Restrictions active before ${puDateStr} ${targetTimeLabel}</div>`;
+      html += `<div style="font-size:12px;color:#555;margin-top:4px">`;
+      pu.conflicts.forEach(c => {
+        html += `<div style="padding:2px 0">• ${c.rule} on ${c.day} ${c.date} at ${c.time}</div>`;
+      });
+      html += `</div></div>`;
+    }
+  }
+
+  const rules = seg.rules || [];
+  if (rules.length === 0) {
+    html += '<div style="color:#999">No sign data for this zone</div>';
+  } else {
+    rules.forEach(r => {
+      const info = CATEGORIES[r.category] || CATEGORIES.UNKNOWN;
+      html += `<div class="sign-rule">`;
+      html += `<span class="sign-cat" style="background:${info.color}">${info.label}</span>`;
+
+      const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      let schedStr = '';
+      if (r.anytime) {
+        schedStr = 'All days, all times';
+      } else {
+        if (r.days && r.days.length === 7) schedStr = 'Daily';
+        else if (r.days && r.days.length > 0) schedStr = r.days.map(d => dayNames[d]).join('/');
+        if (r.timeRanges && r.timeRanges.length > 0) {
+          schedStr += ' ' + r.timeRanges.map(tr => `${fmtTime(tr.start)}-${fmtTime(tr.end)}`).join(', ');
+        }
+      }
+      if (schedStr) html += `<br><span style="font-size:12px">${schedStr}</span>`;
+      if (r.description) html += `<div class="sign-raw">${r.description}</div>`;
+      html += `</div>`;
+    });
+  }
+
+  document.getElementById('infoPanelContent').innerHTML = html;
+  document.getElementById('infoPanel').style.display = 'block';
+};
+
 // ==== Initialization ====
 async function init() {
   // Load tile index and ASP suspensions in parallel
@@ -1154,6 +1574,8 @@ document.getElementById('fbStartDate').addEventListener('change', () => { if (cu
 document.getElementById('fbEndDate').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
 document.getElementById('fbStartTime').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
 document.getElementById('fbEndTime').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
+document.getElementById('puDate').addEventListener('change', () => { if (currentMode === 'park-until') updateMap(); });
+document.getElementById('puTime').addEventListener('change', () => { if (currentMode === 'park-until') updateMap(); });
 
 init();
 
