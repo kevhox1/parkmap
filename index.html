@@ -1,0 +1,1618 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ParkMap - Manhattan Parking</title>
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#2563eb">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/proj4js/2.9.0/proj4.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+#map { width: 100%; height: 100vh; user-select: none; -webkit-user-select: none; }
+
+.control-panel {
+  position: absolute; top: 10px; right: 10px; z-index: 1000;
+  background: white; border-radius: 12px; padding: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  max-width: 320px; max-height: calc(100vh - 20px);
+  overflow-y: auto; font-size: 14px;
+}
+.control-panel h2 { font-size: 18px; margin-bottom: 2px; }
+.control-panel .subtitle { color: #666; font-size: 12px; margin-bottom: 12px; }
+
+.mode-tabs {
+  display: flex; gap: 4px; margin-bottom: 12px;
+}
+.mode-tab {
+  flex: 1; padding: 7px 6px; border: 1px solid #ddd; border-radius: 8px;
+  background: #f9fafb; cursor: pointer; font-size: 12px; font-weight: 500;
+  text-align: center; transition: all 0.15s; min-height: 44px;
+  display: flex; align-items: center; justify-content: center;
+}
+.mode-tab.active { background: #2563eb; color: white; border-color: #2563eb; }
+.mode-tab:hover:not(.active) { background: #e5e7eb; }
+
+.filter-controls { margin-bottom: 12px; }
+.filter-controls label { display: block; font-size: 12px; font-weight: 500; color: #374151; margin-bottom: 4px; }
+.filter-controls input, .filter-controls select {
+  padding: 6px 10px; border: 1px solid #ddd; border-radius: 6px;
+  font-size: 13px; width: 100%; min-height: 44px;
+}
+.filter-row { display: flex; gap: 8px; margin-bottom: 8px; }
+.filter-row > div { flex: 1; }
+
+.asp-banner {
+  background: #fef3c7; border: 1px solid #f59e0b; border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 10px; font-size: 12px; font-weight: 600;
+  color: #92400e; display: none;
+}
+
+.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.legend-item { display: flex; align-items: center; gap: 4px; font-size: 11px; }
+.legend-dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15); flex-shrink: 0; }
+
+.stats { margin-top: 10px; font-size: 12px; color: #555; line-height: 1.5; }
+
+.info-panel {
+  position: absolute; bottom: 20px; left: 20px; z-index: 1000;
+  background: white; border-radius: 12px; padding: 16px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15); max-width: 420px;
+  max-height: 50vh; overflow-y: auto; display: none; font-size: 13px;
+}
+.info-panel h3 { font-size: 15px; margin-bottom: 8px; }
+.info-panel .close-btn {
+  position: absolute; top: 8px; right: 12px; cursor: pointer;
+  font-size: 18px; color: #999; background: none; border: none;
+}
+.sign-rule { padding: 6px 0; border-bottom: 1px solid #eee; }
+.sign-rule:last-child { border-bottom: none; }
+.sign-cat { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; color: white; }
+.sign-raw { font-size: 11px; color: #999; margin-top: 2px; word-break: break-word; }
+
+.loading-overlay {
+  position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(255,255,255,0.9); z-index: 2000;
+  display: flex; align-items: center; justify-content: center;
+  flex-direction: column; gap: 12px;
+}
+.loading-overlay .spinner {
+  width: 40px; height: 40px; border: 4px solid #e5e7eb;
+  border-top-color: #2563eb; border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.error-box {
+  background: #fef2f2; border: 1px solid #fecaca; border-radius: 8px;
+  padding: 16px; color: #991b1b; max-width: 500px; text-align: center;
+}
+
+.panel-toggle {
+  position: absolute; z-index: 1001;
+  width: 44px; height: 44px; border-radius: 10px;
+  background: white; border: none; box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+  font-size: 20px; cursor: pointer; display: flex;
+  align-items: center; justify-content: center;
+  top: 10px; right: 10px;
+}
+.panel-toggle:active { background: #f3f4f6; }
+.control-panel.collapsed .panel-body { display: none; }
+
+.close-btn { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+
+@media (max-width: 480px) {
+  .control-panel { max-width: calc(100vw - 20px); right: 5px; top: 5px; padding: 12px; }
+  .info-panel { max-width: calc(100vw - 20px); left: 5px; bottom: 5px; }
+}
+
+@media (max-width: 399px) {
+  .control-panel {
+    position: absolute; top: auto; bottom: 0; left: 0; right: 0;
+    max-width: 100%; border-radius: 16px 16px 0 0;
+    max-height: 55vh; padding: 12px 14px;
+  }
+  .panel-toggle {
+    top: auto; bottom: calc(55vh + 8px); right: 10px;
+  }
+  .control-panel.collapsed + .panel-toggle,
+  .control-panel.collapsed ~ .panel-toggle {
+    bottom: 10px;
+  }
+  .info-panel {
+    bottom: auto; top: 10px; left: 5px; right: 5px;
+    max-width: 100%; max-height: 40vh;
+  }
+}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="control-panel" id="controlPanel">
+  <div style="display:flex;align-items:center;justify-content:space-between">
+    <div>
+      <h2>🅿️ ParkMap</h2>
+      <div class="subtitle">Manhattan parking signs</div>
+    </div>
+    <button id="panelToggle" onclick="togglePanel()" aria-label="Toggle panel" style="width:44px;height:44px;border-radius:10px;background:#f3f4f6;border:none;font-size:16px;cursor:pointer;flex-shrink:0;">▼</button>
+  </div>
+
+  <div class="panel-body" id="panelBody">
+    <div class="mode-tabs">
+      <div class="mode-tab active" data-mode="signs" onclick="setMode('signs')">Signs</div>
+      <div class="mode-tab" data-mode="free-today" onclick="setMode('free-today')">Free Today</div>
+      <div class="mode-tab" data-mode="free-between" onclick="setMode('free-between')">Free Between</div>
+      <div class="mode-tab" data-mode="smart-score" onclick="setMode('smart-score')">Smart Score</div>
+    </div>
+
+    <div class="asp-banner" id="aspBanner"></div>
+
+    <div class="filter-controls" id="filterControls" style="display:none">
+      <!-- Free Today controls -->
+      <div id="freeTodayControls" style="display:none">
+        <label>Date (ET)</label>
+        <input type="date" id="ftDate">
+      </div>
+      <!-- Free Between controls -->
+      <div id="freeBetweenControls" style="display:none">
+        <div class="filter-row">
+          <div><label>Start Date</label><input type="date" id="fbStartDate"></div>
+          <div><label>Start Time</label><input type="time" id="fbStartTime" value="08:00"></div>
+        </div>
+        <div class="filter-row">
+          <div><label>End Date</label><input type="date" id="fbEndDate"></div>
+          <div><label>End Time</label><input type="time" id="fbEndTime" value="18:00"></div>
+        </div>
+      </div>
+      <!-- Smart Score controls -->
+      <div id="smartScoreControls" style="display:none">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <div style="flex:1;font-size:12px;color:#374151" id="smartScoreTime">Scoring for: ...</div>
+          <button onclick="updateMap()" style="padding:4px 10px;border:1px solid #ddd;border-radius:6px;background:#f9fafb;cursor:pointer;font-size:12px;min-height:44px">Refresh</button>
+        </div>
+        <div style="font-size:12px;color:#666">🔴 Bad → 🟡 OK → 🟢 Great</div>
+      </div>
+    </div>
+
+    <div class="legend" id="legend"></div>
+    <div class="stats" id="stats"></div>
+  </div>
+</div>
+
+<div class="info-panel" id="infoPanel">
+  <button class="close-btn" onclick="document.getElementById('infoPanel').style.display='none'">&times;</button>
+  <div id="infoPanelContent"></div>
+</div>
+
+<div class="loading-overlay" id="loading">
+  <div class="spinner"></div>
+  <div id="loadingText">Loading parking data...</div>
+</div>
+
+<script>
+// ==== Constants ====
+const SP_BOUNDS = { xMin: 979000, xMax: 1010000, yMin: 194000, yMax: 259000 };
+
+const CATEGORIES = {
+  ASP_MON_THU:       { label: 'ASP Mon/Thu',       color: '#8b5cf6', priority: 7 },
+  ASP_TUE_FRI:       { label: 'ASP Tue/Fri',       color: '#f97316', priority: 8 },
+  ASP_OVERNIGHT_MWF: { label: 'ASP Night MWF',     color: '#ec4899', priority: 9 },
+  ASP_OVERNIGHT_TTHS:{ label: 'ASP Night TThS',    color: '#06b6d4', priority: 10 },
+  ASP_DAILY:         { label: 'ASP Daily',          color: '#eab308', priority: 6 },
+  METERED:           { label: 'Metered',            color: '#3b82f6', priority: 5 },
+  TRUCK_LOADING:     { label: 'Truck Loading',      color: '#92400e', priority: 4 },
+  NO_PARKING:        { label: 'No Parking',         color: '#ef4444', priority: 2 },
+  NO_STANDING:       { label: 'No Standing/Stop',   color: '#7f1d1d', priority: 1 },
+  SPECIAL:           { label: 'Special',            color: '#1f2937', priority: 3 },
+  FREE:              { label: 'Free',               color: '#22c55e', priority: 99 },
+  UNKNOWN:           { label: 'Unknown',            color: '#d1d5db', priority: 11 },
+};
+
+// ==== Proj4 ====
+proj4.defs('NYSP', '+proj=lcc +lat_1=41.03333333333333 +lat_2=40.66666666666666 +lat_0=40.16666666666666 +lon_0=-74 +x_0=300000.0000000001 +y_0=0 +ellps=GRS80 +datum=NAD83 +to_meter=0.3048006096012192 +no_defs');
+function spToLatLng(x, y) {
+  const [lng, lat] = proj4('NYSP', 'EPSG:4326', [+x, +y]);
+  return [lat, lng];
+}
+
+// ==== Map ====
+const map = L.map('map', { preferCanvas: true }).setView([40.7831, -73.9712], 13);
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+  attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
+}).addTo(map);
+
+// ==== State ====
+let currentMode = 'signs';
+let segmentLayers = [];
+let aspSuspensions = null; // cached
+
+// ==== ET helpers ====
+function nowET() {
+  return new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
+}
+function toETDateStr(d) {
+  // d is a Date interpreted as ET already
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+// ==== Sign Classification ====
+const SKIP_PATTERNS = ['LOCATOR NUMBER','LOCATION PANEL','MTA BUS','STREET NAME','ONE WAY','SPEED LIMIT','DEAD END','CONSTRUCTION'];
+
+function classifySign(desc) {
+  if (!desc) return null;
+  const d = desc.toUpperCase();
+
+  // Skip informational signs
+  for (const p of SKIP_PATTERNS) { if (d.includes(p)) return null; }
+
+  const hasBroom = d.includes('BROOM');
+  const hasMidnight = d.includes('MIDNIGHT');
+
+  if (hasBroom) {
+    // Parse days mentioned in the description
+    const dayFlags = {
+      mon: /MONDAY|MON\b/.test(d), tue: /TUESDAY|TUE\b/.test(d),
+      wed: /WEDNESDAY|WED\b/.test(d), thu: /THURSDAY|THU\b/.test(d),
+      fri: /FRIDAY|FRI\b/.test(d), sat: /SATURDAY|SAT\b/.test(d),
+      sun: /SUNDAY|SUN\b/.test(d)
+    };
+    const hasMonFri = /MON(DAY)?\s*(THRU|THROUGH|-|&)\s*FRI(DAY)?/i.test(d);
+    const hasMonSat = /MON(DAY)?\s*(THRU|THROUGH|-|&)\s*SAT(URDAY)?/i.test(d);
+
+    if (hasMidnight) {
+      // Overnight ASP
+      if (dayFlags.mon || dayFlags.wed || dayFlags.fri) return 'ASP_OVERNIGHT_MWF';
+      if (dayFlags.tue || dayFlags.thu || dayFlags.sat) return 'ASP_OVERNIGHT_TTHS';
+      return 'ASP_DAILY';
+    }
+
+    // Daytime ASP
+    if ((dayFlags.mon && dayFlags.thu) || (dayFlags.mon || dayFlags.thu)) {
+      if (!dayFlags.tue && !dayFlags.fri && !hasMonFri && !hasMonSat) return 'ASP_MON_THU';
+    }
+    if ((dayFlags.tue && dayFlags.fri) || (dayFlags.tue || dayFlags.fri)) {
+      if (!dayFlags.mon && !dayFlags.thu && !hasMonFri && !hasMonSat) return 'ASP_TUE_FRI';
+    }
+    if (hasMonFri || hasMonSat) return 'ASP_DAILY';
+    // Fallback: if days don't match a specific pattern
+    return 'ASP_DAILY';
+  }
+
+  if (d.includes('NO STOPPING') || d.includes('NO STANDING')) return 'NO_STANDING';
+  if (d.includes('NO PARKING')) return 'NO_PARKING';
+  if (d.includes('TRUCK LOADING')) return 'TRUCK_LOADING';
+  if (d.includes('AMBULANCE') || d.includes('FIRE DEPT') || d.includes('DOCTOR LICENSE') || d.includes('AVO')) return 'SPECIAL';
+  if ((d.includes('HMP') || d.includes('MUNI METER') || d.includes('METER')) && !d.includes('METERS ARE NOT IN EFFECT')) return 'METERED';
+
+  return 'UNKNOWN';
+}
+
+// ==== Parse sign schedule (days & times) ====
+function parseSchedule(desc) {
+  if (!desc) return { days: [], timeRanges: [], anytime: false };
+  const d = desc.toUpperCase();
+  const result = { days: [], timeRanges: [], anytime: false, arrow: null };
+
+  // Arrow
+  if (d.includes('<->') || d.includes('<- ->')) result.arrow = 'both';
+  else if (d.includes('-->')) result.arrow = 'towards';
+  else if (d.includes('<--')) result.arrow = 'away';
+
+  // Anytime checks
+  if (d.includes('ANYTIME') || d.includes('AT ALL TIMES')) {
+    result.anytime = true;
+    result.days = [0,1,2,3,4,5,6];
+    return result;
+  }
+
+  // Day ranges
+  const hasMonFri = /MON(DAY)?\s*(THRU|THROUGH|-)\s*FRI(DAY)?/i.test(d);
+  const hasMonSat = /MON(DAY)?\s*(THRU|THROUGH|-)\s*SAT(URDAY)?/i.test(d);
+
+  if (hasMonSat) result.days = [1,2,3,4,5,6];
+  else if (hasMonFri) result.days = [1,2,3,4,5];
+  else {
+    // Remove EXCEPT phrases before scanning
+    const dClean = d.replace(/EXCEPT\s+(SUNDAY|SATURDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY)/gi, '');
+    const dayMap = { MONDAY:1, TUESDAY:2, WEDNESDAY:3, THURSDAY:4, FRIDAY:5, SATURDAY:6, SUNDAY:0 };
+    for (const [name, num] of Object.entries(dayMap)) {
+      if (dClean.includes(name)) result.days.push(num);
+    }
+  }
+
+  // Exceptions
+  const exceptMatch = d.match(/EXCEPT\s+(SUNDAY|SATURDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY)/gi);
+  if (exceptMatch) {
+    const dayMap = { MONDAY:1, TUESDAY:2, WEDNESDAY:3, THURSDAY:4, FRIDAY:5, SATURDAY:6, SUNDAY:0 };
+    exceptMatch.forEach(m => {
+      const day = m.replace(/EXCEPT\s+/i, '').trim().toUpperCase();
+      if (dayMap[day] !== undefined) result.days = result.days.filter(x => x !== dayMap[day]);
+    });
+  }
+
+  // If no days found, assume Mon-Sat (common default for NYC signs)
+  if (result.days.length === 0) result.days = [1,2,3,4,5,6];
+
+  // Parse times
+  const timeRe = /(\d{1,2}(?::\d{2})?\s*(?:AM|PM)|MIDNIGHT|NOON)[\s-]+(\d{1,2}(?::\d{2})?\s*(?:AM|PM)|MIDNIGHT|NOON)/gi;
+  let tm;
+  while ((tm = timeRe.exec(d)) !== null) {
+    const start = parseTimeStr(tm[1]);
+    const end = parseTimeStr(tm[2]);
+    if (start !== null && end !== null) result.timeRanges.push({ start, end });
+  }
+
+  return result;
+}
+
+function parseTimeStr(s) {
+  if (!s) return null;
+  const t = s.toUpperCase().trim();
+  if (t === 'MIDNIGHT') return 0;
+  if (t === 'NOON') return 720;
+  const m = t.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)/);
+  if (!m) return null;
+  let h = parseInt(m[1]);
+  const min = m[2] ? parseInt(m[2]) : 0;
+  if (m[3] === 'PM' && h !== 12) h += 12;
+  if (m[3] === 'AM' && h === 12) h = 0;
+  return h * 60 + min;
+}
+
+function fmtTime(mins) {
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  if (mins === 0) return '12AM';
+  const ampm = h >= 12 ? 'PM' : 'AM';
+  const dh = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${dh}${m > 0 ? ':' + String(m).padStart(2, '0') : ''}${ampm}`;
+}
+
+// ==== ASP active day check ====
+function isASPDayForCategory(cat, dayOfWeek) {
+  // dayOfWeek: 0=Sun ... 6=Sat
+  switch (cat) {
+    case 'ASP_MON_THU': return dayOfWeek === 1 || dayOfWeek === 4;
+    case 'ASP_TUE_FRI': return dayOfWeek === 2 || dayOfWeek === 5;
+    case 'ASP_OVERNIGHT_MWF': return dayOfWeek === 1 || dayOfWeek === 3 || dayOfWeek === 5;
+    case 'ASP_OVERNIGHT_TTHS': return dayOfWeek === 2 || dayOfWeek === 4 || dayOfWeek === 6;
+    case 'ASP_DAILY': return dayOfWeek >= 1 && dayOfWeek <= 6; // not Sunday
+    default: return false;
+  }
+}
+
+function isASPCategory(cat) {
+  return cat && cat.startsWith('ASP_');
+}
+
+// ==== Schedule active check ====
+function isScheduleActiveAt(schedule, dayOfWeek, minuteOfDay) {
+  if (schedule.anytime) return true;
+  if (!schedule.days.includes(dayOfWeek)) return false;
+  if (schedule.timeRanges.length === 0) return true; // all day
+  return schedule.timeRanges.some(tr => {
+    if (tr.start < tr.end) return minuteOfDay >= tr.start && minuteOfDay < tr.end;
+    return minuteOfDay >= tr.start || minuteOfDay < tr.end; // wraps midnight
+  });
+}
+
+// Check if schedule is active at ANY point during a time window (possibly spanning midnight)
+function isScheduleActiveDuring(schedule, startDay, startMin, endDay, endMin) {
+  if (schedule.anytime) return true;
+
+  // Simple case: same day
+  if (startDay === endDay && startMin <= endMin) {
+    return isActiveInDayWindow(schedule, startDay, startMin, endMin);
+  }
+
+  // Spans midnight or multiple days
+  // Check from startMin to end of startDay
+  if (isActiveInDayWindow(schedule, startDay, startMin, 1440)) return true;
+  // Check any full intermediate days
+  let d = (startDay + 1) % 7;
+  while (d !== endDay) {
+    if (isActiveInDayWindow(schedule, d, 0, 1440)) return true;
+    d = (d + 1) % 7;
+  }
+  // Check from start of endDay to endMin
+  if (isActiveInDayWindow(schedule, endDay, 0, endMin)) return true;
+
+  return false;
+}
+
+function isActiveInDayWindow(schedule, dayOfWeek, winStart, winEnd) {
+  if (schedule.anytime) return true;
+  if (!schedule.days.includes(dayOfWeek)) return false;
+  if (schedule.timeRanges.length === 0) return true;
+  return schedule.timeRanges.some(tr => {
+    // Rule active from tr.start to tr.end
+    if (tr.start < tr.end) {
+      // Normal range: overlap if ruleStart < winEnd && ruleEnd > winStart
+      return tr.start < winEnd && tr.end > winStart;
+    } else {
+      // Wraps midnight (e.g. 11PM-3AM): active from tr.start..1440 and 0..tr.end
+      return (tr.start < winEnd) || (tr.end > winStart);
+    }
+  });
+}
+
+// Check if ASP is active during a window (considering suspension)
+function isASPActiveDuring(cat, startDay, startMin, endDay, endMin) {
+  // Same-day case
+  if (startDay === endDay && startMin <= endMin) {
+    return isASPDayForCategory(cat, startDay);
+  }
+  // Multi-day: check each day in the window
+  let d = startDay;
+  const maxIter = 8;
+  for (let i = 0; i < maxIter; i++) {
+    if (isASPDayForCategory(cat, d)) return true;
+    if (d === endDay) break;
+    d = (d + 1) % 7;
+  }
+  return false;
+}
+
+// ==== ASP Suspension ====
+async function loadASPSuspensions() {
+  try {
+    const resp = await fetch('https://data.cityofnewyork.us/resource/4n2j-ut8i.json?$limit=5000&$order=date DESC');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    aspSuspensions = {};
+    data.forEach(row => {
+      // The date field: "2024-01-15T00:00:00.000"
+      const dateStr = (row.date || '').substring(0, 10);
+      if (dateStr) {
+        aspSuspensions[dateStr] = {
+          suspended: (row.status || '').toUpperCase() === 'SUSPENDED',
+          reason: row.occasion || ''
+        };
+      }
+    });
+    console.log('ASP suspensions loaded:', Object.keys(aspSuspensions).length, 'dates');
+  } catch (e) {
+    console.error('Failed to load ASP suspensions:', e);
+    aspSuspensions = {};
+  }
+}
+
+function isASPSuspended(dateStr) {
+  if (!aspSuspensions || !aspSuspensions[dateStr]) return false;
+  return aspSuspensions[dateStr].suspended;
+}
+
+// ==== Most restrictive category for a set of rules (Signs mode) ====
+function mostRestrictiveCategory(ruleSet) {
+  if (!ruleSet || ruleSet.length === 0) return 'UNKNOWN';
+  let best = null;
+  let bestPriority = 999;
+  for (const r of ruleSet) {
+    const cat = r.category;
+    if (!cat || !CATEGORIES[cat]) continue;
+    if (CATEGORIES[cat].priority < bestPriority) {
+      bestPriority = CATEGORIES[cat].priority;
+      best = cat;
+    }
+  }
+  return best || 'UNKNOWN';
+}
+
+// ==== OSM Geometry Functions ====
+// Embedded real street centerlines from OpenStreetMap (Overpass API)
+// Each street has arrays of [lat, lng] polyline chains
+
+// Name mapping: NYC parking data (UPPER) → OSM (Title Case)
+const NYC_TO_OSM = {
+  'BOWERY': 'Bowery', 'CHRYSTIE STREET': 'Chrystie Street',
+  'ELIZABETH STREET': 'Elizabeth Street', 'MOTT STREET': 'Mott Street',
+  'MULBERRY STREET': 'Mulberry Street', 'EAST HOUSTON STREET': 'East Houston Street',
+  'PRINCE STREET': 'Prince Street', 'SPRING STREET': 'Spring Street',
+  'KENMARE STREET': 'Kenmare Street', 'JERSEY STREET': 'Jersey Street',
+  'LAFAYETTE STREET': 'Lafayette Street', 'BLEECKER STREET': 'Bleecker Street',
+  'GREAT JONES STREET': 'Great Jones Street', 'BOND STREET': 'Bond Street',
+  'BROOME STREET': 'Broome Street', 'BROADWAY': 'Broadway',
+  'CENTRE STREET': 'Centre Street', '2ND AVENUE': '2nd Avenue',
+  '3RD AVENUE': '3rd Avenue', 'COOPER SQUARE': 'Cooper Square',
+  'CROSBY STREET': 'Crosby Street', 'DELANCEY STREET': 'Delancey Street',
+  'CLEVELAND PLACE': 'Cleveland Place', 'CENTRE MARKET PLACE': 'Centre Market Place',
+  'ALLEN STREET': 'Allen Street', 'ELDRIDGE STREET': 'Eldridge Street',
+  'FORSYTH STREET': 'Forsyth Street', 'MERCER STREET': 'Mercer Street',
+  'RIVINGTON STREET': 'Rivington Street', 'STANTON STREET': 'Stanton Street',
+  'WEST HOUSTON STREET': 'West Houston Street', 'EAST 1ST STREET': 'East 1st Street',
+  'EAST 2ND STREET': 'East 2nd Street', 'EAST 3RD STREET': 'East 3rd Street',
+  'EAST 4TH STREET': 'East 4th Street', 'EAST 5TH STREET': 'East 5th Street',
+  'GRAND STREET': 'Grand Street', 'GREENE STREET': 'Greene Street',
+  'WEST BROADWAY': 'West Broadway', 'WOOSTER STREET': 'Wooster Street',
+  'THOMPSON STREET': 'Thompson Street', 'HOWARD STREET': 'Howard Street',
+};
+
+const osmNameCache = {};
+function osmName(nycName) {
+  if (!nycName) return null;
+  const upper = nycName.toUpperCase().trim();
+  if (osmNameCache[upper] !== undefined) return osmNameCache[upper];
+
+  // 1. Explicit manual mapping
+  if (NYC_TO_OSM[upper]) { osmNameCache[upper] = NYC_TO_OSM[upper]; return NYC_TO_OSM[upper]; }
+
+  // 2. Smart title-case with ordinal handling
+  const titled = upper.replace(/\b(\d+)(ST|ND|RD|TH)\b/gi, (_, n, suf) => n + suf.toLowerCase())
+    .replace(/\b[A-Z]+/g, w => {
+      if (/^\d/.test(w)) return w; // already handled ordinals
+      return w.charAt(0) + w.slice(1).toLowerCase();
+    })
+    .replace(/\bFdr\b/gi, 'FDR');
+  if (OSM_STREETS[titled]) { osmNameCache[upper] = titled; return titled; }
+
+  // 3. Case-insensitive match against OSM keys
+  for (const k of Object.keys(OSM_STREETS)) {
+    if (k.toUpperCase() === upper) { osmNameCache[upper] = k; return k; }
+  }
+
+  // 4. Try without "STREET"/"AVENUE" suffix variations
+  const variations = [
+    titled,
+    titled.replace(/ Street$/, ' St'),
+    titled.replace(/ Avenue$/, ' Ave'),
+    titled.replace(/ St$/, ' Street'),
+    titled.replace(/ Ave$/, ' Avenue'),
+    titled.replace(/ Place$/, ' Pl'),
+    titled.replace(/ Pl$/, ' Place'),
+  ];
+  for (const v of variations) {
+    if (OSM_STREETS[v]) { osmNameCache[upper] = v; return v; }
+  }
+
+  osmNameCache[upper] = null;
+  return null;
+}
+
+// Distance in meters between two lat/lng points (Haversine approx for short distances)
+function geoDist(lat1, lng1, lat2, lng2) {
+  const dLat = (lat2 - lat1) * 111320;
+  const dLng = (lng2 - lng1) * 111320 * Math.cos((lat1 + lat2) / 2 * Math.PI / 180);
+  return Math.sqrt(dLat * dLat + dLng * dLng);
+}
+
+// Compute cumulative distances along a polyline (in meters)
+function cumulativeDists(pts) {
+  const d = [0];
+  for (let i = 1; i < pts.length; i++) {
+    d.push(d[i-1] + geoDist(pts[i-1][0], pts[i-1][1], pts[i][0], pts[i][1]));
+  }
+  return d;
+}
+
+// Find closest point on any chain of a street to a given point. Returns {chainIdx, segIdx, frac, pt, dist}
+function closestPointOnStreet(streetName, lat, lng) {
+  const chains = OSM_STREETS[streetName];
+  if (!chains) return null;
+  let best = null;
+  for (let ci = 0; ci < chains.length; ci++) {
+    const chain = chains[ci];
+    for (let i = 0; i < chain.length - 1; i++) {
+      const [aLat, aLng] = chain[i];
+      const [bLat, bLng] = chain[i+1];
+      // Project point onto segment
+      const abLat = bLat - aLat, abLng = bLng - aLng;
+      const apLat = lat - aLat, apLng = lng - aLng;
+      const ab2 = abLat*abLat + abLng*abLng;
+      let t = ab2 > 0 ? (apLat*abLat + apLng*abLng) / ab2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const pLat = aLat + t * abLat, pLng = aLng + t * abLng;
+      const d = geoDist(lat, lng, pLat, pLng);
+      if (!best || d < best.dist) {
+        best = { chainIdx: ci, segIdx: i, frac: t, pt: [pLat, pLng], dist: d };
+      }
+    }
+  }
+  return best;
+}
+
+// Find approximate intersection point of two streets
+const intersectionCache = {};
+function findIntersection(street1, street2) {
+  const key = [street1, street2].sort().join('|');
+  if (intersectionCache[key]) return intersectionCache[key];
+  
+  const chains1 = OSM_STREETS[street1];
+  const chains2 = OSM_STREETS[street2];
+  if (!chains1 || !chains2) return null;
+  
+  // Find closest pair of points between the two streets
+  let best = null;
+  for (const c1 of chains1) {
+    for (let i = 0; i < c1.length - 1; i++) {
+      for (const c2 of chains2) {
+        for (let j = 0; j < c2.length - 1; j++) {
+          // Check segment-segment closest approach
+          const pt = segSegClosest(c1[i], c1[i+1], c2[j], c2[j+1]);
+          if (pt && (!best || pt.dist < best.dist)) {
+            best = pt;
+          }
+        }
+      }
+    }
+  }
+  
+  if (best && best.dist < 30) { // within 30m = valid intersection
+    intersectionCache[key] = best.pt;
+    return best.pt;
+  }
+  return null;
+}
+
+// Closest point between two line segments, returns {pt: [lat,lng], dist}
+function segSegClosest(a1, a2, b1, b2) {
+  // Try actual intersection first
+  const ix = lineIntersect(a1, a2, b1, b2);
+  if (ix) return { pt: ix, dist: 0 };
+  
+  // Otherwise find closest endpoints
+  let best = null;
+  const pairs = [
+    [a1, b1, b2], [a2, b1, b2], [b1, a1, a2], [b2, a1, a2]
+  ];
+  for (const [pt, s1, s2] of pairs) {
+    const proj = projectPointOnSeg(pt, s1, s2);
+    const d = geoDist(pt[0], pt[1], proj[0], proj[1]);
+    if (!best || d < best.dist) {
+      const mid = [(pt[0]+proj[0])/2, (pt[1]+proj[1])/2];
+      best = { pt: mid, dist: d };
+    }
+  }
+  return best;
+}
+
+function lineIntersect(a1, a2, b1, b2) {
+  const d1Lat = a2[0]-a1[0], d1Lng = a2[1]-a1[1];
+  const d2Lat = b2[0]-b1[0], d2Lng = b2[1]-b1[1];
+  const cross = d1Lat*d2Lng - d1Lng*d2Lat;
+  if (Math.abs(cross) < 1e-12) return null;
+  const t = ((b1[0]-a1[0])*d2Lng - (b1[1]-a1[1])*d2Lat) / cross;
+  const u = ((b1[0]-a1[0])*d1Lng - (b1[1]-a1[1])*d1Lat) / cross;
+  if (t >= 0 && t <= 1 && u >= 0 && u <= 1) {
+    return [a1[0] + t*d1Lat, a1[1] + t*d1Lng];
+  }
+  return null;
+}
+
+function projectPointOnSeg(pt, s1, s2) {
+  const dLat = s2[0]-s1[0], dLng = s2[1]-s1[1];
+  const len2 = dLat*dLat + dLng*dLng;
+  if (len2 < 1e-14) return s1;
+  let t = ((pt[0]-s1[0])*dLat + (pt[1]-s1[1])*dLng) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return [s1[0] + t*dLat, s1[1] + t*dLng];
+}
+
+// Extract a sub-polyline from an OSM street chain between two points
+// Returns array of [lat, lng] following the real street geometry
+function extractPolylineBetween(streetOsmName, ptA, ptB) {
+  const chains = OSM_STREETS[streetOsmName];
+  if (!chains) return null;
+  
+  // Find which chain and position for both points
+  const locA = closestPointOnStreet(streetOsmName, ptA[0], ptA[1]);
+  const locB = closestPointOnStreet(streetOsmName, ptB[0], ptB[1]);
+  if (!locA || !locB) return null;
+  
+  // If on different chains, just return straight line
+  if (locA.chainIdx !== locB.chainIdx) return [ptA, ptB];
+  
+  const chain = chains[locA.chainIdx];
+  
+  // Determine direction: which comes first along the chain
+  let startLoc, endLoc;
+  if (locA.segIdx < locB.segIdx || (locA.segIdx === locB.segIdx && locA.frac <= locB.frac)) {
+    startLoc = locA; endLoc = locB;
+  } else {
+    startLoc = locB; endLoc = locA;
+  }
+  
+  // Build polyline: start point, intermediate chain vertices, end point
+  const result = [startLoc.pt];
+  
+  // Add chain vertices between start and end
+  for (let i = startLoc.segIdx + 1; i <= endLoc.segIdx; i++) {
+    result.push(chain[i]);
+  }
+  
+  result.push(endLoc.pt);
+  return result;
+}
+
+// Get the block polyline from OSM geometry
+// block: { street, from, to, side, signs }
+function getBlockPolyline(block) {
+  const streetOsm = osmName(block.street);
+  const fromOsm = osmName(block.from);
+  const toOsm = osmName(block.to);
+  
+  if (!streetOsm || !OSM_STREETS[streetOsm]) return null;
+  
+  // Find intersection points
+  let ptFrom = null, ptTo = null;
+  
+  if (fromOsm && OSM_STREETS[fromOsm]) {
+    ptFrom = findIntersection(streetOsm, fromOsm);
+  }
+  if (toOsm && OSM_STREETS[toOsm]) {
+    ptTo = findIntersection(streetOsm, toOsm);
+  }
+  
+  // If we can't find both intersections, return null (will fallback)
+  if (!ptFrom || !ptTo) return null;
+  
+  // Extract the polyline between the two intersection points
+  const line = extractPolylineBetween(streetOsm, ptFrom, ptTo);
+  if (!line || line.length < 2) return null;
+  
+  // Compute total length of this block in meters
+  const totalLen = cumulativeDists(line);
+  const blockLenM = totalLen[totalLen.length - 1];
+  // Convert to feet for distance_from_intersection matching
+  const blockLenFt = blockLenM * 3.28084;
+  
+  return { line, totalLen, blockLenM, blockLenFt };
+}
+
+// Interpolate a point at a given distance (in feet from intersection) along a block polyline
+function interpolateOnBlockLine(blockGeo, distFt) {
+  const distM = distFt / 3.28084;
+  const { line, totalLen } = blockGeo;
+  
+  // Clamp
+  const targetM = Math.max(0, Math.min(distM, totalLen[totalLen.length - 1]));
+  
+  for (let i = 0; i < line.length - 1; i++) {
+    if (targetM >= totalLen[i] && targetM <= totalLen[i + 1]) {
+      const segLen = totalLen[i + 1] - totalLen[i];
+      const frac = segLen > 0 ? (targetM - totalLen[i]) / segLen : 0;
+      return [
+        line[i][0] + frac * (line[i+1][0] - line[i][0]),
+        line[i][1] + frac * (line[i+1][1] - line[i][1])
+      ];
+    }
+  }
+  return line[line.length - 1];
+}
+
+// Extract sub-segment of block polyline between two distances (in feet)
+function extractSubSegment(blockGeo, startFt, endFt) {
+  const startM = startFt / 3.28084;
+  const endM = endFt / 3.28084;
+  const { line, totalLen } = blockGeo;
+  
+  const startPt = interpolateOnBlockLine(blockGeo, startFt);
+  const endPt = interpolateOnBlockLine(blockGeo, endFt);
+  if (!startPt || !endPt) return null;
+  
+  const result = [startPt];
+  
+  // Add intermediate vertices
+  for (let i = 0; i < line.length; i++) {
+    if (totalLen[i] > startM && totalLen[i] < endM) {
+      result.push(line[i]);
+    }
+  }
+  
+  result.push(endPt);
+  
+  // Validate
+  if (result.length < 2) return [startPt, endPt];
+  return result;
+}
+
+// Legacy fallback: use sign coordinates when OSM lookup fails
+function getBlockCoordRefsFallback(signs) {
+  const raw = signs
+    .filter(s => s.sign_x_coord && s.sign_y_coord)
+    .map(s => {
+      const [lat, lng] = spToLatLng(s.sign_x_coord, s.sign_y_coord);
+      return { lat, lng, dist: +(s.distance_from_intersection || 0) };
+    })
+    .filter(c => isFinite(c.lat) && isFinite(c.lng))
+    .sort((a, b) => a.dist - b.dist);
+  
+  const seen = new Set();
+  return raw.filter(c => {
+    const key = c.lat.toFixed(6) + ',' + c.lng.toFixed(6);
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function offsetPolyline(points, side) {
+  const offset = 0.00004;
+  if (!points || points.length < 2) return points || [];
+  const valid = points.filter(p => Array.isArray(p) && p.length >= 2 && isFinite(p[0]) && isFinite(p[1]));
+  if (valid.length < 2) return valid;
+
+  // Per-segment offset for curved streets
+  const result = [];
+  for (let i = 0; i < valid.length; i++) {
+    let nx, ny;
+    if (i === 0) {
+      const dx = valid[1][1] - valid[0][1], dy = valid[1][0] - valid[0][0];
+      const len = Math.sqrt(dx*dx + dy*dy);
+      if (len === 0) { result.push(valid[i]); continue; }
+      nx = -dy / len; ny = dx / len;
+    } else if (i === valid.length - 1) {
+      const dx = valid[i][1] - valid[i-1][1], dy = valid[i][0] - valid[i-1][0];
+      const len = Math.sqrt(dx*dx + dy*dy);
+      if (len === 0) { result.push(valid[i]); continue; }
+      nx = -dy / len; ny = dx / len;
+    } else {
+      // Average of adjacent segment normals for smooth offset
+      const dx1 = valid[i][1] - valid[i-1][1], dy1 = valid[i][0] - valid[i-1][0];
+      const dx2 = valid[i+1][1] - valid[i][1], dy2 = valid[i+1][0] - valid[i][0];
+      const len1 = Math.sqrt(dx1*dx1 + dy1*dy1);
+      const len2 = Math.sqrt(dx2*dx2 + dy2*dy2);
+      if (len1 === 0 || len2 === 0) { result.push(valid[i]); continue; }
+      nx = (-dy1/len1 + -dy2/len2) / 2;
+      ny = (dx1/len1 + dx2/len2) / 2;
+      const nLen = Math.sqrt(nx*nx + ny*ny);
+      if (nLen > 0) { nx /= nLen; ny /= nLen; }
+    }
+    
+    let mult = 0;
+    if (side === 'E' || side === 'N') mult = 1;
+    else if (side === 'W' || side === 'S') mult = -1;
+    
+    result.push([valid[i][0] + nx * offset * mult, valid[i][1] + ny * offset * mult]);
+  }
+  return result;
+}
+
+// ==== Sub-segment creation ====
+function createSubSegments(block) {
+  const signData = block.signs
+    .map(s => {
+      const cat = classifySign(s.sign_description);
+      if (!cat) return null;
+      const schedule = parseSchedule(s.sign_description);
+      return { sign: s, category: cat, schedule, distance: +(s.distance_from_intersection || 0), arrow: schedule.arrow };
+    })
+    .filter(Boolean);
+
+  if (signData.length === 0) return [];
+  signData.sort((a, b) => a.distance - b.distance);
+
+  const uniqueDists = [...new Set(signData.map(s => s.distance))].sort((a, b) => a - b);
+
+  if (uniqueDists.length <= 1) {
+    return [{ rules: signData, distStart: Math.max(0, uniqueDists[0] - 30), distEnd: uniqueDists[0] + 30 }];
+  }
+
+  const signsByDist = {};
+  signData.forEach(s => { (signsByDist[s.distance] = signsByDist[s.distance] || []).push(s); });
+
+  const boundaries = [];
+  if (uniqueDists[0] > 15) boundaries.push(0);
+  boundaries.push(...uniqueDists);
+  boundaries.push(uniqueDists[uniqueDists.length - 1] + 40);
+
+  const zones = [];
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    zones.push({ distStart: boundaries[i], distEnd: boundaries[i + 1], rules: [] });
+  }
+
+  uniqueDists.forEach(d => {
+    const signsAtD = signsByDist[d];
+    const zoneAfterIdx = zones.findIndex(z => z.distStart === d);
+    const zoneBeforeIdx = zones.findIndex(z => z.distEnd === d);
+
+    signsAtD.forEach(sd => {
+      const arrow = sd.arrow;
+      let coversBefore = arrow === 'both' || arrow === null || arrow === 'away';
+      let coversAfter = arrow === 'both' || arrow === null || arrow === 'towards';
+
+      if (coversBefore && zoneBeforeIdx >= 0) zones[zoneBeforeIdx].rules.push(sd);
+      if (coversAfter && zoneAfterIdx >= 0) zones[zoneAfterIdx].rules.push(sd);
+    });
+  });
+
+  return zones.filter(z => z.rules.length > 0 && (z.distEnd - z.distStart) >= 1);
+}
+
+// ==== Mode & Rendering ====
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
+  const fc = document.getElementById('filterControls');
+  const ftc = document.getElementById('freeTodayControls');
+  const fbc = document.getElementById('freeBetweenControls');
+
+  const ssc = document.getElementById('smartScoreControls');
+
+  ssc.style.display = 'none';
+  if (mode === 'signs') {
+    fc.style.display = 'none';
+  } else if (mode === 'free-today') {
+    fc.style.display = 'block';
+    ftc.style.display = 'block';
+    fbc.style.display = 'none';
+    ssc.style.display = 'none';
+  } else if (mode === 'free-between') {
+    fc.style.display = 'block';
+    ftc.style.display = 'none';
+    fbc.style.display = 'block';
+    ssc.style.display = 'none';
+  } else if (mode === 'smart-score') {
+    fc.style.display = 'block';
+    ftc.style.display = 'none';
+    fbc.style.display = 'none';
+    ssc.style.display = 'block';
+  }
+  updateMap();
+}
+
+function updateLegend() {
+  if (currentMode === 'smart-score') return; // smart-score renders its own legend
+  const el = document.getElementById('legend');
+  let cats;
+  if (currentMode === 'signs') {
+    cats = ['NO_STANDING','NO_PARKING','SPECIAL','TRUCK_LOADING','METERED','ASP_DAILY','ASP_MON_THU','ASP_TUE_FRI','ASP_OVERNIGHT_MWF','ASP_OVERNIGHT_TTHS','UNKNOWN'];
+  } else {
+    cats = ['FREE','NO_STANDING','NO_PARKING','SPECIAL','TRUCK_LOADING','METERED','ASP_MON_THU','ASP_TUE_FRI','ASP_OVERNIGHT_MWF','ASP_OVERNIGHT_TTHS','ASP_DAILY','UNKNOWN'];
+  }
+  el.innerHTML = cats.map(c => {
+    const info = CATEGORIES[c];
+    return `<div class="legend-item"><div class="legend-dot" style="background:${info.color}"></div>${info.label}</div>`;
+  }).join('');
+}
+
+function updateMap() {
+  updateLegend();
+  const banner = document.getElementById('aspBanner');
+  banner.style.display = 'none';
+
+  if (currentMode === 'signs') {
+    renderSignsMode();
+  } else if (currentMode === 'free-today') {
+    renderFreeTodayMode();
+  } else if (currentMode === 'free-between') {
+    renderFreeBetweenMode();
+  } else if (currentMode === 'smart-score') {
+    renderSmartScoreMode();
+  }
+}
+
+function renderSignsMode() {
+  const counts = {};
+  segmentLayers.forEach(seg => {
+    const cat = mostRestrictiveCategory(seg.rules);
+    const info = CATEGORIES[cat] || CATEGORIES.UNKNOWN;
+    seg.layer.setStyle({ color: info.color, weight: 6, opacity: 0.85 });
+    counts[cat] = (counts[cat] || 0) + 1;
+  });
+  renderStats(counts);
+}
+
+function renderFreeTodayMode() {
+  const dateStr = document.getElementById('ftDate').value;
+  if (!dateStr) return;
+  const dateParts = dateStr.split('-');
+  const dateObj = new Date(+dateParts[0], +dateParts[1] - 1, +dateParts[2]);
+  const dayOfWeek = dateObj.getDay();
+  const suspended = isASPSuspended(dateStr);
+
+  const banner = document.getElementById('aspBanner');
+  if (suspended) {
+    const reason = aspSuspensions[dateStr]?.reason || '';
+    banner.textContent = `🚫🧹 Alternate Side Suspended ${dateStr}${reason ? ' — ' + reason : ''}`;
+    banner.style.display = 'block';
+  }
+
+  const counts = {};
+  segmentLayers.forEach(seg => {
+    let color, opacity = 0.85, cat;
+    const dominantCat = mostRestrictiveCategory(seg.rules);
+
+    if (isASPCategory(dominantCat)) {
+      if (suspended || !isASPDayForCategory(dominantCat, dayOfWeek)) {
+        cat = 'FREE'; color = CATEGORIES.FREE.color; opacity = 0.85;
+      } else {
+        cat = dominantCat; color = CATEGORIES[dominantCat].color; opacity = 0.4;
+      }
+    } else if (dominantCat === 'METERED') {
+      cat = 'METERED'; color = CATEGORIES.METERED.color; opacity = 0.4;
+    } else if (['NO_PARKING','NO_STANDING','TRUCK_LOADING','SPECIAL'].includes(dominantCat)) {
+      // Check if any rule is active today
+      const activeToday = seg.rules.some(r => {
+        if (!['NO_PARKING','NO_STANDING','TRUCK_LOADING','SPECIAL'].includes(r.category)) return false;
+        return r.schedule.days.includes(dayOfWeek) || r.schedule.anytime;
+      });
+      if (activeToday) {
+        cat = dominantCat; color = CATEGORIES[dominantCat].color; opacity = 0.4;
+      } else {
+        cat = 'FREE'; color = CATEGORIES.FREE.color; opacity = 0.85;
+      }
+    } else {
+      cat = 'FREE'; color = CATEGORIES.FREE.color; opacity = 0.85;
+    }
+
+    seg.layer.setStyle({ color, weight: 6, opacity });
+    counts[cat] = (counts[cat] || 0) + 1;
+  });
+  renderStats(counts);
+}
+
+function renderFreeBetweenMode() {
+  const sd = document.getElementById('fbStartDate').value;
+  const st = document.getElementById('fbStartTime').value;
+  const ed = document.getElementById('fbEndDate').value;
+  const et2 = document.getElementById('fbEndTime').value;
+  if (!sd || !st || !ed || !et2) return;
+
+  const startParts = sd.split('-');
+  const startDate = new Date(+startParts[0], +startParts[1]-1, +startParts[2]);
+  const startDay = startDate.getDay();
+  const [sh, sm] = st.split(':').map(Number);
+  const startMin = sh * 60 + sm;
+
+  const endParts = ed.split('-');
+  const endDate = new Date(+endParts[0], +endParts[1]-1, +endParts[2]);
+  const endDay = endDate.getDay();
+  const [eh, em] = et2.split(':').map(Number);
+  const endMin = eh * 60 + em;
+
+  // Check if ANY date in the range has ASP suspended
+  const suspendedDates = new Set();
+  let checkDate = new Date(startDate);
+  const endCheck = new Date(endDate);
+  endCheck.setDate(endCheck.getDate() + 1);
+  while (checkDate < endCheck) {
+    const ds = toETDateStr(checkDate);
+    if (isASPSuspended(ds)) suspendedDates.add(ds);
+    checkDate.setDate(checkDate.getDate() + 1);
+  }
+
+  const banner = document.getElementById('aspBanner');
+  if (suspendedDates.size > 0) {
+    banner.textContent = `🚫🧹 Alternate Side Suspended on: ${[...suspendedDates].join(', ')}`;
+    banner.style.display = 'block';
+  }
+
+  const counts = {};
+  segmentLayers.forEach(seg => {
+    let color, opacity = 0.85, cat;
+    const dominantCat = mostRestrictiveCategory(seg.rules);
+
+    let isFree = true;
+
+    if (isASPCategory(dominantCat)) {
+      // Check if ASP is active on any day in window AND not suspended on that day
+      const aspActive = isASPActiveDuring(dominantCat, startDay, startMin, endDay, endMin);
+      // For simplicity, if ASP is active on any day in window, check if ALL those days are suspended
+      if (aspActive) {
+        // Check each day
+        let allSuspended = true;
+        let d2 = new Date(startDate);
+        while (d2 <= endDate) {
+          const dow = d2.getDay();
+          if (isASPDayForCategory(dominantCat, dow)) {
+            const ds = toETDateStr(d2);
+            if (!isASPSuspended(ds)) { allSuspended = false; break; }
+          }
+          d2.setDate(d2.getDate() + 1);
+        }
+        isFree = allSuspended;
+      }
+    } else if (dominantCat === 'METERED') {
+      isFree = false;
+    } else if (['NO_PARKING','NO_STANDING','TRUCK_LOADING','SPECIAL'].includes(dominantCat)) {
+      const anyActive = seg.rules.some(r => {
+        if (!['NO_PARKING','NO_STANDING','TRUCK_LOADING','SPECIAL'].includes(r.category)) return false;
+        return isScheduleActiveDuring(r.schedule, startDay, startMin, endDay, endMin);
+      });
+      isFree = !anyActive;
+    }
+
+    if (isFree && dominantCat !== 'METERED') {
+      cat = 'FREE'; color = CATEGORIES.FREE.color; opacity = 0.85;
+    } else {
+      cat = dominantCat; color = (CATEGORIES[dominantCat] || CATEGORIES.UNKNOWN).color; opacity = 0.4;
+    }
+
+    seg.layer.setStyle({ color, weight: 6, opacity });
+    counts[cat] = (counts[cat] || 0) + 1;
+  });
+  renderStats(counts);
+}
+
+// ==== Smart Score helpers ====
+function computeHoursUntilActive(rule, currentDay, currentMinutes) {
+  const schedule = rule.schedule;
+  if (schedule.anytime) return 0;
+  if (schedule.days.length === 0) return 168;
+
+  // Check if active right now
+  if (isScheduleActiveAt(schedule, currentDay, currentMinutes)) return 0;
+
+  // Walk forward through the week
+  for (let offset = 0; offset < 8; offset++) {
+    const checkDay = (currentDay + offset) % 7;
+    if (!schedule.days.includes(checkDay)) continue;
+
+    if (schedule.timeRanges.length === 0) {
+      // All day rule: if today (offset=0), it's active now (handled above). Otherwise starts at midnight of that day.
+      if (offset === 0) return 0;
+      const hoursToMidnight = (1440 - currentMinutes) / 60;
+      return hoursToMidnight + (offset - 1) * 24;
+    }
+
+    for (const tr of schedule.timeRanges) {
+      let startMin = tr.start;
+      if (offset === 0 && startMin <= currentMinutes) continue; // already passed today
+      if (offset === 0) {
+        return (startMin - currentMinutes) / 60;
+      } else {
+        const hoursToMidnight = (1440 - currentMinutes) / 60;
+        return hoursToMidnight + (offset - 1) * 24 + startMin / 60;
+      }
+    }
+  }
+  return 168; // cap at one week
+}
+
+function scoreToColor(score) {
+  if (score <= 10) return '#991b1b';
+  if (score <= 30) return '#ef4444';
+  if (score <= 50) return '#f97316';
+  if (score <= 70) return '#eab308';
+  if (score <= 85) return '#22c55e';
+  return '#15803d';
+}
+
+function computeBlockScore(rules, dayOfWeek, minuteOfDay, aspSuspendedToday) {
+  if (!rules || rules.length === 0) return { score: 50, reason: 'No sign data (unknown)' };
+
+  let worstScore = 100;
+  let worstReason = 'No restrictions nearby';
+
+  for (const rule of rules) {
+    const cat = rule.category;
+    let score, reason;
+
+    if (cat === 'NO_STANDING' || cat === 'SPECIAL') {
+      score = 0;
+      reason = cat === 'NO_STANDING' ? 'No standing/stopping zone' : 'Special restriction';
+    } else if (cat === 'NO_PARKING' || cat === 'TRUCK_LOADING') {
+      const active = isScheduleActiveAt(rule.schedule, dayOfWeek, minuteOfDay);
+      if (active) {
+        score = 0;
+        reason = (cat === 'NO_PARKING' ? 'No parking' : 'Truck loading') + ' active now';
+      } else {
+        const hours = computeHoursUntilActive(rule, dayOfWeek, minuteOfDay);
+        score = Math.min(Math.round(hours * 10), 80);
+        const label = cat === 'NO_PARKING' ? 'No parking' : 'Truck loading';
+        reason = `${label} in ${Math.round(hours)}h`;
+      }
+    } else if (cat === 'METERED') {
+      const active = isScheduleActiveAt(rule.schedule, dayOfWeek, minuteOfDay);
+      if (active) {
+        score = 30;
+        reason = 'Metered parking (costs money)';
+      } else {
+        score = 60;
+        reason = 'Meter not active (free now)';
+      }
+    } else if (isASPCategory(cat)) {
+      if (aspSuspendedToday) {
+        score = 95;
+        reason = 'ASP suspended today';
+      } else {
+        // Check if ASP is active right now based on category day + schedule times
+        const isAspDay = isASPDayForCategory(cat, dayOfWeek);
+        const activeNow = isAspDay && isScheduleActiveAt(rule.schedule, dayOfWeek, minuteOfDay);
+        if (activeNow) {
+          score = 0;
+          reason = `${CATEGORIES[cat].label} active now`;
+        } else {
+          const hours = computeHoursUntilASP(cat, rule, dayOfWeek, minuteOfDay);
+          score = Math.min(Math.round(hours * 4), 100);
+          reason = `${CATEGORIES[cat].label}: next in ${Math.round(hours)}h`;
+        }
+      }
+    } else {
+      score = 50;
+      reason = 'Unknown restriction';
+    }
+
+    if (score < worstScore) {
+      worstScore = score;
+      worstReason = reason;
+    }
+  }
+
+  return { score: worstScore, reason: worstReason };
+}
+
+function computeHoursUntilASP(cat, rule, currentDay, currentMinutes) {
+  // Walk forward through days to find next ASP activation
+  for (let offset = 0; offset < 8; offset++) {
+    const checkDay = (currentDay + offset) % 7;
+    if (!isASPDayForCategory(cat, checkDay)) continue;
+
+    const schedule = rule.schedule;
+    if (schedule.timeRanges.length === 0) {
+      // All-day ASP on that day
+      if (offset === 0) return 0; // active now (should have been caught)
+      const hoursToMidnight = (1440 - currentMinutes) / 60;
+      return hoursToMidnight + (offset - 1) * 24;
+    }
+
+    for (const tr of schedule.timeRanges) {
+      if (offset === 0 && tr.start <= currentMinutes && currentMinutes < tr.end) return 0;
+      if (offset === 0 && tr.start > currentMinutes) {
+        return (tr.start - currentMinutes) / 60;
+      }
+      if (offset > 0) {
+        const hoursToMidnight = (1440 - currentMinutes) / 60;
+        return hoursToMidnight + (offset - 1) * 24 + tr.start / 60;
+      }
+    }
+  }
+  return 168;
+}
+
+function renderSmartScoreMode() {
+  const et = nowET();
+  const dayOfWeek = et.getDay();
+  const minuteOfDay = et.getHours() * 60 + et.getMinutes();
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const dateStr = toETDateStr(et);
+  const suspended = isASPSuspended(dateStr);
+
+  // Update time display
+  const timeStr = et.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true });
+  document.getElementById('smartScoreTime').textContent = `Scoring for: ${dayNames[dayOfWeek]} ${timeStr} ET`;
+
+  // ASP banner
+  const banner = document.getElementById('aspBanner');
+  if (suspended) {
+    const reason = aspSuspensions[dateStr]?.reason || '';
+    banner.textContent = `🚫🧹 ASP Suspended${reason ? ' — ' + reason : ''}. Street cleaning spots score 95!`;
+    banner.style.display = 'block';
+  }
+
+  // Score legend
+  const legendEl = document.getElementById('legend');
+  legendEl.innerHTML = [
+    { color: '#15803d', label: '86-100 Excellent' },
+    { color: '#22c55e', label: '71-85 Good' },
+    { color: '#eab308', label: '51-70 Decent' },
+    { color: '#f97316', label: '31-50 Mediocre' },
+    { color: '#ef4444', label: '11-30 Bad' },
+    { color: '#991b1b', label: '0-10 No-go' },
+  ].map(i => `<div class="legend-item"><div class="legend-dot" style="background:${i.color}"></div>${i.label}</div>`).join('');
+
+  const buckets = { excellent: 0, good: 0, decent: 0, poor: 0, nogo: 0 };
+
+  segmentLayers.forEach(seg => {
+    const result = computeBlockScore(seg.rules, dayOfWeek, minuteOfDay, suspended);
+    seg._smartScore = result;
+
+    const color = scoreToColor(result.score);
+    const opacity = result.score === 0 ? 0.3 : 0.85;
+    seg.layer.setStyle({ color, weight: 6, opacity });
+
+    if (result.score >= 86) buckets.excellent++;
+    else if (result.score >= 71) buckets.good++;
+    else if (result.score >= 51) buckets.decent++;
+    else if (result.score >= 11) buckets.poor++;
+    else buckets.nogo++;
+  });
+
+  const el = document.getElementById('stats');
+  el.innerHTML = `<strong>${segmentLayers.length} segments</strong><br>` +
+    `<span style="color:#15803d;font-weight:600">${buckets.excellent}</span> excellent · ` +
+    `<span style="color:#22c55e;font-weight:600">${buckets.good}</span> good · ` +
+    `<span style="color:#eab308;font-weight:600">${buckets.decent}</span> decent · ` +
+    `<span style="color:#ef4444;font-weight:600">${buckets.poor}</span> poor · ` +
+    `<span style="color:#991b1b;font-weight:600">${buckets.nogo}</span> no-go`;
+}
+
+function renderStats(counts) {
+  const el = document.getElementById('stats');
+  const total = segmentLayers.length;
+  const parts = [];
+  const order = ['FREE','NO_STANDING','NO_PARKING','SPECIAL','TRUCK_LOADING','METERED','ASP_MON_THU','ASP_TUE_FRI','ASP_OVERNIGHT_MWF','ASP_OVERNIGHT_TTHS','ASP_DAILY','UNKNOWN'];
+  for (const c of order) {
+    if (counts[c]) {
+      const info = CATEGORIES[c];
+      parts.push(`<span style="color:${info.color};font-weight:600">${counts[c]}</span> ${info.label}`);
+    }
+  }
+  el.innerHTML = `<strong>${total} segments</strong><br>${parts.join(' · ')}`;
+}
+
+// ==== Info Panel ====
+function showBlockInfo(seg) {
+  const sideLabel = { E: 'East', W: 'West', N: 'North', S: 'South' }[seg.side] || seg.side;
+  let html = `<h3>${seg.blockKey}</h3>`;
+  html += `<div style="margin-bottom:8px">Side: <strong>${sideLabel}</strong>`;
+  if (seg.isSubSegment) {
+    html += ` | Zone: <strong>${seg.distRange}</strong>`;
+  }
+  html += `</div>`;
+
+  // Smart Score info
+  if (currentMode === 'smart-score' && seg._smartScore) {
+    const ss = seg._smartScore;
+    const color = scoreToColor(ss.score);
+    html += `<div style="margin-bottom:8px;padding:8px;background:${color}15;border:1px solid ${color}40;border-radius:6px">`;
+    html += `<div style="font-size:16px;font-weight:700;color:${color}">Score: ${ss.score}/100</div>`;
+    html += `<div style="font-size:12px;color:#555;margin-top:2px">${ss.reason}</div>`;
+    html += `</div>`;
+  }
+
+  const rules = seg.rules || [];
+  if (rules.length === 0) {
+    html += '<div style="color:#999">No sign data for this zone</div>';
+  } else {
+    rules.forEach(r => {
+      const info = CATEGORIES[r.category] || CATEGORIES.UNKNOWN;
+      html += `<div class="sign-rule">`;
+      html += `<span class="sign-cat" style="background:${info.color}">${info.label}</span>`;
+
+      // Schedule info
+      const sched = r.schedule;
+      const dayNames = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+      let schedStr = '';
+      if (sched.anytime) {
+        schedStr = 'All days, all times';
+      } else {
+        if (sched.days.length === 7) schedStr = 'Daily';
+        else if (sched.days.length > 0) schedStr = sched.days.map(d => dayNames[d]).join('/');
+        if (sched.timeRanges.length > 0) {
+          schedStr += ' ' + sched.timeRanges.map(tr => `${fmtTime(tr.start)}-${fmtTime(tr.end)}`).join(', ');
+        }
+      }
+      if (schedStr) html += `<br><span style="font-size:12px">${schedStr}</span>`;
+      html += `<div class="sign-raw">${r.sign.sign_description || ''}</div>`;
+      html += `</div>`;
+    });
+  }
+
+  document.getElementById('infoPanelContent').innerHTML = html;
+  document.getElementById('infoPanel').style.display = 'block';
+}
+
+// ==== OSM Data Loading ====
+let OSM_STREETS = {};
+async function loadOSMGeometry() {
+  const loadingText = document.getElementById('loadingText');
+  loadingText.textContent = 'Loading street geometry...';
+  const resp = await fetch('osm_data.json');
+  OSM_STREETS = await resp.json();
+  console.log(`Loaded OSM geometry for ${Object.keys(OSM_STREETS).length} streets`);
+}
+
+// ==== Data Loading ====
+async function loadData() {
+  try {
+    const baseUrl = 'https://data.cityofnewyork.us/resource/nfid-uabd.json';
+    let allSigns = [];
+    const PAGE_SIZE = 5000;
+    const loadingText = document.getElementById('loadingText');
+
+    // Fetch signs using geographic bounding box pagination
+    let offset = 0;
+    let keepFetching = true;
+    while (keepFetching) {
+      const url = `${baseUrl}?$limit=${PAGE_SIZE}&$offset=${offset}&borough=Manhattan`;
+      loadingText.textContent = `Loading parking data... (page ${Math.floor(offset/PAGE_SIZE) + 1}, ${allSigns.length} signs)`;
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) { console.error(`HTTP ${resp.status} at offset ${offset}`); break; }
+        const data = await resp.json();
+        if (!Array.isArray(data) || data.length === 0) { keepFetching = false; break; }
+        allSigns.push(...data);
+        console.log(`Fetched page at offset ${offset}: ${data.length} signs (total: ${allSigns.length})`);
+        if (data.length < PAGE_SIZE) keepFetching = false;
+        else offset += PAGE_SIZE;
+      } catch (e) { console.error(`Error fetching at offset ${offset}:`, e); break; }
+    }
+    loadingText.textContent = `Processing ${allSigns.length} signs...`;
+    console.log(`Fetched ${allSigns.length} total signs`);
+
+    // Also load ASP suspensions in parallel
+    await loadASPSuspensions();
+
+    // Filter to area
+    const filtered = allSigns.filter(s => {
+      if (!s.sign_x_coord || !s.sign_y_coord) return false;
+      const x = +s.sign_x_coord, y = +s.sign_y_coord;
+      return x >= SP_BOUNDS.xMin && x <= SP_BOUNDS.xMax && y >= SP_BOUNDS.yMin && y <= SP_BOUNDS.yMax;
+    });
+    console.log(`Filtered to ${filtered.length} signs in area`);
+
+    // Load OSM street geometry (inline)
+    await loadOSMGeometry();
+
+    // Group by block
+    const blocks = {};
+    filtered.forEach(sign => {
+      const desc = (sign.sign_description || '').toUpperCase();
+      // Skip informational
+      for (const p of SKIP_PATTERNS) { if (desc.includes(p)) return; }
+
+      const key = `${sign.on_street} (${sign.from_street} to ${sign.to_street})`;
+      const fullKey = `${key} [${sign.side_of_street}]`;
+      if (!blocks[fullKey]) {
+        blocks[fullKey] = { street: sign.on_street, from: sign.from_street, to: sign.to_street, side: sign.side_of_street, signs: [], blockKey: key };
+      }
+      blocks[fullKey].signs.push(sign);
+    });
+
+    console.log(`${Object.keys(blocks).length} block segments`);
+
+    // Create layers using OSM geometry
+    let osmHits = 0, osmMisses = 0;
+    Object.values(blocks).forEach(block => {
+      const subSegments = createSubSegments(block);
+      
+      // Try to get block polyline from OSM
+      const blockGeo = getBlockPolyline(block);
+      
+      if (blockGeo) {
+        osmHits++;
+        // Use OSM geometry
+        if (subSegments.length === 0) {
+          // No parseable rules, draw whole block as unknown
+          const offsetLine = offsetPolyline(blockGeo.line, block.side);
+          if (!offsetLine || offsetLine.length < 2) return;
+          const layer = L.polyline(offsetLine, { color: '#d1d5db', weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+          const seg = { ...block, rules: [], layer, isSubSegment: false };
+          layer.on('click', () => showBlockInfo(seg));
+          layer.on('mouseover', function() { this.setStyle({ weight: 8 }); });
+          layer.on('mouseout', function() { this.setStyle({ weight: 6 }); });
+          segmentLayers.push(seg);
+          return;
+        }
+        
+        subSegments.forEach((zone, idx) => {
+          let line;
+          try {
+            line = extractSubSegment(blockGeo, zone.distStart, zone.distEnd);
+          } catch(e) { return; }
+          if (!line || line.length < 2) return;
+          
+          const offsetLine = offsetPolyline(line, block.side);
+          if (!offsetLine || offsetLine.length < 2) return;
+          if (!offsetLine.every(p => isFinite(p[0]) && isFinite(p[1]))) return;
+          
+          const layer = L.polyline(offsetLine, { color: '#d1d5db', weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+          const seg = {
+            ...block,
+            rules: zone.rules,
+            signs: zone.rules.map(r => r.sign),
+            layer,
+            isSubSegment: true,
+            distRange: `${Math.round(zone.distStart)}-${Math.round(zone.distEnd)}ft`,
+            distStart: zone.distStart, distEnd: zone.distEnd,
+            subIndex: idx, totalSubs: subSegments.length
+          };
+          layer.on('click', () => showBlockInfo(seg));
+          layer.on('mouseover', function() { this.setStyle({ weight: 8 }); });
+          layer.on('mouseout', function() { this.setStyle({ weight: 6 }); });
+          segmentLayers.push(seg);
+        });
+      } else {
+        osmMisses++;
+        // Fallback: use sign coordinates
+        const coordRefs = getBlockCoordRefsFallback(block.signs);
+        if (coordRefs.length === 0) return;
+        
+        if (subSegments.length === 0) {
+          const line = coordRefs.length === 1
+            ? [[coordRefs[0].lat - 0.00005, coordRefs[0].lng], [coordRefs[0].lat + 0.00005, coordRefs[0].lng]]
+            : coordRefs.map(c => [c.lat, c.lng]);
+          const offsetLine = offsetPolyline(line, block.side);
+          const layer = L.polyline(offsetLine, { color: '#d1d5db', weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+          const seg = { ...block, rules: [], layer, isSubSegment: false };
+          layer.on('click', () => showBlockInfo(seg));
+          layer.on('mouseover', function() { this.setStyle({ weight: 8 }); });
+          layer.on('mouseout', function() { this.setStyle({ weight: 6 }); });
+          segmentLayers.push(seg);
+          return;
+        }
+        
+        // Fallback sub-segments using old interpolation
+        const fakeBuildLine = (start, end) => {
+          const pts = [];
+          if (coordRefs.length >= 2) {
+            // Simple: draw from first to last coord ref
+            pts.push([coordRefs[0].lat, coordRefs[0].lng]);
+            for (let i = 1; i < coordRefs.length - 1; i++) pts.push([coordRefs[i].lat, coordRefs[i].lng]);
+            pts.push([coordRefs[coordRefs.length-1].lat, coordRefs[coordRefs.length-1].lng]);
+          } else {
+            pts.push([coordRefs[0].lat - 0.00005, coordRefs[0].lng]);
+            pts.push([coordRefs[0].lat + 0.00005, coordRefs[0].lng]);
+          }
+          return pts;
+        };
+        
+        // For fallback, just draw one line for the whole block with the dominant rules
+        const allRules = subSegments.flatMap(z => z.rules);
+        const line = fakeBuildLine();
+        const offsetLine = offsetPolyline(line, block.side);
+        if (!offsetLine || offsetLine.length < 2) return;
+        
+        const layer = L.polyline(offsetLine, { color: '#d1d5db', weight: 6, opacity: 0.85, lineCap: 'round', lineJoin: 'round' }).addTo(map);
+        const seg = {
+          ...block,
+          rules: allRules,
+          signs: allRules.map(r => r.sign),
+          layer,
+          isSubSegment: false
+        };
+        layer.on('click', () => showBlockInfo(seg));
+        layer.on('mouseover', function() { this.setStyle({ weight: 8 }); });
+        layer.on('mouseout', function() { this.setStyle({ weight: 6 }); });
+        segmentLayers.push(seg);
+      }
+    });
+    console.log(`OSM geometry: ${osmHits} hits, ${osmMisses} misses`);
+
+    document.getElementById('loading').style.display = 'none';
+
+    // Set default date/time controls to now in ET
+    const et = nowET();
+    const dateStr = toETDateStr(et);
+    document.getElementById('ftDate').value = dateStr;
+    document.getElementById('fbStartDate').value = dateStr;
+    document.getElementById('fbEndDate').value = dateStr;
+
+    // Default mode: signs
+    setMode('signs');
+    console.log('Map loaded with', segmentLayers.length, 'segments');
+
+  } catch (err) {
+    console.error('loadData crashed:', err);
+    document.getElementById('loading').innerHTML =
+      `<div class="error-box"><h3>Error loading map data</h3><p>${err.message}</p></div>`;
+  }
+}
+
+// Listen for filter changes
+document.getElementById('ftDate').addEventListener('change', () => { if (currentMode === 'free-today') updateMap(); });
+document.getElementById('fbStartDate').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
+document.getElementById('fbEndDate').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
+document.getElementById('fbStartTime').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
+document.getElementById('fbEndTime').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
+
+loadData();
+
+// Toggle panel collapse/expand
+function togglePanel() {
+  const panel = document.getElementById('controlPanel');
+  const toggle = document.getElementById('panelToggle');
+  const body = document.getElementById('panelBody');
+  const isCollapsed = panel.classList.toggle('collapsed');
+  body.style.display = isCollapsed ? 'none' : 'block';
+  toggle.textContent = isCollapsed ? '▲' : '▼';
+}
+
+// Register service worker
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').catch(err => console.log('SW registration failed:', err));
+}
+</script>
+</body>
+</html>
