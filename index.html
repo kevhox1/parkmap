@@ -269,8 +269,17 @@ const CATEGORIES = {
 
 // ==== Map ====
 const map = L.map('map', { preferCanvas: true }).setView([40.7831, -73.9712], 13);
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+// Base map without labels (underneath parking lines)
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
   attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
+}).addTo(map);
+
+// Street labels on top of everything (added to a pane above overlays)
+map.createPane('labels');
+map.getPane('labels').style.zIndex = 650;
+map.getPane('labels').style.pointerEvents = 'none';
+L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+  maxZoom: 20, pane: 'labels'
 }).addTo(map);
 
 // ==== State ====
@@ -544,7 +553,7 @@ async function loadTile(row, col) {
 
       // Line is already offset for side of street, render directly
       const layer = L.polyline(seg.line, {
-        color: '#d1d5db', weight: 6, opacity: 0.85,
+        color: '#d1d5db', weight: 5, opacity: 0.75,
         lineCap: 'round', lineJoin: 'round'
       }).addTo(map);
 
@@ -563,8 +572,8 @@ async function loadTile(row, col) {
       };
 
       layer.on('click', () => showBlockInfo(segData));
-      layer.on('mouseover', function() { this.setStyle({ weight: 8 }); });
-      layer.on('mouseout', function() { this.setStyle({ weight: 6 }); });
+      layer.on('mouseover', function() { this.setStyle({ weight: 7 }); });
+      layer.on('mouseout', function() { this.setStyle({ weight: 5 }); });
 
       segmentLayers.push(segData);
     });
@@ -748,7 +757,7 @@ function renderSignsMode() {
   segmentLayers.forEach(seg => {
     const cat = seg.dominantCategory || mostRestrictiveCategory(seg.rules);
     const info = CATEGORIES[cat] || CATEGORIES.UNKNOWN;
-    seg.layer.setStyle({ color: info.color, weight: 6, opacity: 0.85 });
+    seg.layer.setStyle({ color: info.color, weight: 5, opacity: 0.75 });
     counts[cat] = (counts[cat] || 0) + 1;
   });
   renderStats(counts);
@@ -796,7 +805,7 @@ function renderFreeTodayMode() {
       cat = 'FREE'; color = CATEGORIES.FREE.color; opacity = 0.85;
     }
 
-    seg.layer.setStyle({ color, weight: 6, opacity });
+    seg.layer.setStyle({ color, weight: 5, opacity });
     counts[cat] = (counts[cat] || 0) + 1;
   });
   renderStats(counts);
@@ -876,7 +885,7 @@ function renderFreeBetweenMode() {
       cat = dominantCat; color = (CATEGORIES[dominantCat] || CATEGORIES.UNKNOWN).color; opacity = 0.4;
     }
 
-    seg.layer.setStyle({ color, weight: 6, opacity });
+    seg.layer.setStyle({ color, weight: 5, opacity });
     counts[cat] = (counts[cat] || 0) + 1;
   });
   renderStats(counts);
@@ -1046,7 +1055,7 @@ function renderSmartScoreMode() {
 
     const color = scoreToColor(result.score);
     const opacity = result.score === 0 ? 0.3 : 0.85;
-    seg.layer.setStyle({ color, weight: 6, opacity });
+    seg.layer.setStyle({ color, weight: 5, opacity });
 
     if (result.score >= 86) buckets.excellent++;
     else if (result.score >= 71) buckets.good++;
