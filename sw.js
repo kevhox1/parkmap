@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'parkmap-v1';
+const CACHE_VERSION = 'parkmap-v3';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 const DATA_CACHE = CACHE_VERSION + '-data';
 
