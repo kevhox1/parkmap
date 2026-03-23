@@ -483,13 +483,15 @@ async function loadTileIndex() {
 // Given map bounds, return which tile {row, col} combos to load
 function getTilesForBounds(bounds) {
   if (!tileIndex) return [];
+  // Add buffer: load 2 extra tiles in each direction for smoother panning
+  const buffer = 2;
   const south = bounds.getSouth(), north = bounds.getNorth();
   const west = bounds.getWest(), east = bounds.getEast();
 
-  const rowMin = Math.floor((south - tileIndex.latMin) / tileIndex.rowSize);
-  const rowMax = Math.floor((north - tileIndex.latMin) / tileIndex.rowSize);
-  const colMin = Math.floor((west - tileIndex.lngMin) / tileIndex.colSize);
-  const colMax = Math.floor((east - tileIndex.lngMin) / tileIndex.colSize);
+  const rowMin = Math.floor((south - tileIndex.latMin) / tileIndex.rowSize) - buffer;
+  const rowMax = Math.floor((north - tileIndex.latMin) / tileIndex.rowSize) + buffer;
+  const colMin = Math.floor((west - tileIndex.lngMin) / tileIndex.colSize) - buffer;
+  const colMax = Math.floor((east - tileIndex.lngMin) / tileIndex.colSize) + buffer;
 
   // Build a set of available tiles for quick lookup
   if (!tileIndex._tileSet) {

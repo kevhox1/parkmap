@@ -21,11 +21,11 @@ const PAGE_SIZE = 5000;
 // State Plane coordinate filter for Manhattan
 const SP_BOUNDS = { xMin: 979000, xMax: 1010000, yMin: 194000, yMax: 259000 };
 
-// Tile grid
+// Tile grid — smaller tiles (~250m x 250m) for tighter radius loading
 const GRID = {
   latMin: 40.700, latMax: 40.882,
   lngMin: -74.020, lngMax: -73.907,
-  rows: 18, cols: 11
+  rows: 80, cols: 50
 };
 GRID.rowSize = (GRID.latMax - GRID.latMin) / GRID.rows;
 GRID.colSize = (GRID.lngMax - GRID.lngMin) / GRID.cols;
