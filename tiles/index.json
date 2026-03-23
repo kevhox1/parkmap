@@ -1,0 +1,173 @@
+{
+  "gridSize": {
+    "rows": 18,
+    "cols": 11
+  },
+  "latMin": 40.7,
+  "latMax": 40.882,
+  "lngMin": -74.02,
+  "lngMax": -73.907,
+  "rowSize": 0.010111111111110837,
+  "colSize": 0.010272727272727232,
+  "totalSegments": 8066,
+  "totalTiles": 26,
+  "generatedAt": "2026-03-23T16:39:12.472Z",
+  "tiles": [
+    {
+      "row": 0,
+      "col": 0,
+      "filename": "tile_0_0.json",
+      "segmentCount": 520
+    },
+    {
+      "row": 0,
+      "col": 1,
+      "filename": "tile_0_1.json",
+      "segmentCount": 625
+    },
+    {
+      "row": 0,
+      "col": 2,
+      "filename": "tile_0_2.json",
+      "segmentCount": 47
+    },
+    {
+      "row": 0,
+      "col": 7,
+      "filename": "tile_0_7.json",
+      "segmentCount": 19
+    },
+    {
+      "row": 1,
+      "col": 0,
+      "filename": "tile_1_0.json",
+      "segmentCount": 450
+    },
+    {
+      "row": 1,
+      "col": 1,
+      "filename": "tile_1_1.json",
+      "segmentCount": 1026
+    },
+    {
+      "row": 1,
+      "col": 2,
+      "filename": "tile_1_2.json",
+      "segmentCount": 1162
+    },
+    {
+      "row": 1,
+      "col": 3,
+      "filename": "tile_1_3.json",
+      "segmentCount": 853
+    },
+    {
+      "row": 1,
+      "col": 4,
+      "filename": "tile_1_4.json",
+      "segmentCount": 76
+    },
+    {
+      "row": 2,
+      "col": 0,
+      "filename": "tile_2_0.json",
+      "segmentCount": 172
+    },
+    {
+      "row": 2,
+      "col": 1,
+      "filename": "tile_2_1.json",
+      "segmentCount": 910
+    },
+    {
+      "row": 2,
+      "col": 2,
+      "filename": "tile_2_2.json",
+      "segmentCount": 820
+    },
+    {
+      "row": 2,
+      "col": 3,
+      "filename": "tile_2_3.json",
+      "segmentCount": 169
+    },
+    {
+      "row": 3,
+      "col": 0,
+      "filename": "tile_3_0.json",
+      "segmentCount": 36
+    },
+    {
+      "row": 3,
+      "col": 1,
+      "filename": "tile_3_1.json",
+      "segmentCount": 497
+    },
+    {
+      "row": 3,
+      "col": 2,
+      "filename": "tile_3_2.json",
+      "segmentCount": 52
+    },
+    {
+      "row": 6,
+      "col": 3,
+      "filename": "tile_6_3.json",
+      "segmentCount": 3
+    },
+    {
+      "row": 6,
+      "col": 4,
+      "filename": "tile_6_4.json",
+      "segmentCount": 10
+    },
+    {
+      "row": 6,
+      "col": 7,
+      "filename": "tile_6_7.json",
+      "segmentCount": 34
+    },
+    {
+      "row": 9,
+      "col": 6,
+      "filename": "tile_9_6.json",
+      "segmentCount": 4
+    },
+    {
+      "row": 11,
+      "col": 5,
+      "filename": "tile_11_5.json",
+      "segmentCount": 41
+    },
+    {
+      "row": 11,
+      "col": 6,
+      "filename": "tile_11_6.json",
+      "segmentCount": 7
+    },
+    {
+      "row": 15,
+      "col": 8,
+      "filename": "tile_15_8.json",
+      "segmentCount": 105
+    },
+    {
+      "row": 15,
+      "col": 9,
+      "filename": "tile_15_9.json",
+      "segmentCount": 59
+    },
+    {
+      "row": 16,
+      "col": 8,
+      "filename": "tile_16_8.json",
+      "segmentCount": 157
+    },
+    {
+      "row": 16,
+      "col": 9,
+      "filename": "tile_16_9.json",
+      "segmentCount": 212
+    }
+  ]
+}
