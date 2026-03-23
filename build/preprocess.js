@@ -189,9 +189,31 @@ const NYC_TO_OSM = {
 };
 
 const osmNameCache = {};
+// Normalize NYC's weird street names: "EAST    4 STREET" → "EAST 4TH STREET", "2 AVENUE" → "2ND AVENUE"
+function normalizeNYCName(name) {
+  if (!name) return name;
+  // Collapse multiple spaces
+  let n = name.replace(/\s+/g, ' ').trim();
+  // Add ordinal suffixes to bare numbers before STREET/AVENUE/etc.
+  // "EAST 4 STREET" → "EAST 4TH STREET", "2 AVENUE" → "2ND AVENUE"
+  n = n.replace(/\b(\d+)\s+(STREET|AVENUE|PLACE|ROAD|BOULEVARD|DRIVE)\b/gi, (match, num, suffix) => {
+    const d = parseInt(num);
+    let ord;
+    if (d % 100 >= 11 && d % 100 <= 13) ord = 'TH';
+    else if (d % 10 === 1) ord = 'ST';
+    else if (d % 10 === 2) ord = 'ND';
+    else if (d % 10 === 3) ord = 'RD';
+    else ord = 'TH';
+    return `${d}${ord} ${suffix}`;
+  });
+  return n;
+}
+
 function osmName(nycName) {
   if (!nycName) return null;
-  const upper = nycName.toUpperCase().trim();
+  // Normalize first, then uppercase
+  const normalized = normalizeNYCName(nycName);
+  const upper = normalized.toUpperCase().trim();
   if (osmNameCache[upper] !== undefined) return osmNameCache[upper];
 
   if (NYC_TO_OSM[upper]) { osmNameCache[upper] = NYC_TO_OSM[upper]; return NYC_TO_OSM[upper]; }
@@ -608,13 +630,17 @@ async function main() {
       if (desc.includes(p)) { skippedInfo++; return; }
     }
 
-    const key = `${sign.on_street} (${sign.from_street} to ${sign.to_street})`;
+    // Normalize NYC's weird street names (e.g., "EAST    4 STREET" → "EAST 4TH STREET")
+    const normStreet = normalizeNYCName(sign.on_street);
+    const normFrom = normalizeNYCName(sign.from_street);
+    const normTo = normalizeNYCName(sign.to_street);
+    const key = `${normStreet} (${normFrom} to ${normTo})`;
     const fullKey = `${key} [${sign.side_of_street}]`;
     if (!blocks[fullKey]) {
       blocks[fullKey] = {
-        street: sign.on_street,
-        from: sign.from_street,
-        to: sign.to_street,
+        street: normStreet,
+        from: normFrom,
+        to: normTo,
         side: sign.side_of_street,
         signs: [],
         blockKey: key
