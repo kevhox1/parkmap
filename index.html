@@ -1953,10 +1953,9 @@ function clearRoute() {
 }
 
 function generateParkingRoute() {
-  // Clear previous route
   clearRoute();
 
-  // Step 1: Determine starting point
+  // Step 1: Starting point (car pin or map center)
   let startLat, startLng;
   if (carMarker) {
     const pos = carMarker.getLatLng();
@@ -1974,31 +1973,33 @@ function generateParkingRoute() {
   const dateStr = toETDateStr(et);
   const suspended = isASPSuspended(dateStr);
 
-  // Step 2: Score all loaded segments within ~400m
-  const candidates = [];
+  // Step 2: Find the 10 best blocks within ~500m
   const skipCats = new Set(['NO_STANDING', 'SPECIAL', 'TRUCK_LOADING', 'UNKNOWN']);
+  const candidates = [];
 
   for (const seg of segmentLayers) {
     const domCat = seg.dominantCategory || mostRestrictiveCategory(seg.rules);
     if (skipCats.has(domCat)) continue;
     if (!seg.rules || seg.rules.length === 0) continue;
 
+    // Only ASP and metered blocks
+    if (!isASPCategory(domCat) && domCat !== 'METERED') continue;
+
     const mid = getSegmentMidpoint(seg);
     if (!mid) continue;
 
     const dLat = Math.abs(mid.lat - startLat);
     const dLng = Math.abs(mid.lng - startLng);
-    if (dLat > 0.004 || dLng > 0.006) continue; // ~400m roughly
+    if (dLat > 0.005 || dLng > 0.008) continue; // rough 500m box
 
-    const distM = Math.sqrt(Math.pow(dLat * 111320, 2) + Math.pow(dLng * 111320 * 0.75, 2));
-    if (distM > 450) continue;
+    const distM = Math.sqrt(Math.pow(dLat * 111320, 2) + Math.pow(dLng * 111320 * Math.cos(startLat * Math.PI / 180), 2));
+    if (distM > 500) continue;
 
-    // Compute hours until next restriction
     const restriction = computeNextRestrictionHours(seg);
-    if (restriction.hours === 0) continue; // active restriction now
+    if (restriction.hours === 0) continue; // active restriction, skip
 
-    // Compute route score: hours / (1 + distM/150)
-    const routeScore = restriction.hours / (1 + distM / 150);
+    // Score: hours_until_restriction / (1 + distM/200)^1.5
+    const routeScore = restriction.hours / Math.pow(1 + distM / 200, 1.5);
 
     candidates.push({
       seg,
@@ -2019,151 +2020,92 @@ function generateParkingRoute() {
     return;
   }
 
-  // Step 3: Select the top 20 best segments
+  // Sort by score descending
   candidates.sort((a, b) => b.routeScore - a.routeScore);
-  const topSegs = candidates.slice(0, 20);
 
-  // Step 4: Cluster segments into ~6 waypoints
-  const clusters = [];
-  const used = new Set();
-
-  for (const cand of topSegs) {
-    if (used.has(cand)) continue;
-    const cluster = [cand];
-    used.add(cand);
-
-    for (const other of topSegs) {
-      if (used.has(other)) continue;
-      const d = Math.sqrt(
-        Math.pow((cand.mid.lat - other.mid.lat) * 111320, 2) +
-        Math.pow((cand.mid.lng - other.mid.lng) * 111320 * 0.75, 2)
-      );
-      if (d < 100) {
-        cluster.push(other);
-        used.add(other);
-      }
+  // Deduplicate by block (street+from+to), keeping best-scoring segment per block
+  const blockMap = new Map();
+  for (const c of candidates) {
+    const key = `${c.seg.street}|${c.seg.from}|${c.seg.to}`;
+    if (!blockMap.has(key)) {
+      blockMap.set(key, c);
     }
-
-    // Compute cluster midpoint
-    let sumLat = 0, sumLng = 0;
-    for (const c of cluster) {
-      sumLat += c.mid.lat;
-      sumLng += c.mid.lng;
-    }
-    const clusterMid = { lat: sumLat / cluster.length, lng: sumLng / cluster.length };
-
-    // Pick best segment in cluster for the description
-    cluster.sort((a, b) => b.routeScore - a.routeScore);
-    const best = cluster[0];
-    const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[best.seg.side] || best.seg.side;
-
-    // Build recommendation reason
-    let reason = '';
-    const domCat = best.domCat;
-    if (isASPCategory(domCat)) {
-      const catLabel = CATEGORIES[domCat]?.label || domCat;
-      if (best.hours >= 48) {
-        reason = `${catLabel} done ✅`;
-      } else {
-        reason = `${catLabel} ${Math.round(best.hours)}h away`;
-      }
-    } else if (domCat === 'METERED') {
-      reason = `Metered, ${Math.round(best.hours)}h until restriction`;
-    } else if (domCat === 'NO_PARKING') {
-      reason = `${Math.round(best.hours)}h until no-parking`;
-    } else {
-      reason = `${Math.round(best.hours)}h until next restriction`;
-    }
-
-    clusters.push({
-      lat: clusterMid.lat,
-      lng: clusterMid.lng,
-      segments: cluster,
-      best,
-      sideLabel,
-      reason,
-      blockKey: best.seg.blockKey
-    });
-
-    if (clusters.length >= 8) break;
   }
+  const uniqueBlocks = Array.from(blockMap.values()).slice(0, 10);
 
-  if (clusters.length < 2) {
-    // Not enough variety for a route, show what we have
+  if (uniqueBlocks.length === 0) {
     const infoEl = carMarker ? document.getElementById('routeInfo') : document.getElementById('routeInfoStandalone');
     infoEl.style.display = 'block';
-    if (clusters.length === 1) {
-      infoEl.innerHTML = `<div>Only 1 good area found: <strong>${clusters[0].blockKey}</strong> - ${clusters[0].sideLabel}. ${clusters[0].reason}</div>`;
-    } else {
-      infoEl.innerHTML = '<div style="color:#dc2626">Not enough good parking areas found for a route.</div>';
-    }
+    infoEl.innerHTML = '<div style="color:#dc2626">No good parking blocks found for a route.</div>';
     return;
   }
 
-  // Sort waypoints: nearest-neighbor from start
-  const waypoints = [];
-  const remaining = [...clusters];
-  let currentLat = startLat, currentLng = startLng;
+  // Step 3: Order waypoints by angle from start for a circular sweep
+  const waypoints = uniqueBlocks.map(c => {
+    const angle = Math.atan2(c.mid.lng - startLng, c.mid.lat - startLat);
+    const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[c.seg.side] || c.seg.side;
 
-  while (remaining.length > 0 && waypoints.length < 8) {
-    let nearestIdx = 0;
-    let nearestDist = Infinity;
-    for (let i = 0; i < remaining.length; i++) {
-      const d = Math.pow(remaining[i].lat - currentLat, 2) + Math.pow(remaining[i].lng - currentLng, 2);
-      if (d < nearestDist) {
-        nearestDist = d;
-        nearestIdx = i;
+    // Build recommendation reason
+    let reason = '';
+    if (isASPCategory(c.domCat)) {
+      const catLabel = CATEGORIES[c.domCat]?.label || c.domCat;
+      if (c.hours >= 48) {
+        reason = `${catLabel} done ✅`;
+      } else {
+        reason = `${catLabel} ${Math.round(c.hours)}h away`;
       }
+    } else if (c.domCat === 'METERED') {
+      reason = `Metered, ${Math.round(c.hours)}h until restriction`;
+    } else {
+      reason = `${Math.round(c.hours)}h until next restriction`;
     }
-    const wp = remaining.splice(nearestIdx, 1)[0];
-    waypoints.push(wp);
-    currentLat = wp.lat;
-    currentLng = wp.lng;
-  }
 
-  // Step 6: Draw route on map
+    return { ...c, angle, sideLabel, reason };
+  });
+
+  // Sort by angle (clockwise sweep)
+  waypoints.sort((a, b) => a.angle - b.angle);
+
+  // Step 4: Display on map - highlight segments + numbered markers
   routeLayerGroup = L.layerGroup();
 
-  // Build polyline points: start -> waypoints -> start
-  const routePoints = [
-    [startLat, startLng],
-    ...waypoints.map(wp => [wp.lat, wp.lng]),
-    [startLat, startLng]
-  ];
+  const allBounds = [];
 
-  const routeLine = L.polyline(routePoints, {
-    color: '#2563eb',
-    weight: 4,
-    opacity: 0.8,
-    dashArray: '8, 8',
-    lineCap: 'round',
-    lineJoin: 'round'
-  });
-  routeLayerGroup.addLayer(routeLine);
-
-  // Add numbered markers at each waypoint
   waypoints.forEach((wp, idx) => {
     const num = idx + 1;
-    const catColor = wp.best.domCat && CATEGORIES[wp.best.domCat] ? CATEGORIES[wp.best.domCat].color : '#6b7280';
+    const catColor = (wp.domCat && CATEGORIES[wp.domCat]) ? CATEGORIES[wp.domCat].color : '#6b7280';
 
-    const marker = L.marker([wp.lat, wp.lng], {
+    // Glow highlight on the segment polyline
+    const latlngs = wp.seg.layer.getLatLngs();
+    if (latlngs && latlngs.length >= 2) {
+      const glow = L.polyline(latlngs, {
+        color: '#22c55e',
+        weight: 10,
+        opacity: 0.6,
+        lineCap: 'round',
+        lineJoin: 'round'
+      });
+      routeLayerGroup.addLayer(glow);
+      latlngs.forEach(ll => allBounds.push([ll.lat, ll.lng]));
+    }
+
+    // Numbered marker at midpoint
+    const marker = L.marker([wp.mid.lat, wp.mid.lng], {
       icon: L.divIcon({
-        html: `<div style="width:28px;height:28px;border-radius:50%;background:white;border:3px solid ${catColor};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:${catColor};box-shadow:0 2px 6px rgba(0,0,0,0.25)">${num}</div>`,
+        html: `<div style="width:26px;height:26px;border-radius:50%;background:white;border:3px solid ${catColor};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:${catColor};box-shadow:0 2px 6px rgba(0,0,0,0.3)">${num}</div>`,
         className: '',
-        iconSize: [28, 28],
-        iconAnchor: [14, 14]
+        iconSize: [26, 26],
+        iconAnchor: [13, 13]
       }),
       pane: 'carPin'
     });
 
-    // Popup with details
+    // Popup
     let popupHtml = `<div style="font-size:13px;min-width:180px">`;
-    popupHtml += `<div style="font-weight:700;margin-bottom:4px">Stop ${num}: ${wp.blockKey}</div>`;
-    popupHtml += `<div style="margin-bottom:2px">📍 ${wp.sideLabel}</div>`;
+    popupHtml += `<div style="font-weight:700;margin-bottom:4px">#${num}: ${wp.seg.blockKey}</div>`;
+    popupHtml += `<div style="margin-bottom:2px">📍 ${wp.sideLabel} - scan this side</div>`;
     popupHtml += `<div style="color:${catColor};font-weight:600">${wp.reason}</div>`;
-    if (wp.segments.length > 1) {
-      popupHtml += `<div style="font-size:11px;color:#6b7280;margin-top:4px">${wp.segments.length} good segments in this area</div>`;
-    }
+    popupHtml += `<div style="font-size:11px;color:#6b7280;margin-top:4px">${Math.round(wp.distM)}m from start</div>`;
     popupHtml += `</div>`;
     marker.bindPopup(popupHtml);
 
@@ -2172,41 +2114,55 @@ function generateParkingRoute() {
 
   routeLayerGroup.addTo(map);
 
-  // Zoom to fit
-  const bounds = L.latLngBounds(routePoints);
-  map.fitBounds(bounds, { padding: [40, 40] });
+  // Fit map to show all highlighted segments
+  if (allBounds.length > 0) {
+    allBounds.push([startLat, startLng]);
+    map.fitBounds(L.latLngBounds(allBounds), { padding: [40, 40] });
+  }
 
-  // Step 5: Generate route description
-  const estDriveMin = Math.max(3, waypoints.length * 2);
-  let descHtml = `<div style="font-weight:600;margin-bottom:4px">Route: ${waypoints.length} stops, ~${estDriveMin} min drive</div>`;
+  // Step 5: Route info panel
+  const estDriveMin = Math.max(5, waypoints.length * 2);
+  let descHtml = `<div style="font-weight:600;margin-bottom:6px">🚗 Parking Route: ${waypoints.length} blocks to scan (~${estDriveMin} min)</div>`;
+  descHtml += `<div style="max-height:200px;overflow-y:auto">`;
 
   waypoints.forEach((wp, idx) => {
-    descHtml += `<div style="padding:2px 0;border-bottom:1px solid #eee">${idx + 1}. ${wp.blockKey} - ${wp.sideLabel} - ${wp.reason}</div>`;
+    const catColor = (wp.domCat && CATEGORIES[wp.domCat]) ? CATEGORIES[wp.domCat].color : '#6b7280';
+    descHtml += `<div style="padding:3px 0;border-bottom:1px solid #eee;display:flex;align-items:center;gap:5px">`;
+    descHtml += `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${catColor};flex-shrink:0"></span>`;
+    descHtml += `<span>${idx + 1}. ${wp.seg.blockKey} - ${wp.sideLabel} - ${wp.reason} (${Math.round(wp.distM)}m)</span>`;
+    descHtml += `</div>`;
   });
 
-  // Step 7: Maps buttons
+  descHtml += `</div>`;
+
+  // Step 6: Maps handoff buttons
   descHtml += `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">`;
 
-  const isIOS = /(iPhone|iPad|iPod)/i.test(navigator.userAgent);
-
-  // Google Maps URL with all waypoints
+  // Google Maps URL: start -> waypoints in order -> back to start
   let gmapsUrl = `https://www.google.com/maps/dir/${startLat},${startLng}`;
-  waypoints.forEach(wp => { gmapsUrl += `/${wp.lat},${wp.lng}`; });
+  waypoints.forEach(wp => { gmapsUrl += `/${wp.mid.lat},${wp.mid.lng}`; });
   gmapsUrl += `/${startLat},${startLng}`;
 
-  descHtml += `<a href="${gmapsUrl}" target="_blank" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#4285f4;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">📍 Open in Google Maps</a>`;
+  descHtml += `<a href="${gmapsUrl}" target="_blank" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#4285f4;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">🗺️ Open Route in Google Maps</a>`;
 
+  // Apple Maps (iOS only)
+  const isIOS = /(iPhone|iPad|iPod)/i.test(navigator.userAgent);
   if (isIOS) {
-    // Apple Maps with first waypoint as destination
-    const firstWp = waypoints[0];
-    const appleMapsUrl = `maps://?saddr=Current+Location&daddr=${firstWp.lat},${firstWp.lng}&dirflg=d`;
-    descHtml += `<a href="${appleMapsUrl}" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#333;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">🗺️ Apple Maps</a>`;
+    const appleWps = waypoints.slice(0, 8); // Apple Maps limit ~10 waypoints
+    let appleMapsUrl = `maps://?saddr=${startLat},${startLng}&daddr=${appleWps[0].mid.lat},${appleWps[0].mid.lng}`;
+    for (let i = 1; i < appleWps.length; i++) {
+      appleMapsUrl += `+to:${appleWps[i].mid.lat},${appleWps[i].mid.lng}`;
+    }
+    appleMapsUrl += `&dirflg=d`;
+    descHtml += `<a href="${appleMapsUrl}" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#333;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">🗺️ Open in Apple Maps</a>`;
   }
 
   descHtml += `</div>`;
+
+  // Step 7: Clear route button
   descHtml += `<button onclick="clearRoute()" style="margin-top:6px;padding:6px 12px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:11px;width:100%;min-height:36px">Clear Route</button>`;
 
-  // Show in both info divs (whichever is relevant)
+  // Show in info divs
   const routeInfoEl = document.getElementById('routeInfo');
   const routeInfoStandaloneEl = document.getElementById('routeInfoStandalone');
 
