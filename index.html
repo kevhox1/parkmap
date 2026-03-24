@@ -1999,7 +1999,9 @@ function generateParkingRoute() {
     if (restriction.hours === 0) continue; // active restriction, skip
 
     // Score: hours_until_restriction / (1 + distM/200)^1.5
-    const routeScore = restriction.hours / Math.pow(1 + distM / 200, 1.5);
+    // ASP blocks get a 3x bonus over metered (ASP = free long-term, metered = costs money / short-term)
+    const aspBonus = isASPCategory(domCat) ? 3 : 1;
+    const routeScore = (restriction.hours * aspBonus) / Math.pow(1 + distM / 200, 1.5);
 
     candidates.push({
       seg,
