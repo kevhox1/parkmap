@@ -1760,7 +1760,7 @@ function computeSmartMove() {
   const hoursAwayStr = formatHoursAway(carRestriction.hours);
 
   // Step 3: Find better nearby blocks
-  const searchRadius = 0.005; // ~500m
+  // Search in expanding rings: prefer close blocks, only go far if nothing nearby
   const nearby = [];
   for (const seg of segmentLayers) {
     if (seg === carSeg) continue;
@@ -1768,7 +1768,8 @@ function computeSmartMove() {
     if (!mid) continue;
     const dLat = Math.abs(mid.lat - carPos.lat);
     const dLng = Math.abs(mid.lng - carPos.lng);
-    if (dLat > searchRadius || dLng > searchRadius) continue;
+    // Max search: ~500m
+    if (dLat > 0.005 || dLng > 0.005) continue;
 
     const restriction = computeNextRestrictionHours(seg);
     // Only include blocks that are currently legal to park
@@ -1776,11 +1777,21 @@ function computeSmartMove() {
     if (restriction.hours === 0) continue; // active restriction now
     // Only include if better than current
     if (restriction.hours > carRestriction.hours) {
-      nearby.push({ seg, restriction, midpoint: mid });
+      // Compute distance in meters (approximate)
+      const distM = Math.sqrt(Math.pow(dLat * 111320, 2) + Math.pow(dLng * 111320 * 0.75, 2));
+      nearby.push({ seg, restriction, midpoint: mid, distM });
     }
   }
 
-  nearby.sort((a, b) => b.restriction.hours - a.restriction.hours);
+  // Score: balance time gained vs distance
+  // A spot 1 block away (80m) that's good for 48h is WAY better than
+  // a spot 500m away that's good for 168h
+  // Formula: score = hours / (1 + distM/100)^2
+  // This heavily penalizes distance: a spot 200m away needs 4x the hours to beat a spot 50m away
+  nearby.forEach(n => {
+    n.score = n.restriction.hours / Math.pow(1 + n.distM / 100, 2);
+  });
+  nearby.sort((a, b) => b.score - a.score);
   const topOptions = nearby.slice(0, 5);
 
   // Step 4 & 5: Build recommendation
@@ -1836,7 +1847,10 @@ function computeSmartMove() {
     }
 
     html += `<div style="background:white;border-radius:6px;padding:8px;margin-top:6px;border:1px solid #d1fae5">`;
+    const distStr = best.distM < 100 ? `${Math.round(best.distM)}m away` : `${(best.distM/1000).toFixed(1)}km away`;
+    const walkMin = Math.max(1, Math.round(best.distM / 80)); // ~80m per minute walking
     html += `<div style="color:#059669;font-weight:600;margin-bottom:4px">🟢 Best option: ${best.seg.blockKey} - ${bestSideLabel}</div>`;
+    html += `<div>📍 ${distStr} (~${walkMin} min walk)</div>`;
     html += `<div>Next restriction: ${best.restriction.label} - ${bestTimeLabel} (${bestHoursStr} away)</div>`;
     html += `<div style="color:#059669">Gains you ${improvementStr} extra</div>`;
     html += `<div style="margin-top:4px;font-style:italic">${moveAdvice}</div>`;
