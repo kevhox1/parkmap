@@ -254,6 +254,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
         <button onclick="clearCarPin()" style="margin-top:4px;padding:4px 10px;border:1px solid #ddd;border-radius:6px;background:white;cursor:pointer;font-size:11px;color:#dc2626">Clear</button>
       </div>
       <div id="carParkUntilInfo" style="display:none;margin-top:6px;padding:8px 10px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;font-size:12px;color:#166534"></div>
+      <div id="smartMovePanel" style="display:none">
+        <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:10px;margin-top:8px">
+          <div style="font-weight:600;font-size:13px;margin-bottom:6px">🧠 Smart Move</div>
+          <div id="smartMoveContent" style="font-size:12px;color:#374151"></div>
+          <button id="smartMoveRouteBtn" onclick="openSmartMoveRoute()" style="display:none;margin-top:8px;padding:6px 12px;background:#2563eb;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;min-height:44px">
+            🗺️ Navigate to Best Spot
+          </button>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -705,6 +714,9 @@ async function startMap(lat, lng, zoom) {
   // Start loading visible tiles
   loadVisibleTiles();
 
+  // Start Smart Move countdown interval
+  startSmartMoveInterval();
+
   // Default mode
   setMode('signs');
 }
@@ -787,6 +799,7 @@ function updateMap() {
     renderParkUntilMode();
   }
   updateCarParkUntilInfo();
+  computeSmartMove();
 }
 
 function renderSignsMode() {
@@ -1391,6 +1404,7 @@ function addCarMarker(lat, lng) {
     localStorage.setItem('parkmap_car_lng', pos.lng);
     updateCarInfoBar(pos.lat, pos.lng);
     updateCarParkUntilInfo();
+    computeSmartMove();
   });
 
   updateCarInfoBar(lat, lng);
@@ -1404,6 +1418,7 @@ function parkCarHere() {
   localStorage.setItem('parkmap_car_lng', lng);
   addCarMarker(lat, lng);
   updateCarParkUntilInfo();
+  computeSmartMove();
 }
 
 function clearCarPin() {
@@ -1415,6 +1430,8 @@ function clearCarPin() {
   localStorage.removeItem('parkmap_car_lng');
   document.getElementById('carInfoBar').style.display = 'none';
   document.getElementById('carParkUntilInfo').style.display = 'none';
+  document.getElementById('smartMovePanel').style.display = 'none';
+  clearSmartMoveOverlay();
 }
 
 function updateCarInfoBar(lat, lng) {
@@ -1553,6 +1570,342 @@ showBlockInfo = function(seg) {
   document.getElementById('infoPanelContent').innerHTML = html;
   document.getElementById('infoPanel').style.display = 'block';
 };
+
+// ==== Smart Move ====
+let smartMoveMarker = null;
+let smartMoveHighlight = null;
+let smartMoveRecommendation = null; // { lat, lng } of best segment midpoint
+let smartMoveInterval = null;
+
+function getSegmentMidpoint(seg) {
+  const latlngs = seg.layer.getLatLngs();
+  if (!latlngs || latlngs.length === 0) return null;
+  const mid = Math.floor(latlngs.length / 2);
+  return latlngs[mid];
+}
+
+function distSq(lat1, lng1, lat2, lng2) {
+  return (lat1 - lat2) ** 2 + (lng1 - lng2) ** 2;
+}
+
+function computeNextRestrictionHours(seg) {
+  const et = nowET();
+  const dayOfWeek = et.getDay();
+  const minuteOfDay = et.getHours() * 60 + et.getMinutes();
+  const dateStr = toETDateStr(et);
+  const suspended = isASPSuspended(dateStr);
+
+  const rules = seg.rules || [];
+  if (rules.length === 0) return { hours: 168, label: 'No restrictions', cat: null, rule: null };
+
+  let soonestHours = 168;
+  let soonestLabel = 'No restrictions';
+  let soonestCat = null;
+  let soonestRule = null;
+
+  for (const rule of rules) {
+    const cat = rule.category;
+
+    // Skip permanently restricted blocks
+    if (cat === 'NO_STANDING' || cat === 'SPECIAL') {
+      if (rule.anytime || isScheduleActiveAt(rule, dayOfWeek, minuteOfDay)) {
+        return { hours: 0, label: (cat === 'NO_STANDING' ? 'No standing zone' : 'Special restriction') + ' (active now)', cat, rule };
+      }
+    }
+
+    if (cat === 'NO_PARKING' || cat === 'TRUCK_LOADING') {
+      if (isScheduleActiveAt(rule, dayOfWeek, minuteOfDay)) {
+        return { hours: 0, label: (cat === 'NO_PARKING' ? 'No parking' : 'Truck loading') + ' active now', cat, rule };
+      }
+      const h = computeHoursUntilActive(rule, dayOfWeek, minuteOfDay);
+      if (h < soonestHours) {
+        soonestHours = h;
+        soonestLabel = (cat === 'NO_PARKING' ? 'No Parking' : 'Truck Loading');
+        soonestCat = cat;
+        soonestRule = rule;
+      }
+    }
+
+    if (isASPCategory(cat)) {
+      if (suspended && isASPDayForCategory(cat, dayOfWeek)) {
+        // ASP suspended today, check next non-suspended occurrence
+        const h = computeHoursUntilASP(cat, rule, dayOfWeek, minuteOfDay);
+        // If the next occurrence is today but suspended, skip to further out
+        // Just use the computed hours (will be next unsuspended day in practice)
+        if (h < soonestHours) {
+          soonestHours = h;
+          soonestLabel = CATEGORIES[cat]?.label || cat;
+          soonestCat = cat;
+          soonestRule = rule;
+        }
+        continue;
+      }
+      const isAspDay = isASPDayForCategory(cat, dayOfWeek);
+      if (isAspDay && isScheduleActiveAt(rule, dayOfWeek, minuteOfDay)) {
+        return { hours: 0, label: (CATEGORIES[cat]?.label || cat) + ' active now', cat, rule };
+      }
+      const h = computeHoursUntilASP(cat, rule, dayOfWeek, minuteOfDay);
+      if (h < soonestHours) {
+        soonestHours = h;
+        soonestLabel = CATEGORIES[cat]?.label || cat;
+        soonestCat = cat;
+        soonestRule = rule;
+      }
+    }
+
+    if (cat === 'METERED') {
+      // Metered isn't a "move your car" restriction, skip for Smart Move
+      continue;
+    }
+  }
+
+  return { hours: soonestHours, label: soonestLabel, cat: soonestCat, rule: soonestRule };
+}
+
+function formatHoursAway(hours) {
+  if (hours <= 0) return 'now';
+  if (hours < 1) return `${Math.round(hours * 60)} minutes`;
+  if (hours < 24) {
+    const h = Math.floor(hours);
+    const m = Math.round((hours - h) * 60);
+    return m > 0 ? `${h}h ${m}m` : `${h} hour${h !== 1 ? 's' : ''}`;
+  }
+  const days = Math.floor(hours / 24);
+  const rem = Math.round(hours - days * 24);
+  return rem > 0 ? `${days}d ${rem}h` : `${days} day${days !== 1 ? 's' : ''}`;
+}
+
+function getNextRestrictionTimeLabel(hours) {
+  if (hours >= 168) return 'No upcoming restrictions';
+  const et = nowET();
+  const target = new Date(et.getTime() + hours * 3600000);
+  const dayNames = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
+  const targetDay = target.getDay();
+  const etDay = et.getDay();
+  const etDate = et.getDate();
+  const targetDate = target.getDate();
+
+  let dayLabel;
+  if (etDate === targetDate && etDay === targetDay) {
+    dayLabel = 'Today';
+  } else if (targetDate === etDate + 1 || (etDate > targetDate && (etDay + 1) % 7 === targetDay)) {
+    dayLabel = 'Tomorrow';
+  } else {
+    dayLabel = dayNames[targetDay];
+  }
+
+  const timeStr = target.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: 'America/New_York' });
+  return `${dayLabel} ${timeStr}`;
+}
+
+function clearSmartMoveOverlay() {
+  if (smartMoveMarker) {
+    map.removeLayer(smartMoveMarker);
+    smartMoveMarker = null;
+  }
+  if (smartMoveHighlight) {
+    map.removeLayer(smartMoveHighlight);
+    smartMoveHighlight = null;
+  }
+  smartMoveRecommendation = null;
+}
+
+function computeSmartMove() {
+  const panel = document.getElementById('smartMovePanel');
+  const content = document.getElementById('smartMoveContent');
+  const routeBtn = document.getElementById('smartMoveRouteBtn');
+
+  if (!carMarker) {
+    panel.style.display = 'none';
+    clearSmartMoveOverlay();
+    return;
+  }
+
+  panel.style.display = 'block';
+  const carPos = carMarker.getLatLng();
+
+  // Step 1: Find car's current block
+  const carSeg = findClosestSegment(carPos.lat, carPos.lng);
+  if (!carSeg) {
+    content.innerHTML = '<span style="color:#999">No parking data loaded near your car. Zoom in or pan to load tiles.</span>';
+    routeBtn.style.display = 'none';
+    clearSmartMoveOverlay();
+    return;
+  }
+
+  const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[carSeg.side] || carSeg.side;
+
+  // Step 2: Compute next restriction for current block
+  const carRestriction = computeNextRestrictionHours(carSeg);
+
+  // No restrictions at all
+  if (carRestriction.hours >= 168) {
+    content.innerHTML = `<div style="margin-bottom:4px"><strong>Your car:</strong> ${carSeg.blockKey} - ${sideLabel}</div>` +
+      `<div style="color:#16a34a;font-weight:600">✅ No restrictions on your block! You're all set.</div>`;
+    routeBtn.style.display = 'none';
+    clearSmartMoveOverlay();
+    return;
+  }
+
+  // Active restriction right now (NO_STANDING, etc)
+  if (carRestriction.hours === 0 && (carRestriction.cat === 'NO_STANDING' || carRestriction.cat === 'SPECIAL')) {
+    content.innerHTML = `<div style="margin-bottom:4px"><strong>Your car:</strong> ${carSeg.blockKey} - ${sideLabel}</div>` +
+      `<div style="color:#dc2626;font-weight:600">🚫 ${carRestriction.label}. This block isn't legal for parking.</div>`;
+    routeBtn.style.display = 'none';
+    clearSmartMoveOverlay();
+    return;
+  }
+
+  const restrictionTimeLabel = getNextRestrictionTimeLabel(carRestriction.hours);
+  const hoursAwayStr = formatHoursAway(carRestriction.hours);
+
+  // Step 3: Find better nearby blocks
+  const searchRadius = 0.005; // ~500m
+  const nearby = [];
+  for (const seg of segmentLayers) {
+    if (seg === carSeg) continue;
+    const mid = getSegmentMidpoint(seg);
+    if (!mid) continue;
+    const dLat = Math.abs(mid.lat - carPos.lat);
+    const dLng = Math.abs(mid.lng - carPos.lng);
+    if (dLat > searchRadius || dLng > searchRadius) continue;
+
+    const restriction = computeNextRestrictionHours(seg);
+    // Only include blocks that are currently legal to park
+    if (restriction.hours === 0 && (restriction.cat === 'NO_STANDING' || restriction.cat === 'SPECIAL' || restriction.cat === 'NO_PARKING' || restriction.cat === 'TRUCK_LOADING')) continue;
+    if (restriction.hours === 0) continue; // active restriction now
+    // Only include if better than current
+    if (restriction.hours > carRestriction.hours) {
+      nearby.push({ seg, restriction, midpoint: mid });
+    }
+  }
+
+  nearby.sort((a, b) => b.restriction.hours - a.restriction.hours);
+  const topOptions = nearby.slice(0, 5);
+
+  // Step 4 & 5: Build recommendation
+  let html = `<div style="margin-bottom:6px"><strong>Your car:</strong> ${carSeg.blockKey} - ${sideLabel}</div>`;
+
+  // Current restriction info
+  if (carRestriction.hours === 0) {
+    html += `<div style="color:#dc2626;font-weight:700;margin-bottom:6px">⚠️ ${carRestriction.label}! Move your car immediately!</div>`;
+  } else if (carRestriction.hours <= 2) {
+    html += `<div style="color:#dc2626;font-weight:700;margin-bottom:6px">⚠️ ${carRestriction.label} in ${hoursAwayStr}! Move NOW!</div>`;
+  } else {
+    html += `<div style="margin-bottom:6px">Next: <strong>${carRestriction.label}</strong> - ${restrictionTimeLabel} (${hoursAwayStr} away)</div>`;
+  }
+
+  // Great spot check
+  if (carRestriction.hours >= 48 && topOptions.length === 0) {
+    html += `<div style="color:#16a34a;font-weight:600">✅ You're in a great spot! No need to move until ${getNextRestrictionTimeLabel(carRestriction.hours - 12)}.</div>`;
+    content.innerHTML = html;
+    routeBtn.style.display = 'none';
+    clearSmartMoveOverlay();
+    return;
+  }
+
+  if (topOptions.length === 0 && carRestriction.hours >= 24) {
+    html += `<div style="color:#16a34a">✅ No rush. Your block is already one of the best options nearby.</div>`;
+    content.innerHTML = html;
+    routeBtn.style.display = 'none';
+    clearSmartMoveOverlay();
+    return;
+  }
+
+  if (topOptions.length > 0) {
+    const best = topOptions[0];
+    const bestSideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[best.seg.side] || best.seg.side;
+    const bestHoursStr = formatHoursAway(best.restriction.hours);
+    const bestTimeLabel = getNextRestrictionTimeLabel(best.restriction.hours);
+    const improvement = best.restriction.hours - carRestriction.hours;
+    const improvementStr = formatHoursAway(improvement);
+
+    // Move timing recommendation
+    let moveAdvice = '';
+    if (carRestriction.hours <= 2) {
+      moveAdvice = '<span style="color:#dc2626;font-weight:600">Move NOW!</span>';
+    } else if (isASPCategory(carRestriction.cat) && carRestriction.hours <= 18 && carRestriction.hours > 2) {
+      moveAdvice = 'Move tonight between 6-9 PM';
+    } else if (carRestriction.hours <= 6) {
+      moveAdvice = 'Move soon (within a few hours)';
+    } else if (carRestriction.hours <= 24) {
+      const moveByHours = carRestriction.hours - 1;
+      moveAdvice = `Move by ${getNextRestrictionTimeLabel(moveByHours)}`;
+    } else {
+      moveAdvice = `No rush, but move before ${getNextRestrictionTimeLabel(carRestriction.hours - 1)}`;
+    }
+
+    html += `<div style="background:white;border-radius:6px;padding:8px;margin-top:6px;border:1px solid #d1fae5">`;
+    html += `<div style="color:#059669;font-weight:600;margin-bottom:4px">🟢 Best option: ${best.seg.blockKey} - ${bestSideLabel}</div>`;
+    html += `<div>Next restriction: ${best.restriction.label} - ${bestTimeLabel} (${bestHoursStr} away)</div>`;
+    html += `<div style="color:#059669">Gains you ${improvementStr} extra</div>`;
+    html += `<div style="margin-top:4px;font-style:italic">${moveAdvice}</div>`;
+    html += `</div>`;
+
+    // Show other options if available
+    if (topOptions.length > 1) {
+      html += `<details style="margin-top:6px"><summary style="cursor:pointer;font-size:11px;color:#6b7280">Other options (${topOptions.length - 1} more)</summary><div style="margin-top:4px">`;
+      for (let i = 1; i < topOptions.length; i++) {
+        const opt = topOptions[i];
+        const optSide = { E: 'E', W: 'W', N: 'N', S: 'S' }[opt.seg.side] || opt.seg.side;
+        html += `<div style="padding:3px 0;border-bottom:1px solid #f3f4f6;font-size:11px">${opt.seg.blockKey} (${optSide}) - ${formatHoursAway(opt.restriction.hours)} until ${opt.restriction.label}</div>`;
+      }
+      html += `</div></details>`;
+    }
+
+    // Update map highlight
+    clearSmartMoveOverlay();
+    const bestLatlngs = best.seg.layer.getLatLngs();
+    smartMoveHighlight = L.polyline(bestLatlngs, {
+      color: '#10b981', weight: 10, opacity: 0.8,
+      dashArray: '10, 6', lineCap: 'round', lineJoin: 'round'
+    }).addTo(map);
+
+    const bestMid = best.midpoint;
+    smartMoveMarker = L.marker([bestMid.lat, bestMid.lng], {
+      icon: L.divIcon({
+        html: '<div style="font-size:20px;text-align:center;filter:drop-shadow(0 2px 3px rgba(0,0,0,0.3))">🟢</div>',
+        className: '',
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+      }),
+      pane: 'carPin'
+    }).addTo(map);
+
+    smartMoveRecommendation = { lat: bestMid.lat, lng: bestMid.lng };
+    routeBtn.style.display = 'block';
+  } else {
+    // No better options but restriction is coming
+    if (carRestriction.hours < 24) {
+      html += `<div style="color:#92400e">⚠️ No significantly better blocks nearby. Consider moving further out before ${restrictionTimeLabel}.</div>`;
+    } else {
+      html += `<div style="color:#16a34a">✅ Your block is solid. Next restriction: ${restrictionTimeLabel}.</div>`;
+    }
+    clearSmartMoveOverlay();
+    routeBtn.style.display = 'none';
+  }
+
+  content.innerHTML = html;
+}
+
+function openSmartMoveRoute() {
+  if (!smartMoveRecommendation) return;
+  const { lat, lng } = smartMoveRecommendation;
+  const isIOS = /(iPhone|iPad|iPod)/i.test(navigator.userAgent);
+  if (isIOS) {
+    window.open(`maps://?daddr=${lat},${lng}&dirflg=d`, '_blank');
+  } else {
+    window.open(`https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}&travelmode=driving`, '_blank');
+  }
+}
+
+// Start 1-minute interval for Smart Move countdown updates
+function startSmartMoveInterval() {
+  if (smartMoveInterval) clearInterval(smartMoveInterval);
+  smartMoveInterval = setInterval(() => {
+    if (carMarker) computeSmartMove();
+  }, 60000);
+}
 
 // ==== Initialization ====
 async function init() {
