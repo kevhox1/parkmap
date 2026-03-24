@@ -443,41 +443,33 @@ function offsetPolyline(points, side) {
   const valid = points.filter(p => Array.isArray(p) && p.length >= 2 && isFinite(p[0]) && isFinite(p[1]));
   if (valid.length < 2) return valid;
 
-  const result = [];
-  for (let i = 0; i < valid.length; i++) {
-    let nx, ny;
-    if (i === 0) {
-      const dx = valid[1][1] - valid[0][1], dy = valid[1][0] - valid[0][0];
-      const len = Math.sqrt(dx*dx + dy*dy);
-      if (len === 0) { result.push(valid[i]); continue; }
-      nx = -dy / len; ny = dx / len;
-    } else if (i === valid.length - 1) {
-      const dx = valid[i][1] - valid[i-1][1], dy = valid[i][0] - valid[i-1][0];
-      const len = Math.sqrt(dx*dx + dy*dy);
-      if (len === 0) { result.push(valid[i]); continue; }
-      nx = -dy / len; ny = dx / len;
-    } else {
-      const dx1 = valid[i][1] - valid[i-1][1], dy1 = valid[i][0] - valid[i-1][0];
-      const dx2 = valid[i+1][1] - valid[i][1], dy2 = valid[i+1][0] - valid[i][0];
-      const len1 = Math.sqrt(dx1*dx1 + dy1*dy1);
-      const len2 = Math.sqrt(dx2*dx2 + dy2*dy2);
-      if (len1 === 0 || len2 === 0) { result.push(valid[i]); continue; }
-      nx = (-dy1/len1 + -dy2/len2) / 2;
-      ny = (dx1/len1 + dx2/len2) / 2;
-      const nLen = Math.sqrt(nx*nx + ny*ny);
-      if (nLen > 0) { nx /= nLen; ny /= nLen; }
-    }
+  // Determine overall street orientation from first to last point
+  const totalDLat = valid[valid.length-1][0] - valid[0][0];
+  const totalDLng = valid[valid.length-1][1] - valid[0][1];
+  const isNorthSouth = Math.abs(totalDLat) > Math.abs(totalDLng);
 
-    let mult = 0;
-    if (side === 'E' || side === 'N') mult = 1;
-    else if (side === 'W' || side === 'S') mult = -1;
-
-    result.push([
-      Math.round((valid[i][0] + nx * offset * mult) * 1e6) / 1e6,
-      Math.round((valid[i][1] + ny * offset * mult) * 1e6) / 1e6
-    ]);
+  // Simple compass-based offset:
+  // N/S streets: East side = positive lng offset, West side = negative lng offset
+  // E/W streets: North side = positive lat offset, South side = negative lat offset
+  let latOff = 0, lngOff = 0;
+  if (isNorthSouth) {
+    // N/S street: offset in longitude
+    if (side === 'E') lngOff = offset;
+    else if (side === 'W') lngOff = -offset;
+    else if (side === 'N') latOff = offset;  // rare for N/S street but handle it
+    else if (side === 'S') latOff = -offset;
+  } else {
+    // E/W street: offset in latitude
+    if (side === 'N') latOff = offset;
+    else if (side === 'S') latOff = -offset;
+    else if (side === 'E') lngOff = offset;  // rare for E/W street but handle it
+    else if (side === 'W') lngOff = -offset;
   }
-  return result;
+
+  return valid.map(([lat, lng]) => [
+    Math.round((lat + latOff) * 1e6) / 1e6,
+    Math.round((lng + lngOff) * 1e6) / 1e6
+  ]);
 }
 
 // ==== Sub-segment creation ====
