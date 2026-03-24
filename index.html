@@ -244,6 +244,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
       </div>
     </div>
 
+    <div style="margin-top:8px">
+      <button onclick="generateParkingRoute()" style="padding:8px 14px;background:#059669;color:white;border:none;border-radius:8px;font-size:13px;cursor:pointer;width:100%;min-height:44px">
+        🚗 Find Parking Near Me
+      </button>
+      <div id="routeInfoStandalone" style="display:none;margin-top:6px;font-size:11px;color:#6b7280"></div>
+    </div>
+
     <div class="legend" id="legend"></div>
     <div class="stats" id="stats"></div>
 
@@ -261,6 +268,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
           <button id="smartMoveRouteBtn" onclick="openSmartMoveRoute()" style="display:none;margin-top:8px;padding:6px 12px;background:#2563eb;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;min-height:44px">
             🗺️ Navigate to Best Spot
           </button>
+          <button onclick="generateParkingRoute()" style="margin-top:6px;padding:8px 14px;background:#059669;color:white;border:none;border-radius:8px;font-size:13px;cursor:pointer;width:100%;min-height:44px">
+            🚗 Find Parking Route
+          </button>
+          <div id="routeInfo" style="display:none;margin-top:6px;font-size:11px;color:#6b7280"></div>
         </div>
       </div>
     </div>
@@ -1927,6 +1938,287 @@ function startSmartMoveInterval() {
   smartMoveInterval = setInterval(() => {
     if (carMarker) computeSmartMove();
   }, 60000);
+}
+
+// ==== Parking Route ====
+let routeLayerGroup = null;
+
+function clearRoute() {
+  if (routeLayerGroup) {
+    map.removeLayer(routeLayerGroup);
+    routeLayerGroup = null;
+  }
+  document.getElementById('routeInfo').style.display = 'none';
+  document.getElementById('routeInfoStandalone').style.display = 'none';
+}
+
+function generateParkingRoute() {
+  // Clear previous route
+  clearRoute();
+
+  // Step 1: Determine starting point
+  let startLat, startLng;
+  if (carMarker) {
+    const pos = carMarker.getLatLng();
+    startLat = pos.lat;
+    startLng = pos.lng;
+  } else {
+    const center = map.getCenter();
+    startLat = center.lat;
+    startLng = center.lng;
+  }
+
+  const et = nowET();
+  const dayOfWeek = et.getDay();
+  const minuteOfDay = et.getHours() * 60 + et.getMinutes();
+  const dateStr = toETDateStr(et);
+  const suspended = isASPSuspended(dateStr);
+
+  // Step 2: Score all loaded segments within ~400m
+  const candidates = [];
+  const skipCats = new Set(['NO_STANDING', 'SPECIAL', 'TRUCK_LOADING', 'UNKNOWN']);
+
+  for (const seg of segmentLayers) {
+    const domCat = seg.dominantCategory || mostRestrictiveCategory(seg.rules);
+    if (skipCats.has(domCat)) continue;
+    if (!seg.rules || seg.rules.length === 0) continue;
+
+    const mid = getSegmentMidpoint(seg);
+    if (!mid) continue;
+
+    const dLat = Math.abs(mid.lat - startLat);
+    const dLng = Math.abs(mid.lng - startLng);
+    if (dLat > 0.004 || dLng > 0.006) continue; // ~400m roughly
+
+    const distM = Math.sqrt(Math.pow(dLat * 111320, 2) + Math.pow(dLng * 111320 * 0.75, 2));
+    if (distM > 450) continue;
+
+    // Compute hours until next restriction
+    const restriction = computeNextRestrictionHours(seg);
+    if (restriction.hours === 0) continue; // active restriction now
+
+    // Compute route score: hours / (1 + distM/150)
+    const routeScore = restriction.hours / (1 + distM / 150);
+
+    candidates.push({
+      seg,
+      mid,
+      distM,
+      hours: restriction.hours,
+      label: restriction.label,
+      cat: restriction.cat,
+      routeScore,
+      domCat
+    });
+  }
+
+  if (candidates.length === 0) {
+    const infoEl = carMarker ? document.getElementById('routeInfo') : document.getElementById('routeInfoStandalone');
+    infoEl.style.display = 'block';
+    infoEl.innerHTML = '<div style="color:#dc2626;font-weight:600">No suitable parking segments found nearby. Try panning/zooming to load more data.</div>';
+    return;
+  }
+
+  // Step 3: Select the top 20 best segments
+  candidates.sort((a, b) => b.routeScore - a.routeScore);
+  const topSegs = candidates.slice(0, 20);
+
+  // Step 4: Cluster segments into ~6 waypoints
+  const clusters = [];
+  const used = new Set();
+
+  for (const cand of topSegs) {
+    if (used.has(cand)) continue;
+    const cluster = [cand];
+    used.add(cand);
+
+    for (const other of topSegs) {
+      if (used.has(other)) continue;
+      const d = Math.sqrt(
+        Math.pow((cand.mid.lat - other.mid.lat) * 111320, 2) +
+        Math.pow((cand.mid.lng - other.mid.lng) * 111320 * 0.75, 2)
+      );
+      if (d < 100) {
+        cluster.push(other);
+        used.add(other);
+      }
+    }
+
+    // Compute cluster midpoint
+    let sumLat = 0, sumLng = 0;
+    for (const c of cluster) {
+      sumLat += c.mid.lat;
+      sumLng += c.mid.lng;
+    }
+    const clusterMid = { lat: sumLat / cluster.length, lng: sumLng / cluster.length };
+
+    // Pick best segment in cluster for the description
+    cluster.sort((a, b) => b.routeScore - a.routeScore);
+    const best = cluster[0];
+    const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[best.seg.side] || best.seg.side;
+
+    // Build recommendation reason
+    let reason = '';
+    const domCat = best.domCat;
+    if (isASPCategory(domCat)) {
+      const catLabel = CATEGORIES[domCat]?.label || domCat;
+      if (best.hours >= 48) {
+        reason = `${catLabel} done ✅`;
+      } else {
+        reason = `${catLabel} ${Math.round(best.hours)}h away`;
+      }
+    } else if (domCat === 'METERED') {
+      reason = `Metered, ${Math.round(best.hours)}h until restriction`;
+    } else if (domCat === 'NO_PARKING') {
+      reason = `${Math.round(best.hours)}h until no-parking`;
+    } else {
+      reason = `${Math.round(best.hours)}h until next restriction`;
+    }
+
+    clusters.push({
+      lat: clusterMid.lat,
+      lng: clusterMid.lng,
+      segments: cluster,
+      best,
+      sideLabel,
+      reason,
+      blockKey: best.seg.blockKey
+    });
+
+    if (clusters.length >= 8) break;
+  }
+
+  if (clusters.length < 2) {
+    // Not enough variety for a route, show what we have
+    const infoEl = carMarker ? document.getElementById('routeInfo') : document.getElementById('routeInfoStandalone');
+    infoEl.style.display = 'block';
+    if (clusters.length === 1) {
+      infoEl.innerHTML = `<div>Only 1 good area found: <strong>${clusters[0].blockKey}</strong> - ${clusters[0].sideLabel}. ${clusters[0].reason}</div>`;
+    } else {
+      infoEl.innerHTML = '<div style="color:#dc2626">Not enough good parking areas found for a route.</div>';
+    }
+    return;
+  }
+
+  // Sort waypoints: nearest-neighbor from start
+  const waypoints = [];
+  const remaining = [...clusters];
+  let currentLat = startLat, currentLng = startLng;
+
+  while (remaining.length > 0 && waypoints.length < 8) {
+    let nearestIdx = 0;
+    let nearestDist = Infinity;
+    for (let i = 0; i < remaining.length; i++) {
+      const d = Math.pow(remaining[i].lat - currentLat, 2) + Math.pow(remaining[i].lng - currentLng, 2);
+      if (d < nearestDist) {
+        nearestDist = d;
+        nearestIdx = i;
+      }
+    }
+    const wp = remaining.splice(nearestIdx, 1)[0];
+    waypoints.push(wp);
+    currentLat = wp.lat;
+    currentLng = wp.lng;
+  }
+
+  // Step 6: Draw route on map
+  routeLayerGroup = L.layerGroup();
+
+  // Build polyline points: start -> waypoints -> start
+  const routePoints = [
+    [startLat, startLng],
+    ...waypoints.map(wp => [wp.lat, wp.lng]),
+    [startLat, startLng]
+  ];
+
+  const routeLine = L.polyline(routePoints, {
+    color: '#2563eb',
+    weight: 4,
+    opacity: 0.8,
+    dashArray: '8, 8',
+    lineCap: 'round',
+    lineJoin: 'round'
+  });
+  routeLayerGroup.addLayer(routeLine);
+
+  // Add numbered markers at each waypoint
+  waypoints.forEach((wp, idx) => {
+    const num = idx + 1;
+    const catColor = wp.best.domCat && CATEGORIES[wp.best.domCat] ? CATEGORIES[wp.best.domCat].color : '#6b7280';
+
+    const marker = L.marker([wp.lat, wp.lng], {
+      icon: L.divIcon({
+        html: `<div style="width:28px;height:28px;border-radius:50%;background:white;border:3px solid ${catColor};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;color:${catColor};box-shadow:0 2px 6px rgba(0,0,0,0.25)">${num}</div>`,
+        className: '',
+        iconSize: [28, 28],
+        iconAnchor: [14, 14]
+      }),
+      pane: 'carPin'
+    });
+
+    // Popup with details
+    let popupHtml = `<div style="font-size:13px;min-width:180px">`;
+    popupHtml += `<div style="font-weight:700;margin-bottom:4px">Stop ${num}: ${wp.blockKey}</div>`;
+    popupHtml += `<div style="margin-bottom:2px">📍 ${wp.sideLabel}</div>`;
+    popupHtml += `<div style="color:${catColor};font-weight:600">${wp.reason}</div>`;
+    if (wp.segments.length > 1) {
+      popupHtml += `<div style="font-size:11px;color:#6b7280;margin-top:4px">${wp.segments.length} good segments in this area</div>`;
+    }
+    popupHtml += `</div>`;
+    marker.bindPopup(popupHtml);
+
+    routeLayerGroup.addLayer(marker);
+  });
+
+  routeLayerGroup.addTo(map);
+
+  // Zoom to fit
+  const bounds = L.latLngBounds(routePoints);
+  map.fitBounds(bounds, { padding: [40, 40] });
+
+  // Step 5: Generate route description
+  const estDriveMin = Math.max(3, waypoints.length * 2);
+  let descHtml = `<div style="font-weight:600;margin-bottom:4px">Route: ${waypoints.length} stops, ~${estDriveMin} min drive</div>`;
+
+  waypoints.forEach((wp, idx) => {
+    descHtml += `<div style="padding:2px 0;border-bottom:1px solid #eee">${idx + 1}. ${wp.blockKey} - ${wp.sideLabel} - ${wp.reason}</div>`;
+  });
+
+  // Step 7: Maps buttons
+  descHtml += `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">`;
+
+  const isIOS = /(iPhone|iPad|iPod)/i.test(navigator.userAgent);
+
+  // Google Maps URL with all waypoints
+  let gmapsUrl = `https://www.google.com/maps/dir/${startLat},${startLng}`;
+  waypoints.forEach(wp => { gmapsUrl += `/${wp.lat},${wp.lng}`; });
+  gmapsUrl += `/${startLat},${startLng}`;
+
+  descHtml += `<a href="${gmapsUrl}" target="_blank" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#4285f4;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">📍 Open in Google Maps</a>`;
+
+  if (isIOS) {
+    // Apple Maps with first waypoint as destination
+    const firstWp = waypoints[0];
+    const appleMapsUrl = `maps://?saddr=Current+Location&daddr=${firstWp.lat},${firstWp.lng}&dirflg=d`;
+    descHtml += `<a href="${appleMapsUrl}" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#333;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">🗺️ Apple Maps</a>`;
+  }
+
+  descHtml += `</div>`;
+  descHtml += `<button onclick="clearRoute()" style="margin-top:6px;padding:6px 12px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:11px;width:100%;min-height:36px">Clear Route</button>`;
+
+  // Show in both info divs (whichever is relevant)
+  const routeInfoEl = document.getElementById('routeInfo');
+  const routeInfoStandaloneEl = document.getElementById('routeInfoStandalone');
+
+  if (carMarker) {
+    routeInfoEl.innerHTML = descHtml;
+    routeInfoEl.style.display = 'block';
+    routeInfoStandaloneEl.innerHTML = descHtml;
+    routeInfoStandaloneEl.style.display = 'block';
+  } else {
+    routeInfoStandaloneEl.innerHTML = descHtml;
+    routeInfoStandaloneEl.style.display = 'block';
+  }
 }
 
 // ==== Initialization ====
