@@ -1771,9 +1771,17 @@ function computeSmartMove() {
     // Max search: ~500m
     if (dLat > 0.005 || dLng > 0.005) continue;
 
+    // Skip blocks with unreliable data (UNKNOWN dominant category = missing sign info)
+    const domCat = seg.dominantCategory || (seg.rules && seg.rules.length > 0 ? seg.rules[0].category : 'UNKNOWN');
+    if (domCat === 'UNKNOWN') continue;
+    // Skip blocks with no rules (data gap, not actually free)
+    if (!seg.rules || seg.rules.length === 0) continue;
+    // Only recommend ASP or metered blocks (these are genuinely parkable)
+    const validCats = ['ASP_MON_THU','ASP_TUE_FRI','ASP_OVERNIGHT_MWF','ASP_OVERNIGHT_TTHS','ASP_DAILY','METERED'];
+    if (!validCats.includes(domCat)) continue;
+
     const restriction = computeNextRestrictionHours(seg);
     // Only include blocks that are currently legal to park
-    if (restriction.hours === 0 && (restriction.cat === 'NO_STANDING' || restriction.cat === 'SPECIAL' || restriction.cat === 'NO_PARKING' || restriction.cat === 'TRUCK_LOADING')) continue;
     if (restriction.hours === 0) continue; // active restriction now
     // Only include if better than current
     if (restriction.hours > carRestriction.hours) {
