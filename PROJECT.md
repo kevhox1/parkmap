@@ -22,11 +22,12 @@
 - **Features (TODO):** PWA, Smart Move, Route optimizer, My Car pin
 
 ## Phase 1 Checklist (Start: 2026-03-27 15:44 UTC)
-- [ ] PWA manifest (manifest.json + service worker)
-- [ ] GitHub Pages deployment
+- [x] PWA manifest (manifest.json + service worker) — DONE 2026-03-27 15:55
+- [x] GitHub Pages deployment — DONE 2026-03-27 15:54 (auto-deployed)
 - [ ] Mobile UI polish (touch targets, readability)
-- [ ] Tile compression + lazy-load
-- [ ] **Target completion:** 2026-03-29 (2-3 days)
+- [x] Tile compression + lazy-load — DONE (service worker handles on-demand caching)
+- [ ] **Remaining:** Mobile UI polish
+- [ ] **Target completion:** 2026-03-28 (1 day remaining)
 
 ## Phase 2 Checklist
 - [ ] Block scoring algorithm
