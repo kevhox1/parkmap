@@ -15,7 +15,9 @@ const ROOT = path.resolve(__dirname, '..');
 const OSM_DATA_PATH = path.join(ROOT, 'osm_data.json');
 const TILES_DIR = path.join(ROOT, 'tiles');
 
-const SOCRATA_BASE = 'https://data.cityofnewyork.us/resource/nfid-uabd.json';
+// Two data sources: main signs + ASP-specific signs
+const SOCRATA_MAIN = 'https://data.cityofnewyork.us/resource/nfid-uabd.json';
+const SOCRATA_ASP = 'https://data.cityofnewyork.us/resource/2x64-6f34.json';
 const PAGE_SIZE = 5000;
 
 // State Plane coordinate filter for Manhattan
@@ -568,40 +570,56 @@ async function main() {
   const streetCount = Object.keys(OSM_STREETS).length;
   console.log(`   Loaded ${streetCount} streets from OSM data\n`);
 
-  // 2. Fetch signs from Socrata API
+  // 2. Fetch signs from both Socrata datasets
   console.log('🔄 Fetching parking signs from NYC Socrata API...');
   let allSigns = [];
-  let offset = 0;
-  let keepFetching = true;
-  let pageNum = 0;
+  
+  // Helper to fetch paginated dataset
+  async function fetchSocrataDataset(baseUrl, label) {
+    console.log(`   Fetching ${label}...`);
+    const signs = [];
+    let offset = 0;
+    let pageNum = 0;
+    let keepFetching = true;
 
-  while (keepFetching) {
-    pageNum++;
-    const url = `${SOCRATA_BASE}?$limit=${PAGE_SIZE}&$offset=${offset}&borough=Manhattan`;
-    process.stdout.write(`   Page ${pageNum}: fetching offset ${offset}...`);
+    while (keepFetching) {
+      pageNum++;
+      const url = `${baseUrl}?$limit=${PAGE_SIZE}&$offset=${offset}&borough=Manhattan`;
+      process.stdout.write(`     Page ${pageNum}: offset ${offset}...`);
 
-    try {
-      const resp = await fetch(url);
-      if (!resp.ok) {
-        console.log(` HTTP ${resp.status} - stopping`);
+      try {
+        const resp = await fetch(url);
+        if (!resp.ok) {
+          console.log(` HTTP ${resp.status} - stopping`);
+          break;
+        }
+        const data = await resp.json();
+        if (!Array.isArray(data) || data.length === 0) {
+          console.log(' done');
+          keepFetching = false;
+          break;
+        }
+        signs.push(...data);
+        console.log(` +${data.length} (total: ${signs.length})`);
+        if (data.length < PAGE_SIZE) keepFetching = false;
+        else offset += PAGE_SIZE;
+      } catch (e) {
+        console.log(` ERROR: ${e.message}`);
         break;
       }
-      const data = await resp.json();
-      if (!Array.isArray(data) || data.length === 0) {
-        console.log(' no more data');
-        keepFetching = false;
-        break;
-      }
-      allSigns.push(...data);
-      console.log(` got ${data.length} signs (total: ${allSigns.length})`);
-      if (data.length < PAGE_SIZE) keepFetching = false;
-      else offset += PAGE_SIZE;
-    } catch (e) {
-      console.log(` ERROR: ${e.message}`);
-      break;
     }
+    return signs;
   }
-  console.log(`   Total signs fetched: ${allSigns.length}\n`);
+
+  // Fetch main signs dataset
+  const mainSigns = await fetchSocrataDataset(SOCRATA_MAIN, 'Main Signs (nfid-uabd)');
+  allSigns.push(...mainSigns);
+  
+  // Fetch ASP-specific dataset
+  const aspSigns = await fetchSocrataDataset(SOCRATA_ASP, 'ASP Signs (2x64-6f34)');
+  allSigns.push(...aspSigns);
+  
+  console.log(`   Total signs fetched: ${allSigns.length} (${mainSigns.length} main + ${aspSigns.length} ASP)\n`);
 
   // 3. Filter to Manhattan area using State Plane bounds
   console.log('🔍 Filtering signs to Manhattan area...');
@@ -612,11 +630,29 @@ async function main() {
   });
   console.log(`   ${filtered.length} signs in Manhattan area (from ${allSigns.length} total)\n`);
 
+  // 3b. Deduplicate signs by street/side/description (same sign registered multiple times)
+  console.log('🧹 Deduplicating signs...');
+  const seen = new Set();
+  const deduped = [];
+  let dupCount = 0;
+  
+  filtered.forEach(sign => {
+    // Create unique key from street + side + description (ignore small coordinate differences)
+    const key = `${sign.on_street}|${sign.side_of_street}|${sign.sign_description}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(sign);
+    } else {
+      dupCount++;
+    }
+  });
+  console.log(`   Removed ${dupCount} duplicates (${deduped.length} unique signs)\n`);
+
   // 4. Group signs into blocks
   console.log('📦 Grouping signs into blocks...');
   const blocks = {};
   let skippedInfo = 0;
-  filtered.forEach(sign => {
+  deduped.forEach(sign => {
     const desc = (sign.sign_description || '').toUpperCase();
     for (const p of SKIP_PATTERNS) {
       if (desc.includes(p)) { skippedInfo++; return; }
