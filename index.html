@@ -273,6 +273,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee">
       <button id="parkCarBtn" onclick="parkCarHere()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
+      <div id="smartMoveContainer" style="display:none;margin-top:8px;padding:10px;background:#dbeafe;border:1px solid #93c5fd;border-radius:8px;">
+        <button onclick="generateSmartMoveRecommendation()" style="width:100%;padding:8px 12px;background:#0284c7;color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;min-height:44px;font-weight:600">💡 Smart Move Recommendation</button>
+        <button onclick="clearParkedCar()" style="width:100%;padding:6px 12px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;font-size:12px;cursor:pointer;margin-top:6px;min-height:40px">Clear Car</button>
+      </div>
       <div id="carInfoBar" style="display:none;margin-top:6px;padding:8px 10px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:12px;color:#1e40af">
         <div id="carInfoText"></div>
         <button onclick="clearCarPin()" style="margin-top:4px;padding:4px 10px;border:1px solid #ddd;border-radius:6px;background:white;cursor:pointer;font-size:11px;color:#dc2626">Clear</button>
@@ -828,6 +832,12 @@ function updateMap() {
   }
   updateCarParkUntilInfo();
   computeSmartMove();
+  
+  // Show/hide Smart Move container based on parked car status
+  const smContainer = document.getElementById('smartMoveContainer');
+  if (smContainer) {
+    smContainer.style.display = parkedCarLocation ? 'block' : 'none';
+  }
 }
 
 function renderSignsMode() {
@@ -1128,7 +1138,11 @@ function renderSmartScoreMode() {
   const buckets = { excellent: 0, good: 0, decent: 0, poor: 0, nogo: 0 };
 
   segmentLayers.forEach(seg => {
-    const result = computeBlockScore(seg.rules, dayOfWeek, minuteOfDay, suspended);
+    // Use proximity-weighted score if user location available, else base score
+    const result = userLocation ? 
+      computeBlockScoreWithProximity(seg.rules, dayOfWeek, minuteOfDay, suspended, 
+                                    userLocation.lat, userLocation.lng, seg) :
+      computeBlockScore(seg.rules, dayOfWeek, minuteOfDay, suspended);
     seg._smartScore = result;
 
     const color = scoreToColor(result.score);
@@ -2230,6 +2244,111 @@ function togglePanel() {
   body.style.display = isCollapsed ? 'none' : 'block';
   toggle.textContent = isCollapsed ? '▲' : '▼';
 }
+
+// ==== Phase 2: User Location & Smart Move ====
+let userLocation = null;
+let parkedCarLocation = null;
+
+function getDistance(lat1, lng1, lat2, lng2) {
+  const toRad = Math.PI / 180;
+  const R = 3959; // miles
+  const dLat = (lat2 - lat1) * toRad;
+  const dLng = (lng2 - lng1) * toRad;
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*toRad)*Math.cos(lat2*toRad)*Math.sin(dLng/2)**2;
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c * 5280; // feet
+}
+
+function computeProximityScore(seg, userLat, userLng) {
+  if (!userLat || !userLng || !seg.line || seg.line.length === 0) return 1.0;
+  
+  // Find closest point on segment to user
+  let minDist = Infinity;
+  for (let i = 0; i < seg.line.length - 1; i++) {
+    const [lat1, lng1] = seg.line[i];
+    const [lat2, lng2] = seg.line[i+1];
+    const dist = getDistance(userLat, userLng, (lat1+lat2)/2, (lng1+lng2)/2);
+    minDist = Math.min(minDist, dist);
+  }
+  
+  // Decay: full score at <50ft, half at 500ft, minimal at >1000ft
+  const proximityMultiplier = Math.max(0.1, 1 - (minDist / 1000));
+  return proximityMultiplier;
+}
+
+function computeBlockScoreWithProximity(rules, dayOfWeek, minuteOfDay, suspended, userLat, userLng, seg) {
+  const baseResult = computeBlockScore(rules, dayOfWeek, minuteOfDay, suspended);
+  
+  // If user location is available, boost nearby good spots
+  if (userLat && userLng && seg) {
+    const proximityBoost = computeProximityScore(seg, userLat, userLng);
+    // Proximity only helps, doesn't hurt
+    if (baseResult.score >= 50) {
+      baseResult.score = Math.min(100, baseResult.score + proximityBoost * 15);
+      baseResult.reason = `${baseResult.reason} (${Math.round(proximityBoost*100)}% boost for proximity)`;
+    }
+  }
+  
+  return baseResult;
+}
+
+function parkCarHere() {
+  if (!map) return;
+  const center = map.getCenter();
+  parkedCarLocation = { lat: center.lat, lng: center.lng };
+  localStorage.setItem('parkedCar', JSON.stringify(parkedCarLocation));
+  alert(`🅿️ Car parked at ${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}. Tap "Smart Move" for recommendations.`);
+  updateMap();
+}
+
+function generateSmartMoveRecommendation() {
+  if (!parkedCarLocation) {
+    alert('Park your car first using "Park My Car Here"');
+    return;
+  }
+  
+  const et = nowET();
+  const dayOfWeek = et.getDay();
+  const minuteOfDay = et.getHours() * 60 + et.getMinutes();
+  const dateStr = toETDateStr(et);
+  const suspended = isASPSuspended(dateStr);
+  
+  // Score all visible segments from car location
+  const scored = segmentLayers
+    .map(seg => ({
+      seg,
+      score: computeBlockScoreWithProximity(seg.rules, dayOfWeek, minuteOfDay, suspended, 
+                                           parkedCarLocation.lat, parkedCarLocation.lng, seg).score,
+    }))
+    .sort((a, b) => b.score - a.score);
+  
+  // Top recommendation
+  if (scored.length > 0 && scored[0].score > 30) {
+    const best = scored[0].seg;
+    const sideLabel = { E: 'East', W: 'West', N: 'North', S: 'South' }[best.side] || best.side;
+    const msg = `🚗 Move to: ${best.street}, ${sideLabel} side\n\n` +
+                `⭐ Score: ${scored[0].score}/100\n` +
+                `Safe for: ${computeBlockScore(best.rules, dayOfWeek, minuteOfDay, suspended).reason}`;
+    alert(msg);
+  } else {
+    alert('No good spots nearby right now. Try moving in a few hours.');
+  }
+}
+
+function clearParkedCar() {
+  parkedCarLocation = null;
+  localStorage.removeItem('parkedCar');
+  updateMap();
+}
+
+// Load parked car location on startup
+window.addEventListener('load', () => {
+  const saved = localStorage.getItem('parkedCar');
+  if (saved) {
+    parkedCarLocation = JSON.parse(saved);
+    console.log('[Phase2] Loaded parked car location:', parkedCarLocation);
+  }
+});
 
 // Register service worker
 if ('serviceWorker' in navigator) {
