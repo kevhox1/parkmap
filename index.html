@@ -28,7 +28,13 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 #startScreen button {
   padding: 14px 28px; border: none; border-radius: 12px;
   font-size: 16px; font-weight: 600; cursor: pointer;
-  min-height: 50px; min-width: 220px; transition: background 0.15s;
+  min-height: 50px; min-width: 240px; transition: background 0.15s;
+}
+@media (max-width: 480px) {
+  #startScreen button {
+    min-width: 100%;
+    min-height: 48px;
+  }
 }
 #startScreen .primary-btn { background: #2563eb; color: white; }
 #startScreen .primary-btn:hover { background: #1d4ed8; }
@@ -59,17 +65,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   overflow-y: auto; font-size: 14px;
   display: none; /* hidden until map loads */
 }
-.control-panel h2 { font-size: 18px; margin-bottom: 2px; }
-.control-panel .subtitle { color: #666; font-size: 12px; margin-bottom: 12px; }
+.control-panel h2 { font-size: 18px; margin-bottom: 2px; font-weight: 700; }
+.control-panel .subtitle { color: #999; font-size: 12px; margin-bottom: 12px; }
 
 .mode-tabs {
   display: flex; gap: 4px; margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 .mode-tab {
-  flex: 1; padding: 7px 6px; border: 1px solid #ddd; border-radius: 8px;
-  background: #f9fafb; cursor: pointer; font-size: 12px; font-weight: 500;
+  flex: 1; padding: 10px 8px; border: 1px solid #ddd; border-radius: 8px;
+  background: #f9fafb; cursor: pointer; font-size: 13px; font-weight: 500;
   text-align: center; transition: all 0.15s; min-height: 44px;
   display: flex; align-items: center; justify-content: center;
+  min-width: 70px;
 }
 .mode-tab.active { background: #2563eb; color: white; border-color: #2563eb; }
 .mode-tab:hover:not(.active) { background: #e5e7eb; }
@@ -89,11 +97,11 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   color: #92400e; display: none;
 }
 
-.legend { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-.legend-item { display: flex; align-items: center; gap: 4px; font-size: 11px; }
-.legend-dot { width: 12px; height: 12px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15); flex-shrink: 0; }
+.legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; padding: 4px 0; }
+.legend-dot { width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(0,0,0,0.15); flex-shrink: 0; }
 
-.stats { margin-top: 10px; font-size: 12px; color: #555; line-height: 1.5; }
+.stats { margin-top: 14px; font-size: 13px; color: #555; line-height: 1.6; }
 
 .info-panel {
   position: absolute; bottom: 20px; left: 20px; z-index: 1000;
@@ -101,15 +109,16 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   box-shadow: 0 4px 20px rgba(0,0,0,0.15); max-width: 420px;
   max-height: 50vh; overflow-y: auto; display: none; font-size: 13px;
 }
-.info-panel h3 { font-size: 15px; margin-bottom: 8px; }
+.info-panel h3 { font-size: 16px; margin-bottom: 12px; font-weight: 700; }
 .info-panel .close-btn {
-  position: absolute; top: 8px; right: 12px; cursor: pointer;
-  font-size: 18px; color: #999; background: none; border: none;
+  position: absolute; top: 10px; right: 12px; cursor: pointer;
+  font-size: 20px; color: #999; background: none; border: none;
+  min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center;
 }
-.sign-rule { padding: 6px 0; border-bottom: 1px solid #eee; }
+.sign-rule { padding: 8px 0; border-bottom: 1px solid #eee; }
 .sign-rule:last-child { border-bottom: none; }
-.sign-cat { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 11px; font-weight: 600; color: white; }
-.sign-raw { font-size: 11px; color: #999; margin-top: 2px; word-break: break-word; }
+.sign-cat { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: 600; color: white; }
+.sign-raw { font-size: 12px; color: #999; margin-top: 3px; word-break: break-word; }
 
 .loading-overlay {
   position: absolute; top: 0; left: 0; width: 100%; height: 100%;
@@ -151,10 +160,10 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   .control-panel {
     position: absolute; top: auto; bottom: 0; left: 0; right: 0;
     max-width: 100%; border-radius: 16px 16px 0 0;
-    max-height: 55vh; padding: 12px 14px;
+    max-height: 60vh; padding: 14px;
   }
   .panel-toggle {
-    top: auto; bottom: calc(55vh + 8px); right: 10px;
+    top: auto; bottom: calc(60vh + 8px); right: 10px;
   }
   .control-panel.collapsed + .panel-toggle,
   .control-panel.collapsed ~ .panel-toggle {
@@ -162,7 +171,15 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
   }
   .info-panel {
     bottom: auto; top: 10px; left: 5px; right: 5px;
-    max-width: 100%; max-height: 40vh;
+    max-width: 100%; max-height: 45vh;
+  }
+  .mode-tabs {
+    gap: 3px;
+  }
+  .mode-tab {
+    min-width: 60px;
+    font-size: 12px;
+    padding: 8px 6px;
   }
 }
 </style>
