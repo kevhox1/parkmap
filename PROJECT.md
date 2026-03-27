@@ -5,9 +5,9 @@
 
 ## Deploy Status
 - **GitHub Repo:** https://github.com/kevhox1/parkmap
-- **GitHub Pages (default):** https://kevhox1.github.io/parkmap/
-- **Custom Domain:** [NEED TO CONFIRM - Kevin, what's the intended domain?]
-- **Current Deployment:** NONE (waiting for Phase 1)
+- **Live URL:** https://kevhox1.github.io/parkmap/
+- **Custom Domain:** None (using GitHub Pages default)
+- **Current Deployment:** In progress (Phase 1 start: 2026-03-27 15:47 UTC)
 
 ## Data Status
 - **Parking Signs:** 17,134 unique (merged ASP + main datasets, c33c6f3)
