@@ -490,35 +490,72 @@ function createSubSegments(block) {
 
   const uniqueDists = [...new Set(signData.map(s => s.distance))].sort((a, b) => a - b);
 
+  // For single-sign blocks (or all signs at same distance), cover the whole block
+  // Real-world: a <-> sign means the rule applies in both directions to the next sign/end
   if (uniqueDists.length <= 1) {
-    return [{ rules: signData, distStart: Math.max(0, uniqueDists[0] - 30), distEnd: uniqueDists[0] + 30 }];
+    // Single position: assume rule covers the whole block
+    // Use a generous range: 0 to distance + 100ft (or at least 200ft for block coverage)
+    const d = uniqueDists[0];
+    const blockEnd = Math.max(d + 100, 200);
+    return [{ rules: signData, distStart: 0, distEnd: blockEnd }];
   }
 
   const signsByDist = {};
   signData.forEach(s => { (signsByDist[s.distance] = signsByDist[s.distance] || []).push(s); });
 
-  const boundaries = [];
-  if (uniqueDists[0] > 15) boundaries.push(0);
-  boundaries.push(...uniqueDists);
-  boundaries.push(uniqueDists[uniqueDists.length - 1] + 40);
+  // Create zones between sign positions, with the first zone starting at 0
+  // and the last zone extending past the last sign
+  const boundaries = [0]; // Always start from the beginning of the block
+  uniqueDists.forEach(d => {
+    if (d > 0) boundaries.push(d);
+  });
+  // Extend last boundary to cover the end of the block
+  // Typical Manhattan block is 250-900ft; add generous buffer past last sign
+  const lastDist = uniqueDists[uniqueDists.length - 1];
+  boundaries.push(lastDist + Math.max(100, lastDist * 0.3));
+
+  // Deduplicate and sort boundaries
+  const uniqueBounds = [...new Set(boundaries)].sort((a, b) => a - b);
 
   const zones = [];
-  for (let i = 0; i < boundaries.length - 1; i++) {
-    zones.push({ distStart: boundaries[i], distEnd: boundaries[i + 1], rules: [] });
+  for (let i = 0; i < uniqueBounds.length - 1; i++) {
+    zones.push({ distStart: uniqueBounds[i], distEnd: uniqueBounds[i + 1], rules: [] });
   }
 
+  // Assign signs to zones based on arrow direction
+  // --> (towards): sign applies from this position TOWARDS increasing distance
+  // <-- (away): sign applies from this position TOWARDS decreasing distance (back to intersection)
+  // <-> (both): sign applies in both directions until the next sign
+  // null (no arrow): treat like <-> (applies in both directions)
   uniqueDists.forEach(d => {
     const signsAtD = signsByDist[d];
-    const zoneAfterIdx = zones.findIndex(z => z.distStart === d);
-    const zoneBeforeIdx = zones.findIndex(z => z.distEnd === d);
 
     signsAtD.forEach(sd => {
       const arrow = sd.arrow;
-      let coversBefore = arrow === 'both' || arrow === null || arrow === 'away';
-      let coversAfter = arrow === 'both' || arrow === null || arrow === 'towards';
+      const coversBefore = arrow === 'both' || arrow === null || arrow === 'away';
+      const coversAfter = arrow === 'both' || arrow === null || arrow === 'towards';
 
-      if (coversBefore && zoneBeforeIdx >= 0) zones[zoneBeforeIdx].rules.push(sd);
-      if (coversAfter && zoneAfterIdx >= 0) zones[zoneAfterIdx].rules.push(sd);
+      // Find the zone boundaries for this sign position
+      const zoneAtIdx = zones.findIndex(z => z.distStart === d || (d >= z.distStart && d < z.distEnd));
+
+      if (coversAfter) {
+        // Cover from this sign's position forward to the next sign (or end)
+        for (let i = zoneAtIdx; i < zones.length; i++) {
+          // Stop at the next sign position (if there's a sign there with its own rule)
+          if (i > zoneAtIdx && uniqueDists.includes(zones[i].distStart)) break;
+          if (i >= 0) zones[i].rules.push(sd);
+        }
+      }
+
+      if (coversBefore) {
+        // Cover from this sign's position backward to the previous sign (or start)
+        const beforeIdx = zones.findIndex(z => z.distEnd === d);
+        for (let i = beforeIdx; i >= 0; i--) {
+          // Stop at the previous sign position
+          if (i < beforeIdx && uniqueDists.includes(zones[i].distEnd)) break;
+          if (i >= 0) zones[i].rules.push(sd);
+        }
+      }
     });
   });
 
@@ -637,9 +674,12 @@ async function main() {
   let dupCount = 0;
   
   filtered.forEach(sign => {
-    // Create unique key from street + block + side + description
-    // Must include from/to streets, otherwise signs on different blocks get wrongly deduped
-    const key = `${sign.on_street}|${sign.from_street}|${sign.to_street}|${sign.side_of_street}|${sign.sign_description}`;
+    // Create unique key from street + block + side + distance + description
+    // Must include from/to streets AND distance, otherwise signs at different
+    // positions on the same block get wrongly deduped (e.g., same ASP sign
+    // posted at 89ft, 245ft, 351ft, 424ft along a block)
+    const dist = sign.distance_from_intersection || '0';
+    const key = `${sign.on_street}|${sign.from_street}|${sign.to_street}|${sign.side_of_street}|${dist}|${sign.sign_description}`;
     if (!seen.has(key)) {
       seen.add(key);
       deduped.push(sign);
