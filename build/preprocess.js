@@ -637,8 +637,9 @@ async function main() {
   let dupCount = 0;
   
   filtered.forEach(sign => {
-    // Create unique key from street + side + description (ignore small coordinate differences)
-    const key = `${sign.on_street}|${sign.side_of_street}|${sign.sign_description}`;
+    // Create unique key from street + block + side + description
+    // Must include from/to streets, otherwise signs on different blocks get wrongly deduped
+    const key = `${sign.on_street}|${sign.from_street}|${sign.to_street}|${sign.side_of_street}|${sign.sign_description}`;
     if (!seen.has(key)) {
       seen.add(key);
       deduped.push(sign);

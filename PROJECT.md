@@ -29,11 +29,11 @@
 - ✅ **PHASE 1 COMPLETE** — 2026-03-27 16:05 UTC (1 hour from start)
 
 ## Phase 2 Checklist (Start: 2026-03-27 16:05 UTC)
-- [ ] Block scoring algorithm
-- [ ] Smart Move recommendations
-- [ ] Route optimizer
-- [ ] My Car pin + localStorage
-- [ ] **Target completion:** 2026-03-31 (4 days)
+- [ ] Block scoring algorithm (UI display — scoring logic exists but no dedicated UI)
+- [x] Smart Move recommendations — DONE (v2.7–v2.10, refined in Phase 2 Part 1)
+- [x] Route optimizer / Find Parking — DONE (v2.11–v2.12)
+- [x] My Car pin + localStorage — DONE (v2.5)
+- ✅ **PHASE 2 ~COMPLETE** — Only block scoring UI remains
 
 ## How to Read This
 **Every time you start work on WePark:**
