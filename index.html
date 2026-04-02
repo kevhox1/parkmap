@@ -320,6 +320,87 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     max-height: auto;
   }
 }
+
+/* ===== Park Car Modal ===== */
+#parkCarModal {
+  position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+  background: rgba(0,0,0,0.55); z-index: 3000;
+  display: none; align-items: flex-end; justify-content: center;
+}
+#parkCarModal.visible { display: flex; }
+#parkCarModalInner {
+  background: white; border-radius: 20px 20px 0 0;
+  padding: 22px 20px 32px; width: 100%; max-width: 480px;
+  max-height: 85vh; overflow-y: auto;
+  box-shadow: 0 -6px 40px rgba(0,0,0,0.25);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+@media (min-width: 600px) {
+  #parkCarModal { align-items: center; }
+  #parkCarModalInner { border-radius: 20px; max-height: 70vh; padding-bottom: 22px; }
+}
+.park-modal-title {
+  font-size: 18px; font-weight: 700; margin-bottom: 18px; color: #111;
+}
+.park-form-group { margin-bottom: 16px; }
+.park-form-group label {
+  display: block; font-size: 11px; font-weight: 700;
+  color: #6b7280; text-transform: uppercase; letter-spacing: 0.6px;
+  margin-bottom: 7px;
+}
+.park-form-group input[type="text"],
+.park-form-group select {
+  width: 100%; padding: 12px 14px; border: 1.5px solid #e5e7eb;
+  border-radius: 10px; font-size: 15px; background: white;
+  min-height: 48px; -webkit-appearance: none; appearance: none; color: #111;
+}
+.park-form-group input[type="text"]:focus,
+.park-form-group select:focus {
+  outline: none; border-color: #2563eb; box-shadow: 0 0 0 3px rgba(37,99,235,0.12);
+}
+.park-form-group select:disabled { background: #f9fafb; color: #9ca3af; }
+.park-detected-block {
+  background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px;
+  padding: 12px 14px; margin-bottom: 18px;
+  font-size: 14px; color: #1d4ed8; line-height: 1.5;
+}
+.park-side-grid {
+  display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 4px;
+}
+.park-side-btn {
+  padding: 18px 10px; border: 2px solid #e5e7eb; border-radius: 14px;
+  background: white; cursor: pointer; font-size: 15px; font-weight: 600;
+  color: #374151; text-align: center; min-height: 64px;
+  transition: border-color 0.15s, background 0.15s, color 0.15s;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 5px;
+  -webkit-tap-highlight-color: transparent;
+}
+.park-side-btn:hover,
+.park-side-btn:active { border-color: #2563eb; background: #eff6ff; color: #1d4ed8; }
+.park-side-btn .side-icon { font-size: 22px; line-height: 1; }
+.park-modal-footer {
+  display: flex; gap: 10px; margin-top: 18px;
+}
+.park-modal-footer button {
+  flex: 1; padding: 13px; border-radius: 11px;
+  font-size: 15px; font-weight: 600; cursor: pointer; min-height: 50px;
+  border: 1.5px solid #e5e7eb;
+}
+.park-modal-footer .btn-cancel { background: #f3f4f6; color: #374151; }
+.park-modal-footer .btn-primary {
+  background: #2563eb; color: white; border-color: #2563eb;
+}
+.park-modal-footer .btn-primary:disabled {
+  background: #93c5fd; border-color: #93c5fd; cursor: not-allowed;
+}
+/* Status badges in car info bar */
+.park-status-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 20px;
+  font-size: 11px; font-weight: 600; vertical-align: middle;
+}
+.park-status-safe { background: #dcfce7; color: #15803d; }
+.park-status-warn { background: #fef3c7; color: #92400e; }
+.park-status-danger { background: #fee2e2; color: #dc2626; }
 </style>
 </head>
 <body>
@@ -410,7 +491,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     <div class="stats" id="stats"></div>
 
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee">
-      <button id="parkCarBtn" onclick="parkCarHere()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
+      <button id="parkCarBtn" onclick="openParkModal()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
       <div id="smartMoveContainer" style="display:none;margin-top:8px;padding:10px;background:#dbeafe;border:1px solid #93c5fd;border-radius:8px;">
         <button onclick="generateSmartMoveRecommendation()" style="width:100%;padding:8px 12px;background:#0284c7;color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;min-height:44px;font-weight:600">💡 Smart Move Recommendation</button>
         <button onclick="clearParkedCar()" style="width:100%;padding:6px 12px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;font-size:12px;cursor:pointer;margin-top:6px;min-height:40px">Clear Car</button>
@@ -456,6 +537,51 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 <div class="loading-overlay" id="loading">
   <div class="spinner"></div>
   <div id="loadingText">Loading...</div>
+</div>
+
+<!-- Park My Car Modal -->
+<div id="parkCarModal" role="dialog" aria-modal="true" aria-label="Park My Car">
+  <div id="parkCarModalInner">
+    <div class="park-modal-title">📍 Park My Car</div>
+
+    <!-- Step 1: Mode tabs -->
+    <div id="parkModeRow" style="display:flex;gap:8px;margin-bottom:18px">
+      <button id="parkModeStreet" onclick="setParkMode('street')" style="flex:1;padding:10px 8px;border:2px solid #2563eb;border-radius:10px;background:#eff6ff;color:#2563eb;font-weight:700;font-size:14px;cursor:pointer;min-height:44px">🔤 Enter Street</button>
+      <button id="parkModePin" onclick="setParkMode('pin')" style="flex:1;padding:10px 8px;border:2px solid #e5e7eb;border-radius:10px;background:#f9fafb;color:#6b7280;font-weight:600;font-size:14px;cursor:pointer;min-height:44px">📍 Use Map Pin</button>
+    </div>
+
+    <!-- Street-input form -->
+    <div id="parkStreetForm">
+      <div class="park-form-group">
+        <label>Street</label>
+        <input type="text" id="parkStreetInput" placeholder="Start typing street name…" autocomplete="off" oninput="onStreetInput()" onfocus="showStreetDropdown()">
+        <div id="parkStreetDropdown" style="display:none;position:absolute;z-index:9999;background:white;border:1px solid #e5e7eb;border-radius:10px;box-shadow:0 4px 20px rgba(0,0,0,0.15);max-height:200px;overflow-y:auto;width:calc(100% - 40px)"></div>
+      </div>
+      <div class="park-form-group">
+        <label>Between cross streets</label>
+        <select id="parkCrossSelect" onchange="onCrossSelect()" disabled>
+          <option value="">— select street first —</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- Pin-detect display (both modes show detected block) -->
+    <div id="parkDetectedBlock" class="park-detected-block" style="display:none"></div>
+
+    <!-- Side selection (shown after street+cross selected or pin placed) -->
+    <div id="parkSideSection" style="display:none">
+      <div class="park-form-group">
+        <label>Which side are you on?</label>
+        <div class="park-side-grid" id="parkSideGrid">
+          <!-- buttons injected dynamically -->
+        </div>
+      </div>
+    </div>
+
+    <div class="park-modal-footer">
+      <button class="btn-cancel" onclick="closeParkModal()">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -788,6 +914,8 @@ async function loadTile(row, col) {
 
     // Re-apply current filter mode to newly loaded segments
     applyCurrentModeToAll();
+    // Update street index with newly loaded streets
+    rebuildStreetIndex();
 
   } catch (e) {
     console.warn(`Error loading tile ${key}:`, e);
@@ -891,6 +1019,13 @@ async function startMap(lat, lng, zoom) {
 
   // Restore car pin from localStorage
   restoreCarPin();
+  // Sync Phase 2 parkedCarLocation from parkedBlock if present
+  if (parkedBlock && parkedBlock.lat) {
+    parkedCarLocation = { lat: parkedBlock.lat, lng: parkedBlock.lng };
+  } else {
+    const savedCar = localStorage.getItem('parkedCar');
+    if (savedCar) { try { parkedCarLocation = JSON.parse(savedCar); } catch(e) {} }
+  }
 
   // Start loading visible tiles
   loadVisibleTiles();
@@ -1689,6 +1824,13 @@ function checkParkUntilSafety(seg, windowDates, nowDay, nowMin, targetDay, targe
 // ==== My Car Pin ====
 let carMarker = null;
 
+// Parked block state — full resolution of where the car is
+// { street, from, to, side, lat, lng }
+let parkedBlock = null;
+
+// Street index built from loaded tiles: { "STREET NAME": { "FROM to TO": ["N","S","E","W"] } }
+let parkingStreets = {};
+
 function createCarIcon() {
   return L.divIcon({
     html: '<div style="font-size:24px;line-height:30px;text-align:center;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.3))">🚗</div>',
@@ -1702,10 +1844,96 @@ function createCarIcon() {
 map.createPane('carPin');
 map.getPane('carPin').style.zIndex = 700;
 
-function addCarMarker(lat, lng) {
-  if (carMarker) {
-    map.removeLayer(carMarker);
+// ----------------------------------------------------------------
+// Street index helpers
+// ----------------------------------------------------------------
+
+function rebuildStreetIndex() {
+  const idx = {};
+  for (const seg of segmentLayers) {
+    if (!seg.street || !seg.from || !seg.to) continue;
+    const street = seg.street.toUpperCase();
+    const crossKey = seg.from.toUpperCase() + ' to ' + seg.to.toUpperCase();
+    if (!idx[street]) idx[street] = {};
+    if (!idx[street][crossKey]) idx[street][crossKey] = [];
+    if (!idx[street][crossKey].includes(seg.side)) {
+      idx[street][crossKey].push(seg.side);
+    }
   }
+  parkingStreets = idx;
+}
+
+function getStreetNames() {
+  return Object.keys(parkingStreets).sort();
+}
+
+function getCrossPairsForStreet(streetUpper) {
+  const entry = parkingStreets[streetUpper];
+  if (!entry) return [];
+  return Object.keys(entry).sort();
+}
+
+function getSidesForBlock(streetUpper, crossKey) {
+  return (parkingStreets[streetUpper] || {})[crossKey] || [];
+}
+
+// ----------------------------------------------------------------
+// Segment geometry helpers
+// ----------------------------------------------------------------
+
+function getSegmentOrientation(seg) {
+  const lls = seg.layer.getLatLngs();
+  if (!lls || lls.length < 2) return 'EW';
+  const first = lls[0];
+  const last = lls[lls.length - 1];
+  const dLat = Math.abs(last.lat - first.lat);
+  const dLng = Math.abs(last.lng - first.lng);
+  return dLat > dLng ? 'NS' : 'EW';
+}
+
+function getSideOptionsForOrientation(orientation) {
+  if (orientation === 'NS') {
+    return [
+      { side: 'E', label: 'East side', icon: '→' },
+      { side: 'W', label: 'West side', icon: '←' },
+    ];
+  }
+  return [
+    { side: 'N', label: 'North side', icon: '↑' },
+    { side: 'S', label: 'South side', icon: '↓' },
+  ];
+}
+
+function findSegmentByBlock(street, from, to, side) {
+  const su = (street || '').toUpperCase();
+  const fu = (from || '').toUpperCase();
+  const tu = (to || '').toUpperCase();
+  return segmentLayers.find(seg =>
+    seg.street && seg.street.toUpperCase() === su &&
+    seg.from && seg.from.toUpperCase() === fu &&
+    seg.to && seg.to.toUpperCase() === tu &&
+    seg.side === side
+  ) || null;
+}
+
+function getSegMidLatLng(seg) {
+  const lls = seg.layer.getLatLngs();
+  if (!lls || lls.length === 0) return null;
+  const mid = Math.floor(lls.length / 2);
+  return { lat: lls[mid].lat, lng: lls[mid].lng };
+}
+
+function toTitleCase(str) {
+  if (!str) return '';
+  return str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+
+// ----------------------------------------------------------------
+// Marker management
+// ----------------------------------------------------------------
+
+function addCarMarker(lat, lng) {
+  if (carMarker) map.removeLayer(carMarker);
   carMarker = L.marker([lat, lng], {
     icon: createCarIcon(),
     draggable: true,
@@ -1714,25 +1942,20 @@ function addCarMarker(lat, lng) {
 
   carMarker.on('dragend', function() {
     const pos = carMarker.getLatLng();
-    localStorage.setItem('parkmap_car_lat', pos.lat);
-    localStorage.setItem('parkmap_car_lng', pos.lng);
-    updateCarInfoBar(pos.lat, pos.lng);
-    updateCarParkUntilInfo();
-    computeSmartMove();
+    // After dragging: open side-confirm modal for nearest block
+    openParkModalForPin(pos.lat, pos.lng);
   });
-
-  updateCarInfoBar(lat, lng);
 }
 
-function parkCarHere() {
-  const center = map.getCenter();
-  const lat = center.lat;
-  const lng = center.lng;
-  localStorage.setItem('parkmap_car_lat', lat);
-  localStorage.setItem('parkmap_car_lng', lng);
-  addCarMarker(lat, lng);
-  updateCarParkUntilInfo();
-  computeSmartMove();
+// ----------------------------------------------------------------
+// Saving / clearing
+// ----------------------------------------------------------------
+
+function saveParkedBlock(block) {
+  parkedBlock = block;
+  localStorage.setItem('parkmap_parked_block', JSON.stringify(block));
+  localStorage.setItem('parkmap_car_lat', block.lat);
+  localStorage.setItem('parkmap_car_lng', block.lng);
 }
 
 function clearCarPin() {
@@ -1740,25 +1963,431 @@ function clearCarPin() {
     map.removeLayer(carMarker);
     carMarker = null;
   }
+  parkedBlock = null;
+  localStorage.removeItem('parkmap_parked_block');
   localStorage.removeItem('parkmap_car_lat');
   localStorage.removeItem('parkmap_car_lng');
   document.getElementById('carInfoBar').style.display = 'none';
   document.getElementById('carParkUntilInfo').style.display = 'none';
   document.getElementById('smartMovePanel').style.display = 'none';
   clearSmartMoveOverlay();
+  parkedCarLocation = null;
+  localStorage.removeItem('parkedCar');
+}
+
+// ----------------------------------------------------------------
+// Info bar rendering
+// ----------------------------------------------------------------
+
+function buildCarStatusBadge(seg) {
+  if (!seg) return '';
+  const restriction = computeNextRestrictionHours(seg);
+  if (restriction.hours === 0) {
+    return '<span class="park-status-badge park-status-danger">⚠️ Move now</span>';
+  } else if (restriction.hours <= 2) {
+    const t = formatHoursAway(restriction.hours);
+    return '<span class="park-status-badge park-status-warn">Move in ' + t + '</span>';
+  } else if (restriction.hours >= 168) {
+    return '<span class="park-status-badge park-status-safe">No restrictions</span>';
+  } else {
+    const label = getNextRestrictionTimeLabel(restriction.hours);
+    return '<span class="park-status-badge park-status-safe">Safe · move by ' + label + '</span>';
+  }
+}
+
+function buildCarRulesSnippet(seg) {
+  if (!seg || !seg.rules || seg.rules.length === 0) return '';
+  const restriction = computeNextRestrictionHours(seg);
+  const cat = restriction.cat;
+  if (!cat) return '';
+  const catInfo = CATEGORIES[cat] || CATEGORIES.UNKNOWN;
+  return '<div style="margin-top:4px;font-size:11px;color:#374151">' + catInfo.label + ': ' + restriction.label + '</div>';
 }
 
 function updateCarInfoBar(lat, lng) {
-  document.getElementById('carInfoText').textContent = `Your car: ${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-  document.getElementById('carInfoBar').style.display = 'block';
+  const infoEl = document.getElementById('carInfoBar');
+  const textEl = document.getElementById('carInfoText');
+
+  if (parkedBlock && parkedBlock.street) {
+    const street = parkedBlock.street;
+    const from = parkedBlock.from;
+    const to = parkedBlock.to;
+    const side = parkedBlock.side;
+    const sideLabel = { N: 'North', S: 'South', E: 'East', W: 'West' }[side] || side;
+    const seg = findSegmentByBlock(street, from, to, side);
+    const statusBadge = seg ? buildCarStatusBadge(seg) : '';
+    const rulesSnippet = seg ? buildCarRulesSnippet(seg) : '';
+    const displayStreet = toTitleCase(street);
+    const displayFrom = toTitleCase(from);
+    const displayTo = toTitleCase(to);
+    textEl.innerHTML =
+      '<strong>' + displayStreet + '</strong> (' + displayFrom + ' to ' + displayTo + ')<br>' +
+      sideLabel + ' side ' + statusBadge +
+      rulesSnippet;
+  } else {
+    const seg = findClosestSegment(lat, lng);
+    if (seg) {
+      const sideLabel = { N: 'North', S: 'South', E: 'East', W: 'West' }[seg.side] || seg.side;
+      const displayStreet = toTitleCase(seg.street || '');
+      const displayFrom = toTitleCase(seg.from || '');
+      const displayTo = toTitleCase(seg.to || '');
+      const statusBadge = buildCarStatusBadge(seg);
+      const rulesSnippet = buildCarRulesSnippet(seg);
+      textEl.innerHTML =
+        '<strong>' + displayStreet + '</strong> (' + displayFrom + ' to ' + displayTo + ')<br>' +
+        sideLabel + ' side ' + statusBadge +
+        rulesSnippet;
+    } else {
+      textEl.textContent = 'Your car: ' + lat.toFixed(5) + ', ' + lng.toFixed(5);
+    }
+  }
+  infoEl.style.display = 'block';
 }
 
 function restoreCarPin() {
+  // Try new block-based storage first
+  const saved = localStorage.getItem('parkmap_parked_block');
+  if (saved) {
+    try {
+      const block = JSON.parse(saved);
+      if (block && !isNaN(block.lat) && !isNaN(block.lng)) {
+        parkedBlock = block;
+        addCarMarker(block.lat, block.lng);
+        updateCarInfoBar(block.lat, block.lng);
+        return;
+      }
+    } catch(e) {}
+  }
+  // Legacy: lat/lng only
   const lat = parseFloat(localStorage.getItem('parkmap_car_lat'));
   const lng = parseFloat(localStorage.getItem('parkmap_car_lng'));
   if (!isNaN(lat) && !isNaN(lng)) {
     addCarMarker(lat, lng);
+    updateCarInfoBar(lat, lng);
   }
+}
+
+// ----------------------------------------------------------------
+// Park Car Modal state
+// ----------------------------------------------------------------
+
+let _parkModalMode = 'street'; // 'street' | 'pin'
+let _parkPinLat = null;
+let _parkPinLng = null;
+let _parkDetectedSeg = null;
+let _parkSelectedStreet = null;
+let _parkSelectedCross = null;
+let _parkSelectedSide = null;
+
+// Close modal when tapping backdrop
+document.getElementById('parkCarModal').addEventListener('click', function(e) {
+  if (e.target === this) closeParkModal();
+});
+
+function openParkModal() {
+  rebuildStreetIndex();
+  _parkModalMode = 'street';
+  _parkPinLat = null;
+  _parkPinLng = null;
+  _parkDetectedSeg = null;
+  _parkSelectedStreet = null;
+  _parkSelectedCross = null;
+  _parkSelectedSide = null;
+  resetParkForm();
+  setParkMode('street');
+  document.getElementById('parkCarModal').classList.add('visible');
+}
+
+function openParkModalForPin(lat, lng) {
+  rebuildStreetIndex();
+  _parkModalMode = 'pin';
+  _parkPinLat = lat;
+  _parkPinLng = lng;
+  _parkSelectedSide = null;
+  _parkDetectedSeg = findClosestSegment(lat, lng);
+  resetParkForm();
+  setParkMode('pin');
+  document.getElementById('parkCarModal').classList.add('visible');
+  renderDetectedBlock();
+}
+
+function closeParkModal() {
+  document.getElementById('parkCarModal').classList.remove('visible');
+  hideStreetDropdown();
+}
+
+function setParkMode(mode) {
+  _parkModalMode = mode;
+  _parkSelectedSide = null;
+  const btnStreet = document.getElementById('parkModeStreet');
+  const btnPin = document.getElementById('parkModePin');
+  const streetForm = document.getElementById('parkStreetForm');
+  const detected = document.getElementById('parkDetectedBlock');
+  const sideSection = document.getElementById('parkSideSection');
+
+  if (mode === 'street') {
+    btnStreet.style.borderColor = '#2563eb';
+    btnStreet.style.background = '#eff6ff';
+    btnStreet.style.color = '#2563eb';
+    btnPin.style.borderColor = '#e5e7eb';
+    btnPin.style.background = '#f9fafb';
+    btnPin.style.color = '#6b7280';
+    streetForm.style.display = 'block';
+    detected.style.display = 'none';
+    sideSection.style.display = 'none';
+  } else {
+    btnPin.style.borderColor = '#2563eb';
+    btnPin.style.background = '#eff6ff';
+    btnPin.style.color = '#2563eb';
+    btnStreet.style.borderColor = '#e5e7eb';
+    btnStreet.style.background = '#f9fafb';
+    btnStreet.style.color = '#6b7280';
+    streetForm.style.display = 'none';
+    if (!_parkPinLat) {
+      const c = map.getCenter();
+      _parkPinLat = c.lat;
+      _parkPinLng = c.lng;
+      _parkDetectedSeg = findClosestSegment(_parkPinLat, _parkPinLng);
+    }
+    renderDetectedBlock();
+  }
+}
+
+function resetParkForm() {
+  document.getElementById('parkStreetInput').value = '';
+  const crossSel = document.getElementById('parkCrossSelect');
+  crossSel.innerHTML = '<option value="">— select street first —</option>';
+  crossSel.disabled = true;
+  document.getElementById('parkDetectedBlock').style.display = 'none';
+  document.getElementById('parkSideSection').style.display = 'none';
+  document.getElementById('parkSideGrid').innerHTML = '';
+}
+
+// ----------------------------------------------------------------
+// Street autocomplete
+// ----------------------------------------------------------------
+
+function onStreetInput() {
+  const val = document.getElementById('parkStreetInput').value;
+  if (val.length < 2) { hideStreetDropdown(); return; }
+  const query = val.toUpperCase();
+  const names = getStreetNames().filter(n => n.includes(query)).slice(0, 20);
+  if (names.length === 0) { hideStreetDropdown(); return; }
+  renderStreetDropdown(names);
+}
+
+function showStreetDropdown() {
+  const val = document.getElementById('parkStreetInput').value;
+  if (val.length >= 2) onStreetInput();
+}
+
+function renderStreetDropdown(names) {
+  const dd = document.getElementById('parkStreetDropdown');
+  dd.innerHTML = names.map(n =>
+    '<div onclick="selectStreet(\'' + escapeHtml(n) + '\')" style="padding:12px 16px;cursor:pointer;font-size:15px;border-bottom:1px solid #f3f4f6" onmouseover="this.style.background=\'#f0f6ff\'" onmouseout="this.style.background=\'white\'">' + toTitleCase(n) + '</div>'
+  ).join('');
+  dd.style.display = 'block';
+}
+
+function hideStreetDropdown() {
+  document.getElementById('parkStreetDropdown').style.display = 'none';
+}
+
+function selectStreet(nameUpper) {
+  _parkSelectedStreet = nameUpper;
+  _parkSelectedCross = null;
+  _parkSelectedSide = null;
+  document.getElementById('parkStreetInput').value = toTitleCase(nameUpper);
+  hideStreetDropdown();
+
+  const pairs = getCrossPairsForStreet(nameUpper);
+  const crossSel = document.getElementById('parkCrossSelect');
+  if (pairs.length === 0) {
+    crossSel.innerHTML = '<option value="">— no data —</option>';
+    crossSel.disabled = true;
+  } else {
+    crossSel.innerHTML = '<option value="">— select cross streets —</option>' +
+      pairs.map(p => '<option value="' + escapeHtml(p) + '">' + toTitleCase(p.replace(' to ', ' → ')) + '</option>').join('');
+    crossSel.disabled = false;
+    crossSel.value = '';
+  }
+  document.getElementById('parkDetectedBlock').style.display = 'none';
+  document.getElementById('parkSideSection').style.display = 'none';
+}
+
+function onCrossSelect() {
+  const crossSel = document.getElementById('parkCrossSelect');
+  _parkSelectedCross = crossSel.value || null;
+  _parkSelectedSide = null;
+
+  if (!_parkSelectedStreet || !_parkSelectedCross) {
+    document.getElementById('parkSideSection').style.display = 'none';
+    return;
+  }
+  showDetectedBlockForStreetForm();
+  renderSideButtons(null);
+}
+
+function showDetectedBlockForStreetForm() {
+  if (!_parkSelectedStreet || !_parkSelectedCross) return;
+  const parts = _parkSelectedCross.split(' to ');
+  const from = parts[0] || '';
+  const to = parts.slice(1).join(' to ') || '';
+  const detectedEl = document.getElementById('parkDetectedBlock');
+  detectedEl.innerHTML =
+    '<strong>' + toTitleCase(_parkSelectedStreet) + '</strong><br>' +
+    toTitleCase(from) + ' → ' + toTitleCase(to);
+  detectedEl.style.display = 'block';
+}
+
+// ----------------------------------------------------------------
+// Detected block for pin mode
+// ----------------------------------------------------------------
+
+function renderDetectedBlock() {
+  const detectedEl = document.getElementById('parkDetectedBlock');
+  if (!_parkDetectedSeg) {
+    detectedEl.innerHTML = '<em style="color:#9ca3af">No parking data loaded nearby. Pan/zoom to load tiles first.</em>';
+    detectedEl.style.display = 'block';
+    document.getElementById('parkSideSection').style.display = 'none';
+    return;
+  }
+  const seg = _parkDetectedSeg;
+  detectedEl.innerHTML =
+    'Nearest block: <strong>' + toTitleCase(seg.street || '') + '</strong><br>' +
+    toTitleCase(seg.from || '') + ' → ' + toTitleCase(seg.to || '');
+  detectedEl.style.display = 'block';
+  renderSideButtons(seg);
+}
+
+// ----------------------------------------------------------------
+// Side buttons
+// ----------------------------------------------------------------
+
+function renderSideButtons(seg) {
+  let useSeg = seg;
+  if (!useSeg && _parkSelectedStreet && _parkSelectedCross) {
+    const parts = _parkSelectedCross.split(' to ');
+    const fu = (parts[0] || '').toUpperCase();
+    const tu = parts.slice(1).join(' to ').toUpperCase();
+    const su = _parkSelectedStreet;
+    useSeg = segmentLayers.find(s =>
+      s.street && s.street.toUpperCase() === su &&
+      s.from && s.from.toUpperCase() === fu &&
+      s.to && s.to.toUpperCase() === tu
+    ) || null;
+  }
+  const orientation = useSeg ? getSegmentOrientation(useSeg) : 'EW';
+  const options = getSideOptionsForOrientation(orientation);
+  const grid = document.getElementById('parkSideGrid');
+  grid.innerHTML = options.map(opt =>
+    '<button class="park-side-btn" onclick="selectSide(\'' + opt.side + '\')" id="parkSideBtn_' + opt.side + '">' +
+    '<span class="side-icon">' + opt.icon + '</span>' +
+    '<span>' + opt.label + '</span>' +
+    '</button>'
+  ).join('');
+  document.getElementById('parkSideSection').style.display = 'block';
+}
+
+function selectSide(side) {
+  _parkSelectedSide = side;
+  document.querySelectorAll('.park-side-btn').forEach(btn => {
+    btn.style.borderColor = '#e5e7eb';
+    btn.style.background = 'white';
+    btn.style.color = '#374151';
+  });
+  const selectedBtn = document.getElementById('parkSideBtn_' + side);
+  if (selectedBtn) {
+    selectedBtn.style.borderColor = '#2563eb';
+    selectedBtn.style.background = '#eff6ff';
+    selectedBtn.style.color = '#1d4ed8';
+  }
+  // Confirm immediately on tap
+  confirmParkCar();
+}
+
+// ----------------------------------------------------------------
+// Confirm parking
+// ----------------------------------------------------------------
+
+function confirmParkCar() {
+  if (!_parkSelectedSide) return;
+
+  let street, from, to, side, lat, lng;
+
+  if (_parkModalMode === 'street') {
+    if (!_parkSelectedStreet || !_parkSelectedCross) return;
+    const parts = _parkSelectedCross.split(' to ');
+    from = parts[0] || '';
+    to = parts.slice(1).join(' to ') || '';
+    street = _parkSelectedStreet;
+    side = _parkSelectedSide;
+
+    // Snap to segment midpoint
+    const seg = findSegmentByBlock(street, from, to, side);
+    if (seg) {
+      const mid = getSegMidLatLng(seg);
+      if (mid) { lat = mid.lat; lng = mid.lng; }
+    }
+    if (!lat) {
+      // Try any side of this block
+      for (const s of ['N','S','E','W']) {
+        const anySeg = findSegmentByBlock(street, from, to, s);
+        if (anySeg) {
+          const mid = getSegMidLatLng(anySeg);
+          if (mid) { lat = mid.lat; lng = mid.lng; break; }
+        }
+      }
+    }
+    if (!lat) {
+      const c = map.getCenter();
+      lat = c.lat; lng = c.lng;
+    }
+  } else {
+    if (!_parkDetectedSeg) return;
+    const seg = _parkDetectedSeg;
+    street = seg.street || '';
+    from = seg.from || '';
+    to = seg.to || '';
+    side = _parkSelectedSide;
+    lat = _parkPinLat;
+    lng = _parkPinLng;
+    // Snap to correct-side segment if available
+    const sideSeg = findSegmentByBlock(street, from, to, side);
+    if (sideSeg) {
+      const mid = getSegMidLatLng(sideSeg);
+      if (mid) { lat = mid.lat; lng = mid.lng; }
+    }
+  }
+
+  const block = { street, from, to, side, lat, lng };
+  saveParkedBlock(block);
+  addCarMarker(lat, lng);
+  updateCarInfoBar(lat, lng);
+  updateCarParkUntilInfo();
+  computeSmartMove();
+
+  parkedCarLocation = { lat, lng };
+  localStorage.setItem('parkedCar', JSON.stringify(parkedCarLocation));
+
+  closeParkModal();
+  map.panTo([lat, lng]);
+
+  const smContainer = document.getElementById('smartMoveContainer');
+  if (smContainer) smContainer.style.display = 'block';
+}
+
+// "Park My Car Here" button — open modal using map center as pin seed
+function parkCarHere() {
+  const center = map.getCenter();
+  _parkPinLat = center.lat;
+  _parkPinLng = center.lng;
+  _parkDetectedSeg = findClosestSegment(_parkPinLat, _parkPinLng);
+  _parkModalMode = 'pin';
+  rebuildStreetIndex();
+  resetParkForm();
+  setParkMode('pin');
+  document.getElementById('parkCarModal').classList.add('visible');
 }
 
 function findClosestSegment(lat, lng) {
@@ -1784,8 +2413,15 @@ function updateCarParkUntilInfo() {
     return;
   }
 
-  const pos = carMarker.getLatLng();
-  const seg = findClosestSegment(pos.lat, pos.lng);
+  // Use parkedBlock for precise segment lookup if available
+  let seg = null;
+  if (parkedBlock && parkedBlock.street) {
+    seg = findSegmentByBlock(parkedBlock.street, parkedBlock.from, parkedBlock.to, parkedBlock.side);
+  }
+  if (!seg) {
+    const pos = carMarker.getLatLng();
+    seg = findClosestSegment(pos.lat, pos.lng);
+  }
   if (!seg) {
     el.style.display = 'none';
     return;
@@ -1802,7 +2438,10 @@ function updateCarParkUntilInfo() {
     return;
   }
 
-  const blockLabel = seg.blockKey;
+  // Build a friendly block label
+  const blockLabel = parkedBlock && parkedBlock.street
+    ? toTitleCase(parkedBlock.street) + ' (' + toTitleCase(parkedBlock.from) + ' to ' + toTitleCase(parkedBlock.to) + ')'
+    : seg.blockKey;
   if (result.safe) {
     el.innerHTML = `🚗 Your car is on <strong>${blockLabel}</strong> — <span style="color:#16a34a;font-weight:600">✅ Safe</span> until ${puDateStr} ${targetTimeLabel}`;
   } else {
@@ -2038,8 +2677,12 @@ function computeSmartMove() {
   panel.style.display = 'block';
   const carPos = carMarker.getLatLng();
 
-  // Step 1: Find car's current block
-  const carSeg = findClosestSegment(carPos.lat, carPos.lng);
+  // Step 1: Find car's current block — prefer parkedBlock for precision
+  let carSeg = null;
+  if (parkedBlock && parkedBlock.street) {
+    carSeg = findSegmentByBlock(parkedBlock.street, parkedBlock.from, parkedBlock.to, parkedBlock.side);
+  }
+  if (!carSeg) carSeg = findClosestSegment(carPos.lat, carPos.lng);
   if (!carSeg) {
     content.innerHTML = '<span style="color:#999">No parking data loaded near your car. Zoom in or pan to load tiles.</span>';
     routeBtn.style.display = 'none';
@@ -2047,14 +2690,20 @@ function computeSmartMove() {
     return;
   }
 
-  const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[carSeg.side] || carSeg.side;
+  // Build friendly car label
+  const carBlockLabel = parkedBlock && parkedBlock.street
+    ? toTitleCase(parkedBlock.street) + ' (' + toTitleCase(parkedBlock.from) + ' to ' + toTitleCase(parkedBlock.to) + ')'
+    : carSeg.blockKey;
+  const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[
+    (parkedBlock && parkedBlock.side) || carSeg.side
+  ] || carSeg.side;
 
   // Step 2: Compute next restriction for current block
   const carRestriction = computeNextRestrictionHours(carSeg);
 
   // No restrictions at all
   if (carRestriction.hours >= 168) {
-    content.innerHTML = `<div style="margin-bottom:4px"><strong>Your car:</strong> ${carSeg.blockKey} - ${sideLabel}</div>` +
+    content.innerHTML = `<div style="margin-bottom:4px"><strong>Your car:</strong> ${carBlockLabel} - ${sideLabel}</div>` +
       `<div style="color:#16a34a;font-weight:600">✅ No restrictions on your block! You're all set.</div>`;
     routeBtn.style.display = 'none';
     clearSmartMoveOverlay();
@@ -2063,7 +2712,7 @@ function computeSmartMove() {
 
   // Active restriction right now (NO_STANDING, etc)
   if (carRestriction.hours === 0 && (carRestriction.cat === 'NO_STANDING' || carRestriction.cat === 'SPECIAL')) {
-    content.innerHTML = `<div style="margin-bottom:4px"><strong>Your car:</strong> ${carSeg.blockKey} - ${sideLabel}</div>` +
+    content.innerHTML = `<div style="margin-bottom:4px"><strong>Your car:</strong> ${carBlockLabel} - ${sideLabel}</div>` +
       `<div style="color:#dc2626;font-weight:600">🚫 ${carRestriction.label}. This block isn't legal for parking.</div>`;
     routeBtn.style.display = 'none';
     clearSmartMoveOverlay();
@@ -2117,7 +2766,7 @@ function computeSmartMove() {
   const topOptions = nearby.slice(0, 5);
 
   // Step 4 & 5: Build recommendation
-  let html = `<div style="margin-bottom:6px"><strong>Your car:</strong> ${carSeg.blockKey} - ${sideLabel}</div>`;
+  let html = `<div style="margin-bottom:6px"><strong>Your car:</strong> ${carBlockLabel} - ${sideLabel}</div>`;
 
   // Current restriction info
   if (carRestriction.hours === 0) {
@@ -2517,9 +3166,9 @@ function togglePanel() {
   toggle.textContent = isCollapsed ? '▲' : '▼';
 }
 
-// ==== Phase 2: User Location & Smart Move ====
+// ==== Phase 2: User Location & Smart Score proximity ====
 let userLocation = null;
-let parkedCarLocation = null;
+let parkedCarLocation = null; // kept in sync by saveParkedBlock / clearCarPin
 
 function getDistance(lat1, lng1, lat2, lng2) {
   const toRad = Math.PI / 180;
@@ -2533,8 +3182,6 @@ function getDistance(lat1, lng1, lat2, lng2) {
 
 function computeProximityScore(seg, userLat, userLng) {
   if (!userLat || !userLng || !seg.line || seg.line.length === 0) return 1.0;
-  
-  // Find closest point on segment to user
   let minDist = Infinity;
   for (let i = 0; i < seg.line.length - 1; i++) {
     const [lat1, lng1] = seg.line[i];
@@ -2542,35 +3189,20 @@ function computeProximityScore(seg, userLat, userLng) {
     const dist = getDistance(userLat, userLng, (lat1+lat2)/2, (lng1+lng2)/2);
     minDist = Math.min(minDist, dist);
   }
-  
-  // Decay: full score at <50ft, half at 500ft, minimal at >1000ft
   const proximityMultiplier = Math.max(0.1, 1 - (minDist / 1000));
   return proximityMultiplier;
 }
 
 function computeBlockScoreWithProximity(rules, dayOfWeek, minuteOfDay, suspended, userLat, userLng, seg) {
   const baseResult = computeBlockScore(rules, dayOfWeek, minuteOfDay, suspended);
-  
-  // If user location is available, boost nearby good spots
   if (userLat && userLng && seg) {
     const proximityBoost = computeProximityScore(seg, userLat, userLng);
-    // Proximity only helps, doesn't hurt
     if (baseResult.score >= 50) {
       baseResult.score = Math.min(100, baseResult.score + proximityBoost * 15);
-      baseResult.reason = `${baseResult.reason} (${Math.round(proximityBoost*100)}% boost for proximity)`;
+      baseResult.reason = baseResult.reason + ' (' + Math.round(proximityBoost*100) + '% boost for proximity)';
     }
   }
-  
   return baseResult;
-}
-
-function parkCarHere() {
-  if (!map) return;
-  const center = map.getCenter();
-  parkedCarLocation = { lat: center.lat, lng: center.lng };
-  localStorage.setItem('parkedCar', JSON.stringify(parkedCarLocation));
-  alert(`🅿️ Car parked at ${center.lat.toFixed(4)}, ${center.lng.toFixed(4)}. Tap "Smart Move" for recommendations.`);
-  updateMap();
 }
 
 function generateSmartMoveRecommendation() {
@@ -2578,29 +3210,24 @@ function generateSmartMoveRecommendation() {
     alert('Park your car first using "Park My Car Here"');
     return;
   }
-  
   const et = nowET();
   const dayOfWeek = et.getDay();
   const minuteOfDay = et.getHours() * 60 + et.getMinutes();
   const dateStr = toETDateStr(et);
   const suspended = isASPSuspended(dateStr);
-  
-  // Score all visible segments from car location
   const scored = segmentLayers
     .map(seg => ({
       seg,
-      score: computeBlockScoreWithProximity(seg.rules, dayOfWeek, minuteOfDay, suspended, 
-                                           parkedCarLocation.lat, parkedCarLocation.lng, seg).score,
+      score: computeBlockScoreWithProximity(seg.rules, dayOfWeek, minuteOfDay, suspended,
+                                            parkedCarLocation.lat, parkedCarLocation.lng, seg).score,
     }))
     .sort((a, b) => b.score - a.score);
-  
-  // Top recommendation
   if (scored.length > 0 && scored[0].score > 30) {
     const best = scored[0].seg;
     const sideLabel = { E: 'East', W: 'West', N: 'North', S: 'South' }[best.side] || best.side;
-    const msg = `🚗 Move to: ${best.street}, ${sideLabel} side\n\n` +
-                `⭐ Score: ${scored[0].score}/100\n` +
-                `Safe for: ${computeBlockScore(best.rules, dayOfWeek, minuteOfDay, suspended).reason}`;
+    const msg = '🚗 Move to: ' + best.street + ', ' + sideLabel + ' side\n\n' +
+                '⭐ Score: ' + scored[0].score + '/100\n' +
+                'Safe for: ' + computeBlockScore(best.rules, dayOfWeek, minuteOfDay, suspended).reason;
     alert(msg);
   } else {
     alert('No good spots nearby right now. Try moving in a few hours.');
@@ -2608,19 +3235,8 @@ function generateSmartMoveRecommendation() {
 }
 
 function clearParkedCar() {
-  parkedCarLocation = null;
-  localStorage.removeItem('parkedCar');
-  updateMap();
+  clearCarPin();
 }
-
-// Load parked car location on startup
-window.addEventListener('load', () => {
-  const saved = localStorage.getItem('parkedCar');
-  if (saved) {
-    parkedCarLocation = JSON.parse(saved);
-    console.log('[Phase2] Loaded parked car location:', parkedCarLocation);
-  }
-});
 
 // Register service worker
 if ('serviceWorker' in navigator) {
