@@ -196,6 +196,18 @@ function normalizeNYCName(name) {
   if (!name) return name;
   // Collapse multiple spaces
   let n = name.replace(/\s+/g, ' ').trim();
+
+  // Convert spelled-out ordinals to numeric: "FIRST AVENUE" → "1ST AVENUE", "SECOND STREET" → "2ND STREET"
+  const SPELLED_ORDINALS = {
+    'FIRST': '1ST', 'SECOND': '2ND', 'THIRD': '3RD', 'FOURTH': '4TH', 'FIFTH': '5TH',
+    'SIXTH': '6TH', 'SEVENTH': '7TH', 'EIGHTH': '8TH', 'NINTH': '9TH', 'TENTH': '10TH',
+    'ELEVENTH': '11TH', 'TWELFTH': '12TH', 'THIRTEENTH': '13TH'
+  };
+  const spelledPattern = new RegExp(`\\b(${Object.keys(SPELLED_ORDINALS).join('|')})\\s+(STREET|AVENUE|PLACE|ROAD|BOULEVARD|DRIVE)\\b`, 'gi');
+  n = n.replace(spelledPattern, (match, word, suffix) => {
+    return `${SPELLED_ORDINALS[word.toUpperCase()]} ${suffix}`;
+  });
+
   // Add ordinal suffixes to bare numbers before STREET/AVENUE/etc.
   // "EAST 4 STREET" → "EAST 4TH STREET", "2 AVENUE" → "2ND AVENUE"
   n = n.replace(/\b(\d+)\s+(STREET|AVENUE|PLACE|ROAD|BOULEVARD|DRIVE)\b/gi, (match, num, suffix) => {
