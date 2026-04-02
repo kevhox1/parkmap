@@ -182,6 +182,144 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     padding: 8px 6px;
   }
 }
+
+/* ===== Top Blocks Panel ===== */
+#topBlocksPanel {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1000;
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  width: 280px;
+  max-height: calc(100vh - 20px);
+  display: none;
+  flex-direction: column;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  font-size: 13px;
+  overflow: hidden;
+}
+#topBlocksPanel.visible { display: flex; }
+#topBlocksPanel.collapsed #topBlocksBody { display: none; }
+
+#topBlocksHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px 10px;
+  border-bottom: 1px solid #f0f0f0;
+  cursor: pointer;
+  user-select: none;
+  flex-shrink: 0;
+}
+#topBlocksHeader h4 {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111;
+  margin: 0;
+}
+#topBlocksCollapseBtn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: #888;
+  min-width: 44px;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+#topBlocksCollapseBtn:hover { background: #f3f4f6; }
+
+#topBlocksBody {
+  overflow-y: auto;
+  flex: 1;
+  padding: 6px 0;
+  max-height: calc(100vh - 80px);
+}
+
+.top-block-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  cursor: pointer;
+  border-bottom: 1px solid #f7f7f7;
+  transition: background 0.12s;
+  min-height: 56px;
+}
+.top-block-item:last-child { border-bottom: none; }
+.top-block-item:hover { background: #f0f6ff; }
+.top-block-item:active { background: #e0ecff; }
+
+.tbi-rank {
+  font-size: 12px;
+  font-weight: 700;
+  color: #aaa;
+  min-width: 20px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.tbi-score-badge {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: white;
+  flex-shrink: 0;
+}
+.tbi-info {
+  flex: 1;
+  min-width: 0;
+}
+.tbi-name {
+  font-weight: 600;
+  font-size: 12px;
+  color: #111;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tbi-sub {
+  font-size: 11px;
+  color: #888;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 1px;
+}
+
+#topBlocksEmpty {
+  padding: 16px 14px;
+  color: #999;
+  font-size: 12px;
+  text-align: center;
+}
+
+/* Mobile: bottom sheet style */
+@media (max-width: 480px) {
+  #topBlocksPanel {
+    top: auto;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: 100%;
+    border-radius: 16px 16px 0 0;
+    max-height: 45vh;
+  }
+  #topBlocksPanel.collapsed {
+    max-height: auto;
+  }
+}
 </style>
 </head>
 <body>
@@ -302,6 +440,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 <div class="info-panel" id="infoPanel">
   <button class="close-btn" onclick="document.getElementById('infoPanel').style.display='none'">&times;</button>
   <div id="infoPanelContent"></div>
+</div>
+
+<!-- Top Blocks Panel (Smart Score mode only) -->
+<div id="topBlocksPanel">
+  <div id="topBlocksHeader" onclick="toggleTopBlocks()">
+    <h4>⭐ Top Blocks</h4>
+    <button id="topBlocksCollapseBtn" aria-label="Collapse top blocks">▲</button>
+  </div>
+  <div id="topBlocksBody">
+    <div id="topBlocksEmpty">Calculating scores...</div>
+  </div>
 </div>
 
 <div class="loading-overlay" id="loading">
@@ -756,6 +905,7 @@ async function startMap(lat, lng, zoom) {
 // ==== Map move listener ====
 map.on('moveend', () => {
   loadVisibleTiles();
+  if (currentMode === 'smart-score') scheduleTopBlocksRefresh();
 });
 
 // ==== Mode & Rendering ====
@@ -770,6 +920,7 @@ function setMode(mode) {
 
   ssc.style.display = 'none';
   puc.style.display = 'none';
+  hideTopBlocksPanel();
   if (mode === 'signs') {
     fc.style.display = 'none';
   } else if (mode === 'free-today') {
@@ -785,6 +936,7 @@ function setMode(mode) {
     ftc.style.display = 'none';
     fbc.style.display = 'none';
     ssc.style.display = 'block';
+    showTopBlocksPanel();
   } else if (mode === 'park-until') {
     fc.style.display = 'block';
     ftc.style.display = 'none';
@@ -1163,6 +1315,126 @@ function renderSmartScoreMode() {
     `<span style="color:#eab308;font-weight:600">${buckets.decent}</span> decent · ` +
     `<span style="color:#ef4444;font-weight:600">${buckets.poor}</span> poor · ` +
     `<span style="color:#991b1b;font-weight:600">${buckets.nogo}</span> no-go`;
+
+  // Refresh top blocks list after scores computed
+  scheduleTopBlocksRefresh();
+}
+
+// ==== Top Blocks Panel ====
+let topBlocksDebounceTimer = null;
+let topBlocksCollapsed = false;
+
+function toggleTopBlocks() {
+  topBlocksCollapsed = !topBlocksCollapsed;
+  const panel = document.getElementById('topBlocksPanel');
+  const btn = document.getElementById('topBlocksCollapseBtn');
+  panel.classList.toggle('collapsed', topBlocksCollapsed);
+  btn.textContent = topBlocksCollapsed ? '▼' : '▲';
+}
+
+function showTopBlocksPanel() {
+  document.getElementById('topBlocksPanel').classList.add('visible');
+  refreshTopBlocks();
+}
+
+function hideTopBlocksPanel() {
+  document.getElementById('topBlocksPanel').classList.remove('visible');
+}
+
+function scheduleTopBlocksRefresh() {
+  if (topBlocksDebounceTimer) clearTimeout(topBlocksDebounceTimer);
+  topBlocksDebounceTimer = setTimeout(refreshTopBlocks, 400);
+}
+
+function refreshTopBlocks() {
+  if (currentMode !== 'smart-score') return;
+
+  const bounds = map.getBounds();
+
+  // Gather all scored segments in visible bounds
+  const inView = segmentLayers.filter(seg => {
+    if (!seg._smartScore) return false;
+    const lls = seg.layer.getLatLngs();
+    if (!lls || lls.length === 0) return false;
+    // Check if any point is in bounds
+    return lls.some(ll => bounds.contains(ll));
+  });
+
+  // Deduplicate: group by blockKey, keep best-scoring side
+  const blockMap = new Map();
+  for (const seg of inView) {
+    const key = seg.blockKey;
+    const existing = blockMap.get(key);
+    if (!existing || seg._smartScore.score > existing._smartScore.score) {
+      blockMap.set(key, seg);
+    }
+  }
+
+  // Sort by score descending, take top 20
+  const topBlocks = Array.from(blockMap.values())
+    .sort((a, b) => b._smartScore.score - a._smartScore.score)
+    .slice(0, 20);
+
+  renderTopBlocksList(topBlocks);
+}
+
+function renderTopBlocksList(blocks) {
+  const body = document.getElementById('topBlocksBody');
+
+  if (blocks.length === 0) {
+    body.innerHTML = '<div id="topBlocksEmpty">No scored blocks in view</div>';
+    return;
+  }
+
+  const sideLabels = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' };
+
+  body.innerHTML = blocks.map((seg, i) => {
+    const ss = seg._smartScore;
+    const color = scoreToColor(ss.score);
+    const sideLbl = sideLabels[seg.side] || seg.side || '';
+    // blockKey format: "STREET NAME (FROM to TO)"
+    // Split into street name and from/to for display
+    const match = seg.blockKey.match(/^(.+?)\s*\((.+)\)$/);
+    const streetName = match ? match[1] : seg.blockKey;
+    const fromTo = match ? match[2] : '';
+    const reasonText = ss.reason || '';
+    const subText = [fromTo, sideLbl].filter(Boolean).join(' · ');
+
+    return `<div class="top-block-item" onclick="zoomToBlock(${i})" data-block-index="${i}">
+      <div class="tbi-rank">${i + 1}</div>
+      <div class="tbi-score-badge" style="background:${color}">${ss.score}</div>
+      <div class="tbi-info">
+        <div class="tbi-name">${escapeHtml(streetName)}</div>
+        <div class="tbi-sub">${escapeHtml(subText)}</div>
+        <div class="tbi-sub" style="color:#555">${escapeHtml(reasonText)}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Store reference so we can look up by index on click
+  body._topBlockSegs = blocks;
+}
+
+function zoomToBlock(index) {
+  const body = document.getElementById('topBlocksBody');
+  const blocks = body._topBlockSegs;
+  if (!blocks || !blocks[index]) return;
+  const seg = blocks[index];
+  const lls = seg.layer.getLatLngs();
+  if (!lls || lls.length === 0) return;
+  // Fit the polyline bounds with some padding
+  const bounds = L.latLngBounds(lls);
+  map.fitBounds(bounds.pad(0.3), { maxZoom: 18 });
+  // Show the info panel after a brief delay to let map settle
+  setTimeout(() => showBlockInfo(seg), 200);
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
 
 function renderStats(counts) {
