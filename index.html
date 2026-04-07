@@ -151,6 +151,332 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 
 .close-btn { min-width: 44px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
 
+/* ===== Tracker UI ===== */
+.tracker-panel {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #fcfcff 0%, #f8fbff 100%);
+}
+.tracker-panel-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.tracker-panel-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #111827;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tracker-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  background: #e0f2fe;
+  color: #075985;
+}
+.tracker-subtle {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #6b7280;
+  line-height: 1.4;
+}
+.tracker-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #374151;
+  white-space: nowrap;
+}
+.tracker-toggle input { accent-color: #2563eb; }
+.tracker-status-summary {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #1f2937;
+  line-height: 1.45;
+}
+.tracker-actions-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.tracker-actions-row button {
+  flex: 1;
+  min-height: 40px;
+  border-radius: 8px;
+  border: 1px solid #d1d5db;
+  background: white;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+}
+.tracker-feed-list {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tracker-feed-empty {
+  padding: 10px;
+  border-radius: 10px;
+  background: #f9fafb;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.45;
+}
+.tracker-feed-item {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: white;
+  padding: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, transform 0.15s, box-shadow 0.15s;
+}
+.tracker-feed-item:hover {
+  border-color: #93c5fd;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(37,99,235,0.08);
+}
+.tracker-feed-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.tracker-feed-type {
+  font-size: 12px;
+  font-weight: 700;
+  color: #111827;
+}
+.tracker-feed-age {
+  font-size: 11px;
+  font-weight: 700;
+  color: #6b7280;
+}
+.tracker-feed-block {
+  font-size: 12px;
+  color: #374151;
+  line-height: 1.35;
+}
+.tracker-feed-meta {
+  margin-top: 6px;
+  font-size: 11px;
+  color: #6b7280;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.tracker-report-card {
+  margin-top: 10px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #fafafa;
+}
+.tracker-report-card + .tracker-report-card { margin-top: 8px; }
+.tracker-report-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.tracker-report-type {
+  font-size: 13px;
+  font-weight: 700;
+  color: #111827;
+}
+.tracker-report-note {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #374151;
+}
+.tracker-report-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+.tracker-inline-btn {
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #111827;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tracker-inline-btn.primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+.tracker-inline-btn.warn {
+  color: #b91c1c;
+}
+.tracker-composer-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 12px;
+}
+.tracker-choice-btn {
+  border: 1px solid #cbd5e1;
+  background: white;
+  border-radius: 10px;
+  padding: 10px;
+  text-align: left;
+  cursor: pointer;
+  font-size: 13px;
+  color: #1f2937;
+}
+.tracker-choice-btn.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+  color: #1d4ed8;
+}
+.tracker-note-input {
+  width: 100%;
+  min-height: 84px;
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  font: inherit;
+  resize: vertical;
+}
+.tracker-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 2500;
+  background: rgba(15, 23, 42, 0.45);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+}
+.tracker-modal-backdrop.visible { display: flex; }
+.tracker-modal {
+  width: min(520px, 100%);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  background: white;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(15,23,42,0.26);
+  padding: 18px;
+}
+.tracker-modal h3 {
+  font-size: 18px;
+  margin-bottom: 6px;
+}
+.tracker-modal .subtitle {
+  font-size: 13px;
+  color: #6b7280;
+  margin-bottom: 12px;
+}
+.tracker-modal .actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 14px;
+  flex-wrap: wrap;
+}
+.tracker-modal .actions button {
+  min-height: 42px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  background: white;
+  padding: 10px 14px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.tracker-modal .actions .primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+.tracker-helper-box {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  font-size: 12px;
+  color: #475569;
+  line-height: 1.45;
+}
+.tracker-event-list {
+  margin-top: 10px;
+  border-top: 1px solid #e5e7eb;
+  padding-top: 10px;
+}
+.tracker-event-item {
+  font-size: 12px;
+  color: #4b5563;
+  padding: 5px 0;
+}
+.tracker-marker {
+  min-width: 54px;
+  padding: 6px 8px;
+  border-radius: 999px;
+  color: white;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-shadow: 0 10px 24px rgba(15,23,42,0.22);
+  border: 2px solid rgba(255,255,255,0.92);
+}
+.tracker-marker--ticket_agent { background: #dc2626; }
+.tracker-marker--sweeper { background: #f97316; }
+.tracker-marker--block_cleaned { background: #0f766e; }
+.tracker-marker--fresh { opacity: 1; }
+.tracker-marker--aging { opacity: 0.9; }
+.tracker-marker--stale { opacity: 0.76; }
+.tracker-marker-count {
+  background: rgba(255,255,255,0.18);
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.tracker-sheet-section {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e7eb;
+}
+.tracker-sheet-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 10px;
+}
+.tracker-sheet-actions button {
+  border: 1px solid #d1d5db;
+  background: white;
+  color: #111827;
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.tracker-sheet-actions .primary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: white;
+}
+
 @media (max-width: 480px) {
   .control-panel { max-width: calc(100vw - 20px); right: 5px; top: 5px; padding: 12px; }
   .info-panel { max-width: calc(100vw - 20px); left: 5px; bottom: 5px; }
@@ -490,6 +816,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     <div class="legend" id="legend"></div>
     <div class="stats" id="stats"></div>
 
+    <div id="trackerPanel" class="tracker-panel" style="display:none">
+      <div class="tracker-panel-header">
+        <div>
+          <div class="tracker-panel-title">
+            <span>Tracker</span>
+            <span id="trackerProviderBadge" class="tracker-badge">Local demo</span>
+          </div>
+          <div id="trackerFeedAnchorText" class="tracker-subtle">Nearby feed follows the map center until you park a car.</div>
+        </div>
+        <label class="tracker-toggle"><input type="checkbox" id="trackerEnabledToggle" checked onchange="toggleTrackerOverlay(this.checked)"> Live</label>
+      </div>
+      <div id="trackerStatusSummary" class="tracker-status-summary">Loading tracker layer…</div>
+      <div class="tracker-actions-row">
+        <button onclick="focusTrackerAnchor()">Focus feed area</button>
+        <button onclick="refreshTrackerFeed()">Refresh feed</button>
+      </div>
+      <div id="trackerFeedList" class="tracker-feed-list"></div>
+    </div>
+
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee">
       <button id="parkCarBtn" onclick="openParkModal()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
       <div id="smartMoveContainer" style="display:none;margin-top:8px;padding:10px;background:#dbeafe;border:1px solid #93c5fd;border-radius:8px;">
@@ -537,6 +882,42 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 <div class="loading-overlay" id="loading">
   <div class="spinner"></div>
   <div id="loadingText">Loading...</div>
+</div>
+
+<div class="tracker-modal-backdrop" id="trackerComposerBackdrop" onclick="dismissTrackerBackdrop(event, 'trackerComposerBackdrop')">
+  <div class="tracker-modal" role="dialog" aria-modal="true" aria-label="Report tracker event">
+    <h3 id="trackerComposerTitle">Report tracker event</h3>
+    <div id="trackerComposerSubtitle" class="subtitle"></div>
+    <div id="trackerComposerBlock" class="tracker-helper-box"></div>
+    <div id="trackerComposerDirectionWrap">
+      <div style="font-size:13px;font-weight:700;color:#111827;margin-top:12px">Direction</div>
+      <div class="tracker-composer-grid">
+        <button id="trackerDirectionFrom" class="tracker-choice-btn" onclick="setTrackerComposerDirection('toward_from')"></button>
+        <button id="trackerDirectionTo" class="tracker-choice-btn" onclick="setTrackerComposerDirection('toward_to')"></button>
+      </div>
+      <button id="trackerDirectionUnknown" class="tracker-inline-btn" style="margin-top:8px" onclick="setTrackerComposerDirection('unknown')">Direction unclear</button>
+    </div>
+    <textarea id="trackerComposerNote" class="tracker-note-input" maxlength="140" placeholder="Optional note, max 140 characters"></textarea>
+    <div id="trackerComposerHelper" class="tracker-helper-box"></div>
+    <div class="actions">
+      <button onclick="closeTrackerComposer()">Cancel</button>
+      <button class="primary" onclick="submitTrackerComposer()">Submit report</button>
+    </div>
+  </div>
+</div>
+
+<div class="tracker-modal-backdrop" id="trackerAuthBackdrop" onclick="dismissTrackerBackdrop(event, 'trackerAuthBackdrop')">
+  <div class="tracker-modal" role="dialog" aria-modal="true" aria-label="Tracker sign in required">
+    <h3>Sign in to write</h3>
+    <div class="subtitle">Reading stays anonymous. Reporting, confirming, and pass counts are write actions.</div>
+    <div class="tracker-helper-box">
+      This build is running without Supabase auth configured, so the app uses a local demo writer identity. The data layer is already shaped for a future Supabase provider, but this keeps the UI testable right now.
+    </div>
+    <div class="actions">
+      <button onclick="closeTrackerAuthGate()">Cancel</button>
+      <button class="primary" onclick="enableTrackerDemoAuth()">Continue in local demo mode</button>
+    </div>
+  </div>
 </div>
 
 <!-- Park My Car Modal -->
@@ -624,6 +1005,47 @@ let tileIndex = null;       // from tiles/index.json
 let tileCache = {};          // key: "row_col" -> true (loaded)
 let tilesLoading = 0;        // count of in-flight tile fetches
 let mapReady = false;        // after user picks location
+
+// ==== Tracker constants & state ====
+const TRACKER_TYPES = {
+  sweeper: {
+    label: 'Sweeper',
+    icon: '🧹',
+    color: '#f97316',
+    priority: 2,
+    ttlMs: 15 * 60 * 1000,
+    description: 'Street sweeper sighting'
+  },
+  ticket_agent: {
+    label: 'Ticket agent',
+    icon: '🎟️',
+    color: '#dc2626',
+    priority: 3,
+    ttlMs: 15 * 60 * 1000,
+    description: 'Enforcement agent sighting'
+  },
+  block_cleaned: {
+    label: 'Block cleaned',
+    icon: '✅',
+    color: '#0f766e',
+    priority: 1,
+    ttlMs: null,
+    description: 'ASP pass already happened'
+  }
+};
+const TRACKER_FEED_RADIUS_M = 400;
+const TRACKER_STORAGE_KEY = 'wepark_tracker_mock_v1';
+const TRACKER_AUTH_KEY = 'wepark_tracker_auth_v1';
+let trackerProvider = null;
+let trackerOverlayEnabled = true;
+let trackerOverlayLayer = L.layerGroup().addTo(map);
+let trackerRefreshTimer = null;
+let trackerComposerState = { seg: null, type: null, directionMode: 'unknown' };
+let trackerPendingWriteAction = null;
+let trackerDetailCache = { reports: [], events: [] };
+
+map.createPane('trackerOverlay');
+map.getPane('trackerOverlay').style.zIndex = 640;
 
 // ==== ET helpers ====
 function nowET() {
@@ -865,6 +1287,775 @@ function updateTileLoaderUI() {
   }
 }
 
+function normalizeBlockToken(value) {
+  return String(value || '')
+    .trim()
+    .toUpperCase()
+    .replace(/&/g, ' AND ')
+    .replace(/[^A-Z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+function getSideLabel(side) {
+  return { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[side] || side || '';
+}
+
+function getBlockFaceId(street, from, to, side) {
+  return ['bf', normalizeBlockToken(street), normalizeBlockToken(from), normalizeBlockToken(to), side || 'U'].join('__');
+}
+
+function getBlockFaceLabel(street, from, to, side) {
+  return `${toTitleCase(street || '')}, ${toTitleCase(from || '')} to ${toTitleCase(to || '')}, ${(getSideLabel(side) || side || '').toLowerCase()}`;
+}
+
+function buildBlockFaceForSegment(seg) {
+  const center = getSegmentMidLatLng(seg) || { lat: map.getCenter().lat, lng: map.getCenter().lng };
+  return {
+    id: getBlockFaceId(seg.street, seg.from, seg.to, seg.side),
+    street: seg.street,
+    from_street: seg.from,
+    to_street: seg.to,
+    side: seg.side,
+    label: getBlockFaceLabel(seg.street, seg.from, seg.to, seg.side),
+    center,
+    source_segment_ids: [seg.id]
+  };
+}
+
+function findSegmentByBlockFaceId(blockFaceId) {
+  return segmentLayers.find(seg => seg.blockFace && seg.blockFace.id === blockFaceId) || null;
+}
+
+function distanceMeters(a, b) {
+  if (!a || !b) return Infinity;
+  return map.distance([a.lat, a.lng], [b.lat, b.lng]);
+}
+
+function isoNow() {
+  return new Date().toISOString();
+}
+
+function isoToMs(iso) {
+  return iso ? new Date(iso).getTime() : 0;
+}
+
+function formatTrackerAge(iso) {
+  const diffMs = Math.max(0, Date.now() - isoToMs(iso));
+  const min = Math.round(diffMs / 60000);
+  if (min < 1) return 'now';
+  if (min < 60) return `${min}m`;
+  const hrs = Math.round(min / 60);
+  if (hrs < 24) return `${hrs}h`;
+  return `${Math.round(hrs / 24)}d`;
+}
+
+function trackerAgeClass(report) {
+  const ageMs = Date.now() - isoToMs(report.last_seen_at || report.created_at);
+  if (ageMs < 5 * 60 * 1000) return 'fresh';
+  if (ageMs < 10 * 60 * 1000) return 'aging';
+  return 'stale';
+}
+
+function getReportDirectionLabel(report, blockFace) {
+  if (!report || !blockFace) return '';
+  if (report.direction_mode === 'toward_from') return `Toward ${toTitleCase(blockFace.from_street || '')}`;
+  if (report.direction_mode === 'toward_to') return `Toward ${toTitleCase(blockFace.to_street || '')}`;
+  return 'Direction unclear';
+}
+
+function getTrackerAnchor() {
+  if (parkedBlock && isFinite(parkedBlock.lat) && isFinite(parkedBlock.lng)) {
+    return {
+      lat: parkedBlock.lat,
+      lng: parkedBlock.lng,
+      label: 'Watching your parked-car area',
+      mode: 'parked-car'
+    };
+  }
+  const center = map.getCenter();
+  return {
+    lat: center.lat,
+    lng: center.lng,
+    label: 'Watching the map center area',
+    mode: 'map-center'
+  };
+}
+
+function getActiveScheduleWindow(rule, now = nowET()) {
+  const minute = now.getHours() * 60 + now.getMinutes();
+  const day = now.getDay();
+  const prevDay = (day + 6) % 7;
+  const makeDate = (base, dayOffset, minuteOfDay) => {
+    const d = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 0, 0, 0, 0);
+    d.setDate(d.getDate() + dayOffset);
+    d.setHours(Math.floor(minuteOfDay / 60), minuteOfDay % 60, 0, 0);
+    return d;
+  };
+
+  if (rule.anytime && rule.days && rule.days.includes(day)) {
+    return { startAt: makeDate(now, 0, 0), endAt: makeDate(now, 1, 0) };
+  }
+
+  const ranges = rule.timeRanges && rule.timeRanges.length ? rule.timeRanges : [{ start: 0, end: 1440 }];
+  for (const tr of ranges) {
+    if (tr.start < tr.end) {
+      if ((rule.days || []).includes(day) && minute >= tr.start && minute < tr.end) {
+        return { startAt: makeDate(now, 0, tr.start), endAt: makeDate(now, 0, tr.end) };
+      }
+    } else {
+      if ((rule.days || []).includes(day) && minute >= tr.start) {
+        return { startAt: makeDate(now, 0, tr.start), endAt: makeDate(now, 1, tr.end) };
+      }
+      if ((rule.days || []).includes(prevDay) && minute < tr.end) {
+        return { startAt: makeDate(now, -1, tr.start), endAt: makeDate(now, 0, tr.end) };
+      }
+    }
+  }
+  return null;
+}
+
+function getCurrentASPWindow(seg) {
+  if (!seg || !seg.rules) return null;
+  for (const rule of seg.rules) {
+    if (!isASPCategory(rule.category)) continue;
+    const win = getActiveScheduleWindow(rule);
+    if (win) {
+      return {
+        category: rule.category,
+        start_at: win.startAt.toISOString(),
+        end_at: win.endAt.toISOString(),
+        rule
+      };
+    }
+  }
+  return null;
+}
+
+function createTrackerMockProvider() {
+  const listeners = new Set();
+  const readState = () => {
+    try {
+      const raw = localStorage.getItem(TRACKER_STORAGE_KEY);
+      if (!raw) return { reports: [], events: [], seeded: false };
+      const parsed = JSON.parse(raw);
+      return {
+        reports: Array.isArray(parsed.reports) ? parsed.reports : [],
+        events: Array.isArray(parsed.events) ? parsed.events : [],
+        seeded: !!parsed.seeded
+      };
+    } catch (err) {
+      console.warn('Tracker mock state reset after parse failure', err);
+      return { reports: [], events: [], seeded: false };
+    }
+  };
+  const writeState = (state) => {
+    localStorage.setItem(TRACKER_STORAGE_KEY, JSON.stringify(state));
+    listeners.forEach(fn => fn());
+  };
+  const readSession = () => {
+    try {
+      return JSON.parse(localStorage.getItem(TRACKER_AUTH_KEY) || 'null');
+    } catch (err) {
+      return null;
+    }
+  };
+  const isActive = (report) => report.status === 'active' && isoToMs(report.expires_at) > Date.now();
+  const cleanup = () => {
+    const state = readState();
+    let changed = false;
+    for (const report of state.reports) {
+      if (report.status === 'active' && isoToMs(report.expires_at) <= Date.now()) {
+        report.status = 'expired';
+        report.updated_at = isoNow();
+        changed = true;
+        state.events.unshift({
+          id: crypto.randomUUID(),
+          report_id: report.id,
+          block_face_id: report.block_face_id,
+          event_type: 'expired',
+          created_at: isoNow(),
+          payload: { type: report.type }
+        });
+      }
+    }
+    if (changed) writeState(state);
+    return state;
+  };
+  const getSortedActiveReports = () => cleanup().reports
+    .filter(isActive)
+    .sort((a, b) => isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at));
+  return {
+    name: 'Local demo',
+    kind: 'mock',
+    async init() { cleanup(); },
+    async getAuthSession() { return readSession(); },
+    async enableDemoAuth() {
+      const session = { id: 'local-demo-user', canWrite: true, auth_provider: 'local-demo', display_name: 'Local demo user' };
+      localStorage.setItem(TRACKER_AUTH_KEY, JSON.stringify(session));
+      listeners.forEach(fn => fn());
+      return session;
+    },
+    async getActiveReportsForBounds(bounds) {
+      return getSortedActiveReports().filter(report => {
+        const c = report.block_face_snapshot && report.block_face_snapshot.center;
+        return c && bounds.contains([c.lat, c.lng]);
+      });
+    },
+    async getBlockFaceDetail(blockFaceId) {
+      const state = cleanup();
+      return {
+        reports: state.reports
+          .filter(report => report.block_face_id === blockFaceId && isActive(report))
+          .sort((a, b) => TRACKER_TYPES[b.type].priority - TRACKER_TYPES[a.type].priority || isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at)),
+        events: state.events
+          .filter(event => event.block_face_id === blockFaceId)
+          .sort((a, b) => isoToMs(b.created_at) - isoToMs(a.created_at))
+          .slice(0, 8)
+      };
+    },
+    async getNearbyFeed(anchor, radiusMeters) {
+      return getSortedActiveReports()
+        .map(report => ({
+          ...report,
+          distance_m: Math.round(distanceMeters(anchor, report.block_face_snapshot && report.block_face_snapshot.center))
+        }))
+        .filter(report => report.distance_m <= radiusMeters)
+        .sort((a, b) => a.distance_m - b.distance_m || isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at));
+    },
+    async createReport(input) {
+      const session = readSession();
+      if (!session || !session.canWrite) throw new Error('auth_required');
+      const state = cleanup();
+      const now = isoNow();
+      const baseSnapshot = input.block_face_snapshot;
+      if (input.type === 'block_cleaned') {
+        const existing = state.reports.find(report =>
+          report.status === 'active' &&
+          report.type === 'block_cleaned' &&
+          report.block_face_id === input.block_face_id &&
+          report.asp_window_start_at === input.asp_window_start_at
+        );
+        if (existing) {
+          existing.pass_count = (existing.pass_count || 1) + 1;
+          existing.last_pass_at = now;
+          existing.last_seen_at = now;
+          existing.updated_at = now;
+          existing.expires_at = input.asp_window_end_at;
+          existing.distinct_reporter_count = (existing.distinct_reporter_count || 1) + 1;
+          state.events.unshift({
+            id: crypto.randomUUID(),
+            report_id: existing.id,
+            block_face_id: existing.block_face_id,
+            event_type: 'pass_incremented',
+            created_at: now,
+            payload: { pass_count: existing.pass_count }
+          });
+          writeState(state);
+          return existing;
+        }
+      } else {
+        const existing = state.reports.find(report =>
+          report.status === 'active' &&
+          report.type === input.type &&
+          report.block_face_id === input.block_face_id &&
+          report.direction_mode === input.direction_mode
+        );
+        if (existing) {
+          existing.confirm_count = (existing.confirm_count || 0) + 1;
+          existing.distinct_reporter_count = (existing.distinct_reporter_count || 1) + 1;
+          existing.last_seen_at = now;
+          existing.updated_at = now;
+          existing.expires_at = new Date(Date.now() + TRACKER_TYPES[input.type].ttlMs).toISOString();
+          state.events.unshift({
+            id: crypto.randomUUID(),
+            report_id: existing.id,
+            block_face_id: existing.block_face_id,
+            event_type: 'confirmed',
+            created_at: now,
+            payload: { type: existing.type }
+          });
+          writeState(state);
+          return existing;
+        }
+      }
+
+      const report = {
+        id: crypto.randomUUID(),
+        type: input.type,
+        block_face_id: input.block_face_id,
+        block_face_snapshot: baseSnapshot,
+        reporter_user_id: session.id,
+        status: 'active',
+        created_at: now,
+        updated_at: now,
+        last_seen_at: now,
+        expires_at: input.type === 'block_cleaned'
+          ? input.asp_window_end_at
+          : new Date(Date.now() + TRACKER_TYPES[input.type].ttlMs).toISOString(),
+        note: input.note || '',
+        confirm_count: 0,
+        distinct_reporter_count: 1,
+        confidence: 'low',
+        direction_mode: input.direction_mode || 'unknown',
+        direction_label_cache: input.direction_label_cache || '',
+        asp_window_start_at: input.asp_window_start_at || null,
+        asp_window_end_at: input.asp_window_end_at || null,
+        pass_count: input.type === 'block_cleaned' ? 1 : null,
+        last_pass_at: input.type === 'block_cleaned' ? now : null
+      };
+      state.reports.unshift(report);
+      state.events.unshift({
+        id: crypto.randomUUID(),
+        report_id: report.id,
+        block_face_id: report.block_face_id,
+        event_type: 'created',
+        created_at: now,
+        payload: { type: report.type }
+      });
+      writeState(state);
+      return report;
+    },
+    async confirmReport(reportId) {
+      const session = readSession();
+      if (!session || !session.canWrite) throw new Error('auth_required');
+      const state = cleanup();
+      const report = state.reports.find(r => r.id === reportId && r.status === 'active');
+      if (!report) return null;
+      const now = isoNow();
+      report.confirm_count = (report.confirm_count || 0) + 1;
+      report.distinct_reporter_count = (report.distinct_reporter_count || 1) + 1;
+      report.last_seen_at = now;
+      report.updated_at = now;
+      if (report.type !== 'block_cleaned') {
+        report.expires_at = new Date(Date.now() + TRACKER_TYPES[report.type].ttlMs).toISOString();
+      }
+      state.events.unshift({
+        id: crypto.randomUUID(),
+        report_id: report.id,
+        block_face_id: report.block_face_id,
+        event_type: 'confirmed',
+        created_at: now,
+        payload: { type: report.type }
+      });
+      writeState(state);
+      return report;
+    },
+    async retractReport(reportId) {
+      const session = readSession();
+      if (!session || !session.canWrite) throw new Error('auth_required');
+      const state = cleanup();
+      const report = state.reports.find(r => r.id === reportId && r.status === 'active');
+      if (!report) return null;
+      if (report.reporter_user_id !== session.id) throw new Error('not_owner');
+      report.status = 'retracted';
+      report.updated_at = isoNow();
+      state.events.unshift({
+        id: crypto.randomUUID(),
+        report_id: report.id,
+        block_face_id: report.block_face_id,
+        event_type: 'retracted',
+        created_at: isoNow(),
+        payload: { type: report.type }
+      });
+      writeState(state);
+      return report;
+    },
+    async seedReports(seedReports) {
+      const state = cleanup();
+      if (state.seeded || state.reports.length > 0) return;
+      state.reports.unshift(...seedReports);
+      for (const report of seedReports) {
+        state.events.unshift({
+          id: crypto.randomUUID(),
+          report_id: report.id,
+          block_face_id: report.block_face_id,
+          event_type: 'created',
+          created_at: report.created_at,
+          payload: { type: report.type, seeded: true }
+        });
+      }
+      state.seeded = true;
+      writeState(state);
+    },
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    }
+  };
+}
+
+function createSupabaseTrackerProvider(config) {
+  console.info('Supabase tracker provider insertion point ready', config);
+  return {
+    name: 'Supabase pending',
+    kind: 'supabase-stub',
+    async init() {},
+    async getAuthSession() { return null; },
+    async enableDemoAuth() { throw new Error('supabase_auth_not_configured'); },
+    async getActiveReportsForBounds() { return []; },
+    async getBlockFaceDetail() { return { reports: [], events: [] }; },
+    async getNearbyFeed() { return []; },
+    async createReport() { throw new Error('Supabase provider not wired yet'); },
+    async confirmReport() { throw new Error('Supabase provider not wired yet'); },
+    async retractReport() { throw new Error('Supabase provider not wired yet'); },
+    subscribe() { return () => {}; }
+  };
+}
+
+function makeTrackerProvider() {
+  const cfg = window.WEPARK_SUPABASE_CONFIG;
+  if (cfg && cfg.url && cfg.anonKey) return createSupabaseTrackerProvider(cfg);
+  return createTrackerMockProvider();
+}
+
+async function initTracker() {
+  if (!trackerProvider) {
+    trackerProvider = makeTrackerProvider();
+    await trackerProvider.init();
+    trackerProvider.subscribe(() => queueTrackerRefresh());
+  }
+  const panel = document.getElementById('trackerPanel');
+  if (panel) panel.style.display = 'block';
+  document.getElementById('trackerProviderBadge').textContent = trackerProvider.name;
+  await maybeSeedTrackerDemoReports();
+  await refreshTrackerFeed();
+}
+
+async function maybeSeedTrackerDemoReports() {
+  if (!trackerProvider || trackerProvider.kind !== 'mock' || segmentLayers.length < 20) return;
+  const center = getTrackerAnchor();
+  const ranked = segmentLayers
+    .filter(seg => seg.blockFace)
+    .map(seg => ({ seg, dist: distanceMeters(center, seg.blockFace.center) }))
+    .sort((a, b) => a.dist - b.dist)
+    .map(x => x.seg);
+  if (!ranked.length) return;
+  const picked = [];
+  for (const seg of ranked) {
+    if (!picked.find(existing => existing.blockFace.id === seg.blockFace.id)) picked.push(seg);
+    if (picked.length >= 3) break;
+  }
+  if (!picked.length) return;
+  const now = Date.now();
+  const seeded = [];
+  if (picked[0]) {
+    seeded.push({
+      id: crypto.randomUUID(),
+      type: 'sweeper',
+      block_face_id: picked[0].blockFace.id,
+      block_face_snapshot: picked[0].blockFace,
+      reporter_user_id: 'seed',
+      status: 'active',
+      created_at: new Date(now - 4 * 60000).toISOString(),
+      updated_at: new Date(now - 4 * 60000).toISOString(),
+      last_seen_at: new Date(now - 2 * 60000).toISOString(),
+      expires_at: new Date(now + 11 * 60000).toISOString(),
+      note: 'Local demo report',
+      confirm_count: 1,
+      distinct_reporter_count: 2,
+      confidence: 'medium',
+      direction_mode: 'toward_to',
+      direction_label_cache: `Toward ${toTitleCase(picked[0].to || '')}`,
+      pass_count: null,
+      last_pass_at: null,
+      asp_window_start_at: null,
+      asp_window_end_at: null
+    });
+  }
+  if (picked[1]) {
+    seeded.push({
+      id: crypto.randomUUID(),
+      type: 'ticket_agent',
+      block_face_id: picked[1].blockFace.id,
+      block_face_snapshot: picked[1].blockFace,
+      reporter_user_id: 'seed',
+      status: 'active',
+      created_at: new Date(now - 7 * 60000).toISOString(),
+      updated_at: new Date(now - 7 * 60000).toISOString(),
+      last_seen_at: new Date(now - 5 * 60000).toISOString(),
+      expires_at: new Date(now + 8 * 60000).toISOString(),
+      note: 'Local demo report',
+      confirm_count: 0,
+      distinct_reporter_count: 1,
+      confidence: 'low',
+      direction_mode: 'toward_from',
+      direction_label_cache: `Toward ${toTitleCase(picked[1].from || '')}`,
+      pass_count: null,
+      last_pass_at: null,
+      asp_window_start_at: null,
+      asp_window_end_at: null
+    });
+  }
+  const cleanedSeg = ranked.find(seg => getCurrentASPWindow(seg));
+  if (cleanedSeg) {
+    const win = getCurrentASPWindow(cleanedSeg);
+    seeded.push({
+      id: crypto.randomUUID(),
+      type: 'block_cleaned',
+      block_face_id: cleanedSeg.blockFace.id,
+      block_face_snapshot: cleanedSeg.blockFace,
+      reporter_user_id: 'seed',
+      status: 'active',
+      created_at: new Date(now - 9 * 60000).toISOString(),
+      updated_at: new Date(now - 9 * 60000).toISOString(),
+      last_seen_at: new Date(now - 3 * 60000).toISOString(),
+      expires_at: win.end_at,
+      note: 'ASP pass seen in local demo',
+      confirm_count: 0,
+      distinct_reporter_count: 1,
+      confidence: 'low',
+      direction_mode: 'unknown',
+      direction_label_cache: '',
+      pass_count: 1,
+      last_pass_at: new Date(now - 3 * 60000).toISOString(),
+      asp_window_start_at: win.start_at,
+      asp_window_end_at: win.end_at
+    });
+  }
+  if (seeded.length) await trackerProvider.seedReports(seeded);
+}
+
+function queueTrackerRefresh() {
+  if (!mapReady || !trackerProvider) return;
+  clearTimeout(trackerRefreshTimer);
+  trackerRefreshTimer = setTimeout(() => refreshTrackerFeed(), 80);
+}
+
+async function refreshTrackerFeed() {
+  if (!mapReady || !trackerProvider) return;
+  const anchor = getTrackerAnchor();
+  document.getElementById('trackerFeedAnchorText').textContent = anchor.label + ` · ${TRACKER_FEED_RADIUS_M}m radius`;
+  const bounds = map.getBounds().pad(0.12);
+  const [reportsInView, nearbyFeed] = await Promise.all([
+    trackerProvider.getActiveReportsForBounds(bounds),
+    trackerProvider.getNearbyFeed(anchor, TRACKER_FEED_RADIUS_M)
+  ]);
+  renderTrackerSummary(reportsInView, nearbyFeed, anchor);
+  renderTrackerMarkers(reportsInView);
+}
+
+function renderTrackerSummary(reportsInView, nearbyFeed, anchor) {
+  const summaryEl = document.getElementById('trackerStatusSummary');
+  const feedEl = document.getElementById('trackerFeedList');
+  if (!reportsInView.length) {
+    summaryEl.textContent = trackerProvider.kind === 'mock'
+      ? 'No active tracker reports in view yet. Pan around, or use the composer on a block face to add local demo data.'
+      : 'No active tracker reports in view.';
+  } else {
+    const types = reportsInView.reduce((acc, report) => {
+      acc[report.type] = (acc[report.type] || 0) + 1;
+      return acc;
+    }, {});
+    summaryEl.innerHTML = [
+      `${reportsInView.length} active report${reportsInView.length === 1 ? '' : 's'} in view`,
+      types.ticket_agent ? `${types.ticket_agent} ticket agent` : null,
+      types.sweeper ? `${types.sweeper} sweeper` : null,
+      types.block_cleaned ? `${types.block_cleaned} cleaned` : null
+    ].filter(Boolean).join(' · ');
+  }
+
+  if (!nearbyFeed.length) {
+    feedEl.innerHTML = `<div class="tracker-feed-empty">No nearby reports within ${TRACKER_FEED_RADIUS_M}m of the ${anchor.mode === 'parked-car' ? 'parked car' : 'map center'}.</div>`;
+    return;
+  }
+
+  feedEl.innerHTML = nearbyFeed.slice(0, 6).map(report => {
+    const type = TRACKER_TYPES[report.type];
+    const block = report.block_face_snapshot || {};
+    const metaBits = [
+      report.direction_mode && report.type !== 'block_cleaned' ? getReportDirectionLabel(report, block) : null,
+      report.type === 'block_cleaned' ? `Passes ${report.pass_count || 1}` : null,
+      Number.isFinite(report.distance_m) ? `${report.distance_m}m away` : null,
+      report.confirm_count ? `${report.confirm_count} confirm${report.confirm_count === 1 ? '' : 's'}` : null
+    ].filter(Boolean);
+    return `<div class="tracker-feed-item" onclick="openTrackerBlockFromId('${report.block_face_id}')">
+      <div class="tracker-feed-top">
+        <div class="tracker-feed-type">${type.icon} ${type.label}</div>
+        <div class="tracker-feed-age">${formatTrackerAge(report.last_seen_at || report.created_at)}</div>
+      </div>
+      <div class="tracker-feed-block">${escapeHtml(block.label || report.block_face_id)}</div>
+      <div class="tracker-feed-meta">${metaBits.map(bit => `<span>${escapeHtml(bit)}</span>`).join('')}</div>
+    </div>`;
+  }).join('');
+}
+
+function renderTrackerMarkers(reportsInView) {
+  trackerOverlayLayer.clearLayers();
+  if (!trackerOverlayEnabled) return;
+  const grouped = new Map();
+  for (const report of reportsInView) {
+    const key = report.block_face_id;
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(report);
+  }
+  for (const [blockFaceId, reports] of grouped.entries()) {
+    const seg = findSegmentByBlockFaceId(blockFaceId);
+    if (!seg || !seg.blockFace || !seg.blockFace.center) continue;
+    const primary = reports.slice().sort((a, b) => TRACKER_TYPES[b.type].priority - TRACKER_TYPES[a.type].priority || isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at))[0];
+    const type = TRACKER_TYPES[primary.type];
+    const ageClass = trackerAgeClass(primary);
+    const badge = primary.type === 'block_cleaned'
+      ? `x${primary.pass_count || 1}`
+      : formatTrackerAge(primary.last_seen_at || primary.created_at);
+    const markerHtml = `<div class="tracker-marker tracker-marker--${primary.type} tracker-marker--${ageClass}"><span>${type.icon}</span><span>${badge}</span>${reports.length > 1 ? `<span class="tracker-marker-count">+${reports.length - 1}</span>` : ''}</div>`;
+    const marker = L.marker([seg.blockFace.center.lat, seg.blockFace.center.lng], {
+      icon: L.divIcon({ html: markerHtml, className: '', iconSize: [72, 30], iconAnchor: [36, 15] }),
+      pane: 'trackerOverlay'
+    });
+    marker.on('click', () => showBlockInfo(seg));
+    marker.bindTooltip(`${type.label} · ${seg.blockFace.label}`, { direction: 'top', offset: [0, -12] });
+    trackerOverlayLayer.addLayer(marker);
+  }
+}
+
+function toggleTrackerOverlay(enabled) {
+  trackerOverlayEnabled = !!enabled;
+  queueTrackerRefresh();
+}
+
+function focusTrackerAnchor() {
+  const anchor = getTrackerAnchor();
+  map.flyTo([anchor.lat, anchor.lng], Math.max(map.getZoom(), 17));
+}
+
+function dismissTrackerBackdrop(event, id) {
+  if (event.target && event.target.id === id) {
+    document.getElementById(id).classList.remove('visible');
+  }
+}
+
+function openTrackerComposer(seg, type) {
+  trackerComposerState = { seg, type, directionMode: type === 'block_cleaned' ? 'unknown' : 'toward_to' };
+  const block = seg.blockFace;
+  const aspWindow = getCurrentASPWindow(seg);
+  document.getElementById('trackerComposerTitle').textContent = `${TRACKER_TYPES[type].icon} Report ${TRACKER_TYPES[type].label.toLowerCase()}`;
+  document.getElementById('trackerComposerSubtitle').textContent = type === 'block_cleaned'
+    ? 'This persists through the active ASP window and merges repeated passes.'
+    : 'Direction is stored relative to this block face, not cardinal direction.';
+  document.getElementById('trackerComposerBlock').innerHTML = `<strong>${escapeHtml(block.label)}</strong><br>${escapeHtml(type === 'block_cleaned' && aspWindow ? `Active ASP window until ${new Date(aspWindow.end_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Use the cross-street direction buttons below.')}`;
+  document.getElementById('trackerComposerDirectionWrap').style.display = type === 'block_cleaned' ? 'none' : 'block';
+  document.getElementById('trackerDirectionFrom').textContent = `← Toward ${toTitleCase(seg.from || '')}`;
+  document.getElementById('trackerDirectionTo').textContent = `→ Toward ${toTitleCase(seg.to || '')}`;
+  document.getElementById('trackerComposerNote').value = '';
+  document.getElementById('trackerComposerHelper').textContent = type === 'block_cleaned'
+    ? (aspWindow ? 'Only allowed while the block is in an active ASP window. Repeat submissions increment pass count.' : 'This block does not have an active ASP window right now.')
+    : 'Anonymous reading stays open. Submit will trigger the write auth gate if needed.';
+  setTrackerComposerDirection(trackerComposerState.directionMode);
+  document.getElementById('trackerComposerBackdrop').classList.add('visible');
+}
+
+function openTrackerComposerFromBlockId(blockFaceId, type) {
+  const seg = findSegmentByBlockFaceId(blockFaceId);
+  if (!seg) return;
+  openTrackerComposer(seg, type);
+}
+
+function setTrackerComposerDirection(directionMode) {
+  trackerComposerState.directionMode = directionMode;
+  document.getElementById('trackerDirectionFrom').classList.toggle('active', directionMode === 'toward_from');
+  document.getElementById('trackerDirectionTo').classList.toggle('active', directionMode === 'toward_to');
+  document.getElementById('trackerDirectionUnknown').classList.toggle('primary', directionMode === 'unknown');
+}
+
+function closeTrackerComposer() {
+  document.getElementById('trackerComposerBackdrop').classList.remove('visible');
+}
+
+function openTrackerAuthGate(actionFn) {
+  trackerPendingWriteAction = actionFn;
+  document.getElementById('trackerAuthBackdrop').classList.add('visible');
+}
+
+function closeTrackerAuthGate() {
+  trackerPendingWriteAction = null;
+  document.getElementById('trackerAuthBackdrop').classList.remove('visible');
+}
+
+async function ensureTrackerWriteAccess(actionFn) {
+  const session = trackerProvider ? await trackerProvider.getAuthSession() : null;
+  if (session && session.canWrite) {
+    return actionFn();
+  }
+  openTrackerAuthGate(actionFn);
+}
+
+async function enableTrackerDemoAuth() {
+  if (!trackerProvider) return;
+  await trackerProvider.enableDemoAuth();
+  document.getElementById('trackerAuthBackdrop').classList.remove('visible');
+  const pending = trackerPendingWriteAction;
+  trackerPendingWriteAction = null;
+  if (pending) pending();
+}
+
+async function submitTrackerComposer() {
+  const seg = trackerComposerState.seg;
+  const type = trackerComposerState.type;
+  if (!seg || !type) return;
+  const execSubmit = async () => {
+    const block = seg.blockFace;
+    const note = document.getElementById('trackerComposerNote').value.trim().slice(0, 140);
+    const payload = {
+      type,
+      block_face_id: block.id,
+      block_face_snapshot: block,
+      direction_mode: type === 'block_cleaned' ? 'unknown' : trackerComposerState.directionMode,
+      direction_label_cache: type === 'block_cleaned' ? '' : getReportDirectionLabel({ direction_mode: trackerComposerState.directionMode }, { from_street: seg.from, to_street: seg.to }),
+      note
+    };
+    if (type === 'block_cleaned') {
+      const aspWindow = getCurrentASPWindow(seg);
+      if (!aspWindow) {
+        alert('Block cleaned is only enabled during an active ASP window on this block.');
+        return;
+      }
+      payload.asp_window_start_at = aspWindow.start_at;
+      payload.asp_window_end_at = aspWindow.end_at;
+    }
+    try {
+      await trackerProvider.createReport(payload);
+      closeTrackerComposer();
+      await refreshTrackerFeed();
+      showBlockInfo(seg);
+    } catch (err) {
+      alert(err.message === 'auth_required' ? 'Sign in required to write tracker reports.' : err.message);
+    }
+  };
+  return ensureTrackerWriteAccess(execSubmit);
+}
+
+async function confirmTrackerReport(reportId, blockFaceId) {
+  return ensureTrackerWriteAccess(async () => {
+    await trackerProvider.confirmReport(reportId);
+    await refreshTrackerFeed();
+    const seg = findSegmentByBlockFaceId(blockFaceId);
+    if (seg) showBlockInfo(seg);
+  });
+}
+
+async function retractTrackerReport(reportId, blockFaceId) {
+  return ensureTrackerWriteAccess(async () => {
+    try {
+      await trackerProvider.retractReport(reportId);
+      await refreshTrackerFeed();
+      const seg = findSegmentByBlockFaceId(blockFaceId);
+      if (seg) showBlockInfo(seg);
+    } catch (err) {
+      alert(err.message === 'not_owner' ? 'Only the local demo author can retract that report.' : err.message);
+    }
+  });
+}
+
+function openTrackerBlockFromId(blockFaceId) {
+  const seg = findSegmentByBlockFaceId(blockFaceId);
+  if (!seg) return;
+  const lls = seg.layer.getLatLngs();
+  if (lls && lls.length) {
+    map.fitBounds(L.latLngBounds(lls).pad(0.5), { maxZoom: 18 });
+  }
+  showBlockInfo(seg);
+}
+
 // Fetch a single tile, create polylines, add to map
 async function loadTile(row, col) {
   const key = `${row}_${col}`;
@@ -901,9 +2092,13 @@ async function loadTile(row, col) {
         rules: seg.rules || [],
         dominantCategory: seg.dominantCategory,
         layer,
+        line: seg.line,
         id: seg.id,
         isSubSegment: false
       };
+      segData.blockFace = buildBlockFaceForSegment(segData);
+      segData.blockFaceId = segData.blockFace.id;
+      segData.blockFaceLabel = segData.blockFace.label;
 
       layer.on('click', () => showBlockInfo(segData));
       layer.on('mouseover', function() { this.setStyle({ weight: 7 }); });
@@ -916,6 +2111,7 @@ async function loadTile(row, col) {
     applyCurrentModeToAll();
     // Update street index with newly loaded streets
     rebuildStreetIndex();
+    queueTrackerRefresh();
 
   } catch (e) {
     console.warn(`Error loading tile ${key}:`, e);
@@ -1035,12 +2231,14 @@ async function startMap(lat, lng, zoom) {
 
   // Default mode
   setMode('signs');
+  await initTracker();
 }
 
 // ==== Map move listener ====
 map.on('moveend', () => {
   loadVisibleTiles();
   if (currentMode === 'smart-score') scheduleTopBlocksRefresh();
+  queueTrackerRefresh();
 });
 
 // ==== Mode & Rendering ====
@@ -1956,6 +3154,7 @@ function saveParkedBlock(block) {
   localStorage.setItem('parkmap_parked_block', JSON.stringify(block));
   localStorage.setItem('parkmap_car_lat', block.lat);
   localStorage.setItem('parkmap_car_lng', block.lng);
+  queueTrackerRefresh();
 }
 
 function clearCarPin() {
@@ -1973,6 +3172,7 @@ function clearCarPin() {
   clearSmartMoveOverlay();
   parkedCarLocation = null;
   localStorage.removeItem('parkedCar');
+  queueTrackerRefresh();
 }
 
 // ----------------------------------------------------------------
@@ -2454,14 +3654,17 @@ function updateCarParkUntilInfo() {
 // ==== Park Until Info Panel ====
 const _origShowBlockInfo = showBlockInfo;
 
-// Override showBlockInfo to add Park Until info
-showBlockInfo = function(seg) {
-  // Build standard info
+// Override showBlockInfo to add Park Until info + tracker state
+showBlockInfo = async function(seg) {
   const sideLabel = { E: 'East', W: 'West', N: 'North', S: 'South' }[seg.side] || seg.side;
+  const blockFace = seg.blockFace || buildBlockFaceForSegment(seg);
+  const trackerDetail = trackerProvider ? await trackerProvider.getBlockFaceDetail(blockFace.id) : { reports: [], events: [] };
+  trackerDetailCache = trackerDetail;
+  const authSession = trackerProvider ? await trackerProvider.getAuthSession() : null;
   let html = `<h3>${seg.blockKey}</h3>`;
   html += `<div style="margin-bottom:8px">Side: <strong>${sideLabel}</strong></div>`;
+  html += `<div style="margin-bottom:8px;font-size:12px;color:#6b7280">Tracker block face: ${escapeHtml(blockFace.label)}</div>`;
 
-  // Smart Score info
   if (currentMode === 'smart-score' && seg._smartScore) {
     const ss = seg._smartScore;
     const color = scoreToColor(ss.score);
@@ -2471,7 +3674,6 @@ showBlockInfo = function(seg) {
     html += `</div>`;
   }
 
-  // Park Until info
   if (currentMode === 'park-until' && seg._parkUntilResult) {
     const pu = seg._parkUntilResult;
     const puDateStr = document.getElementById('puDate').value;
@@ -2494,9 +3696,67 @@ showBlockInfo = function(seg) {
     }
   }
 
+  const aspWindow = getCurrentASPWindow(seg);
+  const cleanedExisting = trackerDetail.reports.find(report => report.type === 'block_cleaned');
+  html += `<div class="tracker-sheet-section">`;
+  html += `<div style="display:flex;align-items:center;justify-content:space-between;gap:8px">`;
+  html += `<div style="font-size:14px;font-weight:700">Tracker on this block</div>`;
+  html += `<div style="font-size:11px;color:#6b7280">${authSession && authSession.canWrite ? 'Write enabled' : 'Anonymous read'}</div>`;
+  html += `</div>`;
+  html += `<div style="margin-top:4px;font-size:12px;color:#6b7280">Canonical ID: ${escapeHtml(blockFace.id)}</div>`;
+  html += `<div class="tracker-sheet-actions">`;
+  html += `<button class="primary" onclick="openTrackerComposerFromBlockId('${blockFace.id}', 'sweeper')">🧹 Report sweeper</button>`;
+  html += `<button onclick="openTrackerComposerFromBlockId('${blockFace.id}', 'ticket_agent')">🎟️ Report ticket agent</button>`;
+  html += `<button onclick="openTrackerComposerFromBlockId('${blockFace.id}', 'block_cleaned')">${cleanedExisting ? '🔁 Seen another pass' : '✅ Mark block cleaned'}</button>`;
+  html += `</div>`;
+  html += `<div style="margin-top:6px;font-size:12px;color:#6b7280">${aspWindow ? `Active ASP window ends ${new Date(aspWindow.end_at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}` : 'Block cleaned is disabled unless this block is in an active ASP window.'}</div>`;
+
+  if (!trackerDetail.reports.length) {
+    html += `<div class="tracker-feed-empty" style="margin-top:10px">No active reports on this block face.</div>`;
+  } else {
+    html += trackerDetail.reports.map(report => {
+      const type = TRACKER_TYPES[report.type];
+      const meta = [
+        report.type !== 'block_cleaned' ? getReportDirectionLabel(report, blockFace) : null,
+        report.type === 'block_cleaned' ? `Passes ${report.pass_count || 1}` : null,
+        report.confirm_count ? `${report.confirm_count} confirm${report.confirm_count === 1 ? '' : 's'}` : null,
+        `${formatTrackerAge(report.last_seen_at || report.created_at)} ago`
+      ].filter(Boolean).join(' · ');
+      const canRetract = authSession && authSession.canWrite && authSession.id === report.reporter_user_id;
+      return `<div class="tracker-report-card">
+        <div class="tracker-report-header">
+          <div class="tracker-report-type">${type.icon} ${type.label}</div>
+          <div style="font-size:11px;color:#6b7280">${meta}</div>
+        </div>
+        <div style="margin-top:6px;font-size:12px;color:#4b5563">${escapeHtml(meta)}</div>
+        ${report.note ? `<div class="tracker-report-note">${escapeHtml(report.note)}</div>` : ''}
+        <div class="tracker-report-actions">
+          <button class="tracker-inline-btn primary" onclick="confirmTrackerReport('${report.id}', '${blockFace.id}')">Confirm</button>
+          ${canRetract ? `<button class="tracker-inline-btn warn" onclick="retractTrackerReport('${report.id}', '${blockFace.id}')">Retract</button>` : ''}
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  html += `<div class="tracker-event-list">`;
+  html += `<div style="font-size:13px;font-weight:700;color:#111827;margin-bottom:4px">Recent tracker events</div>`;
+  if (!trackerDetail.events.length) {
+    html += `<div class="tracker-event-item">No recent events yet.</div>`;
+  } else {
+    html += trackerDetail.events.slice(0, 5).map(event => {
+      const label = event.event_type === 'created' ? 'Created report'
+        : event.event_type === 'confirmed' ? 'Confirmed sighting'
+        : event.event_type === 'pass_incremented' ? 'Incremented cleaned pass count'
+        : event.event_type === 'retracted' ? 'Retracted report'
+        : 'Expired report';
+      return `<div class="tracker-event-item">• ${label}, ${formatTrackerAge(event.created_at)} ago</div>`;
+    }).join('');
+  }
+  html += `</div></div>`;
+
   const rules = seg.rules || [];
   if (rules.length === 0) {
-    html += '<div style="color:#999">No sign data for this zone</div>';
+    html += '<div style="color:#999;margin-top:12px">No sign data for this zone</div>';
   } else {
     rules.forEach(r => {
       const info = CATEGORIES[r.category] || CATEGORIES.UNKNOWN;
