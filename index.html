@@ -11,6 +11,7 @@
 <link rel="apple-touch-icon" href="icon-192.png">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="tracker-config.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
@@ -908,14 +909,14 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 
 <div class="tracker-modal-backdrop" id="trackerAuthBackdrop" onclick="dismissTrackerBackdrop(event, 'trackerAuthBackdrop')">
   <div class="tracker-modal" role="dialog" aria-modal="true" aria-label="Tracker sign in required">
-    <h3>Sign in to write</h3>
-    <div class="subtitle">Reading stays anonymous. Reporting, confirming, and pass counts are write actions.</div>
-    <div class="tracker-helper-box">
+    <h3 id="trackerAuthTitle">Sign in to write</h3>
+    <div id="trackerAuthSubtitle" class="subtitle">Reading stays anonymous. Reporting, confirming, and pass counts are write actions.</div>
+    <div id="trackerAuthHelper" class="tracker-helper-box">
       This build is running without Supabase auth configured, so the app uses a local demo writer identity. The data layer is already shaped for a future Supabase provider, but this keeps the UI testable right now.
     </div>
     <div class="actions">
       <button onclick="closeTrackerAuthGate()">Cancel</button>
-      <button class="primary" onclick="enableTrackerDemoAuth()">Continue in local demo mode</button>
+      <button id="trackerAuthPrimaryButton" class="primary" onclick="runTrackerAuthPrimaryAction()">Continue in local demo mode</button>
     </div>
   </div>
 </div>
@@ -1002,7 +1003,7 @@ let currentMode = 'signs';
 let segmentLayers = [];
 let aspSuspensions = null;
 let tileIndex = null;       // from tiles/index.json
-let tileCache = {};          // key: "row_col" -> true (loaded)
+let tileCache = {};          // key: "row_col" -> 'loading' | 'loaded'
 let tilesLoading = 0;        // count of in-flight tile fetches
 let mapReady = false;        // after user picks location
 
@@ -1036,6 +1037,16 @@ const TRACKER_TYPES = {
 const TRACKER_FEED_RADIUS_M = 400;
 const TRACKER_STORAGE_KEY = 'wepark_tracker_mock_v1';
 const TRACKER_AUTH_KEY = 'wepark_tracker_auth_v1';
+const DEFAULT_TRACKER_CONFIG = {
+  provider: 'mock',
+  supabaseUrl: '',
+  supabaseAnonKey: '',
+  allowMockFallback: true,
+  supabase: {
+    authMode: 'none',
+    realtime: false
+  }
+};
 let trackerProvider = null;
 let trackerOverlayEnabled = true;
 let trackerOverlayLayer = L.layerGroup().addTo(map);
@@ -1431,6 +1442,104 @@ function getCurrentASPWindow(seg) {
   return null;
 }
 
+function getTrackerRuntimeConfig() {
+  const cfg = window.WEPARK_TRACKER_CONFIG || {};
+  const legacy = window.WEPARK_SUPABASE_CONFIG || {};
+  const provider = cfg.provider || ((legacy.url && legacy.anonKey) ? 'supabase' : DEFAULT_TRACKER_CONFIG.provider);
+  return {
+    provider,
+    supabaseUrl: cfg.supabaseUrl || legacy.url || '',
+    supabaseAnonKey: cfg.supabaseAnonKey || legacy.anonKey || '',
+    allowMockFallback: cfg.allowMockFallback !== false,
+    supabase: {
+      authMode: cfg.supabase && cfg.supabase.authMode ? cfg.supabase.authMode : DEFAULT_TRACKER_CONFIG.supabase.authMode,
+      realtime: !!(cfg.supabase && cfg.supabase.realtime)
+    }
+  };
+}
+
+function normalizeTrackerBlockSnapshot(input) {
+  if (!input) return null;
+  const center = input.center && isFinite(input.center.lat) && isFinite(input.center.lng)
+    ? { lat: Number(input.center.lat), lng: Number(input.center.lng) }
+    : (isFinite(input.lat) && isFinite(input.lng)
+      ? { lat: Number(input.lat), lng: Number(input.lng) }
+      : null);
+  return {
+    id: input.id || input.block_face_id || '',
+    street: input.street || '',
+    from_street: input.from_street || input.from || '',
+    to_street: input.to_street || input.to || '',
+    side: input.side || '',
+    label: input.label || input.block_label || getBlockFaceLabel(input.street || '', input.from_street || input.from || '', input.to_street || input.to || '', input.side || ''),
+    center,
+    has_asp: !!input.has_asp,
+    asp_rules: Array.isArray(input.asp_rules) ? input.asp_rules : [],
+    source_segment_ids: Array.isArray(input.source_segment_ids) ? input.source_segment_ids : []
+  };
+}
+
+function normalizeTrackerReport(report) {
+  if (!report) return null;
+  const blockFace = normalizeTrackerBlockSnapshot(report.block_face_snapshot || report.blockFace || report);
+  return {
+    ...report,
+    block_face_id: report.block_face_id || (blockFace && blockFace.id) || '',
+    block_face_snapshot: blockFace,
+    reporter_user_id: report.reporter_user_id || report.reporterUserId || null,
+    confirm_count: Number(report.confirm_count || 0),
+    distinct_reporter_count: Number(report.distinct_reporter_count || 0),
+    pass_count: report.pass_count == null ? null : Number(report.pass_count),
+    direction_mode: report.direction_mode || null,
+    direction_label_cache: report.direction_label_cache || '',
+    note: report.note || '',
+    status: report.status || 'active'
+  };
+}
+
+function normalizeTrackerDetail(detail, blockFaceId = '') {
+  const activeReports = Array.isArray(detail && detail.activeReports)
+    ? detail.activeReports
+    : Array.isArray(detail && detail.reports)
+      ? detail.reports
+      : [];
+  const recentEvents = Array.isArray(detail && detail.recentEvents)
+    ? detail.recentEvents
+    : Array.isArray(detail && detail.events)
+      ? detail.events
+      : [];
+  return {
+    blockFace: normalizeTrackerBlockSnapshot((detail && detail.blockFace) || { id: blockFaceId }),
+    reports: activeReports.map(normalizeTrackerReport).filter(Boolean),
+    events: recentEvents,
+    comments: Array.isArray(detail && detail.comments) ? detail.comments : []
+  };
+}
+
+function getTrackerAuthGateState() {
+  if (!trackerProvider || typeof trackerProvider.getAuthGateState !== 'function') {
+    return {
+      title: 'Sign in to write',
+      subtitle: 'Reading stays anonymous. Reporting, confirming, and pass counts are write actions.',
+      helper: 'Tracker write auth is not available in this build.',
+      primaryLabel: '',
+      primaryEnabled: false
+    };
+  }
+  return trackerProvider.getAuthGateState();
+}
+
+function renderTrackerAuthGate() {
+  const state = getTrackerAuthGateState();
+  document.getElementById('trackerAuthTitle').textContent = state.title || 'Sign in to write';
+  document.getElementById('trackerAuthSubtitle').textContent = state.subtitle || '';
+  document.getElementById('trackerAuthHelper').textContent = state.helper || '';
+  const button = document.getElementById('trackerAuthPrimaryButton');
+  button.textContent = state.primaryLabel || 'Continue';
+  button.style.display = state.primaryLabel ? '' : 'none';
+  button.disabled = state.primaryEnabled === false;
+}
+
 function createTrackerMockProvider() {
   const listeners = new Set();
   const readState = () => {
@@ -1489,11 +1598,23 @@ function createTrackerMockProvider() {
     kind: 'mock',
     async init() { cleanup(); },
     async getAuthSession() { return readSession(); },
-    async enableDemoAuth() {
+    getAuthGateState() {
+      return {
+        title: 'Enable local demo writes',
+        subtitle: 'Reading stays anonymous. Reporting, confirming, and pass counts are write actions.',
+        helper: 'This build is using the local tracker provider, so writes stay in this browser only. It keeps the tracker UI testable without live Supabase credentials.',
+        primaryLabel: 'Continue in local demo mode',
+        primaryEnabled: true
+      };
+    },
+    async signInForWrites() {
       const session = { id: 'local-demo-user', canWrite: true, auth_provider: 'local-demo', display_name: 'Local demo user' };
       localStorage.setItem(TRACKER_AUTH_KEY, JSON.stringify(session));
       listeners.forEach(fn => fn());
       return session;
+    },
+    async enableDemoAuth() {
+      return this.signInForWrites();
     },
     async getActiveReportsForBounds(bounds) {
       return getSortedActiveReports().filter(report => {
@@ -1684,39 +1805,195 @@ function createTrackerMockProvider() {
   };
 }
 
-function createSupabaseTrackerProvider(config) {
-  console.info('Supabase tracker provider insertion point ready', config);
+async function createSupabaseTrackerProvider(config) {
+  const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm');
+  const supabase = createClient(config.supabaseUrl, config.supabaseAnonKey, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true
+    },
+    realtime: {
+      params: { eventsPerSecond: 2 }
+    }
+  });
+  const listeners = new Set();
+  let realtimeChannel = null;
+  let authSubscription = null;
+  const notify = () => listeners.forEach(fn => fn());
+  const authMode = (config.supabase && config.supabase.authMode) || 'none';
+
+  async function getSession() {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) throw error;
+    const session = data && data.session;
+    if (!session) return null;
+    return {
+      id: session.user && session.user.id,
+      canWrite: !!session.access_token,
+      auth_provider: (session.user && session.user.app_metadata && session.user.app_metadata.provider) || 'supabase',
+      display_name: (session.user && session.user.user_metadata && session.user.user_metadata.display_name) || (session.user && session.user.email) || 'Supabase user',
+      access_token: session.access_token
+    };
+  }
+
+  async function rpc(fnName, payload, options = {}) {
+    const session = await getSession();
+    if (options.requireAuth && !(session && session.canWrite)) throw new Error('auth_required');
+    const { data, error } = await supabase.rpc(fnName, payload || {});
+    if (error) {
+      const code = String(error.code || '').toUpperCase();
+      const message = String(error.message || '').toLowerCase();
+      if (code === 'PGRST301' || message.includes('jwt') || message.includes('auth')) {
+        throw new Error('auth_required');
+      }
+      throw error;
+    }
+    return data;
+  }
+
+  function normalizeList(rows) {
+    return (Array.isArray(rows) ? rows : []).map(normalizeTrackerReport).filter(Boolean);
+  }
+
   return {
-    name: 'Supabase pending',
-    kind: 'supabase-stub',
-    async init() {},
-    async getAuthSession() { return null; },
-    async enableDemoAuth() { throw new Error('supabase_auth_not_configured'); },
-    async getActiveReportsForBounds() { return []; },
-    async getBlockFaceDetail() { return { reports: [], events: [] }; },
-    async getNearbyFeed() { return []; },
-    async createReport() { throw new Error('Supabase provider not wired yet'); },
-    async confirmReport() { throw new Error('Supabase provider not wired yet'); },
-    async retractReport() { throw new Error('Supabase provider not wired yet'); },
-    subscribe() { return () => {}; }
+    name: 'Supabase live',
+    kind: 'supabase',
+    async init() {
+      const authState = supabase.auth.onAuthStateChange(() => notify());
+      authSubscription = authState && authState.data && authState.data.subscription;
+      if (config.supabase && config.supabase.realtime) {
+        realtimeChannel = supabase.channel('tracker-realtime-ui')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'tracker_reports' }, () => notify())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'report_events' }, () => notify())
+          .subscribe();
+      }
+      await getSession();
+    },
+    async destroy() {
+      if (authSubscription && typeof authSubscription.unsubscribe === 'function') authSubscription.unsubscribe();
+      if (realtimeChannel) await supabase.removeChannel(realtimeChannel);
+    },
+    async getAuthSession() {
+      return getSession();
+    },
+    getAuthGateState() {
+      if (authMode === 'anonymous') {
+        return {
+          title: 'Authenticate to write to Supabase',
+          subtitle: 'Reading stays anonymous. Reporting, confirming, and pass counts are write actions.',
+          helper: 'This build is pointed at Supabase. Continue to create an anonymous Supabase session for tracker writes if anonymous auth is enabled on the project.',
+          primaryLabel: 'Continue with Supabase auth',
+          primaryEnabled: true
+        };
+      }
+      return {
+        title: 'Supabase write auth required',
+        subtitle: 'Reading stays anonymous. Reporting, confirming, and pass counts are write actions.',
+        helper: 'Supabase reads are configured, but no write auth flow is enabled in tracker-config.js yet. Set supabase.authMode to anonymous after enabling anonymous auth in Supabase, or switch the app back to the mock provider.',
+        primaryLabel: '',
+        primaryEnabled: false
+      };
+    },
+    async signInForWrites() {
+      if (authMode !== 'anonymous') throw new Error('auth_not_configured');
+      const { data, error } = await supabase.auth.signInAnonymously();
+      if (error) throw error;
+      notify();
+      return {
+        id: data && data.user && data.user.id,
+        canWrite: true,
+        auth_provider: 'supabase-anonymous',
+        display_name: 'Anonymous tracker user'
+      };
+    },
+    async enableDemoAuth() {
+      return this.signInForWrites();
+    },
+    async getActiveReportsForBounds(bounds) {
+      const data = await rpc('tracker_get_active_reports_in_bbox', {
+        p_west: bounds.getWest(),
+        p_south: bounds.getSouth(),
+        p_east: bounds.getEast(),
+        p_north: bounds.getNorth()
+      });
+      return normalizeList(data);
+    },
+    async getBlockFaceDetail(blockFaceId) {
+      const data = await rpc('tracker_get_block_face_detail', { p_block_face_id: blockFaceId });
+      return normalizeTrackerDetail(data, blockFaceId);
+    },
+    async getNearbyFeed(anchor, radiusMeters) {
+      const data = await rpc('tracker_get_nearby_feed', {
+        p_lat: anchor.lat,
+        p_lng: anchor.lng,
+        p_radius_m: radiusMeters,
+        p_limit: 50
+      });
+      return normalizeList(data).map(report => ({
+        ...report,
+        distance_m: Number(report.distance_m || Math.round(distanceMeters(anchor, report.block_face_snapshot && report.block_face_snapshot.center)))
+      }));
+    },
+    async createReport(input) {
+      const data = input.type === 'block_cleaned'
+        ? await rpc('tracker_mark_block_cleaned', {
+            p_block_face_id: input.block_face_id,
+            p_asp_window_start_at: input.asp_window_start_at,
+            p_asp_window_end_at: input.asp_window_end_at,
+            p_note: input.note || null
+          }, { requireAuth: true })
+        : await rpc('tracker_create_report', {
+            p_block_face_id: input.block_face_id,
+            p_type: input.type,
+            p_direction_mode: input.direction_mode || 'unknown',
+            p_note: input.note || null
+          }, { requireAuth: true });
+      notify();
+      return normalizeTrackerReport(data);
+    },
+    async confirmReport(reportId) {
+      const data = await rpc('tracker_confirm_report', { p_report_id: reportId }, { requireAuth: true });
+      notify();
+      return normalizeTrackerReport(data);
+    },
+    async retractReport(reportId) {
+      const data = await rpc('tracker_retract_report', { p_report_id: reportId }, { requireAuth: true });
+      notify();
+      return normalizeTrackerReport(data);
+    },
+    subscribe(fn) {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    }
   };
 }
 
-function makeTrackerProvider() {
-  const cfg = window.WEPARK_SUPABASE_CONFIG;
-  if (cfg && cfg.url && cfg.anonKey) return createSupabaseTrackerProvider(cfg);
+async function makeTrackerProvider() {
+  const cfg = getTrackerRuntimeConfig();
+  const wantsSupabase = cfg.provider === 'supabase' && cfg.supabaseUrl && cfg.supabaseAnonKey;
+  if (wantsSupabase) return createSupabaseTrackerProvider(cfg);
   return createTrackerMockProvider();
 }
 
 async function initTracker() {
   if (!trackerProvider) {
-    trackerProvider = makeTrackerProvider();
-    await trackerProvider.init();
+    const runtimeConfig = getTrackerRuntimeConfig();
+    try {
+      trackerProvider = await makeTrackerProvider();
+      await trackerProvider.init();
+    } catch (err) {
+      if (!runtimeConfig.allowMockFallback) throw err;
+      console.warn('Tracker provider init failed, falling back to local demo', err);
+      trackerProvider = createTrackerMockProvider();
+      await trackerProvider.init();
+    }
     trackerProvider.subscribe(() => queueTrackerRefresh());
   }
   const panel = document.getElementById('trackerPanel');
   if (panel) panel.style.display = 'block';
   document.getElementById('trackerProviderBadge').textContent = trackerProvider.name;
+  renderTrackerAuthGate();
   await maybeSeedTrackerDemoReports();
   await refreshTrackerFeed();
 }
@@ -1826,12 +2103,19 @@ async function refreshTrackerFeed() {
   const anchor = getTrackerAnchor();
   document.getElementById('trackerFeedAnchorText').textContent = anchor.label + ` · ${TRACKER_FEED_RADIUS_M}m radius`;
   const bounds = map.getBounds().pad(0.12);
-  const [reportsInView, nearbyFeed] = await Promise.all([
-    trackerProvider.getActiveReportsForBounds(bounds),
-    trackerProvider.getNearbyFeed(anchor, TRACKER_FEED_RADIUS_M)
-  ]);
-  renderTrackerSummary(reportsInView, nearbyFeed, anchor);
-  renderTrackerMarkers(reportsInView);
+  try {
+    const [reportsInView, nearbyFeed] = await Promise.all([
+      trackerProvider.getActiveReportsForBounds(bounds),
+      trackerProvider.getNearbyFeed(anchor, TRACKER_FEED_RADIUS_M)
+    ]);
+    renderTrackerSummary(reportsInView, nearbyFeed, anchor);
+    renderTrackerMarkers(reportsInView);
+  } catch (err) {
+    console.error('Tracker refresh failed', err);
+    document.getElementById('trackerStatusSummary').textContent = trackerProvider.name + ' is temporarily unavailable.';
+    document.getElementById('trackerFeedList').innerHTML = '<div class="tracker-feed-empty">Tracker data could not be loaded right now.</div>';
+    trackerOverlayLayer.clearLayers();
+  }
 }
 
 function renderTrackerSummary(reportsInView, nearbyFeed, anchor) {
@@ -1963,6 +2247,7 @@ function closeTrackerComposer() {
 
 function openTrackerAuthGate(actionFn) {
   trackerPendingWriteAction = actionFn;
+  renderTrackerAuthGate();
   document.getElementById('trackerAuthBackdrop').classList.add('visible');
 }
 
@@ -1979,13 +2264,29 @@ async function ensureTrackerWriteAccess(actionFn) {
   openTrackerAuthGate(actionFn);
 }
 
-async function enableTrackerDemoAuth() {
+async function runTrackerAuthPrimaryAction() {
   if (!trackerProvider) return;
-  await trackerProvider.enableDemoAuth();
-  document.getElementById('trackerAuthBackdrop').classList.remove('visible');
-  const pending = trackerPendingWriteAction;
-  trackerPendingWriteAction = null;
-  if (pending) pending();
+  try {
+    if (typeof trackerProvider.signInForWrites === 'function') {
+      await trackerProvider.signInForWrites();
+    } else if (typeof trackerProvider.enableDemoAuth === 'function') {
+      await trackerProvider.enableDemoAuth();
+    } else {
+      throw new Error('auth_not_configured');
+    }
+    document.getElementById('trackerAuthBackdrop').classList.remove('visible');
+    const pending = trackerPendingWriteAction;
+    trackerPendingWriteAction = null;
+    if (pending) pending();
+  } catch (err) {
+    alert(err.message === 'auth_not_configured'
+      ? 'Tracker write auth is not configured for this build yet.'
+      : `Unable to enable tracker writes: ${err.message}`);
+  }
+}
+
+async function enableTrackerDemoAuth() {
+  return runTrackerAuthPrimaryAction();
 }
 
 async function submitTrackerComposer() {
@@ -2018,7 +2319,11 @@ async function submitTrackerComposer() {
       await refreshTrackerFeed();
       showBlockInfo(seg);
     } catch (err) {
-      alert(err.message === 'auth_required' ? 'Sign in required to write tracker reports.' : err.message);
+      if (err.message === 'auth_required') {
+        openTrackerAuthGate(execSubmit);
+        return;
+      }
+      alert(err.message || 'Unable to submit tracker report.');
     }
   };
   return ensureTrackerWriteAccess(execSubmit);
@@ -2026,10 +2331,18 @@ async function submitTrackerComposer() {
 
 async function confirmTrackerReport(reportId, blockFaceId) {
   return ensureTrackerWriteAccess(async () => {
-    await trackerProvider.confirmReport(reportId);
-    await refreshTrackerFeed();
-    const seg = findSegmentByBlockFaceId(blockFaceId);
-    if (seg) showBlockInfo(seg);
+    try {
+      await trackerProvider.confirmReport(reportId);
+      await refreshTrackerFeed();
+      const seg = findSegmentByBlockFaceId(blockFaceId);
+      if (seg) showBlockInfo(seg);
+    } catch (err) {
+      if (err.message === 'auth_required') {
+        openTrackerAuthGate(async () => confirmTrackerReport(reportId, blockFaceId));
+        return;
+      }
+      alert(err.message || 'Unable to confirm tracker report.');
+    }
   });
 }
 
@@ -2041,7 +2354,11 @@ async function retractTrackerReport(reportId, blockFaceId) {
       const seg = findSegmentByBlockFaceId(blockFaceId);
       if (seg) showBlockInfo(seg);
     } catch (err) {
-      alert(err.message === 'not_owner' ? 'Only the local demo author can retract that report.' : err.message);
+      if (err.message === 'auth_required') {
+        openTrackerAuthGate(async () => retractTrackerReport(reportId, blockFaceId));
+        return;
+      }
+      alert(err.message === 'not_owner' ? 'Only the local demo author can retract that report.' : (err.message || 'Unable to retract tracker report.'));
     }
   });
 }
@@ -2059,8 +2376,8 @@ function openTrackerBlockFromId(blockFaceId) {
 // Fetch a single tile, create polylines, add to map
 async function loadTile(row, col) {
   const key = `${row}_${col}`;
-  if (tileCache[key]) return; // already loaded
-  tileCache[key] = true; // mark immediately to prevent double-fetch
+  if (tileCache[key] === 'loaded' || tileCache[key] === 'loading') return;
+  tileCache[key] = 'loading';
 
   tilesLoading++;
   updateTileLoaderUI();
@@ -2069,6 +2386,7 @@ async function loadTile(row, col) {
     const resp = await fetch(`tiles/tile_${row}_${col}.json`);
     if (!resp.ok) {
       console.warn(`Tile ${key} fetch failed: HTTP ${resp.status}`);
+      delete tileCache[key];
       return;
     }
     const segments = await resp.json();
@@ -2107,6 +2425,8 @@ async function loadTile(row, col) {
       segmentLayers.push(segData);
     });
 
+    tileCache[key] = 'loaded';
+
     // Re-apply current filter mode to newly loaded segments
     applyCurrentModeToAll();
     // Update street index with newly loaded streets
@@ -2115,7 +2435,7 @@ async function loadTile(row, col) {
 
   } catch (e) {
     console.warn(`Error loading tile ${key}:`, e);
-    tileCache[key] = false; // allow retry
+    delete tileCache[key];
   } finally {
     tilesLoading--;
     updateTileLoaderUI();
@@ -2128,7 +2448,7 @@ function loadVisibleTiles() {
   const bounds = map.getBounds();
   const needed = getTilesForBounds(bounds);
   needed.forEach(({ row, col }) => {
-    if (!tileCache[`${row}_${col}`]) {
+    if (tileCache[`${row}_${col}`] !== 'loaded' && tileCache[`${row}_${col}`] !== 'loading') {
       loadTile(row, col);
     }
   });
@@ -3658,9 +3978,15 @@ const _origShowBlockInfo = showBlockInfo;
 showBlockInfo = async function(seg) {
   const sideLabel = { E: 'East', W: 'West', N: 'North', S: 'South' }[seg.side] || seg.side;
   const blockFace = seg.blockFace || buildBlockFaceForSegment(seg);
-  const trackerDetail = trackerProvider ? await trackerProvider.getBlockFaceDetail(blockFace.id) : { reports: [], events: [] };
+  let trackerDetail = { reports: [], events: [] };
+  let authSession = null;
+  try {
+    trackerDetail = trackerProvider ? await trackerProvider.getBlockFaceDetail(blockFace.id) : { reports: [], events: [] };
+    authSession = trackerProvider ? await trackerProvider.getAuthSession() : null;
+  } catch (err) {
+    console.warn('Failed to load tracker block detail', err);
+  }
   trackerDetailCache = trackerDetail;
-  const authSession = trackerProvider ? await trackerProvider.getAuthSession() : null;
   let html = `<h3>${seg.blockKey}</h3>`;
   html += `<div style="margin-bottom:8px">Side: <strong>${sideLabel}</strong></div>`;
   html += `<div style="margin-bottom:8px;font-size:12px;color:#6b7280">Tracker block face: ${escapeHtml(blockFace.label)}</div>`;

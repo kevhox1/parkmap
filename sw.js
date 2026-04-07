@@ -1,10 +1,11 @@
-const CACHE_VERSION = 'wepark-v5';
+const CACHE_VERSION = 'wepark-v6';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 const TILE_CACHE = CACHE_VERSION + '-tiles';
 
 const STATIC_ASSETS = [
   'index.html',
   'manifest.json',
+  'tracker-config.js',
   'icon-192.png',
   'icon-512.png',
   'tiles/index.json',
@@ -48,10 +49,25 @@ self.addEventListener('activate', event => {
   );
 });
 
+function isSupabaseLiveRequest(url) {
+  return url.hostname.endsWith('.supabase.co')
+    || url.pathname.startsWith('/rest/v1/')
+    || url.pathname.startsWith('/auth/v1/')
+    || url.pathname.startsWith('/realtime/v1/')
+    || url.pathname.startsWith('/functions/v1/')
+    || url.pathname.startsWith('/storage/v1/');
+}
+
 // Fetch strategies
 self.addEventListener('fetch', event => {
   const url = new URL(event.request.url);
   const pathname = url.pathname;
+
+  // Never cache live backend traffic, especially tracker reads/auth/realtime.
+  if (isSupabaseLiveRequest(url)) {
+    event.respondWith(fetch(event.request));
+    return;
+  }
 
   // Network-first for index.html (always pick up latest)
   if (pathname.endsWith('/') || pathname.endsWith('/index.html') || pathname.endsWith('index.html')) {
