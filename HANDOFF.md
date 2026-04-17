@@ -1,0 +1,74 @@
+# WePark — Handoff
+
+This document is the operating manual for any future Claude session working on WePark. Read this first, then `PROJECT.md`, then `TRACKER_MVP_SPEC.md`, then ask Kevin what's being worked on.
+
+## Project Overview
+
+WePark is a free parking-regulations and community-threat-tracker web app for NYC street parkers. It is a single-page Leaflet PWA hosted on GitHub Pages at https://kevhox1.github.io/parkmap/ (repo: https://github.com/kevhox1/parkmap). Current phase: Phase 1 (PWA) and Phase 2 (Smart Score / Smart Move / My Car) are complete. Tier 3 (Threat Tracker) is in progress — the Supabase-ready provider layer is merged but no live Supabase project is wired yet, so the app runs on a local mock provider by default.
+
+## How to work in this repo
+
+- **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
+- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` (currently `wepark-v6`). Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
+- **Tile data is pre-built and committed.** The `tiles/` directory holds 976 pre-generated JSON tiles (~6.39 MB). Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large.
+- **No automated test suite exists.** QA is done via:
+  - Independent QA subagent review (see `TRACKER_QA_VERIFY.md` for the pattern)
+  - Manual smoke on the live site after deploy
+  - Code review in PRs
+  Never let the agent that built a feature also sign off on it — spawn a separate QA subagent.
+- **Deploy target: GitHub Pages, auto-deploy on push to `main`.** There is no build step. `.nojekyll` is present so GitHub Pages serves files as-is.
+- **Specs live at the repo root.** Key docs:
+  - `PROJECT.md` — current status, phase checklist
+  - `PRODUCT.md` — product vision
+  - `TRACKER_MVP_SPEC.md` — tracker feature spec (read before touching tracker code)
+  - `SUPABASE_MVP_SCHEMA.md` — backend tables + RPC functions (the Supabase provider in `index.html` calls the RPC names defined here)
+  - `BACKEND_OPTIONS.md` — backend trade-off notes
+  - `TRACKER_QA_VERIFY.md` — latest independent QA verification
+- **Branch and PR conventions.**
+  - Work on a topic branch off `main`, never push to `main` directly (except docs/PROJECT/handoff updates and SW cache bumps).
+  - PR titles follow Conventional Commits: `feat:`, `fix:`, `chore:`, `docs:`, `style:`.
+  - Merges to `main` are **squash merges** via `gh pr merge <n> --squash --delete-branch`. The squashed commit ends with ` (#N)`.
+  - Separate `chore: bump SW cache to vN` commits are OK and have happened historically.
+
+## Tech stack
+
+- **Frontend:** vanilla JS in a single `index.html`, Leaflet 1.9.4 (loaded from unpkg CDN)
+- **PWA:** `manifest.json` + `sw.js` service worker with separate static/tile caches
+- **Backend (in progress):** Supabase (Postgres + PostgREST + Realtime + Anonymous Auth). Provider is loaded dynamically as an ESM import from jsdelivr when `tracker-config.js` is set to `provider: 'supabase'`.
+- **Tracker provider config:** `tracker-config.js` at repo root — empty creds by default, falls back to local mock
+- **Hosting:** GitHub Pages, auto-deploy on push to `main`
+- **Data sources:** NYC parking sign data (merged ASP + main), pre-tiled into 976 JSON tiles under `tiles/`
+
+## Changelog
+
+### 2026-04-17 — Supabase-ready tracker provider + QA fixes
+- PR #5 (`a45098b`): real Supabase tracker provider with dynamic `supabase-js` import, auth gate state API, RPC wrappers for `tracker_get_active_reports_in_bbox` / `tracker_get_block_face_detail` / `tracker_get_nearby_feed` / `tracker_create_report` / `tracker_mark_block_cleaned` / `tracker_confirm_report` / `tracker_retract_report`, optional realtime channel. `tracker-config.js` introduced to select provider and hold creds. Graceful fallback to local mock if init fails. SW now bypasses Supabase hosts (never cache `*.supabase.co` / `/rest/v1/` / `/auth/v1/` / `/realtime/v1/` / `/functions/v1/` / `/storage/v1/`). SW cache bumped to `wepark-v6`. Tile cache state changed from boolean to `'loading' | 'loaded'` with cleanup on fetch failure so failed tiles can retry within a session.
+- PR #6 (`aa7c5bd`): tracker QA follow-ups. Park My Car CTA now wired to `parkCarHere()` (one-tap pin flow) instead of the modal. Block-face nearest-segment detection now uses projected point-to-polyline distance (`getClosestPointOnSegmentGeometry`) instead of nearest vertex only. `block_cleaned` aging respects `asp_window_end_at` instead of generic 10-minute stale rule. ASP next-restriction timing walks 14 future days, skips `isASPSuspended` dates, and honors `rule.days`. Smart Move button and panel now share `computeSmartMove()` output. Narrow-phone bottom-sheet coordination via `isCompactBottomSheetLayout()` / `syncResponsivePanels()` so only one sheet is visible at a time on small screens. `showBlockInfo` wraps tracker detail + auth fetch in try/catch so backend failures don't crash the block popup.
+
+### 2026-04-07 — Initial threat tracker slice
+- PR #4 (`f8ba00b`): first tracker slice. Mock provider with localStorage persistence, auth gate, tracker overlay on the map, feed panel with nearby reports, report composer for sweeper / ticket-agent / block-cleaned events, confirm / retract actions. Provider-abstracted so the Supabase one can drop in later. SW cache bumped to `wepark-v5` (commit `8720a3a`).
+
+### 2026-04-02 — Street-based Park My Car + cross-street normalization + Top Blocks
+- PR #3 (`d6788b0`): Park My Car reworked to take a street name with smart side confirmation.
+- PR #2 (`211a73c`): normalized spelled-out cross streets (`FIRST AVENUE` ↔ `1ST AVENUE`, etc.) so block-face matching stops dropping entire sides of the street.
+- PR #1 (`5746e1d`): Top Blocks ranked panel for Smart Score mode.
+- SW cache bumped to `wepark-v4` (commit `179904c`) and `wepark-v3` earlier.
+
+### Pre-April 2026 — Phase 1 & Phase 2 foundations
+- Phase 1 (2026-03-27): PWA manifest, service worker, GitHub Pages deploy, mobile UI polish, tile-based lazy load.
+- Phase 2 (through 2026-04-02): Smart Move, Smart Score, My Car pin with localStorage, route optimizer.
+- Data pipeline fixes along the way: dedup bug dropping ~50% of signs (`dc16002`), sub-segmentation bug dropping ~75% (`f65d08f`), merging ASP-only streets into the main dataset (`c33c6f3`), Jekyll bypass via `.nojekyll` (`ac76cde`).
+
+## Open questions / known gaps
+
+- **Supabase not provisioned.** `tracker-config.js` still has empty `supabaseUrl` / `supabaseAnonKey`. Before flipping `provider` to `'supabase'`, Kevin needs to: create the Supabase project, apply `SUPABASE_MVP_SCHEMA.md`, enable anonymous auth, verify RPC function names match what the provider expects (see changelog entry for 2026-04-17), and populate the config.
+- **No automated tests.** If behavior-critical work lands, consider what lightweight in-browser smoke coverage would be worth adding (e.g., a manual QA checklist per PR, or a small hand-written test harness loaded behind a URL flag).
+- **PROJECT.md freshness cadence is manual.** It gets stale unless updated as part of the PR that changes things. Consider making it a checklist item in PR descriptions.
+- **SW cache discipline.** Tile freshness depends on bumping `CACHE_VERSION` when tile data changes. No automatic invalidation on content hash. TRACKER_QA_VERIFY flagged this as an unresolved concern.
+- **Tracker QA gaps that were closed in PR #6 but not independently re-verified post-merge.** The QA agent that wrote `TRACKER_QA_VERIFY.md` reviewed an older snapshot. A fresh QA pass against `main` post-#6 would be worth doing before the real Supabase wire-up.
+
+## Quick start for a new session
+
+Tell a new Claude:
+
+> Read `HANDOFF.md`, `PROJECT.md`, and `TRACKER_MVP_SPEC.md` at the repo root. Then ask me what we're working on. Don't push to `main`; use a topic branch and a squash-merged PR. Bump `CACHE_VERSION` in `sw.js` on any asset change.
