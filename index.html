@@ -641,7 +641,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     right: 0;
     width: 100%;
     border-radius: 16px 16px 0 0;
-    max-height: 45vh;
+    max-height: 40vh;
   }
   #topBlocksPanel.collapsed {
     max-height: auto;
@@ -795,6 +795,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
           <div style="flex:1;font-size:12px;color:#374151" id="smartScoreTime">Scoring for: ...</div>
           <button onclick="updateMap()" style="padding:4px 10px;border:1px solid #ddd;border-radius:6px;background:#f9fafb;cursor:pointer;font-size:12px;min-height:44px">Refresh</button>
         </div>
+        <div id="smartScoreMobileHint" style="display:none;margin-bottom:8px;font-size:12px;color:#6b7280">Top Blocks moves into its own bottom sheet on small screens. Collapse this panel to see it.</div>
         <div style="font-size:12px;color:#666">🔴 Bad → 🟡 OK → 🟢 Great</div>
       </div>
       <!-- Park Until controls -->
@@ -837,7 +838,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
     </div>
 
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee">
-      <button id="parkCarBtn" onclick="openParkModal()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
+      <button id="parkCarBtn" onclick="parkCarHere()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
       <div id="smartMoveContainer" style="display:none;margin-top:8px;padding:10px;background:#dbeafe;border:1px solid #93c5fd;border-radius:8px;">
         <button onclick="generateSmartMoveRecommendation()" style="width:100%;padding:8px 12px;background:#0284c7;color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;min-height:44px;font-weight:600">💡 Smart Move Recommendation</button>
         <button onclick="clearParkedCar()" style="width:100%;padding:6px 12px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;font-size:12px;cursor:pointer;margin-top:6px;min-height:40px">Clear Car</button>
@@ -1361,6 +1362,15 @@ function formatTrackerAge(iso) {
 }
 
 function trackerAgeClass(report) {
+  if (report && report.type === 'block_cleaned') {
+    const windowEndMs = isoToMs(report.expires_at || report.asp_window_end_at);
+    if (windowEndMs > Date.now()) {
+      const remainingMs = windowEndMs - Date.now();
+      if (remainingMs <= 10 * 60 * 1000) return 'aging';
+      return 'fresh';
+    }
+    return 'stale';
+  }
   const ageMs = Date.now() - isoToMs(report.last_seen_at || report.created_at);
   if (ageMs < 5 * 60 * 1000) return 'fresh';
   if (ageMs < 10 * 60 * 1000) return 'aging';
@@ -2563,6 +2573,7 @@ map.on('moveend', () => {
 
 // ==== Mode & Rendering ====
 function setMode(mode) {
+  const previousMode = currentMode;
   currentMode = mode;
   document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
   const fc = document.getElementById('filterControls');
@@ -2589,6 +2600,9 @@ function setMode(mode) {
     ftc.style.display = 'none';
     fbc.style.display = 'none';
     ssc.style.display = 'block';
+    if (isCompactBottomSheetLayout() && previousMode !== 'smart-score') {
+      setControlPanelCollapsed(true, { sync: false });
+    }
     showTopBlocksPanel();
   } else if (mode === 'park-until') {
     fc.style.display = 'block';
@@ -2596,6 +2610,7 @@ function setMode(mode) {
     fbc.style.display = 'none';
     puc.style.display = 'block';
   }
+  syncResponsivePanels();
   updateMap();
 }
 
@@ -2858,11 +2873,11 @@ function computeBlockScore(rules, dayOfWeek, minuteOfDay, aspSuspendedToday) {
         reason = 'Meter not active (free now)';
       }
     } else if (isASPCategory(cat)) {
-      if (aspSuspendedToday) {
+      const isAspDay = isASPDayForCategory(cat, dayOfWeek) && (!rule.days || !rule.days.length || rule.days.includes(dayOfWeek));
+      if (aspSuspendedToday && isAspDay) {
         score = 95;
         reason = 'ASP suspended today';
       } else {
-        const isAspDay = isASPDayForCategory(cat, dayOfWeek);
         const activeNow = isAspDay && isScheduleActiveAt(rule, dayOfWeek, minuteOfDay);
         if (activeNow) {
           score = 0;
@@ -2888,25 +2903,34 @@ function computeBlockScore(rules, dayOfWeek, minuteOfDay, aspSuspendedToday) {
 }
 
 function computeHoursUntilASP(cat, rule, currentDay, currentMinutes) {
-  for (let offset = 0; offset < 8; offset++) {
-    const checkDay = (currentDay + offset) % 7;
+  const now = nowET();
+  for (let offset = 0; offset < 14; offset++) {
+    const checkDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
+    checkDate.setDate(checkDate.getDate() + offset);
+    const checkDay = checkDate.getDay();
     if (!isASPDayForCategory(cat, checkDay)) continue;
+    if (rule.days && rule.days.length && !rule.days.includes(checkDay)) continue;
+    if (isASPSuspended(toETDateStr(checkDate))) continue;
 
     if (!rule.timeRanges || rule.timeRanges.length === 0) {
-      if (offset === 0) return 0;
-      const hoursToMidnight = (1440 - currentMinutes) / 60;
-      return hoursToMidnight + (offset - 1) * 24;
+      const start = new Date(checkDate);
+      if (offset === 0 && now >= start && now < new Date(start.getTime() + 24 * 60 * 60 * 1000)) return 0;
+      if (start > now) return (start.getTime() - now.getTime()) / 3600000;
+      continue;
     }
 
     for (const tr of rule.timeRanges) {
-      if (offset === 0 && tr.start <= currentMinutes && currentMinutes < tr.end) return 0;
-      if (offset === 0 && tr.start > currentMinutes) {
-        return (tr.start - currentMinutes) / 60;
+      const start = new Date(checkDate);
+      start.setHours(Math.floor(tr.start / 60), tr.start % 60, 0, 0);
+      const end = new Date(checkDate);
+      if (tr.start < tr.end) {
+        end.setHours(Math.floor(tr.end / 60), tr.end % 60, 0, 0);
+      } else {
+        end.setDate(end.getDate() + 1);
+        end.setHours(Math.floor(tr.end / 60), tr.end % 60, 0, 0);
       }
-      if (offset > 0) {
-        const hoursToMidnight = (1440 - currentMinutes) / 60;
-        return hoursToMidnight + (offset - 1) * 24 + tr.start / 60;
-      }
+      if (now >= start && now < end) return 0;
+      if (start > now) return (start.getTime() - now.getTime()) / 3600000;
     }
   }
   return 168;
@@ -2985,9 +3009,43 @@ function toggleTopBlocks() {
   btn.textContent = topBlocksCollapsed ? '▼' : '▲';
 }
 
+function isCompactBottomSheetLayout() {
+  return window.innerWidth <= 480;
+}
+
+function setControlPanelCollapsed(collapsed, { sync = true } = {}) {
+  const panel = document.getElementById('controlPanel');
+  const toggle = document.getElementById('panelToggle');
+  const body = document.getElementById('panelBody');
+  panel.classList.toggle('collapsed', !!collapsed);
+  body.style.display = collapsed ? 'none' : 'block';
+  toggle.textContent = collapsed ? '▲' : '▼';
+  if (sync) syncResponsivePanels();
+}
+
+function syncResponsivePanels() {
+  const hint = document.getElementById('smartScoreMobileHint');
+  const topBlocksPanel = document.getElementById('topBlocksPanel');
+  const controlPanel = document.getElementById('controlPanel');
+  const compact = isCompactBottomSheetLayout();
+  const controlCollapsed = controlPanel.classList.contains('collapsed');
+
+  if (hint) {
+    hint.style.display = currentMode === 'smart-score' && compact && !controlCollapsed ? 'block' : 'none';
+  }
+
+  if (currentMode !== 'smart-score') {
+    topBlocksPanel.classList.remove('visible');
+    return;
+  }
+
+  const shouldShow = !compact || controlCollapsed;
+  topBlocksPanel.classList.toggle('visible', shouldShow);
+  if (shouldShow) refreshTopBlocks();
+}
+
 function showTopBlocksPanel() {
-  document.getElementById('topBlocksPanel').classList.add('visible');
-  refreshTopBlocks();
+  syncResponsivePanels();
 }
 
 function hideTopBlocksPanel() {
@@ -2996,7 +3054,9 @@ function hideTopBlocksPanel() {
 
 function scheduleTopBlocksRefresh() {
   if (topBlocksDebounceTimer) clearTimeout(topBlocksDebounceTimer);
-  topBlocksDebounceTimer = setTimeout(refreshTopBlocks, 400);
+  topBlocksDebounceTimer = setTimeout(() => {
+    if (document.getElementById('topBlocksPanel').classList.contains('visible')) refreshTopBlocks();
+  }, 400);
 }
 
 function refreshTopBlocks() {
@@ -3441,6 +3501,82 @@ function getSegMidLatLng(seg) {
   return { lat: lls[mid].lat, lng: lls[mid].lng };
 }
 
+function projectLatLngToMeters(lat, lng, refLat = lat) {
+  const metersPerDegLat = 111320;
+  const metersPerDegLng = 111320 * Math.cos(refLat * Math.PI / 180);
+  return { x: lng * metersPerDegLng, y: lat * metersPerDegLat };
+}
+
+function getSegmentGeometryLatLngs(seg) {
+  if (seg && Array.isArray(seg.line) && seg.line.length) {
+    return seg.line
+      .filter(pt => Array.isArray(pt) && pt.length >= 2 && isFinite(pt[0]) && isFinite(pt[1]))
+      .map(([ptLat, ptLng]) => ({ lat: Number(ptLat), lng: Number(ptLng) }));
+  }
+  if (seg && seg.layer && typeof seg.layer.getLatLngs === 'function') {
+    return (seg.layer.getLatLngs() || []).map(pt => ({ lat: Number(pt.lat), lng: Number(pt.lng) }));
+  }
+  return [];
+}
+
+function getClosestPointOnSegmentGeometry(seg, lat, lng) {
+  const points = getSegmentGeometryLatLngs(seg);
+  if (!points.length) return null;
+  const refLat = lat;
+  const target = projectLatLngToMeters(lat, lng, refLat);
+  let best = null;
+
+  const considerPoint = (point, segmentIndex = 0, t = 0) => {
+    const projected = projectLatLngToMeters(point.lat, point.lng, refLat);
+    const dx = projected.x - target.x;
+    const dy = projected.y - target.y;
+    const distanceSq = dx * dx + dy * dy;
+    if (!best || distanceSq < best.distanceSq) {
+      best = {
+        distanceSq,
+        distanceM: Math.sqrt(distanceSq),
+        lat: point.lat,
+        lng: point.lng,
+        segmentIndex,
+        t
+      };
+    }
+  };
+
+  if (points.length === 1) {
+    considerPoint(points[0]);
+    return best;
+  }
+
+  for (let i = 0; i < points.length - 1; i++) {
+    const start = points[i];
+    const end = points[i + 1];
+    const a = projectLatLngToMeters(start.lat, start.lng, refLat);
+    const b = projectLatLngToMeters(end.lat, end.lng, refLat);
+    const abx = b.x - a.x;
+    const aby = b.y - a.y;
+    const lenSq = abx * abx + aby * aby;
+    if (!lenSq) {
+      considerPoint(start, i, 0);
+      continue;
+    }
+    const rawT = ((target.x - a.x) * abx + (target.y - a.y) * aby) / lenSq;
+    const t = Math.max(0, Math.min(1, rawT));
+    considerPoint({
+      lat: start.lat + (end.lat - start.lat) * t,
+      lng: start.lng + (end.lng - start.lng) * t
+    }, i, t);
+  }
+
+  return best;
+}
+
+function getSnappedLatLngForSegment(seg, lat, lng) {
+  const closest = getClosestPointOnSegmentGeometry(seg, lat, lng);
+  if (closest) return { lat: closest.lat, lng: closest.lng };
+  return getSegMidLatLng(seg);
+}
+
 function toTitleCase(str) {
   if (!str) return '';
   return str.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
@@ -3872,11 +4008,12 @@ function confirmParkCar() {
     side = _parkSelectedSide;
     lat = _parkPinLat;
     lng = _parkPinLng;
-    // Snap to correct-side segment if available
+    // Snap to the selected side geometry near the dropped pin, not the segment midpoint
     const sideSeg = findSegmentByBlock(street, from, to, side);
-    if (sideSeg) {
-      const mid = getSegMidLatLng(sideSeg);
-      if (mid) { lat = mid.lat; lng = mid.lng; }
+    const snapped = getSnappedLatLngForSegment(sideSeg || seg, _parkPinLat, _parkPinLng);
+    if (snapped) {
+      lat = snapped.lat;
+      lng = snapped.lng;
     }
   }
 
@@ -3900,27 +4037,18 @@ function confirmParkCar() {
 // "Park My Car Here" button — open modal using map center as pin seed
 function parkCarHere() {
   const center = map.getCenter();
-  _parkPinLat = center.lat;
-  _parkPinLng = center.lng;
-  _parkDetectedSeg = findClosestSegment(_parkPinLat, _parkPinLng);
-  _parkModalMode = 'pin';
-  rebuildStreetIndex();
-  resetParkForm();
-  setParkMode('pin');
-  document.getElementById('parkCarModal').classList.add('visible');
+  openParkModalForPin(center.lat, center.lng);
 }
 
 function findClosestSegment(lat, lng) {
   let closest = null;
   let closestDist = Infinity;
   for (const seg of segmentLayers) {
-    const latlngs = seg.layer.getLatLngs();
-    for (const pt of latlngs) {
-      const d = (pt.lat - lat) ** 2 + (pt.lng - lng) ** 2;
-      if (d < closestDist) {
-        closestDist = d;
-        closest = seg;
-      }
+    const nearest = getClosestPointOnSegmentGeometry(seg, lat, lng);
+    if (!nearest) continue;
+    if (nearest.distanceSq < closestDist) {
+      closestDist = nearest.distanceSq;
+      closest = seg;
     }
   }
   return closest;
@@ -4113,7 +4241,7 @@ showBlockInfo = async function(seg) {
 // ==== Smart Move ====
 let smartMoveMarker = null;
 let smartMoveHighlight = null;
-let smartMoveRecommendation = null; // { lat, lng } of best segment midpoint
+let smartMoveRecommendation = null; // best candidate from computeSmartMove()
 let smartMoveInterval = null;
 
 function getSegmentMidpoint(seg) {
@@ -4131,8 +4259,6 @@ function computeNextRestrictionHours(seg) {
   const et = nowET();
   const dayOfWeek = et.getDay();
   const minuteOfDay = et.getHours() * 60 + et.getMinutes();
-  const dateStr = toETDateStr(et);
-  const suspended = isASPSuspended(dateStr);
 
   const rules = seg.rules || [];
   if (rules.length === 0) return { hours: 168, label: 'No restrictions', cat: null, rule: null };
@@ -4166,21 +4292,8 @@ function computeNextRestrictionHours(seg) {
     }
 
     if (isASPCategory(cat)) {
-      if (suspended && isASPDayForCategory(cat, dayOfWeek)) {
-        // ASP suspended today, check next non-suspended occurrence
-        const h = computeHoursUntilASP(cat, rule, dayOfWeek, minuteOfDay);
-        // If the next occurrence is today but suspended, skip to further out
-        // Just use the computed hours (will be next unsuspended day in practice)
-        if (h < soonestHours) {
-          soonestHours = h;
-          soonestLabel = CATEGORIES[cat]?.label || cat;
-          soonestCat = cat;
-          soonestRule = rule;
-        }
-        continue;
-      }
-      const isAspDay = isASPDayForCategory(cat, dayOfWeek);
-      if (isAspDay && isScheduleActiveAt(rule, dayOfWeek, minuteOfDay)) {
+      const isAspDay = isASPDayForCategory(cat, dayOfWeek) && (!rule.days || !rule.days.length || rule.days.includes(dayOfWeek));
+      if (isAspDay && isScheduleActiveAt(rule, dayOfWeek, minuteOfDay) && !isASPSuspended(toETDateStr(et))) {
         return { hours: 0, label: (CATEGORIES[cat]?.label || cat) + ' active now', cat, rule };
       }
       const h = computeHoursUntilASP(cat, rule, dayOfWeek, minuteOfDay);
@@ -4443,7 +4556,18 @@ function computeSmartMove() {
       pane: 'carPin'
     }).addTo(map);
 
-    smartMoveRecommendation = { lat: bestMid.lat, lng: bestMid.lng };
+    smartMoveRecommendation = {
+      lat: bestMid.lat,
+      lng: bestMid.lng,
+      seg: best.seg,
+      restriction: best.restriction,
+      distM: best.distM,
+      walkMin,
+      improvementHours: improvement,
+      sideLabel: bestSideLabel,
+      currentBlockLabel: carBlockLabel,
+      currentRestriction: carRestriction
+    };
     routeBtn.style.display = 'block';
   } else {
     // No better options but restriction is coming
@@ -4739,17 +4863,14 @@ document.getElementById('fbStartTime').addEventListener('change', () => { if (cu
 document.getElementById('fbEndTime').addEventListener('change', () => { if (currentMode === 'free-between') updateMap(); });
 document.getElementById('puDate').addEventListener('change', () => { if (currentMode === 'park-until') updateMap(); });
 document.getElementById('puTime').addEventListener('change', () => { if (currentMode === 'park-until') updateMap(); });
+window.addEventListener('resize', syncResponsivePanels);
 
 init();
 
 // Toggle panel collapse/expand
 function togglePanel() {
   const panel = document.getElementById('controlPanel');
-  const toggle = document.getElementById('panelToggle');
-  const body = document.getElementById('panelBody');
-  const isCollapsed = panel.classList.toggle('collapsed');
-  body.style.display = isCollapsed ? 'none' : 'block';
-  toggle.textContent = isCollapsed ? '▲' : '▼';
+  setControlPanelCollapsed(!panel.classList.contains('collapsed'));
 }
 
 // ==== Phase 2: User Location & Smart Score proximity ====
@@ -4796,28 +4917,22 @@ function generateSmartMoveRecommendation() {
     alert('Park your car first using "Park My Car Here"');
     return;
   }
-  const et = nowET();
-  const dayOfWeek = et.getDay();
-  const minuteOfDay = et.getHours() * 60 + et.getMinutes();
-  const dateStr = toETDateStr(et);
-  const suspended = isASPSuspended(dateStr);
-  const scored = segmentLayers
-    .map(seg => ({
-      seg,
-      score: computeBlockScoreWithProximity(seg.rules, dayOfWeek, minuteOfDay, suspended,
-                                            parkedCarLocation.lat, parkedCarLocation.lng, seg).score,
-    }))
-    .sort((a, b) => b.score - a.score);
-  if (scored.length > 0 && scored[0].score > 30) {
-    const best = scored[0].seg;
-    const sideLabel = { E: 'East', W: 'West', N: 'North', S: 'South' }[best.side] || best.side;
-    const msg = '🚗 Move to: ' + best.street + ', ' + sideLabel + ' side\n\n' +
-                '⭐ Score: ' + scored[0].score + '/100\n' +
-                'Safe for: ' + computeBlockScore(best.rules, dayOfWeek, minuteOfDay, suspended).reason;
-    alert(msg);
-  } else {
-    alert('No good spots nearby right now. Try moving in a few hours.');
+
+  computeSmartMove();
+
+  if (!smartMoveRecommendation) {
+    alert('Your current block is already one of the best nearby options right now.');
+    return;
   }
+
+  const rec = smartMoveRecommendation;
+  const distStr = rec.distM < 100 ? `${Math.round(rec.distM)}m away` : `${(rec.distM / 1000).toFixed(1)}km away`;
+  const msg = '🚗 Best nearby move:\n' +
+              rec.seg.blockKey + ' - ' + rec.sideLabel + '\n\n' +
+              '📍 ' + distStr + ' (~' + rec.walkMin + ' min walk)\n' +
+              'Next restriction: ' + rec.restriction.label + ' - ' + getNextRestrictionTimeLabel(rec.restriction.hours) + ' (' + formatHoursAway(rec.restriction.hours) + ' away)\n' +
+              'Improvement: ' + formatHoursAway(rec.improvementHours) + ' extra';
+  alert(msg);
 }
 
 function clearParkedCar() {
