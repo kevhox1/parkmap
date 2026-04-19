@@ -1627,22 +1627,32 @@ function createTrackerMockProvider() {
       return this.signInForWrites();
     },
     async getActiveReportsForBounds(bounds) {
-      return getSortedActiveReports().filter(report => {
-        const c = report.block_face_snapshot && report.block_face_snapshot.center;
-        return c && bounds.contains([c.lat, c.lng]);
-      });
+      return getSortedActiveReports()
+        .filter(report => {
+          const c = report.block_face_snapshot && report.block_face_snapshot.center;
+          return c && bounds.contains([c.lat, c.lng]);
+        })
+        .map(normalizeTrackerReport)
+        .filter(Boolean);
     },
     async getBlockFaceDetail(blockFaceId) {
       const state = cleanup();
-      return {
-        reports: state.reports
-          .filter(report => report.block_face_id === blockFaceId && isActive(report))
-          .sort((a, b) => TRACKER_TYPES[b.type].priority - TRACKER_TYPES[a.type].priority || isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at)),
-        events: state.events
-          .filter(event => event.block_face_id === blockFaceId)
-          .sort((a, b) => isoToMs(b.created_at) - isoToMs(a.created_at))
-          .slice(0, 8)
-      };
+      const activeReports = state.reports
+        .filter(report => report.block_face_id === blockFaceId && isActive(report))
+        .sort((a, b) => TRACKER_TYPES[b.type].priority - TRACKER_TYPES[a.type].priority || isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at));
+      const recentEvents = state.events
+        .filter(event => event.block_face_id === blockFaceId)
+        .sort((a, b) => isoToMs(b.created_at) - isoToMs(a.created_at))
+        .slice(0, 8);
+      const blockFaceSnapshot = (activeReports[0] && activeReports[0].block_face_snapshot)
+        || state.reports.find(r => r.block_face_id === blockFaceId && r.block_face_snapshot)?.block_face_snapshot
+        || { id: blockFaceId };
+      return normalizeTrackerDetail({
+        blockFace: blockFaceSnapshot,
+        activeReports,
+        recentEvents,
+        comments: []
+      }, blockFaceId);
     },
     async getNearbyFeed(anchor, radiusMeters) {
       return getSortedActiveReports()
@@ -1651,7 +1661,12 @@ function createTrackerMockProvider() {
           distance_m: Math.round(distanceMeters(anchor, report.block_face_snapshot && report.block_face_snapshot.center))
         }))
         .filter(report => report.distance_m <= radiusMeters)
-        .sort((a, b) => a.distance_m - b.distance_m || isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at));
+        .sort((a, b) => a.distance_m - b.distance_m || isoToMs(b.last_seen_at || b.created_at) - isoToMs(a.last_seen_at || a.created_at))
+        .map(report => {
+          const normalized = normalizeTrackerReport(report);
+          return normalized ? { ...normalized, distance_m: report.distance_m } : null;
+        })
+        .filter(Boolean);
     },
     async createReport(input) {
       const session = readSession();
@@ -1682,7 +1697,7 @@ function createTrackerMockProvider() {
             payload: { pass_count: existing.pass_count }
           });
           writeState(state);
-          return existing;
+          return normalizeTrackerReport(existing);
         }
       } else {
         const existing = state.reports.find(report =>
@@ -1706,7 +1721,7 @@ function createTrackerMockProvider() {
             payload: { type: existing.type }
           });
           writeState(state);
-          return existing;
+          return normalizeTrackerReport(existing);
         }
       }
 
@@ -1744,7 +1759,7 @@ function createTrackerMockProvider() {
         payload: { type: report.type }
       });
       writeState(state);
-      return report;
+      return normalizeTrackerReport(report);
     },
     async confirmReport(reportId) {
       const session = readSession();
@@ -1769,7 +1784,7 @@ function createTrackerMockProvider() {
         payload: { type: report.type }
       });
       writeState(state);
-      return report;
+      return normalizeTrackerReport(report);
     },
     async retractReport(reportId) {
       const session = readSession();
@@ -1789,7 +1804,7 @@ function createTrackerMockProvider() {
         payload: { type: report.type }
       });
       writeState(state);
-      return report;
+      return normalizeTrackerReport(report);
     },
     async seedReports(seedReports) {
       const state = cleanup();
@@ -1879,6 +1894,31 @@ async function createSupabaseTrackerProvider(config) {
           .subscribe();
       }
       await getSession();
+      // Connectivity probe: validate the Supabase URL + anon key actually work
+      // before we show "Supabase live" in the UI. Without this, bogus creds pass
+      // init() silently (getSession only reads local storage), then every RPC
+      // fails at runtime with no fallback to mock.
+      try {
+        const probe = await Promise.race([
+          supabase.rpc('tracker_get_active_reports_in_bbox', { p_west: 0, p_south: 0, p_east: 0, p_north: 0 }),
+          new Promise((_, reject) => setTimeout(() => reject(new Error('supabase_probe_timeout')), 4000))
+        ]);
+        if (probe && probe.error) {
+          const code = String(probe.error.code || '').toUpperCase();
+          const message = String(probe.error.message || '').toLowerCase();
+          // Any of: network error (Failed to fetch), bad URL, missing function/table
+          // (schema not deployed), invalid JWT (bad anon key) -> treat as unreachable.
+          // Only a small set of PG errors (row-level violations, check constraints, etc.)
+          // actually mean "connected but request was invalid" — we accept those silently.
+          const connected = code === '23503' || code === '23505' || code === 'P0001' || message.includes('no rows');
+          if (!connected) {
+            throw new Error('supabase_probe_failed: ' + (probe.error.message || code || 'unknown'));
+          }
+        }
+      } catch (probeErr) {
+        // Network errors ("Failed to fetch") and our own probe errors both land here.
+        throw new Error('supabase_unreachable: ' + (probeErr && probeErr.message ? probeErr.message : probeErr));
+      }
     },
     async destroy() {
       if (authSubscription && typeof authSubscription.unsubscribe === 'function') authSubscription.unsubscribe();

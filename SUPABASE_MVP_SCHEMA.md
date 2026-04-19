@@ -1,5 +1,8 @@
 # WePark Tracker, Supabase MVP Schema
 
+> **Reference implementation note**
+> The local JS mock in `index.html` (`createTrackerMockProvider`) is the reference implementation for tracker merge/conflict/dedupe semantics (spec section 5.5 rules). When the SQL RPCs below are implemented, match the mock's behavior exactly, then delete this note. If the two ever disagree, the mock wins and the SQL should be corrected.
+
 ## Goal
 Ship the fastest real backend for the threat tracker while keeping the frontend on GitHub Pages.
 

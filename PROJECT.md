@@ -7,7 +7,7 @@
 - **GitHub Repo:** https://github.com/kevhox1/parkmap
 - **Live URL:** https://kevhox1.github.io/parkmap/
 - **Hosting:** GitHub Pages, auto-deploy on push to `main`
-- **Service Worker Cache:** `wepark-v6` (bump on any asset change)
+- **Service Worker Cache:** `wepark-v7` (bump on any asset change)
 
 ## Data Status
 - **Parking Signs:** 17,134 unique (merged ASP + main datasets)
@@ -30,11 +30,13 @@
   - [x] Initial tracker slice with mock provider (PR #4, merged 2026-04-07)
   - [x] Supabase-ready provider layer with dynamic supabase-js import, auth gate, realtime hook, SW bypass for live traffic (PR #5, merged 2026-04-17)
   - [x] Tracker QA fixes: Park My Car CTA wire-up, projected point-to-polyline snapping, ASP-window-aware `block_cleaned` aging, narrow-phone bottom-sheet coordination, unified Smart Move engine, future ASP suspensions skipped in next-ASP timing (PR #6, merged 2026-04-17)
+  - [x] Production hardening: mock/Supabase shape parity, Supabase init connectivity probe with graceful mock fallback, RPC name cross-check — all 7 match (2026-04-17)
   - [ ] Provision real Supabase project and populate `tracker-config.js` with URL/anon key
-  - [ ] Apply `SUPABASE_MVP_SCHEMA.md` and verify RPC functions named by the provider match
+  - [ ] Apply `SUPABASE_MVP_SCHEMA.md` in the Supabase SQL editor
   - [ ] Flip `provider` to `supabase` and `authMode` to `anonymous` once anonymous auth is enabled
 
 ## Recently Landed
+- 2026-04-17 (direct to `main`): tracker production hardening — mock/Supabase shape parity, Supabase init connectivity probe, SW cache bumped to v7
 - PR #6 (`aa7c5bd`): tracker QA fixes
 - PR #5 (`a45098b`): Supabase-ready tracker provider + live-data plumbing, SW cache v6
 - PR #4 (`f8ba00b`): initial threat tracker slice (mock provider)
@@ -46,4 +48,4 @@
 - `TRACKER_MVP_SPEC.md` — tracker feature spec
 - `SUPABASE_MVP_SCHEMA.md` — backend schema + RPC design
 - `BACKEND_OPTIONS.md` — backend trade-offs
-- `TRACKER_QA_VERIFY.md` — latest independent QA verification
+- `TRACKER_QA_PASS_2.md` — latest independent QA verification (2026-04-17). Supersedes `TRACKER_QA_VERIFY.md`.
