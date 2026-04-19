@@ -1321,7 +1321,7 @@ function getBlockFaceLabel(street, from, to, side) {
 }
 
 function buildBlockFaceForSegment(seg) {
-  const center = getSegmentMidLatLng(seg) || { lat: map.getCenter().lat, lng: map.getCenter().lng };
+  const center = getSegMidLatLng(seg) || { lat: map.getCenter().lat, lng: map.getCenter().lng };
   return {
     id: getBlockFaceId(seg.street, seg.from, seg.to, seg.side),
     street: seg.street,
