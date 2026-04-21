@@ -1149,6 +1149,181 @@ function isASPActiveDuring(cat, startDay, startMin, endDay, endMin) {
   return false;
 }
 
+// ==== Street graph (directed, for one-way aware routing) ====
+// Populated from osm_oneway.json (NYC DOT Centerline data).
+// Shape: { adj: Map<nodeKey, Array<{to,dist,street}>>, nodeLatLng: Map<nodeKey,{lat,lng}>, loaded: bool }
+let streetGraph = null;
+
+// Canonical street-name normalizer — same logic as scripts/build-oneway-data.js.
+// Converts "1st Avenue" / "1 AVE" / "FIRST AVENUE" → "1 AVE", etc.
+const STREET_SUFFIX_NORMALIZE = [
+  [/\bSTREETS\b/g, 'ST'], [/\bSTREET\b/g, 'ST'],
+  [/\bAVENUES\b/g, 'AVE'], [/\bAVENUE\b/g, 'AVE'],
+  [/\bBOULEVARD\b/g, 'BLVD'], [/\bPLACE\b/g, 'PL'], [/\bPLAZA\b/g, 'PLZ'],
+  [/\bDRIVE\b/g, 'DR'], [/\bROAD\b/g, 'RD'], [/\bPARKWAY\b/g, 'PKWY'],
+  [/\bEXPRESSWAY\b/g, 'EXPY'], [/\bTERRACE\b/g, 'TER'], [/\bCOURT\b/g, 'CT'],
+  [/\bSQUARE\b/g, 'SQ'], [/\bHIGHWAY\b/g, 'HWY'], [/\bBRIDGE\b/g, 'BR'], [/\bTUNNEL\b/g, 'TUN'],
+  [/\bEAST\b/g, 'E'], [/\bWEST\b/g, 'W'], [/\bNORTH\b/g, 'N'], [/\bSOUTH\b/g, 'S'],
+  [/\bFIRST\b/g, '1'], [/\bSECOND\b/g, '2'], [/\bTHIRD\b/g, '3'],
+  [/\bFOURTH\b/g, '4'], [/\bFIFTH\b/g, '5'], [/\bSIXTH\b/g, '6'],
+  [/\bSEVENTH\b/g, '7'], [/\bEIGHTH\b/g, '8'], [/\bNINTH\b/g, '9'],
+  [/\bTENTH\b/g, '10'], [/\bELEVENTH\b/g, '11'], [/\bTWELFTH\b/g, '12']
+];
+function canonicalStreetName(raw) {
+  if (!raw) return '';
+  let s = String(raw).toUpperCase().trim();
+  s = s.replace(/(\d+)(ST|ND|RD|TH)\b/g, '$1');
+  for (const [re, rep] of STREET_SUFFIX_NORMALIZE) s = s.replace(re, rep);
+  s = s.replace(/\s+/g, ' ').trim();
+  if (s === 'AVE OF THE AMERICAS' || s === 'AVE OF AMERICAS') return '6 AVE';
+  return s;
+}
+
+// Snap lat/lng to a ~11m grid (0.0001°) so polyline endpoints at the same
+// intersection collapse to the same graph node.
+function latLngToNodeKey(lat, lng) {
+  return Math.round(lat * 10000) + '_' + Math.round(lng * 10000);
+}
+
+function haversineMeters(a, b) {
+  const R = 6371000;
+  const toRad = Math.PI / 180;
+  const dLat = (b[0] - a[0]) * toRad;
+  const dLng = (b[1] - a[1]) * toRad;
+  const la1 = a[0] * toRad, la2 = b[0] * toRad;
+  const h = Math.sin(dLat/2)**2 + Math.cos(la1) * Math.cos(la2) * Math.sin(dLng/2)**2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+async function loadStreetGraph() {
+  try {
+    const resp = await fetch('osm_oneway.json');
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    const adj = new Map();
+    const nodeLatLng = new Map();
+    const addEdge = (from, to, dist, street) => {
+      if (!adj.has(from)) adj.set(from, []);
+      adj.get(from).push({ to, dist, street });
+    };
+    const ensureNode = (lat, lng) => {
+      const key = latLngToNodeKey(lat, lng);
+      if (!nodeLatLng.has(key)) nodeLatLng.set(key, { lat, lng });
+      return key;
+    };
+    let edgeCount = 0;
+    for (const street of Object.keys(data)) {
+      for (const way of data[street]) {
+        const pts = way.polyline;
+        if (!pts || pts.length < 2) continue;
+        for (let i = 0; i < pts.length - 1; i++) {
+          const [aLat, aLng] = pts[i];
+          const [bLat, bLng] = pts[i + 1];
+          const aKey = ensureNode(aLat, aLng);
+          const bKey = ensureNode(bLat, bLng);
+          if (aKey === bKey) continue;
+          const dist = haversineMeters(pts[i], pts[i + 1]);
+          // "yes" = forward along polyline, "reverse" = backward, "no" = both
+          if (way.oneway === 'yes') {
+            addEdge(aKey, bKey, dist, street); edgeCount++;
+          } else if (way.oneway === 'reverse') {
+            addEdge(bKey, aKey, dist, street); edgeCount++;
+          } else {
+            addEdge(aKey, bKey, dist, street);
+            addEdge(bKey, aKey, dist, street);
+            edgeCount += 2;
+          }
+        }
+      }
+    }
+    streetGraph = { adj, nodeLatLng, loaded: true };
+    console.log(`Street graph loaded: ${nodeLatLng.size} intersections, ${edgeCount} directed edges`);
+  } catch (e) {
+    console.warn('Street graph failed to load, route will use crow-flies:', e.message);
+    streetGraph = { adj: new Map(), nodeLatLng: new Map(), loaded: false };
+  }
+}
+
+// Snap a lat/lng to the nearest node in the graph. Linear scan (O(N)) is
+// fine here — we only do this a handful of times per route request.
+function nearestGraphNode(lat, lng, maxMeters = 150) {
+  if (!streetGraph || !streetGraph.loaded) return null;
+  let best = null;
+  let bestD = maxMeters;
+  for (const [key, ll] of streetGraph.nodeLatLng) {
+    const d = haversineMeters([lat, lng], [ll.lat, ll.lng]);
+    if (d < bestD) { bestD = d; best = key; }
+  }
+  return best;
+}
+
+// Minimal binary-heap priority queue (pairs: [priority, value]).
+class MinHeap {
+  constructor() { this.a = []; }
+  push(p, v) { this.a.push([p, v]); this._up(this.a.length - 1); }
+  pop() { if (!this.a.length) return null; const top = this.a[0]; const last = this.a.pop(); if (this.a.length) { this.a[0] = last; this._down(0); } return top; }
+  get size() { return this.a.length; }
+  _up(i) { while (i > 0) { const p = (i - 1) >> 1; if (this.a[p][0] <= this.a[i][0]) break; [this.a[p], this.a[i]] = [this.a[i], this.a[p]]; i = p; } }
+  _down(i) { const n = this.a.length; for (;;) { const l = 2*i + 1, r = 2*i + 2; let m = i; if (l < n && this.a[l][0] < this.a[m][0]) m = l; if (r < n && this.a[r][0] < this.a[m][0]) m = r; if (m === i) break; [this.a[m], this.a[i]] = [this.a[i], this.a[m]]; i = m; } }
+}
+
+// A* search on the directed street graph. Heuristic = haversine to target
+// (admissible since actual path can never be shorter than Euclidean).
+// Returns drive-distance in meters, or Infinity if unreachable within caps.
+function directedShortestPath(fromKey, toKey, { maxMeters = 4000, maxNodes = 3000 } = {}) {
+  if (!streetGraph || !streetGraph.loaded) return Infinity;
+  if (fromKey === toKey) return 0;
+  const adj = streetGraph.adj;
+  const nodeLatLng = streetGraph.nodeLatLng;
+  const target = nodeLatLng.get(toKey);
+  if (!target) return Infinity;
+  const h = (key) => {
+    const n = nodeLatLng.get(key);
+    if (!n) return Infinity;
+    return haversineMeters([n.lat, n.lng], [target.lat, target.lng]);
+  };
+  const gScore = new Map();
+  gScore.set(fromKey, 0);
+  const closed = new Set();
+  const open = new MinHeap();
+  open.push(h(fromKey), fromKey);
+  let expanded = 0;
+  while (open.size && expanded < maxNodes) {
+    const [, cur] = open.pop();
+    if (closed.has(cur)) continue;
+    closed.add(cur);
+    expanded++;
+    if (cur === toKey) return gScore.get(cur);
+    const curG = gScore.get(cur);
+    if (curG > maxMeters) continue;
+    const edges = adj.get(cur) || [];
+    for (const e of edges) {
+      if (closed.has(e.to)) continue;
+      const tentative = curG + e.dist;
+      if (tentative > maxMeters) continue;
+      const prev = gScore.get(e.to);
+      if (prev === undefined || tentative < prev) {
+        gScore.set(e.to, tentative);
+        open.push(tentative + h(e.to), e.to);
+      }
+    }
+  }
+  return Infinity;
+}
+
+// Public: drive distance respecting one-ways. Falls back to crow-flies if
+// the graph is unavailable or the points can't be resolved/connected.
+function driveDistance(fromLatLng, toLatLng) {
+  const crow = haversineMeters([fromLatLng.lat, fromLatLng.lng], [toLatLng.lat, toLatLng.lng]);
+  if (!streetGraph || !streetGraph.loaded) return crow;
+  const a = nearestGraphNode(fromLatLng.lat, fromLatLng.lng);
+  const b = nearestGraphNode(toLatLng.lat, toLatLng.lng);
+  if (!a || !b) return crow;
+  const d = directedShortestPath(a, b);
+  if (!isFinite(d)) return crow * 1.5; // unreachable-in-budget penalty
+  return d;
+}
+
 // ==== ASP Suspension ====
 async function loadASPSuspensions() {
   try {
@@ -4724,6 +4899,24 @@ function generateParkingRoute() {
     return;
   }
 
+  // Pass-count bonus: if two candidates are on the same street and within
+  // 250m of each other, boost both — you'd scan them on the same pass.
+  const PASS_BONUS = 1.25;
+  const PASS_RADIUS = 250;
+  for (let i = 0; i < candidates.length; i++) {
+    for (let j = i + 1; j < candidates.length; j++) {
+      if (candidates[i].seg.street !== candidates[j].seg.street) continue;
+      const d = Math.sqrt(
+        Math.pow((candidates[i].mid.lat - candidates[j].mid.lat) * 111320, 2) +
+        Math.pow((candidates[i].mid.lng - candidates[j].mid.lng) * 111320 * Math.cos(startLat * Math.PI / 180), 2)
+      );
+      if (d <= PASS_RADIUS) {
+        candidates[i].routeScore *= PASS_BONUS;
+        candidates[j].routeScore *= PASS_BONUS;
+      }
+    }
+  }
+
   // Sort by score descending
   candidates.sort((a, b) => b.routeScore - a.routeScore);
 
@@ -4744,12 +4937,63 @@ function generateParkingRoute() {
     return;
   }
 
-  // Step 3: Order waypoints by angle from start for a circular sweep
-  const waypoints = uniqueBlocks.map(c => {
-    const angle = Math.atan2(c.mid.lng - startLng, c.mid.lat - startLat);
+  // Step 3: Order waypoints by solving open-path TSP on drive-distance matrix.
+  // Drive distance respects one-ways via the street graph; falls back to
+  // crow-flies when the graph isn't loaded or points aren't resolvable.
+  const tspStart = { lat: startLat, lng: startLng };
+  const tspPoints = [tspStart, ...uniqueBlocks.map(b => b.mid)];
+  const N = tspPoints.length;
+  // Build N×N distance matrix
+  const dmat = Array.from({ length: N }, () => new Array(N).fill(0));
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < N; j++) {
+      if (i === j) continue;
+      dmat[i][j] = driveDistance(tspPoints[i], tspPoints[j]);
+    }
+  }
+  // Held-Karp open path: start at node 0 (user), visit all others, end anywhere.
+  // dp[mask][i] = min cost visiting `mask` ending at node i. Mask excludes node 0.
+  // For N-1 ≤ 10 the state space is at most 2^10 × 10 = 10240 entries.
+  const K = N - 1; // number of waypoints
+  const FULL = (1 << K) - 1;
+  const INF = Infinity;
+  const dp = Array.from({ length: 1 << K }, () => new Array(K).fill(INF));
+  const parent = Array.from({ length: 1 << K }, () => new Array(K).fill(-1));
+  for (let i = 0; i < K; i++) {
+    dp[1 << i][i] = dmat[0][i + 1];
+  }
+  for (let mask = 1; mask <= FULL; mask++) {
+    for (let last = 0; last < K; last++) {
+      if (!(mask & (1 << last))) continue;
+      if (dp[mask][last] === INF) continue;
+      for (let next = 0; next < K; next++) {
+        if (mask & (1 << next)) continue;
+        const newMask = mask | (1 << next);
+        const candidate = dp[mask][last] + dmat[last + 1][next + 1];
+        if (candidate < dp[newMask][next]) {
+          dp[newMask][next] = candidate;
+          parent[newMask][next] = last;
+        }
+      }
+    }
+  }
+  // Find best terminal node for full mask
+  let bestLast = 0, bestCost = dp[FULL][0];
+  for (let i = 1; i < K; i++) {
+    if (dp[FULL][i] < bestCost) { bestCost = dp[FULL][i]; bestLast = i; }
+  }
+  // Reconstruct order
+  const orderIdx = [];
+  let mask = FULL, last = bestLast;
+  while (last !== -1) {
+    orderIdx.unshift(last);
+    const p = parent[mask][last];
+    mask ^= (1 << last);
+    last = p;
+  }
+  const orderedBlocks = orderIdx.map(i => uniqueBlocks[i]);
+  const waypoints = orderedBlocks.map(c => {
     const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[c.seg.side] || c.seg.side;
-
-    // Build recommendation reason
     let reason = '';
     if (isASPCategory(c.domCat)) {
       const catLabel = CATEGORIES[c.domCat]?.label || c.domCat;
@@ -4763,12 +5007,11 @@ function generateParkingRoute() {
     } else {
       reason = `${Math.round(c.hours)}h until next restriction`;
     }
-
-    return { ...c, angle, sideLabel, reason };
+    return { ...c, sideLabel, reason };
   });
-
-  // Sort by angle (clockwise sweep)
-  waypoints.sort((a, b) => a.angle - b.angle);
+  if (streetGraph && streetGraph.loaded) {
+    console.log(`Route TSP: ${waypoints.length} stops, ${Math.round(bestCost)}m total drive path (one-way aware)`);
+  }
 
   // Step 4: Display on map - highlight segments + numbered markers
   routeLayerGroup = L.layerGroup();
@@ -4883,10 +5126,11 @@ function generateParkingRoute() {
 
 // ==== Initialization ====
 async function init() {
-  // Load tile index and ASP suspensions in parallel
+  // Load tile index, ASP suspensions, and street graph in parallel.
   const [tileOk] = await Promise.all([
     loadTileIndex(),
-    loadASPSuspensions()
+    loadASPSuspensions(),
+    loadStreetGraph()
   ]);
 
   if (!tileOk) return; // error already shown

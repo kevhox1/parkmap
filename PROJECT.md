@@ -7,7 +7,7 @@
 - **GitHub Repo:** https://github.com/kevhox1/parkmap
 - **Live URL:** https://kevhox1.github.io/parkmap/
 - **Hosting:** GitHub Pages, auto-deploy on push to `main`
-- **Service Worker Cache:** `wepark-v7` (bump on any asset change)
+- **Service Worker Cache:** `wepark-v9` (bump on any asset change)
 
 ## Data Status
 - **Parking Signs:** 17,134 unique (merged ASP + main datasets)
@@ -36,6 +36,8 @@
   - [ ] Flip `provider` to `supabase` and `authMode` to `anonymous` once anonymous auth is enabled
 
 ## Recently Landed
+- 2026-04-21 (direct to `main`): one-way aware parking route with mini-TSP (held-karp on top 10 candidates, directed street graph from NYC DOT Centerline, A* drive-distance, pass-count bonus). SW cache bumped to v9.
+- 2026-04-21 (direct to `main`): fix for `getSegmentMidLatLng` typo blocking all segment rendering since PR #5. SW cache bumped to v8.
 - 2026-04-17 (direct to `main`): tracker production hardening — mock/Supabase shape parity, Supabase init connectivity probe, SW cache bumped to v7
 - PR #6 (`aa7c5bd`): tracker QA fixes
 - PR #5 (`a45098b`): Supabase-ready tracker provider + live-data plumbing, SW cache v6

@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'wepark-v8';
+const CACHE_VERSION = 'wepark-v9';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 const TILE_CACHE = CACHE_VERSION + '-tiles';
 
@@ -9,6 +9,7 @@ const STATIC_ASSETS = [
   'icon-192.png',
   'icon-512.png',
   'tiles/index.json',
+  'osm_oneway.json',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css',
   'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js'
 ];
