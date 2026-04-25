@@ -7,7 +7,7 @@
 - **GitHub Repo:** https://github.com/kevhox1/parkmap
 - **Live URL:** https://kevhox1.github.io/parkmap/
 - **Hosting:** GitHub Pages, auto-deploy on push to `main`
-- **Service Worker Cache:** `wepark-v10` (bump on any asset change)
+- **Service Worker Cache:** `wepark-v11` (bump on any asset change)
 
 ## Data Status
 - **Parking Signs:** 17,134 unique (merged ASP + main datasets)
@@ -36,6 +36,7 @@
   - [ ] Flip `provider` to `supabase` and `authMode` to `anonymous` once anonymous auth is enabled
 
 ## Recently Landed
+- 2026-04-22 (direct to `main`): park-pin no-snap fix, "Wrong street?" modal alternatives, route excludes parked block, proper metered status label (no more 168h), attachBlockFacesToEdges cache fix (2.8s → 235ms). SW cache bumped to v11.
 - 2026-04-22 (direct to `main`): replaced TSP with coverage-sweep route planner. Greedy one-way-aware walk through directed graph, ASP prioritized over metered, drawn polyline path + highlighted scanned blocks. SW cache bumped to v10.
 - 2026-04-21 (direct to `main`): one-way aware parking route with mini-TSP (held-karp on top 10 candidates, directed street graph from NYC DOT Centerline, A* drive-distance, pass-count bonus). SW cache bumped to v9.
 - 2026-04-21 (direct to `main`): fix for `getSegmentMidLatLng` typo blocking all segment rendering since PR #5. SW cache bumped to v8.

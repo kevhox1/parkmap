@@ -1321,6 +1321,7 @@ function attachBlockFacesToEdges() {
   if (streetGraph._attachedSegmentCount === segmentLayers.length && streetGraph.edgeToBlockFaces) return;
   // edgesByCanonStreet is invariant of segment data — build once and reuse.
   if (!streetGraph._edgesByCanonStreet) {
+    const built = new Map();
     for (const [fromKey, edges] of streetGraph.adj) {
       const fromLL = streetGraph.nodeLatLng.get(fromKey);
       if (!fromLL) continue;
@@ -1329,13 +1330,14 @@ function attachBlockFacesToEdges() {
         if (!toLL) continue;
         const canonStreet = canonicalStreetName(e.street);
         const mid = { lat: (fromLL.lat + toLL.lat) / 2, lng: (fromLL.lng + toLL.lng) / 2 };
-        const arr = edgesByCanonStreet.get(canonStreet);
+        const arr = built.get(canonStreet);
         const entry = { id: fromKey + '|' + e.to, mid, fromKey, toKey: e.to };
-        if (arr) arr.push(entry); else edgesByCanonStreet.set(canonStreet, [entry]);
+        if (arr) arr.push(entry); else built.set(canonStreet, [entry]);
       }
     }
-    streetGraph._edgesByCanonStreet = edgesByCanonStreet;
+    streetGraph._edgesByCanonStreet = built;
   }
+  const edgesByCanonStreet = streetGraph._edgesByCanonStreet;
   const edgeToBlockFaces = new Map();
   for (const seg of segmentLayers) {
     const canon = canonicalStreetName(seg.street || '');
@@ -1363,8 +1365,10 @@ function attachBlockFacesToEdges() {
 
 // Compute coverage value of a single directed edge given current time/date.
 // Returns { score, faces } where faces is the subset of block faces worth
-// highlighting (non-zero contribution).
-function scoreEdgeCoverage(edgeId) {
+// highlighting (non-zero contribution). `skipBlockKey` (street|from|to) lets
+// the caller exclude the user's currently-parked block from the score (we
+// shouldn't route them to scan a block they're already on).
+function scoreEdgeCoverage(edgeId, skipBlockKey = null) {
   if (!streetGraph || !streetGraph.edgeToBlockFaces) return { score: 0, faces: [] };
   const faces = streetGraph.edgeToBlockFaces.get(edgeId) || [];
   if (!faces.length) return { score: 0, faces: [] };
@@ -1372,6 +1376,10 @@ function scoreEdgeCoverage(edgeId) {
   let score = 0;
   const scoredFaces = [];
   for (const bf of faces) {
+    if (skipBlockKey && bf.street && bf.from && bf.to) {
+      const bk = bf.street + '|' + bf.from + '|' + bf.to;
+      if (bk === skipBlockKey) continue;
+    }
     const domCat = bf.dominantCategory || mostRestrictiveCategory(bf.rules);
     if (SKIP.has(domCat)) continue;
     if (!bf.rules || bf.rules.length === 0) continue;
@@ -4024,6 +4032,7 @@ function restoreCarPin() {
 // ----------------------------------------------------------------
 
 let _parkModalMode = 'street'; // 'street' | 'pin'
+let _parkCandidateSegs = [];
 let _parkPinLat = null;
 let _parkPinLng = null;
 let _parkDetectedSeg = null;
@@ -4056,10 +4065,20 @@ function openParkModalForPin(lat, lng) {
   _parkPinLat = lat;
   _parkPinLng = lng;
   _parkSelectedSide = null;
-  _parkDetectedSeg = findClosestSegment(lat, lng);
+  _parkCandidateSegs = findCandidateSegments(lat, lng, 35, 4);
+  _parkDetectedSeg = _parkCandidateSegs.length ? _parkCandidateSegs[0].seg : findClosestSegment(lat, lng);
   resetParkForm();
   setParkMode('pin');
   document.getElementById('parkCarModal').classList.add('visible');
+  renderDetectedBlock();
+}
+
+// Called from the modal when user picks an alternative block from the candidate list
+function selectAlternativeDetectedBlock(idx) {
+  const cand = _parkCandidateSegs && _parkCandidateSegs[idx];
+  if (!cand) return;
+  _parkDetectedSeg = cand.seg;
+  _parkSelectedSide = null;
   renderDetectedBlock();
 }
 
@@ -4205,9 +4224,30 @@ function renderDetectedBlock() {
     return;
   }
   const seg = _parkDetectedSeg;
-  detectedEl.innerHTML =
-    'Nearest block: <strong>' + toTitleCase(seg.street || '') + '</strong><br>' +
+  let html = 'Detected block: <strong>' + toTitleCase(seg.street || '') + '</strong><br>' +
     toTitleCase(seg.from || '') + ' → ' + toTitleCase(seg.to || '');
+
+  // Show alternative nearby blocks (different streets near the pin) so the
+  // user can correct the auto-detection at corners. Only show if there's >1.
+  const alternatives = (_parkCandidateSegs || []).filter(c => {
+    return c.seg !== _parkDetectedSeg && (
+      c.seg.street !== _parkDetectedSeg.street ||
+      c.seg.from !== _parkDetectedSeg.from ||
+      c.seg.to !== _parkDetectedSeg.to
+    );
+  });
+  if (alternatives.length > 0) {
+    html += '<div style="margin-top:8px;font-size:11px;color:#6b7280">Wrong street? Pick another nearby block:</div>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px">';
+    alternatives.forEach((c) => {
+      const idx = _parkCandidateSegs.indexOf(c);
+      const label = toTitleCase(c.seg.street || '') + ' (' + Math.round(c.distM) + 'm)';
+      html += '<button onclick="selectAlternativeDetectedBlock(' + idx + ')" style="padding:6px 10px;border:1px solid #d1d5db;border-radius:6px;background:white;font-size:11px;cursor:pointer">' + label + '</button>';
+    });
+    html += '</div>';
+  }
+
+  detectedEl.innerHTML = html;
   detectedEl.style.display = 'block';
   renderSideButtons(seg);
 }
@@ -4302,15 +4342,12 @@ function confirmParkCar() {
     from = seg.from || '';
     to = seg.to || '';
     side = _parkSelectedSide;
+    // Keep the marker exactly where the user tapped. The detected segment
+    // is used for parking-rules lookup, but the visual pin should not jump
+    // away from the spot the user picked. (Old code snapped to the side
+    // polyline which moved the pin noticeably at corners and intersections.)
     lat = _parkPinLat;
     lng = _parkPinLng;
-    // Snap to the selected side geometry near the dropped pin, not the segment midpoint
-    const sideSeg = findSegmentByBlock(street, from, to, side);
-    const snapped = getSnappedLatLngForSegment(sideSeg || seg, _parkPinLat, _parkPinLng);
-    if (snapped) {
-      lat = snapped.lat;
-      lng = snapped.lng;
-    }
   }
 
   const block = { street, from, to, side, lat, lng };
@@ -4348,6 +4385,28 @@ function findClosestSegment(lat, lng) {
     }
   }
   return closest;
+}
+
+// Returns nearby block-face candidates within `radiusM` of (lat,lng), grouped
+// to one entry per unique block (street + from + to), sorted by distance.
+// Used to surface alternatives in the park-pin modal — at corners the
+// auto-detected block is often the wrong street, so we let the user switch.
+function findCandidateSegments(lat, lng, radiusM = 35, maxResults = 4) {
+  const refLat = lat;
+  const radiusSq = (radiusM * radiusM);
+  const byBlock = new Map(); // key = street|from|to (ignore side — same physical block)
+  for (const seg of segmentLayers) {
+    const nearest = getClosestPointOnSegmentGeometry(seg, lat, lng);
+    if (!nearest) continue;
+    const distSq = nearest.distanceSq;
+    if (distSq > radiusSq) continue;
+    const key = (seg.street || '') + '|' + (seg.from || '') + '|' + (seg.to || '');
+    const prev = byBlock.get(key);
+    if (!prev || distSq < prev.distSq) byBlock.set(key, { seg, distSq, distM: Math.sqrt(distSq) });
+  }
+  return Array.from(byBlock.values())
+    .sort((a, b) => a.distSq - b.distSq)
+    .slice(0, maxResults);
 }
 
 function updateCarParkUntilInfo() {
@@ -4608,6 +4667,48 @@ function computeNextRestrictionHours(seg) {
   }
 
   return { hours: soonestHours, label: soonestLabel, cat: soonestCat, rule: soonestRule };
+}
+
+// For metered blocks, compute a human-readable status. computeNextRestrictionHours
+// skips METERED ("not a move-your-car restriction"), so it returns 168h for pure-
+// metered blocks — useless for the sidebar. This gives "Metered (paid until 7pm)"
+// when active, or "Metered (free now)" when not.
+function meteredStatusLabel(seg) {
+  const meterRules = (seg.rules || []).filter(r => r.category === 'METERED');
+  if (!meterRules.length) return 'Metered';
+  const et = nowET();
+  const dow = et.getDay();
+  const minute = et.getHours() * 60 + et.getMinutes();
+  const fmt = (m) => {
+    const h = Math.floor(m / 60), mm = m % 60;
+    const ampm = h >= 12 ? 'pm' : 'am';
+    const h12 = ((h + 11) % 12) + 1;
+    return mm > 0 ? `${h12}:${String(mm).padStart(2,'0')}${ampm}` : `${h12}${ampm}`;
+  };
+  // Active right now?
+  for (const r of meterRules) {
+    if (r.days && r.days.length && !r.days.includes(dow)) continue;
+    for (const tr of (r.timeRanges || [])) {
+      if (minute >= tr.start && minute <= tr.end) return `Metered (paid until ${fmt(tr.end)})`;
+    }
+  }
+  // Find next activation today or later this week
+  let bestMinutes = Infinity;
+  for (let dayOff = 0; dayOff < 7; dayOff++) {
+    const d = (dow + dayOff) % 7;
+    for (const r of meterRules) {
+      if (r.days && r.days.length && !r.days.includes(d)) continue;
+      for (const tr of (r.timeRanges || [])) {
+        const minutesUntil = (dayOff === 0 ? Math.max(0, tr.start - minute) : (1440 - minute) + (dayOff - 1) * 1440 + tr.start);
+        if (minutesUntil < bestMinutes && (dayOff > 0 || tr.start > minute)) bestMinutes = minutesUntil;
+      }
+    }
+    if (bestMinutes !== Infinity) break;
+  }
+  if (bestMinutes === Infinity) return 'Metered (free)';
+  if (bestMinutes < 1440) return `Metered (free until ${fmt(((minute + bestMinutes) % 1440))})`;
+  const days = Math.floor(bestMinutes / 1440);
+  return `Metered (free for ${days}d)`;
 }
 
 function formatHoursAway(hours) {
@@ -4944,6 +5045,13 @@ function generateParkingRoute() {
     return;
   }
 
+  // If the user is already parked on a known block, exclude it from candidates
+  // so the route doesn't say "scan this block at 0m" — they're already on it.
+  let skipBlockKey = null;
+  if (typeof parkedBlock !== 'undefined' && parkedBlock && parkedBlock.street && parkedBlock.from && parkedBlock.to) {
+    skipBlockKey = parkedBlock.street + '|' + parkedBlock.from + '|' + parkedBlock.to;
+  }
+
   // ===== Greedy coverage sweep =====
   // Walk outward from start, picking the highest-coverage unvisited edge at each
   // intersection. Penalize revisits hard, ban U-turns, bias toward returning to
@@ -4973,7 +5081,7 @@ function generateParkingRoute() {
       .map(e => {
         const eId = cur + '|' + e.to;
         const visits = edgeVisits.get(eId) || 0;
-        const cov = scoreEdgeCoverage(eId);
+        const cov = scoreEdgeCoverage(eId, skipBlockKey);
         let score = cov.score;
         if (visits > 0) score -= 100 * visits; // huge penalty for revisits
         // Slight penalty for distance — prefer short edges so we have more turns/options
@@ -5125,7 +5233,7 @@ function generateParkingRoute() {
         const catLabel = CATEGORIES[sf.domCat]?.label || sf.domCat;
         reason = sf.restriction.hours >= 48 ? `${catLabel} done ✅` : `${catLabel} ${Math.round(sf.restriction.hours)}h`;
       } else if (sf.domCat === 'METERED') {
-        reason = `Metered ${Math.round(sf.restriction.hours)}h`;
+        reason = meteredStatusLabel(sf.bf);
       }
       const color = isASPCategory(sf.domCat) ? (sf.restriction.hours >= 48 ? '#15803d' : '#65a30d') : '#0ea5e9';
       descHtml += `<div style="padding:2px 0;border-bottom:1px solid #f3f4f6">`;
