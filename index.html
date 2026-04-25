@@ -5947,10 +5947,58 @@ function clearParkedCar() {
   clearCarPin();
 }
 
-// Register service worker
+// ==== Service worker registration with auto-update ====
+// On every page load:
+// 1. Register the SW.
+// 2. Force an update check (don't wait for the browser's 24h heuristic).
+// 3. When a new SW activates with a new version, automatically reload so users
+//    always run the latest code without ever needing to clear cache manually.
+const APP_VERSION = 'wepark-v19';
+let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('sw.js').catch(err => console.log('SW registration failed:', err));
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    // Check for SW updates immediately on load (bypasses the 24h heuristic).
+    try { reg.update(); } catch (e) {}
+    // When a new worker takes control, reload once to load fresh JS/HTML.
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      if (_swReloadGuard) return;
+      _swReloadGuard = true;
+      console.log('[wepark] SW controller changed — reloading for fresh content');
+      location.reload();
+    });
+    // The new SW also broadcasts a message; handle that too as a backup signal.
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if (event.data?.type === 'WEPARK_SW_UPDATED' && event.data.version !== APP_VERSION) {
+        if (_swReloadGuard) return;
+        _swReloadGuard = true;
+        console.log('[wepark] SW updated to', event.data.version, '— reloading');
+        location.reload();
+      }
+    });
+  }).catch(err => console.log('SW registration failed:', err));
 }
+// Tiny version chip in the bottom-right so we can always see which version
+// is actually running. Click it to force a hard refresh + cache nuke.
+(function showVersionChip() {
+  const el = document.createElement('div');
+  el.id = 'weparkVersionChip';
+  el.textContent = APP_VERSION;
+  el.title = 'Click to force-refresh and clear cache';
+  el.style.cssText = 'position:fixed;bottom:6px;right:8px;z-index:99;font-size:9px;color:#9ca3af;background:rgba(255,255,255,0.85);padding:2px 6px;border-radius:6px;font-family:system-ui,-apple-system,sans-serif;cursor:pointer;user-select:none;border:1px solid rgba(0,0,0,0.05)';
+  el.onclick = async () => {
+    if (!confirm('Force refresh and clear cache?')) return;
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations();
+      for (const r of regs) await r.unregister();
+    }
+    if ('caches' in window) {
+      const ks = await caches.keys();
+      for (const k of ks) await caches.delete(k);
+    }
+    location.reload();
+  };
+  document.body.appendChild(el);
+})();
 </script>
 </body>
 </html>

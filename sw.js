@@ -1,11 +1,13 @@
-const CACHE_VERSION = 'wepark-v18';
+const CACHE_VERSION = 'wepark-v19';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 const TILE_CACHE = CACHE_VERSION + '-tiles';
 
+// Note: tracker-config.js intentionally NOT precached — it carries auth keys
+// that may rotate and we want a fresh fetch every page load. The fetch handler
+// below is network-first for everything that isn't a tile, so it stays fresh.
 const STATIC_ASSETS = [
   'index.html',
   'manifest.json',
-  'tracker-config.js',
   'icon-192.png',
   'icon-512.png',
   'tiles/index.json',
@@ -31,23 +33,36 @@ self.addEventListener('install', event => {
   );
 });
 
-// Activate: clean old caches
+// Activate: clean old caches AND broadcast a reload signal to all clients so
+// they pick up the new code immediately instead of running stale JS until the
+// user manually refreshes. Combined with skipWaiting() in install + clients.claim()
+// here, this means: deploy v(N+1), users running v(N) auto-update + reload on
+// next page load. No more "clear cache" for users.
 self.addEventListener('activate', event => {
-  event.waitUntil(
-    caches.keys().then(keys => {
-      return Promise.all(
-        keys
-          .filter(k => k.startsWith('wepark') && !k.startsWith(CACHE_VERSION))
-          .map(k => {
-            console.log('[SW] Deleting old cache:', k);
-            return caches.delete(k);
-          })
-      );
-    }).then(() => {
-      console.log('[SW] Activation complete');
-      return self.clients.claim();
-    })
-  );
+  event.waitUntil((async () => {
+    const keys = await caches.keys();
+    await Promise.all(
+      keys
+        .filter(k => k.startsWith('wepark') && !k.startsWith(CACHE_VERSION))
+        .map(k => {
+          console.log('[SW] Deleting old cache:', k);
+          return caches.delete(k);
+        })
+    );
+    await self.clients.claim();
+    const clients = await self.clients.matchAll({ type: 'window' });
+    for (const client of clients) {
+      client.postMessage({ type: 'WEPARK_SW_UPDATED', version: CACHE_VERSION });
+    }
+    console.log('[SW] Activation complete:', CACHE_VERSION);
+  })());
+});
+
+// Allow the page to ping us for the active version
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'WEPARK_GET_VERSION') {
+    event.ports[0]?.postMessage({ version: CACHE_VERSION });
+  }
 });
 
 function isSupabaseLiveRequest(url) {
