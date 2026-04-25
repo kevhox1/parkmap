@@ -5423,6 +5423,10 @@ window.addEventListener('resize', syncResponsivePanels);
 
 init();
 setupPWAInstallHint();
+// Render the auth chip immediately with default state so the user always sees
+// a "Sign in" button even if Supabase init hangs (e.g., flaky network on the
+// supabase-js CDN). Subsequent renders happen via notifyAuthStateUpdated().
+if (typeof renderAuthChip === 'function') renderAuthChip();
 initSupabaseAuth();
 initZoneChat();
 
@@ -5623,7 +5627,15 @@ async function initSupabaseAuth() {
     return;
   }
   try {
-    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm');
+    // Race the import against a 10s timeout — on flaky networks (iOS / cellular)
+    // the dynamic import can hang silently and never resolve or reject. Without
+    // the race, notifyAuthStateUpdated below would never run and the auth chip
+    // would render empty forever.
+    const importPromise = import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm');
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('supabase-js import timeout (10s)')), 10000)
+    );
+    const { createClient } = await Promise.race([importPromise, timeoutPromise]);
     supabaseAuthClient = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
     });
