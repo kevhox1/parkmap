@@ -1311,6 +1311,87 @@ function directedShortestPath(fromKey, toKey, { maxMeters = 4000, maxNodes = 300
   return Infinity;
 }
 
+// Attach loaded block-face segments to the directed edges they cover.
+// Called at the start of every route request. Writes
+// streetGraph.edgeToBlockFaces: Map<edgeId, seg[]>. Cached on segment count;
+// rebuilds when more tiles have loaded since last call.
+function attachBlockFacesToEdges() {
+  if (!streetGraph || !streetGraph.loaded) return;
+  // Cache: rebuild only if segmentLayers grew since last attach.
+  if (streetGraph._attachedSegmentCount === segmentLayers.length && streetGraph.edgeToBlockFaces) return;
+  // edgesByCanonStreet is invariant of segment data — build once and reuse.
+  if (!streetGraph._edgesByCanonStreet) {
+    for (const [fromKey, edges] of streetGraph.adj) {
+      const fromLL = streetGraph.nodeLatLng.get(fromKey);
+      if (!fromLL) continue;
+      for (const e of edges) {
+        const toLL = streetGraph.nodeLatLng.get(e.to);
+        if (!toLL) continue;
+        const canonStreet = canonicalStreetName(e.street);
+        const mid = { lat: (fromLL.lat + toLL.lat) / 2, lng: (fromLL.lng + toLL.lng) / 2 };
+        const arr = edgesByCanonStreet.get(canonStreet);
+        const entry = { id: fromKey + '|' + e.to, mid, fromKey, toKey: e.to };
+        if (arr) arr.push(entry); else edgesByCanonStreet.set(canonStreet, [entry]);
+      }
+    }
+    streetGraph._edgesByCanonStreet = edgesByCanonStreet;
+  }
+  const edgeToBlockFaces = new Map();
+  for (const seg of segmentLayers) {
+    const canon = canonicalStreetName(seg.street || '');
+    if (!canon) continue;
+    const candidates = edgesByCanonStreet.get(canon);
+    if (!candidates || !candidates.length) continue;
+    const line = seg.line;
+    if (!line || line.length < 2) continue;
+    const midPt = line[Math.floor(line.length / 2)];
+    let best = null, bestD = 60;
+    for (const ce of candidates) {
+      const d = haversineMeters([midPt[0], midPt[1]], [ce.mid.lat, ce.mid.lng]);
+      if (d < bestD) { bestD = d; best = ce; }
+    }
+    if (!best) continue;
+    // Attach to this directed edge and its reverse (same physical road)
+    for (const eId of [best.id, best.toKey + '|' + best.fromKey]) {
+      const list = edgeToBlockFaces.get(eId);
+      if (list) list.push(seg); else edgeToBlockFaces.set(eId, [seg]);
+    }
+  }
+  streetGraph.edgeToBlockFaces = edgeToBlockFaces;
+  streetGraph._attachedSegmentCount = segmentLayers.length;
+}
+
+// Compute coverage value of a single directed edge given current time/date.
+// Returns { score, faces } where faces is the subset of block faces worth
+// highlighting (non-zero contribution).
+function scoreEdgeCoverage(edgeId) {
+  if (!streetGraph || !streetGraph.edgeToBlockFaces) return { score: 0, faces: [] };
+  const faces = streetGraph.edgeToBlockFaces.get(edgeId) || [];
+  if (!faces.length) return { score: 0, faces: [] };
+  const SKIP = new Set(['NO_STANDING', 'NO_PARKING', 'SPECIAL', 'TRUCK_LOADING', 'UNKNOWN']);
+  let score = 0;
+  const scoredFaces = [];
+  for (const bf of faces) {
+    const domCat = bf.dominantCategory || mostRestrictiveCategory(bf.rules);
+    if (SKIP.has(domCat)) continue;
+    if (!bf.rules || bf.rules.length === 0) continue;
+    if (!isASPCategory(domCat) && domCat !== 'METERED') continue;
+    const restriction = computeNextRestrictionHours(bf);
+    if (!restriction || restriction.hours === 0) continue; // active restriction, worthless
+    let add = 0;
+    if (isASPCategory(domCat)) {
+      // ASP done (> 48h) is the gold standard. Less hours = less valuable.
+      add = restriction.hours >= 48 ? 10 : Math.max(1, restriction.hours / 6);
+    } else if (domCat === 'METERED') {
+      // Metered is last-resort — only surfaces if no ASP around.
+      add = 0.5;
+    }
+    score += add;
+    scoredFaces.push({ bf, add, restriction, domCat });
+  }
+  return { score, faces: scoredFaces };
+}
+
 // Public: drive distance respecting one-ways. Falls back to crow-flies if
 // the graph is unavailable or the points can't be resolved/connected.
 function driveDistance(fromLatLng, toLatLng) {
@@ -4832,7 +4913,7 @@ function clearRoute() {
 function generateParkingRoute() {
   clearRoute();
 
-  // Step 1: Starting point (car pin or map center)
+  // Starting point (car pin or map center)
   let startLat, startLng;
   if (carMarker) {
     const pos = carMarker.getLatLng();
@@ -4844,275 +4925,246 @@ function generateParkingRoute() {
     startLng = center.lng;
   }
 
-  const et = nowET();
-  const dayOfWeek = et.getDay();
-  const minuteOfDay = et.getHours() * 60 + et.getMinutes();
-  const dateStr = toETDateStr(et);
-  const suspended = isASPSuspended(dateStr);
+  const infoEl = carMarker ? document.getElementById('routeInfo') : document.getElementById('routeInfoStandalone');
+  const showError = (msg) => { infoEl.style.display = 'block'; infoEl.innerHTML = `<div style="color:#dc2626;font-weight:600">${msg}</div>`; };
 
-  // Step 2: Find the 10 best blocks within ~500m
-  const skipCats = new Set(['NO_STANDING', 'SPECIAL', 'TRUCK_LOADING', 'UNKNOWN']);
-  const candidates = [];
-
-  for (const seg of segmentLayers) {
-    const domCat = seg.dominantCategory || mostRestrictiveCategory(seg.rules);
-    if (skipCats.has(domCat)) continue;
-    if (!seg.rules || seg.rules.length === 0) continue;
-
-    // Only ASP and metered blocks
-    if (!isASPCategory(domCat) && domCat !== 'METERED') continue;
-
-    const mid = getSegmentMidpoint(seg);
-    if (!mid) continue;
-
-    const dLat = Math.abs(mid.lat - startLat);
-    const dLng = Math.abs(mid.lng - startLng);
-    if (dLat > 0.005 || dLng > 0.008) continue; // rough 500m box
-
-    const distM = Math.sqrt(Math.pow(dLat * 111320, 2) + Math.pow(dLng * 111320 * Math.cos(startLat * Math.PI / 180), 2));
-    if (distM > 500) continue;
-
-    const restriction = computeNextRestrictionHours(seg);
-    if (restriction.hours === 0) continue; // active restriction, skip
-
-    // Score: hours_until_restriction / (1 + distM/200)^1.5
-    // ASP blocks get a 3x bonus over metered (ASP = free long-term, metered = costs money / short-term)
-    const aspBonus = isASPCategory(domCat) ? 3 : 1;
-    const routeScore = (restriction.hours * aspBonus) / Math.pow(1 + distM / 200, 1.5);
-
-    candidates.push({
-      seg,
-      mid,
-      distM,
-      hours: restriction.hours,
-      label: restriction.label,
-      cat: restriction.cat,
-      routeScore,
-      domCat
-    });
+  // Coverage sweep needs the directed street graph. Without it we can't honor
+  // one-ways or stitch a real drive path together.
+  if (!streetGraph || !streetGraph.loaded) {
+    showError('Street network not loaded yet — try again in a few seconds.');
+    return;
   }
+  const startNode = nearestGraphNode(startLat, startLng, 200);
+  if (!startNode) { showError('Could not locate your position on the street network.'); return; }
 
-  if (candidates.length === 0) {
-    const infoEl = carMarker ? document.getElementById('routeInfo') : document.getElementById('routeInfoStandalone');
-    infoEl.style.display = 'block';
-    infoEl.innerHTML = '<div style="color:#dc2626;font-weight:600">No suitable parking segments found nearby. Try panning/zooming to load more data.</div>';
+  // Per-route attachment of currently-loaded block faces to their directed edges.
+  attachBlockFacesToEdges();
+  if (!streetGraph.edgeToBlockFaces || streetGraph.edgeToBlockFaces.size === 0) {
+    showError('No parking data near you yet — pan/zoom to load tiles, then try again.');
     return;
   }
 
-  // Pass-count bonus: if two candidates are on the same street and within
-  // 250m of each other, boost both — you'd scan them on the same pass.
-  const PASS_BONUS = 1.25;
-  const PASS_RADIUS = 250;
-  for (let i = 0; i < candidates.length; i++) {
-    for (let j = i + 1; j < candidates.length; j++) {
-      if (candidates[i].seg.street !== candidates[j].seg.street) continue;
-      const d = Math.sqrt(
-        Math.pow((candidates[i].mid.lat - candidates[j].mid.lat) * 111320, 2) +
-        Math.pow((candidates[i].mid.lng - candidates[j].mid.lng) * 111320 * Math.cos(startLat * Math.PI / 180), 2)
-      );
-      if (d <= PASS_RADIUS) {
-        candidates[i].routeScore *= PASS_BONUS;
-        candidates[j].routeScore *= PASS_BONUS;
-      }
-    }
-  }
+  // ===== Greedy coverage sweep =====
+  // Walk outward from start, picking the highest-coverage unvisited edge at each
+  // intersection. Penalize revisits hard, ban U-turns, bias toward returning to
+  // start once we've driven >60% of budget. Stop on budget OR loop close.
+  const MAX_METERS = 2500;        // ~5 minute drive at city speeds
+  const MIN_LOOP_BACK_M = 600;    // require at least 600m driven before loop-close
+  const NEAR_START_M = 90;        // close enough to start to call it a loop
+  const MAX_STEPS = 120;          // hard cap on edges traversed
 
-  // Sort by score descending
-  candidates.sort((a, b) => b.routeScore - a.routeScore);
+  const startLL = streetGraph.nodeLatLng.get(startNode);
+  const path = []; // [{from, to, street, dist, edge}]
+  const edgeVisits = new Map(); // edgeId -> count
+  const scannedFaces = new Map(); // bf-id -> { bf, addedScore, restriction, domCat, orderIdx }
+  let totalMeters = 0;
+  let cur = startNode;
+  let prev = null;
 
-  // Deduplicate by block (street+from+to), keeping best-scoring segment per block
-  const blockMap = new Map();
-  for (const c of candidates) {
-    const key = `${c.seg.street}|${c.seg.from}|${c.seg.to}`;
-    if (!blockMap.has(key)) {
-      blockMap.set(key, c);
-    }
-  }
-  const uniqueBlocks = Array.from(blockMap.values()).slice(0, 10);
+  for (let step = 0; step < MAX_STEPS && totalMeters < MAX_METERS; step++) {
+    const outs = streetGraph.adj.get(cur) || [];
+    if (!outs.length) break;
+    const curLL = streetGraph.nodeLatLng.get(cur);
+    const distFromStart = curLL ? haversineMeters([curLL.lat, curLL.lng], [startLL.lat, startLL.lng]) : 0;
+    const budgetSpent = totalMeters / MAX_METERS;
 
-  if (uniqueBlocks.length === 0) {
-    const infoEl = carMarker ? document.getElementById('routeInfo') : document.getElementById('routeInfoStandalone');
-    infoEl.style.display = 'block';
-    infoEl.innerHTML = '<div style="color:#dc2626">No good parking blocks found for a route.</div>';
-    return;
-  }
+    const choices = outs
+      .filter(e => e.to !== prev) // ban immediate U-turn
+      .map(e => {
+        const eId = cur + '|' + e.to;
+        const visits = edgeVisits.get(eId) || 0;
+        const cov = scoreEdgeCoverage(eId);
+        let score = cov.score;
+        if (visits > 0) score -= 100 * visits; // huge penalty for revisits
+        // Slight penalty for distance — prefer short edges so we have more turns/options
+        score -= e.dist / 80;
+        // Beyond ~60% of budget, bias toward heading back to start
+        if (budgetSpent > 0.6 && curLL && startLL) {
+          const toLL = streetGraph.nodeLatLng.get(e.to);
+          if (toLL) {
+            const newDistFromStart = haversineMeters([toLL.lat, toLL.lng], [startLL.lat, startLL.lng]);
+            score += (distFromStart - newDistFromStart) / 30; // reward edges that close gap
+          }
+        }
+        return { e, eId, cov, score };
+      });
 
-  // Step 3: Order waypoints by solving open-path TSP on drive-distance matrix.
-  // Drive distance respects one-ways via the street graph; falls back to
-  // crow-flies when the graph isn't loaded or points aren't resolvable.
-  const tspStart = { lat: startLat, lng: startLng };
-  const tspPoints = [tspStart, ...uniqueBlocks.map(b => b.mid)];
-  const N = tspPoints.length;
-  // Build N×N distance matrix
-  const dmat = Array.from({ length: N }, () => new Array(N).fill(0));
-  for (let i = 0; i < N; i++) {
-    for (let j = 0; j < N; j++) {
-      if (i === j) continue;
-      dmat[i][j] = driveDistance(tspPoints[i], tspPoints[j]);
-    }
-  }
-  // Held-Karp open path: start at node 0 (user), visit all others, end anywhere.
-  // dp[mask][i] = min cost visiting `mask` ending at node i. Mask excludes node 0.
-  // For N-1 ≤ 10 the state space is at most 2^10 × 10 = 10240 entries.
-  const K = N - 1; // number of waypoints
-  const FULL = (1 << K) - 1;
-  const INF = Infinity;
-  const dp = Array.from({ length: 1 << K }, () => new Array(K).fill(INF));
-  const parent = Array.from({ length: 1 << K }, () => new Array(K).fill(-1));
-  for (let i = 0; i < K; i++) {
-    dp[1 << i][i] = dmat[0][i + 1];
-  }
-  for (let mask = 1; mask <= FULL; mask++) {
-    for (let last = 0; last < K; last++) {
-      if (!(mask & (1 << last))) continue;
-      if (dp[mask][last] === INF) continue;
-      for (let next = 0; next < K; next++) {
-        if (mask & (1 << next)) continue;
-        const newMask = mask | (1 << next);
-        const candidate = dp[mask][last] + dmat[last + 1][next + 1];
-        if (candidate < dp[newMask][next]) {
-          dp[newMask][next] = candidate;
-          parent[newMask][next] = last;
+    if (!choices.length) break;
+    choices.sort((a, b) => b.score - a.score);
+    const pick = choices[0];
+
+    // Record the step
+    path.push({ from: cur, to: pick.e.to, street: pick.e.street, dist: pick.e.dist, edge: pick.e });
+    edgeVisits.set(pick.eId, (edgeVisits.get(pick.eId) || 0) + 1);
+    totalMeters += pick.e.dist;
+
+    // Record block faces scanned along this edge
+    if (pick.cov.faces && pick.cov.faces.length) {
+      for (const sf of pick.cov.faces) {
+        const bfKey = sf.bf.id || (sf.bf.street + '|' + sf.bf.from + '|' + sf.bf.to + '|' + sf.bf.side);
+        if (!scannedFaces.has(bfKey)) {
+          scannedFaces.set(bfKey, { ...sf, orderIdx: scannedFaces.size + 1 });
         }
       }
     }
-  }
-  // Find best terminal node for full mask
-  let bestLast = 0, bestCost = dp[FULL][0];
-  for (let i = 1; i < K; i++) {
-    if (dp[FULL][i] < bestCost) { bestCost = dp[FULL][i]; bestLast = i; }
-  }
-  // Reconstruct order
-  const orderIdx = [];
-  let mask = FULL, last = bestLast;
-  while (last !== -1) {
-    orderIdx.unshift(last);
-    const p = parent[mask][last];
-    mask ^= (1 << last);
-    last = p;
-  }
-  const orderedBlocks = orderIdx.map(i => uniqueBlocks[i]);
-  const waypoints = orderedBlocks.map(c => {
-    const sideLabel = { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[c.seg.side] || c.seg.side;
-    let reason = '';
-    if (isASPCategory(c.domCat)) {
-      const catLabel = CATEGORIES[c.domCat]?.label || c.domCat;
-      if (c.hours >= 48) {
-        reason = `${catLabel} done ✅`;
-      } else {
-        reason = `${catLabel} ${Math.round(c.hours)}h away`;
-      }
-    } else if (c.domCat === 'METERED') {
-      reason = `Metered, ${Math.round(c.hours)}h until restriction`;
-    } else {
-      reason = `${Math.round(c.hours)}h until next restriction`;
+
+    prev = cur;
+    cur = pick.e.to;
+
+    // Loop close
+    const newCurLL = streetGraph.nodeLatLng.get(cur);
+    if (newCurLL && totalMeters > MIN_LOOP_BACK_M) {
+      const d = haversineMeters([newCurLL.lat, newCurLL.lng], [startLL.lat, startLL.lng]);
+      if (d < NEAR_START_M) break;
     }
-    return { ...c, sideLabel, reason };
-  });
-  if (streetGraph && streetGraph.loaded) {
-    console.log(`Route TSP: ${waypoints.length} stops, ${Math.round(bestCost)}m total drive path (one-way aware)`);
   }
 
-  // Step 4: Display on map - highlight segments + numbered markers
-  routeLayerGroup = L.layerGroup();
+  if (path.length === 0) {
+    showError('No drivable streets found from your location.');
+    return;
+  }
 
+  console.log(`Coverage sweep: ${path.length} edges, ${Math.round(totalMeters)}m, ${scannedFaces.size} block faces scanned`);
+
+  // ===== Render: drive path polyline + scanned-block highlights =====
+  routeLayerGroup = L.layerGroup();
   const allBounds = [];
 
-  waypoints.forEach((wp, idx) => {
-    const num = idx + 1;
-    const catColor = (wp.domCat && CATEGORIES[wp.domCat]) ? CATEGORIES[wp.domCat].color : '#6b7280';
-
-    // Glow highlight on the segment polyline
-    const latlngs = wp.seg.layer.getLatLngs();
-    if (latlngs && latlngs.length >= 2) {
-      const glow = L.polyline(latlngs, {
-        color: '#22c55e',
-        weight: 10,
-        opacity: 0.6,
-        lineCap: 'round',
-        lineJoin: 'round'
-      });
-      routeLayerGroup.addLayer(glow);
-      latlngs.forEach(ll => allBounds.push([ll.lat, ll.lng]));
+  // 1) Build the drive-path polyline by stitching node coordinates in order.
+  const pathLatLngs = [];
+  if (startLL) pathLatLngs.push([startLL.lat, startLL.lng]);
+  for (const step of path) {
+    const toLL = streetGraph.nodeLatLng.get(step.to);
+    if (toLL) {
+      pathLatLngs.push([toLL.lat, toLL.lng]);
+      allBounds.push([toLL.lat, toLL.lng]);
     }
-
-    // Numbered marker at midpoint
-    const marker = L.marker([wp.mid.lat, wp.mid.lng], {
-      icon: L.divIcon({
-        html: `<div style="width:26px;height:26px;border-radius:50%;background:white;border:3px solid ${catColor};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:${catColor};box-shadow:0 2px 6px rgba(0,0,0,0.3)">${num}</div>`,
-        className: '',
-        iconSize: [26, 26],
-        iconAnchor: [13, 13]
-      }),
-      pane: 'carPin'
+  }
+  if (pathLatLngs.length >= 2) {
+    // Subtle underglow for legibility on the green line
+    const glow = L.polyline(pathLatLngs, {
+      color: '#ffffff', weight: 10, opacity: 0.85,
+      lineCap: 'round', lineJoin: 'round'
     });
+    routeLayerGroup.addLayer(glow);
+    const drive = L.polyline(pathLatLngs, {
+      color: '#16a34a', weight: 5, opacity: 0.95,
+      lineCap: 'round', lineJoin: 'round'
+    });
+    routeLayerGroup.addLayer(drive);
+  }
 
-    // Popup
-    let popupHtml = `<div style="font-size:13px;min-width:180px">`;
-    popupHtml += `<div style="font-weight:700;margin-bottom:4px">#${num}: ${wp.seg.blockKey}</div>`;
-    popupHtml += `<div style="margin-bottom:2px">📍 ${wp.sideLabel} - scan this side</div>`;
-    popupHtml += `<div style="color:${catColor};font-weight:600">${wp.reason}</div>`;
-    popupHtml += `<div style="font-size:11px;color:#6b7280;margin-top:4px">${Math.round(wp.distM)}m from start</div>`;
-    popupHtml += `</div>`;
-    marker.bindPopup(popupHtml);
+  // 2) Highlight every scanned block face along the route.
+  const orderedScanned = Array.from(scannedFaces.values()).sort((a, b) => a.orderIdx - b.orderIdx);
+  for (const sf of orderedScanned) {
+    const seg = sf.bf;
+    const lls = (seg.layer && seg.layer.getLatLngs && seg.layer.getLatLngs()) || (seg.line ? seg.line.map(p => ({ lat: p[0], lng: p[1] })) : null);
+    if (!lls || lls.length < 2) continue;
+    const isASP = isASPCategory(sf.domCat);
+    const color = isASP ? (sf.restriction.hours >= 48 ? '#15803d' : '#65a30d') : '#0ea5e9';
+    const hl = L.polyline(lls, {
+      color, weight: 8, opacity: 0.7, lineCap: 'round', lineJoin: 'round'
+    });
+    routeLayerGroup.addLayer(hl);
+    lls.forEach(ll => allBounds.push([ll.lat, ll.lng]));
+  }
 
-    routeLayerGroup.addLayer(marker);
+  // 3) Start pin
+  const startMarker = L.marker([startLat, startLng], {
+    icon: L.divIcon({
+      html: '<div style="width:14px;height:14px;border-radius:50%;background:#16a34a;border:3px solid white;box-shadow:0 2px 4px rgba(0,0,0,0.4)"></div>',
+      className: '', iconSize: [14, 14], iconAnchor: [7, 7]
+    }),
+    pane: 'carPin'
   });
+  routeLayerGroup.addLayer(startMarker);
 
   routeLayerGroup.addTo(map);
 
-  // Fit map to show all highlighted segments
   if (allBounds.length > 0) {
     allBounds.push([startLat, startLng]);
-    map.fitBounds(L.latLngBounds(allBounds), { padding: [40, 40] });
+    map.fitBounds(L.latLngBounds(allBounds), { padding: [60, 60] });
   }
 
-  // Step 5: Route info panel
-  const estDriveMin = Math.max(5, waypoints.length * 2);
-  let descHtml = `<div style="font-weight:600;margin-bottom:6px">🚗 Parking Route: ${waypoints.length} blocks to scan (~${estDriveMin} min)</div>`;
-  descHtml += `<div style="max-height:200px;overflow-y:auto">`;
+  // ===== Sidebar info =====
+  const estDriveMin = Math.max(2, Math.round(totalMeters / 250)); // ~250m/min in city
+  const aspCount = orderedScanned.filter(s => isASPCategory(s.domCat)).length;
+  const meterCount = orderedScanned.filter(s => s.domCat === 'METERED').length;
+  const aspDoneCount = orderedScanned.filter(s => isASPCategory(s.domCat) && s.restriction.hours >= 48).length;
 
-  waypoints.forEach((wp, idx) => {
-    const catColor = (wp.domCat && CATEGORIES[wp.domCat]) ? CATEGORIES[wp.domCat].color : '#6b7280';
-    descHtml += `<div style="padding:3px 0;border-bottom:1px solid #eee;display:flex;align-items:center;gap:5px">`;
-    descHtml += `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${catColor};flex-shrink:0"></span>`;
-    descHtml += `<span>${idx + 1}. ${wp.seg.blockKey} - ${wp.sideLabel} - ${wp.reason} (${Math.round(wp.distM)}m)</span>`;
-    descHtml += `</div>`;
+  let descHtml = `<div style="font-weight:600;margin-bottom:6px">🚗 Drive this route (~${estDriveMin} min, ${(totalMeters/1000).toFixed(1)} km)</div>`;
+  descHtml += `<div style="font-size:11px;color:#6b7280;margin-bottom:8px">Pass <strong>${orderedScanned.length}</strong> parking blocks: ${aspDoneCount > 0 ? `<strong style="color:#15803d">${aspDoneCount} ASP done ✅</strong> · ` : ''}${aspCount - aspDoneCount > 0 ? `${aspCount - aspDoneCount} ASP soon · ` : ''}${meterCount > 0 ? `${meterCount} metered` : ''}</div>`;
+
+  // Turn-by-turn — collapse consecutive same-street steps so we only show turns
+  const turns = [];
+  let runningStreet = null;
+  let runningDist = 0;
+  for (const step of path) {
+    if (step.street === runningStreet) { runningDist += step.dist; continue; }
+    if (runningStreet) turns.push({ street: runningStreet, dist: runningDist });
+    runningStreet = step.street;
+    runningDist = step.dist;
+  }
+  if (runningStreet) turns.push({ street: runningStreet, dist: runningDist });
+
+  descHtml += `<div style="max-height:170px;overflow-y:auto;font-size:11px;border-top:1px solid #eee;padding-top:6px;margin-top:4px">`;
+  descHtml += `<div style="font-weight:600;margin-bottom:4px">Turn-by-turn:</div>`;
+  turns.forEach((t, idx) => {
+    descHtml += `<div style="padding:2px 0;color:#374151">${idx + 1}. ${t.street} <span style="color:#9ca3af">(${Math.round(t.dist)}m)</span></div>`;
   });
-
   descHtml += `</div>`;
 
-  // Step 6: Maps handoff buttons
-  descHtml += `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">`;
+  // Scanned block list
+  if (orderedScanned.length > 0) {
+    descHtml += `<details style="margin-top:6px;font-size:11px"><summary style="cursor:pointer;color:#6b7280;font-weight:600">Scanned blocks (${orderedScanned.length})</summary><div style="margin-top:4px;max-height:140px;overflow-y:auto">`;
+    orderedScanned.forEach((sf, idx) => {
+      const seg = sf.bf;
+      const sideLabel = { E: 'E', W: 'W', N: 'N', S: 'S' }[seg.side] || seg.side || '';
+      let reason = '';
+      if (isASPCategory(sf.domCat)) {
+        const catLabel = CATEGORIES[sf.domCat]?.label || sf.domCat;
+        reason = sf.restriction.hours >= 48 ? `${catLabel} done ✅` : `${catLabel} ${Math.round(sf.restriction.hours)}h`;
+      } else if (sf.domCat === 'METERED') {
+        reason = `Metered ${Math.round(sf.restriction.hours)}h`;
+      }
+      const color = isASPCategory(sf.domCat) ? (sf.restriction.hours >= 48 ? '#15803d' : '#65a30d') : '#0ea5e9';
+      descHtml += `<div style="padding:2px 0;border-bottom:1px solid #f3f4f6">`;
+      descHtml += `<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:${color};margin-right:5px"></span>`;
+      descHtml += `${idx + 1}. ${seg.blockKey || (seg.street + ' ' + (seg.from || '') + '→' + (seg.to || ''))} ${sideLabel} — ${reason}`;
+      descHtml += `</div>`;
+    });
+    descHtml += `</div></details>`;
+  }
 
-  // Google Maps URL: start -> waypoints in order -> back to start
+  // Maps handoff — feed the path's intermediate intersection points (every Nth) so
+  // Google Maps actually traces the same path we drew.
+  const handoffPoints = [];
+  const stride = Math.max(1, Math.floor(path.length / 8));
+  for (let i = 0; i < path.length; i += stride) {
+    const ll = streetGraph.nodeLatLng.get(path[i].to);
+    if (ll) handoffPoints.push([ll.lat, ll.lng]);
+  }
   let gmapsUrl = `https://www.google.com/maps/dir/${startLat},${startLng}`;
-  waypoints.forEach(wp => { gmapsUrl += `/${wp.mid.lat},${wp.mid.lng}`; });
+  handoffPoints.slice(0, 8).forEach(p => { gmapsUrl += `/${p[0]},${p[1]}`; });
   gmapsUrl += `/${startLat},${startLng}`;
 
-  descHtml += `<a href="${gmapsUrl}" target="_blank" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#4285f4;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">🗺️ Open Route in Google Maps</a>`;
+  descHtml += `<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">`;
+  descHtml += `<a href="${gmapsUrl}" target="_blank" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#4285f4;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">🗺️ Open in Google Maps</a>`;
 
-  // Apple Maps (iOS only)
   const isIOS = /(iPhone|iPad|iPod)/i.test(navigator.userAgent);
-  if (isIOS) {
-    const appleWps = waypoints.slice(0, 8); // Apple Maps limit ~10 waypoints
-    let appleMapsUrl = `maps://?saddr=${startLat},${startLng}&daddr=${appleWps[0].mid.lat},${appleWps[0].mid.lng}`;
-    for (let i = 1; i < appleWps.length; i++) {
-      appleMapsUrl += `+to:${appleWps[i].mid.lat},${appleWps[i].mid.lng}`;
+  if (isIOS && handoffPoints.length > 0) {
+    let appleMapsUrl = `maps://?saddr=${startLat},${startLng}&daddr=${handoffPoints[0][0]},${handoffPoints[0][1]}`;
+    for (let i = 1; i < Math.min(handoffPoints.length, 8); i++) {
+      appleMapsUrl += `+to:${handoffPoints[i][0]},${handoffPoints[i][1]}`;
     }
     appleMapsUrl += `&dirflg=d`;
     descHtml += `<a href="${appleMapsUrl}" style="flex:1;display:inline-block;text-align:center;padding:8px 12px;background:#333;color:white;border-radius:6px;text-decoration:none;font-weight:600;font-size:12px;min-height:44px;line-height:28px">🗺️ Open in Apple Maps</a>`;
   }
-
   descHtml += `</div>`;
-
-  // Step 7: Clear route button
   descHtml += `<button onclick="clearRoute()" style="margin-top:6px;padding:6px 12px;background:#f3f4f6;border:1px solid #ddd;border-radius:6px;cursor:pointer;font-size:11px;width:100%;min-height:36px">Clear Route</button>`;
 
-  // Show in info divs
   const routeInfoEl = document.getElementById('routeInfo');
   const routeInfoStandaloneEl = document.getElementById('routeInfoStandalone');
-
   if (carMarker) {
     routeInfoEl.innerHTML = descHtml;
     routeInfoEl.style.display = 'block';
