@@ -737,6 +737,31 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 <body>
 <div id="map"></div>
 
+<!-- Auth: Sign-in modal -->
+<div id="signInModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10000;align-items:center;justify-content:center;padding:20px">
+  <div style="background:white;border-radius:16px;max-width:400px;width:100%;padding:22px;box-shadow:0 20px 50px rgba(0,0,0,0.3)">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+      <h2 style="margin:0;font-size:18px">Sign in to ParkMap</h2>
+      <button onclick="closeSignInModal()" aria-label="Close" style="width:32px;height:32px;border-radius:8px;border:none;background:#f3f4f6;font-size:18px;cursor:pointer">×</button>
+    </div>
+    <div style="font-size:13px;color:#4b5563;margin-bottom:14px">We'll email you a magic link to sign in. No password needed.</div>
+    <input type="email" id="signInEmail" placeholder="you@example.com" autocomplete="email" style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:10px;font-size:15px;box-sizing:border-box;margin-bottom:10px" onkeydown="if(event.key==='Enter')sendSignInLink()">
+    <button onclick="sendSignInLink()" id="signInBtn" style="width:100%;padding:12px;border:none;border-radius:10px;background:#2563eb;color:white;font-weight:700;font-size:15px;cursor:pointer;min-height:44px">Send magic link</button>
+    <div id="signInStatus" style="margin-top:10px;font-size:13px;text-align:center;min-height:18px"></div>
+  </div>
+</div>
+
+<!-- Auth: Pick a username (after first sign-in) -->
+<div id="usernameModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10000;align-items:center;justify-content:center;padding:20px">
+  <div style="background:white;border-radius:16px;max-width:400px;width:100%;padding:22px;box-shadow:0 20px 50px rgba(0,0,0,0.3)">
+    <h2 style="margin:0 0 8px 0;font-size:18px">Pick a username</h2>
+    <div style="font-size:13px;color:#4b5563;margin-bottom:14px">Other parkers will see this in chat and on reports. Your email stays private.</div>
+    <input type="text" id="usernameInput" placeholder="e.g. bowery_kevin" maxlength="24" autocomplete="off" style="width:100%;padding:12px;border:1px solid #d1d5db;border-radius:10px;font-size:15px;box-sizing:border-box;margin-bottom:10px" onkeydown="if(event.key==='Enter')saveUsername()">
+    <button onclick="saveUsername()" id="usernameSaveBtn" style="width:100%;padding:12px;border:none;border-radius:10px;background:#2563eb;color:white;font-weight:700;font-size:15px;cursor:pointer;min-height:44px">Save</button>
+    <div id="usernameStatus" style="margin-top:10px;font-size:13px;text-align:center;color:#dc2626;min-height:18px"></div>
+  </div>
+</div>
+
 <!-- PWA install hint (mobile, browser-only, dismissible) -->
 <div id="pwaInstallHint" style="display:none;position:fixed;bottom:12px;left:12px;right:12px;z-index:9999;background:white;border:1px solid #e5e7eb;border-radius:14px;padding:12px 14px;box-shadow:0 8px 24px rgba(15,23,42,0.18);font-size:13px;line-height:1.4;max-width:480px;margin:0 auto">
   <div style="display:flex;align-items:flex-start;gap:10px">
@@ -766,11 +791,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 <div id="tileLoader">🔄 Loading area...</div>
 
 <div class="control-panel" id="controlPanel">
-  <div style="display:flex;align-items:center;justify-content:space-between">
-    <div>
+  <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+    <div style="min-width:0">
       <h2>🅿️ ParkMap</h2>
       <div class="subtitle">Manhattan parking signs</div>
     </div>
+    <div id="authChip" style="display:flex;align-items:center;gap:6px;flex-shrink:0"></div>
     <button id="panelToggle" onclick="togglePanel()" aria-label="Toggle panel" style="width:44px;height:44px;border-radius:10px;background:#f3f4f6;border:none;font-size:16px;cursor:pointer;flex-shrink:0;">▼</button>
   </div>
 
@@ -5378,6 +5404,161 @@ window.addEventListener('resize', syncResponsivePanels);
 
 init();
 setupPWAInstallHint();
+initSupabaseAuth();
+
+// ==== Supabase Auth (email magic link, pseudonymous username in user_metadata) ====
+let supabaseAuthClient = null;
+let currentUser = null;
+
+async function initSupabaseAuth() {
+  const cfg = window.WEPARK_TRACKER_CONFIG || {};
+  if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
+    console.warn('Supabase not configured — auth disabled');
+    renderAuthChip();
+    return;
+  }
+  try {
+    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js/+esm');
+    supabaseAuthClient = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+    });
+    const { data: { session } } = await supabaseAuthClient.auth.getSession();
+    if (session) {
+      currentUser = session.user;
+      maybePromptUsername();
+    }
+    supabaseAuthClient.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_IN' && session) {
+        currentUser = session.user;
+        closeSignInModal();
+        maybePromptUsername();
+        renderAuthChip();
+      } else if (event === 'SIGNED_OUT') {
+        currentUser = null;
+        renderAuthChip();
+      } else if (event === 'USER_UPDATED' && session) {
+        currentUser = session.user;
+        renderAuthChip();
+      }
+    });
+  } catch (err) {
+    console.error('Supabase auth init failed:', err);
+  }
+  renderAuthChip();
+}
+
+function getCurrentUsername() {
+  if (!currentUser) return null;
+  const meta = currentUser.user_metadata || {};
+  return meta.username || null;
+}
+
+function renderAuthChip() {
+  const chip = document.getElementById('authChip');
+  if (!chip) return;
+  if (currentUser) {
+    const username = getCurrentUsername() || (currentUser.email || '').split('@')[0];
+    chip.innerHTML =
+      `<span style="display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:20px;background:#eff6ff;color:#1d4ed8;font-size:12px;font-weight:600;max-width:140px">` +
+      `<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">@${escapeHtml(username)}</span>` +
+      `<button onclick="signOut()" title="Sign out" aria-label="Sign out" style="background:none;border:none;cursor:pointer;color:#1d4ed8;padding:0 0 0 4px;font-size:13px">✕</button>` +
+      `</span>`;
+  } else {
+    chip.innerHTML = `<button onclick="openSignInModal()" style="padding:6px 12px;border:1px solid #d1d5db;border-radius:20px;background:white;color:#374151;font-size:12px;font-weight:600;cursor:pointer">Sign in</button>`;
+  }
+}
+
+function openSignInModal() {
+  const modal = document.getElementById('signInModal');
+  if (!modal) return;
+  document.getElementById('signInEmail').value = '';
+  document.getElementById('signInStatus').textContent = '';
+  document.getElementById('signInBtn').disabled = false;
+  document.getElementById('signInBtn').textContent = 'Send magic link';
+  modal.style.display = 'flex';
+  setTimeout(() => document.getElementById('signInEmail').focus(), 100);
+}
+
+function closeSignInModal() {
+  const modal = document.getElementById('signInModal');
+  if (modal) modal.style.display = 'none';
+}
+
+async function sendSignInLink() {
+  if (!supabaseAuthClient) {
+    document.getElementById('signInStatus').textContent = 'Auth not available — try refreshing.';
+    return;
+  }
+  const email = (document.getElementById('signInEmail').value || '').trim();
+  const status = document.getElementById('signInStatus');
+  const btn = document.getElementById('signInBtn');
+  if (!email || !/^\S+@\S+\.\S+$/.test(email)) {
+    status.style.color = '#dc2626';
+    status.textContent = 'Please enter a valid email.';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Sending...';
+  status.style.color = '#6b7280';
+  status.textContent = '';
+  const redirect = window.location.origin + window.location.pathname;
+  const { error } = await supabaseAuthClient.auth.signInWithOtp({
+    email,
+    options: { emailRedirectTo: redirect }
+  });
+  if (error) {
+    status.style.color = '#dc2626';
+    status.textContent = 'Error: ' + (error.message || 'unknown');
+    btn.disabled = false;
+    btn.textContent = 'Send magic link';
+    return;
+  }
+  status.style.color = '#16a34a';
+  status.innerHTML = `✅ Magic link sent to <strong>${escapeHtml(email)}</strong>. Check your inbox.`;
+  btn.textContent = 'Sent';
+}
+
+async function signOut() {
+  if (!supabaseAuthClient) return;
+  await supabaseAuthClient.auth.signOut();
+}
+
+function maybePromptUsername() {
+  if (!currentUser) return;
+  if (getCurrentUsername()) return;
+  // First-time user: prompt them to choose a pseudonymous handle
+  const modal = document.getElementById('usernameModal');
+  if (!modal) return;
+  document.getElementById('usernameInput').value = '';
+  document.getElementById('usernameStatus').textContent = '';
+  document.getElementById('usernameSaveBtn').disabled = false;
+  document.getElementById('usernameSaveBtn').textContent = 'Save';
+  modal.style.display = 'flex';
+  setTimeout(() => document.getElementById('usernameInput').focus(), 100);
+}
+
+async function saveUsername() {
+  const input = document.getElementById('usernameInput');
+  const status = document.getElementById('usernameStatus');
+  const btn = document.getElementById('usernameSaveBtn');
+  const name = (input.value || '').trim().toLowerCase();
+  if (!/^[a-z0-9_]{3,24}$/.test(name)) {
+    status.textContent = '3–24 chars, letters / numbers / underscores only.';
+    return;
+  }
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+  const { data, error } = await supabaseAuthClient.auth.updateUser({ data: { username: name } });
+  if (error) {
+    status.textContent = 'Error: ' + (error.message || 'unknown');
+    btn.disabled = false;
+    btn.textContent = 'Save';
+    return;
+  }
+  currentUser = data.user;
+  document.getElementById('usernameModal').style.display = 'none';
+  renderAuthChip();
+}
 
 // ==== PWA install hint ====
 // Show a one-time, dismissible install hint to mobile-browser users so they

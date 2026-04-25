@@ -1,10 +1,12 @@
 window.WEPARK_TRACKER_CONFIG = {
-  // Default stays on the local mock provider so the app works with zero backend setup.
+  // Tracker provider: keep 'mock' until the SUPABASE_MVP_SCHEMA.md tables/RPCs
+  // are applied to the project. Auth + chat use the same URL/key independently.
   provider: 'mock',
 
-  // Fill these in and switch provider to 'supabase' when ready.
-  supabaseUrl: '',
-  supabaseAnonKey: '',
+  // Live Supabase project (created 2026-04-22). Publishable key is safe to ship
+  // client-side; RLS policies guard the actual data.
+  supabaseUrl: 'https://jiispshyqerscdoferaw.supabase.co',
+  supabaseAnonKey: 'sb_publishable_SEIuWH-HscK3X7wtbLMCqw_ZjRCevRR',
 
   // If Supabase init fails, the UI falls back to the local mock provider.
   allowMockFallback: true,
