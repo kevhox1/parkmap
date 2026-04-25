@@ -2883,6 +2883,12 @@ map.on('moveend', () => {
 function setMode(mode) {
   const previousMode = currentMode;
   currentMode = mode;
+  // Switching modes is a strong "I'm done with that view" signal — clear any
+  // active parking route layer so the user isn't left looking at stale
+  // green dots, highlighted blocks, or drive paths from a previous query.
+  if (previousMode !== mode && typeof clearRoute === 'function' && routeLayerGroup) {
+    clearRoute();
+  }
   document.querySelectorAll('.mode-tab').forEach(t => t.classList.toggle('active', t.dataset.mode === mode));
   const fc = document.getElementById('filterControls');
   const ftc = document.getElementById('freeTodayControls');
