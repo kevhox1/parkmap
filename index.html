@@ -5433,13 +5433,12 @@ let zoneChatSubscription = null;
 let zoneChatLoaded = false;
 
 async function initZoneChat() {
-  // Wait for the auth client to be available (it loads the supabase-js
-  // module and the same client is reused by chat). Poll briefly with cap.
-  for (let i = 0; i < 40 && !supabaseAuthClient; i++) {
-    await new Promise(r => setTimeout(r, 150));
-  }
+  // Wait for auth's initial session check to complete — otherwise we'd
+  // render the composer with currentUser=null and never re-enable it.
+  if (supabaseAuthReady) await supabaseAuthReady;
   if (!supabaseAuthClient) {
     setZoneChatStatus('Chat unavailable — Supabase not configured.');
+    refreshChatComposerState();
     return;
   }
   await loadInitialZoneMessages();
@@ -5603,12 +5602,24 @@ function renderZoneChatMessage(msg) {
 // ==== Supabase Auth (email magic link, pseudonymous username in user_metadata) ====
 let supabaseAuthClient = null;
 let currentUser = null;
+// Promise that resolves once the initial getSession() round-trip completes,
+// regardless of whether a session was found. Other modules (e.g. zone chat)
+// await this so they don't read currentUser=null prematurely.
+let supabaseAuthReady = null;
+
+function notifyAuthStateUpdated() {
+  if (typeof renderAuthChip === 'function') renderAuthChip();
+  if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
+}
 
 async function initSupabaseAuth() {
   const cfg = window.WEPARK_TRACKER_CONFIG || {};
+  let resolveReady;
+  supabaseAuthReady = new Promise(r => { resolveReady = r; });
   if (!cfg.supabaseUrl || !cfg.supabaseAnonKey) {
     console.warn('Supabase not configured — auth disabled');
-    renderAuthChip();
+    notifyAuthStateUpdated();
+    resolveReady();
     return;
   }
   try {
@@ -5616,32 +5627,31 @@ async function initSupabaseAuth() {
     supabaseAuthClient = createClient(cfg.supabaseUrl, cfg.supabaseAnonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
     });
+    // Subscribe FIRST so we don't miss an INITIAL_SESSION event from supabase-js v2.
+    supabaseAuthClient.auth.onAuthStateChange((event, session) => {
+      if ((event === 'SIGNED_IN' || event === 'INITIAL_SESSION' || event === 'TOKEN_REFRESHED') && session) {
+        currentUser = session.user;
+        if (event === 'SIGNED_IN') {
+          closeSignInModal();
+          maybePromptUsername();
+        }
+      } else if (event === 'SIGNED_OUT') {
+        currentUser = null;
+      } else if (event === 'USER_UPDATED' && session) {
+        currentUser = session.user;
+      }
+      notifyAuthStateUpdated();
+    });
     const { data: { session } } = await supabaseAuthClient.auth.getSession();
     if (session) {
       currentUser = session.user;
       maybePromptUsername();
     }
-    supabaseAuthClient.auth.onAuthStateChange((event, session) => {
-      if (event === 'SIGNED_IN' && session) {
-        currentUser = session.user;
-        closeSignInModal();
-        maybePromptUsername();
-        renderAuthChip();
-        if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
-      } else if (event === 'SIGNED_OUT') {
-        currentUser = null;
-        renderAuthChip();
-        if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
-      } else if (event === 'USER_UPDATED' && session) {
-        currentUser = session.user;
-        renderAuthChip();
-        if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
-      }
-    });
   } catch (err) {
     console.error('Supabase auth init failed:', err);
   }
-  renderAuthChip();
+  notifyAuthStateUpdated();
+  resolveReady();
 }
 
 function getCurrentUsername() {
