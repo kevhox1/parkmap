@@ -877,6 +877,25 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
       <div id="trackerFeedList" class="tracker-feed-list"></div>
     </div>
 
+    <!-- Zone Chat — community channel for the user's neighborhood -->
+    <div id="zoneChatPanel" class="tracker-panel" style="margin-top:12px;display:block">
+      <div class="tracker-panel-header">
+        <div>
+          <div class="tracker-panel-title">
+            <span>💬 Community</span>
+            <span id="zoneChatBadge" class="tracker-badge" style="background:#dbeafe;color:#1d4ed8">SOHO/LES</span>
+          </div>
+          <div class="tracker-subtle">Chat with parkers in your neighborhood.</div>
+        </div>
+      </div>
+      <div id="zoneChatMessages" style="margin-top:8px;max-height:280px;overflow-y:auto;padding:6px 0;display:flex;flex-direction:column;gap:6px"></div>
+      <div id="zoneChatComposer" style="margin-top:8px;display:flex;gap:6px;align-items:flex-end">
+        <textarea id="zoneChatInput" placeholder="Sign in to chat" rows="2" maxlength="1000" style="flex:1;padding:8px 10px;border:1px solid #d1d5db;border-radius:8px;font-size:13px;font-family:inherit;resize:vertical;min-height:44px" disabled></textarea>
+        <button id="zoneChatSendBtn" onclick="sendZoneMessage()" disabled style="padding:8px 14px;border:none;border-radius:8px;background:#2563eb;color:white;font-weight:600;font-size:13px;cursor:pointer;min-height:44px">Send</button>
+      </div>
+      <div id="zoneChatStatus" style="font-size:11px;color:#6b7280;margin-top:4px;min-height:14px"></div>
+    </div>
+
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee">
       <button id="parkCarBtn" onclick="parkCarHere()" style="width:100%;padding:10px;border:1px solid #ddd;border-radius:8px;background:#f9fafb;cursor:pointer;font-size:14px;font-weight:600;min-height:44px;transition:background 0.15s">📍 Park My Car Here</button>
       <div id="smartMoveContainer" style="display:none;margin-top:8px;padding:10px;background:#dbeafe;border:1px solid #93c5fd;border-radius:8px;">
@@ -5405,6 +5424,181 @@ window.addEventListener('resize', syncResponsivePanels);
 init();
 setupPWAInstallHint();
 initSupabaseAuth();
+initZoneChat();
+
+// ==== Zone Chat (Supabase realtime) ====
+const CURRENT_ZONE_ID = 'soho-les';
+let zoneChatMessages = [];
+let zoneChatSubscription = null;
+let zoneChatLoaded = false;
+
+async function initZoneChat() {
+  // Wait for the auth client to be available (it loads the supabase-js
+  // module and the same client is reused by chat). Poll briefly with cap.
+  for (let i = 0; i < 40 && !supabaseAuthClient; i++) {
+    await new Promise(r => setTimeout(r, 150));
+  }
+  if (!supabaseAuthClient) {
+    setZoneChatStatus('Chat unavailable — Supabase not configured.');
+    return;
+  }
+  await loadInitialZoneMessages();
+  subscribeZoneChatRealtime();
+  refreshChatComposerState();
+  // Wire input handlers (Enter to send, Shift+Enter for newline)
+  const input = document.getElementById('zoneChatInput');
+  if (input) {
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendZoneMessage();
+      }
+    });
+  }
+}
+
+async function loadInitialZoneMessages() {
+  const { data, error } = await supabaseAuthClient
+    .from('zone_messages_with_author')
+    .select('*')
+    .eq('zone_id', CURRENT_ZONE_ID)
+    .order('created_at', { ascending: false })
+    .limit(50);
+  if (error) {
+    console.warn('Zone chat load failed:', error);
+    setZoneChatStatus('Could not load chat: ' + (error.message || error.code || 'unknown'));
+    return;
+  }
+  zoneChatMessages = (data || []).slice().reverse(); // chronological, oldest first
+  zoneChatLoaded = true;
+  renderZoneChatMessages();
+}
+
+function subscribeZoneChatRealtime() {
+  if (zoneChatSubscription) {
+    try { supabaseAuthClient.removeChannel(zoneChatSubscription); } catch (e) {}
+  }
+  zoneChatSubscription = supabaseAuthClient
+    .channel('zone-chat-' + CURRENT_ZONE_ID)
+    .on('postgres_changes', {
+      event: 'INSERT',
+      schema: 'public',
+      table: 'zone_messages',
+      filter: `zone_id=eq.${CURRENT_ZONE_ID}`
+    }, async (payload) => {
+      // Realtime gives us the row but no joined username — fetch from view
+      const { data, error } = await supabaseAuthClient
+        .from('zone_messages_with_author')
+        .select('*')
+        .eq('id', payload.new.id)
+        .maybeSingle();
+      if (error || !data) return;
+      // De-dupe in case the optimistic insert is still on screen
+      const exists = zoneChatMessages.some(m => m.id === data.id);
+      if (!exists) {
+        zoneChatMessages.push(data);
+        renderZoneChatMessages();
+      }
+    })
+    .subscribe();
+}
+
+function setZoneChatStatus(text) {
+  const el = document.getElementById('zoneChatStatus');
+  if (el) el.textContent = text || '';
+}
+
+function refreshChatComposerState() {
+  const input = document.getElementById('zoneChatInput');
+  const btn = document.getElementById('zoneChatSendBtn');
+  if (!input || !btn) return;
+  const username = getCurrentUsername();
+  if (currentUser && username) {
+    input.disabled = false;
+    btn.disabled = false;
+    input.placeholder = `Share with @soho-les community...`;
+    setZoneChatStatus('');
+  } else if (currentUser && !username) {
+    input.disabled = true;
+    btn.disabled = true;
+    input.placeholder = 'Pick a username to start chatting';
+    setZoneChatStatus('Click your auth chip and pick a username.');
+  } else {
+    input.disabled = true;
+    btn.disabled = true;
+    input.placeholder = 'Sign in to chat';
+    setZoneChatStatus('Sign in to post messages. Reading is open to all.');
+  }
+}
+
+async function sendZoneMessage() {
+  if (!supabaseAuthClient || !currentUser) return;
+  const username = getCurrentUsername();
+  if (!username) { maybePromptUsername(); return; }
+  const input = document.getElementById('zoneChatInput');
+  const btn = document.getElementById('zoneChatSendBtn');
+  const body = (input.value || '').trim();
+  if (!body) return;
+  if (body.length > 1000) {
+    setZoneChatStatus('Message too long (max 1000 chars)');
+    return;
+  }
+  btn.disabled = true;
+  input.disabled = true;
+  setZoneChatStatus('Sending...');
+  const { error } = await supabaseAuthClient.from('zone_messages').insert({
+    zone_id: CURRENT_ZONE_ID,
+    author_id: currentUser.id,
+    message_type: 'user',
+    body
+  });
+  input.disabled = false;
+  btn.disabled = false;
+  if (error) {
+    setZoneChatStatus('Send failed: ' + (error.message || 'unknown'));
+    return;
+  }
+  input.value = '';
+  setZoneChatStatus('');
+  // Realtime subscription will append it; nothing else to do here
+}
+
+function renderZoneChatMessages() {
+  const container = document.getElementById('zoneChatMessages');
+  if (!container) return;
+  if (!zoneChatMessages.length) {
+    container.innerHTML = '<div style="font-size:12px;color:#9ca3af;text-align:center;padding:14px 0">No messages yet. Be the first to say hi 👋</div>';
+    return;
+  }
+  container.innerHTML = zoneChatMessages.map(renderZoneChatMessage).join('');
+  // Auto-scroll to bottom
+  container.scrollTop = container.scrollHeight;
+}
+
+function renderZoneChatMessage(msg) {
+  const ts = new Date(msg.created_at);
+  const tsLabel = ts.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const isMe = currentUser && msg.author_id === currentUser.id;
+  const author = msg.author_username
+    ? '@' + msg.author_username
+    : (msg.author_id ? 'unknown' : 'system');
+  const repBadge = (msg.author_reputation && msg.author_reputation > 0)
+    ? ` <span style="font-size:10px;color:#16a34a">·${msg.author_reputation}</span>`
+    : '';
+  if (msg.message_type === 'system_tracker') {
+    return `<div style="padding:6px 10px;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;font-size:12px;color:#9a3412">
+      <span style="font-weight:600">🚨 ${escapeHtml(msg.body)}</span>
+      <span style="color:#c2410c;font-size:11px;float:right">${tsLabel}</span>
+    </div>`;
+  }
+  const align = isMe ? 'flex-end' : 'flex-start';
+  const bg = isMe ? '#dbeafe' : '#f3f4f6';
+  const color = isMe ? '#1e3a8a' : '#111827';
+  return `<div style="display:flex;flex-direction:column;align-items:${align};max-width:85%;align-self:${align}">
+    <div style="font-size:11px;color:#6b7280;margin-bottom:2px;padding:0 4px">${escapeHtml(author)}${repBadge} · ${tsLabel}</div>
+    <div style="background:${bg};color:${color};padding:8px 12px;border-radius:14px;font-size:13px;line-height:1.35;white-space:pre-wrap;word-break:break-word">${escapeHtml(msg.body)}</div>
+  </div>`;
+}
 
 // ==== Supabase Auth (email magic link, pseudonymous username in user_metadata) ====
 let supabaseAuthClient = null;
@@ -5433,12 +5627,15 @@ async function initSupabaseAuth() {
         closeSignInModal();
         maybePromptUsername();
         renderAuthChip();
+        if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
       } else if (event === 'SIGNED_OUT') {
         currentUser = null;
         renderAuthChip();
+        if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
       } else if (event === 'USER_UPDATED' && session) {
         currentUser = session.user;
         renderAuthChip();
+        if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
       }
     });
   } catch (err) {
@@ -5548,16 +5745,34 @@ async function saveUsername() {
   }
   btn.disabled = true;
   btn.textContent = 'Saving...';
-  const { data, error } = await supabaseAuthClient.auth.updateUser({ data: { username: name } });
-  if (error) {
-    status.textContent = 'Error: ' + (error.message || 'unknown');
-    btn.disabled = false;
-    btn.textContent = 'Save';
+  // 1) Update auth.user_metadata so the chip reflects it immediately
+  const upd = await supabaseAuthClient.auth.updateUser({ data: { username: name } });
+  if (upd.error) {
+    status.textContent = 'Error: ' + (upd.error.message || 'unknown');
+    btn.disabled = false; btn.textContent = 'Save';
     return;
   }
-  currentUser = data.user;
+  currentUser = upd.data.user;
+  // 2) Upsert the public profile row so other users can see this username
+  //    (e.g. in chat rendering). Username is unique-constrained — handle conflict.
+  const { error: profileErr } = await supabaseAuthClient
+    .from('profiles')
+    .upsert({ id: currentUser.id, username: name, updated_at: new Date().toISOString() });
+  if (profileErr) {
+    // Most likely a unique-constraint conflict (username already taken)
+    if (String(profileErr.message || '').toLowerCase().includes('duplicate') ||
+        String(profileErr.code || '') === '23505') {
+      status.textContent = 'That username is taken — try another.';
+    } else {
+      status.textContent = 'Profile error: ' + (profileErr.message || 'unknown');
+    }
+    btn.disabled = false; btn.textContent = 'Save';
+    return;
+  }
   document.getElementById('usernameModal').style.display = 'none';
   renderAuthChip();
+  // Refresh the chat input enabled state now that we have a profile
+  if (typeof refreshChatComposerState === 'function') refreshChatComposerState();
 }
 
 // ==== PWA install hint ====
