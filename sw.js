@@ -1,4 +1,4 @@
-const CACHE_VERSION = 'wepark-v29';
+const CACHE_VERSION = 'wepark-v30';
 const STATIC_CACHE = CACHE_VERSION + '-static';
 const TILE_CACHE = CACHE_VERSION + '-tiles';
 
