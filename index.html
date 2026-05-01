@@ -852,16 +852,180 @@ body.driving-mode .leaflet-control-zoom { display: none; }
   margin-bottom: 10px;
 }
 .dm-entry-btn:active { transform: scale(0.99); }
+
+/* ==== Drive Mode v3 — destination strip (top of overlay) ==== */
+.dm-dest-strip {
+  position: absolute; top: 14px; left: 70px; right: 70px;
+  pointer-events: auto;
+  background: rgba(255,255,255,0.97);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-radius: 14px;
+  padding: 8px 12px;
+  box-shadow: 0 6px 18px rgba(15,23,42,0.2);
+  display: none; align-items: center; gap: 8px;
+  font-size: 13px; max-width: 420px; margin: 0 auto;
+}
+.dm-dest-strip.active { display: flex; }
+.dm-dest-strip-icon { flex-shrink: 0; font-size: 16px; }
+.dm-dest-strip-text {
+  flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  color: #0f172a; font-weight: 600;
+}
+.dm-dest-strip-clear {
+  flex-shrink: 0; width: 28px; height: 28px; border-radius: 8px;
+  border: none; background: #f3f4f6; color: #6b7280;
+  font-size: 14px; cursor: pointer;
+}
+
+/* ==== Drive Mode v3 — destination/token modal ==== */
+.dm-modal {
+  position: fixed; inset: 0; z-index: 13000;
+  background: rgba(15,23,42,0.65);
+  display: none; align-items: center; justify-content: center;
+  padding: 20px;
+}
+.dm-modal.active { display: flex; }
+.dm-modal-card {
+  background: white; border-radius: 18px;
+  max-width: 460px; width: 100%;
+  padding: 22px 22px 18px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.35);
+  max-height: 90vh; overflow-y: auto;
+}
+.dm-modal-title {
+  margin: 0 0 6px 0;
+  font-size: 19px; font-weight: 800; color: #0f172a;
+}
+.dm-modal-subtitle {
+  font-size: 13px; color: #4b5563; line-height: 1.4;
+  margin-bottom: 14px;
+}
+.dm-modal input[type="text"], .dm-modal textarea {
+  width: 100%; box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid #d1d5db; border-radius: 10px;
+  font-size: 15px; font-family: inherit;
+}
+.dm-modal textarea { resize: vertical; min-height: 80px; }
+.dm-modal .dm-modal-actions {
+  display: flex; gap: 8px; margin-top: 12px;
+}
+.dm-modal .dm-btn-primary {
+  flex: 1; padding: 12px; border: none; border-radius: 10px;
+  background: #2563eb; color: white;
+  font-weight: 700; font-size: 14px; cursor: pointer; min-height: 44px;
+}
+.dm-modal .dm-btn-secondary {
+  flex: 0 0 auto; padding: 12px 16px; border: 1px solid #d1d5db; border-radius: 10px;
+  background: white; color: #374151;
+  font-weight: 600; font-size: 14px; cursor: pointer; min-height: 44px;
+}
+.dm-modal .dm-btn-link {
+  background: none; border: none; color: #2563eb;
+  font-size: 12px; cursor: pointer; padding: 4px 0;
+  text-decoration: underline;
+}
+
+/* Geocoding result list */
+.dm-geo-results {
+  margin-top: 8px;
+  border: 1px solid #e5e7eb; border-radius: 10px;
+  max-height: 220px; overflow-y: auto;
+  display: none;
+}
+.dm-geo-results.active { display: block; }
+.dm-geo-result {
+  padding: 10px 12px;
+  border-bottom: 1px solid #f3f4f6;
+  cursor: pointer; font-size: 13px; line-height: 1.3;
+}
+.dm-geo-result:last-child { border-bottom: none; }
+.dm-geo-result:hover { background: #f9fafb; }
+.dm-geo-result-name { font-weight: 600; color: #0f172a; }
+.dm-geo-result-context { color: #6b7280; font-size: 11px; margin-top: 2px; }
+.dm-geo-status {
+  font-size: 11px; color: #6b7280;
+  text-align: center; padding: 8px;
+}
+
+/* Recent destinations chips */
+.dm-recent-dests {
+  display: flex; flex-wrap: wrap; gap: 6px;
+  margin-top: 10px;
+}
+.dm-recent-chip {
+  padding: 6px 10px; border-radius: 999px;
+  background: #f3f4f6; color: #374151;
+  font-size: 11px; cursor: pointer;
+  border: 1px solid #e5e7eb;
+}
+.dm-recent-chip:hover { background: #e5e7eb; }
+
+/* Target parking block pulse marker (green dot near destination) */
+.dm-target-marker {
+  width: 30px; height: 30px;
+  position: relative;
+}
+.dm-target-marker .dm-target-dot {
+  position: absolute; inset: 6px;
+  background: #16a34a;
+  border-radius: 50%;
+  border: 3px solid white;
+  box-shadow: 0 4px 10px rgba(22,163,74,0.55);
+}
+.dm-target-marker .dm-target-pulse {
+  position: absolute; inset: -6px;
+  border-radius: 50%;
+  background: rgba(22,163,74,0.28);
+  animation: dmPulse 1.6s ease-out infinite;
+}
 </style>
 </head>
 <body>
 <div id="map"></div>
+
+<!-- Drive Mode v3 — Mapbox token modal -->
+<div id="dmTokenModal" class="dm-modal" role="dialog" aria-label="Mapbox token">
+  <div class="dm-modal-card">
+    <h2 class="dm-modal-title">🗝️ Set Mapbox token</h2>
+    <p class="dm-modal-subtitle">Drive Mode routing uses Mapbox for geocoding + turn-by-turn directions. Paste your public Mapbox token below — it stays in your browser, never sent to our server.</p>
+    <textarea id="dmTokenInput" placeholder="pk.eyJ1Ijo..." spellcheck="false" autocomplete="off"></textarea>
+    <div id="dmTokenError" style="color:#dc2626;font-size:12px;min-height:14px;margin-top:6px"></div>
+    <div class="dm-modal-actions">
+      <button class="dm-btn-secondary" onclick="closeDriveTokenModal(true)">Skip routing</button>
+      <button class="dm-btn-primary" onclick="saveDriveTokenFromModal()">Save & continue</button>
+    </div>
+    <button class="dm-btn-link" onclick="window.open('https://console.mapbox.com/account/access-tokens/','_blank')">Don't have one? → mapbox.com</button>
+  </div>
+</div>
+
+<!-- Drive Mode v3 — Destination input modal -->
+<div id="dmDestModal" class="dm-modal" role="dialog" aria-label="Pick destination">
+  <div class="dm-modal-card">
+    <h2 class="dm-modal-title">🚗 Where are you headed?</h2>
+    <p class="dm-modal-subtitle">We'll route you there and find free parking nearby. Or skip this and just get street-level info as you drive.</p>
+    <input type="text" id="dmDestInput" placeholder="Address or intersection (e.g. Spring & Mulberry)" autocomplete="off" spellcheck="false">
+    <div id="dmDestStatus" class="dm-geo-status" style="display:none"></div>
+    <div id="dmDestResults" class="dm-geo-results"></div>
+    <div id="dmRecentDests" class="dm-recent-dests"></div>
+    <div class="dm-modal-actions">
+      <button class="dm-btn-secondary" onclick="closeDriveDestModal(true)">Skip</button>
+      <button class="dm-btn-primary" id="dmDestStartBtn" onclick="closeDriveDestModal(true)" style="background:#6b7280">Skip — start without route</button>
+    </div>
+  </div>
+</div>
 
 <!-- Drive Mode v2 — transparent overlay; map underneath is the interface -->
 <div id="drivingMode" role="region" aria-label="Drive Mode">
   <div class="dm-topbar">
     <button onclick="exitDrivingMode()" aria-label="Exit driving mode">✕</button>
     <button id="dmMuteBtn" onclick="toggleDrivingModeVoice()" aria-label="Toggle voice">🔊</button>
+  </div>
+  <div id="dmDestStrip" class="dm-dest-strip">
+    <span class="dm-dest-strip-icon">🎯</span>
+    <span id="dmDestStripText" class="dm-dest-strip-text">—</span>
+    <button class="dm-dest-strip-clear" onclick="clearDriveDestination()" aria-label="Clear destination">✕</button>
   </div>
   <div id="dmBottomCard" class="dm-bottom-card unknown">
     <div id="dmStreet" class="dm-street">Waiting for GPS…</div>
@@ -5125,50 +5289,9 @@ function getCurrentDrivingContext(lat, lng, heading) {
   };
 }
 
-async function enterDrivingMode() {
-  if (drivingModeActive) return;
-  if (!navigator.geolocation) {
-    alert('GPS not available on this device.');
-    return;
-  }
-  drivingModeActive = true;
-  // body class hides the right control panel + start screen + version chip
-  document.body.classList.add('driving-mode');
-  document.getElementById('drivingMode').classList.add('active');
-  drivingVoiceMuted = localStorage.getItem('wepark_dm_voice_muted') === '1';
-  document.getElementById('dmMuteBtn').textContent = drivingVoiceMuted ? '🔇' : '🔊';
-  setDrivingModeStatus('Acquiring GPS…');
-
-  // Stash the current map view so we can restore on exit
-  if (typeof map !== 'undefined' && map) {
-    drivingPreEntryView = { center: map.getCenter(), zoom: map.getZoom() };
-    map.setZoom(DRIVING_ZOOM);
-    map.invalidateSize();
-  }
-
-  // Wake lock so the screen stays on while driving
-  try {
-    if ('wakeLock' in navigator) {
-      drivingWakeLock = await navigator.wakeLock.request('screen');
-      drivingWakeLock.addEventListener?.('release', () => { drivingWakeLock = null; });
-    }
-  } catch (e) {
-    console.warn('Wake lock denied:', e);
-  }
-
-  // Start watching position
-  drivingGeoWatchId = navigator.geolocation.watchPosition(
-    onDrivingGeoUpdate,
-    (err) => {
-      console.warn('Geo error:', err);
-      setDrivingModeStatus('GPS error: ' + (err.message || err.code));
-    },
-    { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
-  );
-
-  // Re-acquire wake lock if visibility changes (iOS sometimes drops it)
-  document.addEventListener('visibilitychange', reacquireWakeLockOnVisible);
-}
+// (enterDrivingMode + actuallyEnterDrivingMode now defined further down with
+//  Mapbox token + destination flow integration. v2.1 standalone version
+//  removed.)
 
 async function exitDrivingMode() {
   drivingModeActive = false;
@@ -5182,13 +5305,17 @@ async function exitDrivingMode() {
     try { await drivingWakeLock.release(); } catch (e) {}
     drivingWakeLock = null;
   }
-  // Remove user marker + side highlights
+  // Remove user marker + side highlights + route + destination pin + target block
   if (drivingUserMarker && typeof map !== 'undefined' && map) {
     try { map.removeLayer(drivingUserMarker); } catch (e) {}
   }
   drivingUserMarker = null;
   clearDrivingSideHighlights();
   drivingLastHighlightedBlock = null;
+  removeDriveRouteLayers();
+  drivingDestination = null;
+  drivingMapboxRoute = null;
+  document.getElementById('dmDestStrip')?.classList.remove('active');
   // Restore pre-entry map view
   if (drivingPreEntryView && typeof map !== 'undefined' && map) {
     map.setView(drivingPreEntryView.center, drivingPreEntryView.zoom, { animate: false });
@@ -5421,6 +5548,379 @@ function speakDrivingContext(ctx) {
     console.warn('Speech failed:', e);
   }
 }
+
+// ==== Drive Mode v3 — Mapbox token, destination, routing ====
+const MAPBOX_TOKEN_KEY = 'wepark_mapbox_token';
+const DRIVE_RECENT_DESTS_KEY = 'wepark_drive_recent_destinations';
+const MAPBOX_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places/';
+const MAPBOX_DIRECTIONS_URL = 'https://api.mapbox.com/directions/v5/mapbox/driving/';
+
+// State
+let drivingDestination = null;       // { lat, lng, name } currently active
+let drivingMapboxRoute = null;       // raw Mapbox response
+let drivingRouteLayer = null;        // Leaflet polyline of the route
+let drivingDestMarker = null;        // Leaflet marker at destination lat/lng
+let drivingTargetBlockMarker = null; // Pulse marker on the chosen parking block
+let drivingTargetBlockHighlight = null; // Polyline highlighting the target block
+let drivingDestModalSkipped = false; // user clicked Skip in this session
+let _dmGeoDebounceTimer = null;
+
+function getMapboxToken() {
+  try { return localStorage.getItem(MAPBOX_TOKEN_KEY); } catch (e) { return null; }
+}
+function setMapboxToken(token) {
+  try { localStorage.setItem(MAPBOX_TOKEN_KEY, token); } catch (e) {}
+}
+
+function openDriveTokenModal() {
+  const modal = document.getElementById('dmTokenModal');
+  document.getElementById('dmTokenInput').value = getMapboxToken() || '';
+  document.getElementById('dmTokenError').textContent = '';
+  modal.classList.add('active');
+}
+function closeDriveTokenModal(continueWithoutToken) {
+  document.getElementById('dmTokenModal').classList.remove('active');
+  // After token modal closes, decide what to show next
+  if (!continueWithoutToken && getMapboxToken()) {
+    openDriveDestModal();
+  } else {
+    // User skipped — proceed straight to Drive Mode without routing
+    actuallyEnterDrivingMode();
+  }
+}
+function saveDriveTokenFromModal() {
+  const input = document.getElementById('dmTokenInput');
+  const errEl = document.getElementById('dmTokenError');
+  const val = (input.value || '').trim();
+  if (!/^pk\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(val)) {
+    errEl.textContent = "That doesn't look like a Mapbox public token (should start with pk.).";
+    return;
+  }
+  setMapboxToken(val);
+  closeDriveTokenModal(false);
+}
+
+function getRecentDestinations() {
+  try { return JSON.parse(localStorage.getItem(DRIVE_RECENT_DESTS_KEY) || '[]'); }
+  catch (e) { return []; }
+}
+function pushRecentDestination(dest) {
+  const list = getRecentDestinations().filter(d =>
+    Math.abs(d.lat - dest.lat) > 0.0002 || Math.abs(d.lng - dest.lng) > 0.0002
+  );
+  list.unshift({ ...dest, ts: Date.now() });
+  try { localStorage.setItem(DRIVE_RECENT_DESTS_KEY, JSON.stringify(list.slice(0, 6))); } catch (e) {}
+}
+
+function openDriveDestModal() {
+  const modal = document.getElementById('dmDestModal');
+  document.getElementById('dmDestInput').value = '';
+  document.getElementById('dmDestStatus').style.display = 'none';
+  const resultsEl = document.getElementById('dmDestResults');
+  resultsEl.innerHTML = '';
+  resultsEl.classList.remove('active');
+  renderRecentDestinations();
+  modal.classList.add('active');
+  setTimeout(() => document.getElementById('dmDestInput').focus(), 100);
+}
+function closeDriveDestModal(skipped) {
+  document.getElementById('dmDestModal').classList.remove('active');
+  if (skipped) drivingDestModalSkipped = true;
+  actuallyEnterDrivingMode();
+}
+
+function renderRecentDestinations() {
+  const container = document.getElementById('dmRecentDests');
+  const list = getRecentDestinations();
+  if (!list.length) { container.innerHTML = ''; return; }
+  container.innerHTML = '<div style="font-size:11px;color:#6b7280;width:100%;margin-bottom:4px">Recent:</div>' +
+    list.map((d, i) => `<button class="dm-recent-chip" onclick="useRecentDestination(${i})">${escapeHtml(d.name || (d.lat.toFixed(4) + ',' + d.lng.toFixed(4)))}</button>`).join('');
+}
+function useRecentDestination(index) {
+  const list = getRecentDestinations();
+  if (!list[index]) return;
+  setDriveDestination(list[index]);
+  closeDriveDestModal(false);
+}
+
+// Wired below to onkeydown
+function onDmDestInput() {
+  const q = (document.getElementById('dmDestInput').value || '').trim();
+  if (_dmGeoDebounceTimer) clearTimeout(_dmGeoDebounceTimer);
+  if (!q || q.length < 2) {
+    document.getElementById('dmDestResults').classList.remove('active');
+    return;
+  }
+  _dmGeoDebounceTimer = setTimeout(() => doMapboxGeocode(q), 280);
+}
+
+async function doMapboxGeocode(query) {
+  const token = getMapboxToken();
+  if (!token) return;
+  const statusEl = document.getElementById('dmDestStatus');
+  const resultsEl = document.getElementById('dmDestResults');
+  statusEl.textContent = 'Searching…';
+  statusEl.style.display = 'block';
+  // Bias toward Manhattan / NYC: proximity center on Times Square; bbox covers all 5 boroughs
+  const proximity = '-74.0,40.75';
+  const bbox = '-74.27,40.49,-73.68,40.92';
+  const url = `${MAPBOX_GEOCODE_URL}${encodeURIComponent(query)}.json` +
+    `?access_token=${token}&autocomplete=true&country=us&types=address,poi,place,neighborhood,locality` +
+    `&proximity=${proximity}&bbox=${bbox}&limit=5`;
+  try {
+    const resp = await fetch(url);
+    const data = await resp.json();
+    statusEl.style.display = 'none';
+    const features = data.features || [];
+    if (!features.length) {
+      resultsEl.innerHTML = '<div class="dm-geo-status">No matches in NYC area.</div>';
+      resultsEl.classList.add('active');
+      return;
+    }
+    resultsEl.innerHTML = features.map((f, i) => {
+      const name = escapeHtml(f.text || '');
+      const ctx = escapeHtml(f.place_name || '');
+      return `<div class="dm-geo-result" onclick="useGeocodeResult(${i})" data-idx="${i}">
+        <div class="dm-geo-result-name">${name}</div>
+        <div class="dm-geo-result-context">${ctx}</div>
+      </div>`;
+    }).join('');
+    resultsEl.classList.add('active');
+    // Stash the raw features so we can read them in useGeocodeResult
+    resultsEl._features = features;
+  } catch (e) {
+    console.warn('Geocode failed:', e);
+    statusEl.textContent = 'Geocoding error: ' + (e.message || e);
+    statusEl.style.display = 'block';
+  }
+}
+
+function useGeocodeResult(index) {
+  const resultsEl = document.getElementById('dmDestResults');
+  const feature = (resultsEl._features || [])[index];
+  if (!feature) return;
+  const [lng, lat] = feature.center;
+  setDriveDestination({ lat, lng, name: feature.place_name || feature.text });
+  closeDriveDestModal(false);
+}
+
+function setDriveDestination(dest) {
+  drivingDestination = dest;
+  pushRecentDestination(dest);
+}
+
+function clearDriveDestination() {
+  drivingDestination = null;
+  drivingMapboxRoute = null;
+  removeDriveRouteLayers();
+  // Hide top strip
+  document.getElementById('dmDestStrip').classList.remove('active');
+}
+
+function removeDriveRouteLayers() {
+  if (typeof map === 'undefined' || !map) return;
+  try { if (drivingRouteLayer) map.removeLayer(drivingRouteLayer); } catch (e) {}
+  try { if (drivingDestMarker) map.removeLayer(drivingDestMarker); } catch (e) {}
+  try { if (drivingTargetBlockMarker) map.removeLayer(drivingTargetBlockMarker); } catch (e) {}
+  try { if (drivingTargetBlockHighlight) map.removeLayer(drivingTargetBlockHighlight); } catch (e) {}
+  drivingRouteLayer = null;
+  drivingDestMarker = null;
+  drivingTargetBlockMarker = null;
+  drivingTargetBlockHighlight = null;
+}
+
+async function fetchAndRenderRoute() {
+  if (!drivingDestination) return;
+  if (typeof map === 'undefined' || !map) return;
+  const token = getMapboxToken();
+  if (!token) return;
+  // Need user position; if we don't have one yet, try a one-shot getCurrentPosition
+  let userLat = null, userLng = null;
+  try {
+    const pos = await new Promise((resolve, reject) => {
+      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
+    });
+    userLat = pos.coords.latitude; userLng = pos.coords.longitude;
+  } catch (e) {
+    console.warn('Could not get user position for route:', e);
+    return;
+  }
+  const url = `${MAPBOX_DIRECTIONS_URL}${userLng},${userLat};${drivingDestination.lng},${drivingDestination.lat}` +
+    `?access_token=${token}&geometries=geojson&steps=true&overview=full&alternatives=false`;
+  try {
+    const resp = await fetch(url);
+    const data = await resp.json();
+    if (!data.routes || !data.routes.length) {
+      console.warn('No Mapbox route returned:', data);
+      return;
+    }
+    drivingMapboxRoute = data.routes[0];
+    renderRouteOnMap(drivingMapboxRoute);
+    renderTargetParkingBlock(drivingDestination);
+    renderDestinationStrip();
+  } catch (e) {
+    console.warn('Mapbox Directions failed:', e);
+  }
+}
+
+function renderRouteOnMap(route) {
+  removeDriveRouteLayers(); // start fresh
+  const coords = route.geometry?.coordinates || [];
+  // Mapbox returns [lng, lat] pairs; Leaflet wants [lat, lng]
+  const latlngs = coords.map(c => [c[1], c[0]]);
+  if (!latlngs.length) return;
+  // Underglow + colored route line for visual depth
+  const underglow = L.polyline(latlngs, {
+    color: '#ffffff', weight: 11, opacity: 0.9,
+    lineCap: 'round', lineJoin: 'round', interactive: false
+  }).addTo(map);
+  const top = L.polyline(latlngs, {
+    color: '#2563eb', weight: 7, opacity: 0.95,
+    lineCap: 'round', lineJoin: 'round', interactive: false
+  }).addTo(map);
+  // Group both as a single "drivingRouteLayer" via layerGroup so removal is one call
+  drivingRouteLayer = L.layerGroup([underglow, top]).addTo(map);
+  // Destination pin
+  drivingDestMarker = L.marker([drivingDestination.lat, drivingDestination.lng], {
+    icon: L.divIcon({
+      html: '<div style="font-size:30px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4))">📍</div>',
+      className: '', iconSize: [30, 30], iconAnchor: [15, 28]
+    }),
+    pane: 'carPin', interactive: false
+  }).addTo(map);
+}
+
+// Find the highest-scoring "free parking" block within ~300m of the destination,
+// using the same actionableSafetyLabel + ASP-priority scoring we use elsewhere.
+function findBestParkingBlockNear(dest, radiusM = 300) {
+  if (!segmentLayers || !segmentLayers.length) return null;
+  const refLat = dest.lat;
+  const radiusSq = radiusM * radiusM;
+  const SKIP = new Set(['NO_STANDING', 'NO_PARKING', 'SPECIAL', 'TRUCK_LOADING', 'UNKNOWN']);
+  let best = null, bestScore = -1;
+  for (const seg of segmentLayers) {
+    const dom = seg.dominantCategory || mostRestrictiveCategory(seg.rules);
+    if (SKIP.has(dom)) continue;
+    if (!seg.line || seg.line.length < 2) continue;
+    const mid = seg.line[Math.floor(seg.line.length / 2)];
+    const dx = (mid[1] - dest.lng) * 111320 * Math.cos(refLat * Math.PI / 180);
+    const dy = (mid[0] - refLat) * 111320;
+    const distSq = dx * dx + dy * dy;
+    if (distSq > radiusSq) continue;
+    const label = actionableSafetyLabel(seg);
+    if (label.severity === 'restricted' || label.severity === 'unknown') continue;
+    const distM = Math.sqrt(distSq);
+    let score = 0;
+    if (label.severity === 'free') score = 100 - distM * 0.2;
+    else if (label.severity === 'metered') score = 30 - distM * 0.2;
+    if (score > bestScore) { bestScore = score; best = { seg, distM, label }; }
+  }
+  return best;
+}
+
+function renderTargetParkingBlock(dest) {
+  const target = findBestParkingBlockNear(dest);
+  if (!target) return;
+  const { seg, label } = target;
+  // Highlight the target block with a thick green line
+  drivingTargetBlockHighlight = L.polyline(seg.line, {
+    color: '#16a34a', weight: 11, opacity: 0.85,
+    lineCap: 'round', lineJoin: 'round', interactive: false,
+    dashArray: '4 6'
+  }).addTo(map);
+  // Pulsing green marker at the block midpoint
+  const mid = seg.line[Math.floor(seg.line.length / 2)];
+  drivingTargetBlockMarker = L.marker([mid[0], mid[1]], {
+    icon: L.divIcon({
+      className: '',
+      html: '<div class="dm-target-marker"><div class="dm-target-pulse"></div><div class="dm-target-dot"></div></div>',
+      iconSize: [30, 30], iconAnchor: [15, 15]
+    }),
+    pane: 'carPin', interactive: false
+  }).addTo(map);
+}
+
+function renderDestinationStrip() {
+  const strip = document.getElementById('dmDestStrip');
+  const text = document.getElementById('dmDestStripText');
+  if (drivingDestination) {
+    text.textContent = drivingDestination.name || `${drivingDestination.lat.toFixed(4)}, ${drivingDestination.lng.toFixed(4)}`;
+    strip.classList.add('active');
+  } else {
+    strip.classList.remove('active');
+  }
+}
+
+// === Drive Mode entry rewired to flow through token + destination modals ===
+
+// Replace the direct enterDrivingMode call with this orchestrator.
+async function enterDrivingMode() {
+  if (drivingModeActive) return;
+  if (!navigator.geolocation) {
+    alert('GPS not available on this device.');
+    return;
+  }
+  drivingDestModalSkipped = false;
+  // 1. Token check
+  if (!getMapboxToken()) {
+    openDriveTokenModal();
+    return; // closeDriveTokenModal continues the flow
+  }
+  // 2. Destination check
+  openDriveDestModal();
+  // closeDriveDestModal continues to actuallyEnterDrivingMode
+}
+
+async function actuallyEnterDrivingMode() {
+  if (drivingModeActive) return;
+  drivingModeActive = true;
+  document.body.classList.add('driving-mode');
+  document.getElementById('drivingMode').classList.add('active');
+  drivingVoiceMuted = localStorage.getItem('wepark_dm_voice_muted') === '1';
+  document.getElementById('dmMuteBtn').textContent = drivingVoiceMuted ? '🔇' : '🔊';
+  setDrivingModeStatus('Acquiring GPS…');
+
+  if (typeof map !== 'undefined' && map) {
+    drivingPreEntryView = { center: map.getCenter(), zoom: map.getZoom() };
+    map.setZoom(DRIVING_ZOOM);
+    map.invalidateSize();
+  }
+
+  try {
+    if ('wakeLock' in navigator) {
+      drivingWakeLock = await navigator.wakeLock.request('screen');
+      drivingWakeLock.addEventListener?.('release', () => { drivingWakeLock = null; });
+    }
+  } catch (e) {
+    console.warn('Wake lock denied:', e);
+  }
+
+  drivingGeoWatchId = navigator.geolocation.watchPosition(
+    onDrivingGeoUpdate,
+    (err) => {
+      console.warn('Geo error:', err);
+      setDrivingModeStatus('GPS error: ' + (err.message || err.code));
+    },
+    { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
+  );
+
+  document.addEventListener('visibilitychange', reacquireWakeLockOnVisible);
+
+  // If we have a destination, fetch & render the route now (async)
+  if (drivingDestination) {
+    renderDestinationStrip();
+    fetchAndRenderRoute();
+  }
+}
+
+// Wire the destination input handler once on first DOMContentLoaded
+document.addEventListener('DOMContentLoaded', () => {
+  const inp = document.getElementById('dmDestInput');
+  if (inp && !inp._wired) {
+    inp._wired = true;
+    inp.addEventListener('input', onDmDestInput);
+  }
+});
 
 function clearSmartMoveOverlay() {
   if (smartMoveMarker) {
@@ -6638,7 +7138,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v23';
+const APP_VERSION = 'wepark-v24';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {

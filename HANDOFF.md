@@ -59,7 +59,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 ## How to work in this repo
 
 - **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
-- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v23`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
+- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v24`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
 - **Tile data is pre-built and committed.** The `tiles/` directory holds 976 pre-generated JSON tiles (~6.39 MB). Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large.
 - **No automated test suite exists.** QA is done via:
   - Independent QA subagent review (see `TRACKER_QA_VERIFY.md` for the pattern)
@@ -90,6 +90,18 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Data sources:** NYC parking sign data (merged ASP + main), pre-tiled into 976 JSON tiles under `tiles/`
 
 ## Changelog
+
+### 2026-05-01 — Drive Mode v3 Phase 3a (destination input + Mapbox routing)
+- New entry flow: tap **🚗 Driving Mode** → if no Mapbox token, show token-entry modal first → then destination modal → then Drive Mode UI activates.
+- **Token modal** (`#dmTokenModal`): pastes a `pk.*` Mapbox public token, validates format, saves to `localStorage.wepark_mapbox_token`. Skip option enters Drive Mode without routing (v2.1 behavior).
+- **Destination modal** (`#dmDestModal`): input field + live Mapbox Geocoding autocomplete (`/geocoding/v5/mapbox.places/`, debounced 280ms, Manhattan-biased via `proximity` + `bbox`, top 5 results, types include addresses, POIs, neighborhoods). Recent destinations rendered as chips (last 6 stored in `localStorage.wepark_drive_recent_destinations`). Skip option also drops to v2.1 behavior.
+- **Mapbox Directions API** (`/directions/v5/mapbox/driving/`) called once on entry with destination set. Returns route GeoJSON + steps (steps are stashed for Phase 3b voice but not used yet).
+- **Route render**: thick blue line (weight 7) with white underglow (weight 11) drawn on top of the map. 📍 destination pin at the end. Pulsing green marker + thick dashed green polyline on the **best free-parking block within 300m of the destination** — picked via `findBestParkingBlockNear()` which uses the existing `actionableSafetyLabel()` scoring (free=high score, metered=lower, restricted=excluded).
+- **Top destination strip** (`#dmDestStrip`): floats below the top bar with `🎯 [destination name] [✕]`. Clear button removes the route + destination without exiting Drive Mode.
+- Cleanup: all v3 layers (route, dest pin, target block highlight, target marker) removed on Drive Mode exit OR on destination clear.
+- **Token NOT in source code** — GitHub's push protection blocks `pk.*` Mapbox tokens. Kevin's existing token (created 2026-05-01, URL-restricted to `kevhox1.github.io` + `localhost:8765`) stored only in `localStorage.wepark_mapbox_token`. The token modal handles first-use entry; Kevin can also preset via DevTools `localStorage.setItem('wepark_mapbox_token', '<pk.string>')`.
+- Out of v3 Phase 3a: turn-by-turn voice (Phase 3b), parking-aware alt-route selection (3c), re-routing on deviation (3d), arrival prompt (3e). All in `docs/drive-mode-routing.md`.
+- SW cache bumped to `wepark-v24`.
 
 ### 2026-05-01 — Drive Mode v2.1 (visual polish)
 - Replaced the blue dot user marker with an Apple-Maps-style **🚗 car emoji** in a white circle with a blue ring + pulse outline. Rotates with GPS heading (offset −90° because the car emoji's natural orientation faces east, not north).
