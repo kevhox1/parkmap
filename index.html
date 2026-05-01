@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>ParkMap - Manhattan Parking</title>
 <link rel="manifest" href="manifest.json">
 <meta name="theme-color" content="#2563eb">
@@ -759,7 +759,10 @@ body.driving-mode #map {
 }
 #drivingMode.active { display: block; }
 .dm-topbar {
-  position: absolute; top: 14px; left: 14px; right: 14px;
+  position: absolute;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  left: calc(14px + env(safe-area-inset-left, 0px));
+  right: calc(14px + env(safe-area-inset-right, 0px));
   display: flex; align-items: center; justify-content: space-between;
   pointer-events: none;
 }
@@ -774,7 +777,10 @@ body.driving-mode #map {
 }
 .dm-topbar button:active { transform: scale(0.96); }
 .dm-bottom-card {
-  position: absolute; bottom: 18px; left: 14px; right: 14px;
+  position: absolute;
+  bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+  left: calc(14px + env(safe-area-inset-left, 0px));
+  right: calc(14px + env(safe-area-inset-right, 0px));
   pointer-events: auto;
   background: rgba(255,255,255,0.97);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -864,7 +870,9 @@ body.driving-mode #map {
 /* ==== Drive Mode v3 — top turn-by-turn ribbon (Apple Maps green band) ==== */
 .dm-turn-ribbon {
   position: absolute;
-  top: 14px; left: 14px; right: 14px;
+  top: calc(14px + env(safe-area-inset-top, 0px));
+  left: calc(14px + env(safe-area-inset-left, 0px));
+  right: calc(14px + env(safe-area-inset-right, 0px));
   pointer-events: auto;
   background: linear-gradient(180deg, #16a34a, #15803d);
   color: white;
@@ -896,7 +904,10 @@ body.driving-mode #map {
 
 /* ==== Drive Mode v3 — destination strip (below turn ribbon, smaller) ==== */
 .dm-dest-strip {
-  position: absolute; top: 96px; left: 70px; right: 70px;
+  position: absolute;
+  top: calc(96px + env(safe-area-inset-top, 0px));
+  left: calc(70px + env(safe-area-inset-left, 0px));
+  right: calc(70px + env(safe-area-inset-right, 0px));
   pointer-events: auto;
   background: rgba(255,255,255,0.97);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -7526,7 +7537,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v27';
+const APP_VERSION = 'wepark-v28';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
