@@ -1,10 +1,59 @@
 # WePark — Handoff
 
-This document is the operating manual for any future Claude session working on WePark. Read this first, then `PROJECT.md`, then `TRACKER_MVP_SPEC.md`, then ask Kevin what's being worked on.
+This document is the operating manual for any future Claude session working on WePark. **Read this first, then any spec doc in `docs/` for the feature in flight, then continue.** Don't reload chat history — the docs + git log are the source of truth.
+
+## Session opening protocol
+
+When Kevin starts a new session, default response:
+> "Read `HANDOFF.md`, then `docs/<current-feature>.md`, then continue building."
+
+Don't re-derive specs from chat memory. The docs are the source.
 
 ## Project Overview
 
-WePark is a free parking-regulations and community-threat-tracker web app for NYC street parkers. It is a single-page Leaflet PWA hosted on GitHub Pages at https://kevhox1.github.io/parkmap/ (repo: https://github.com/kevhox1/parkmap). Current phase: Phase 1 (PWA) and Phase 2 (Smart Score / Smart Move / My Car) are complete. Tier 3 (Threat Tracker) is in progress — the Supabase-ready provider layer is merged but no live Supabase project is wired yet, so the app runs on a local mock provider by default.
+WePark is **a community-driven parking app for NYC street parkers**. The product has three layers, in order of importance to the user:
+
+1. **Parked-car management** (daily-active hook) — Smart Move, ASP-suspension banner, My Car pin, sign verification. Replaces the user's reliance on Twitter (for ASP suspensions) and Calendar (for "move your car" alarms).
+2. **Community** (the moat) — pseudonymous neighborhood chat per zone, structured tracker reports (sweeper / ticket-agent / block-cleaned), reputation scoring, real-time alerts.
+3. **Driving Mode** (the in-car experience, _NEW priority as of 2026-04-26_) — full-screen, glanceable, voice-narrated. Tells the driver what parking is on the LEFT and RIGHT of the street they're currently on, framed as "free until X" actionable answers.
+
+**Distribution:** PWA (live at https://kevhox1.github.io/parkmap/) → Capacitor wrap for iOS App Store → eventual native iOS rewrite. Repo: https://github.com/kevhox1/parkmap.
+
+## Current MVP roadmap (state-of-world)
+
+**Shipped:**
+- ✅ Phase 1 (PWA + tile-based map + ASP suspension data load)
+- ✅ Phase 2 (Smart Score, Smart Move, My Car, Find Parking Near Me with one-way-aware coverage sweep)
+- ✅ Phase 3 (Threat Tracker UI, mock provider, Supabase-ready provider with connectivity probe)
+- ✅ ASP suspension banner (kills Twitter dependency)
+- ✅ PWA install hint (iOS Add-to-Home-Screen prompt)
+- ✅ Email magic-link auth + pseudonymous username + `profiles` table
+- ✅ SOHO/LES zone chat with Supabase Realtime
+- ✅ Self-healing service worker (auto-update + version chip + one-tap escape hatch)
+
+**Live blockers / waiting on Kevin:**
+- ⏳ Kevin needs to **end-to-end test sign-in + chat on real device** (was wedged on cache; v19 ships self-healing SW, should now work after one final clear)
+
+**In flight:**
+- 🚧 **Driving Mode v1** (the active feature). See `docs/driving-mode.md` for spec.
+
+**Backlog (not started, ordered by priority):**
+- Cross-pollination: tracker reports auto-post to zone chat as `system_tracker` messages (requires applying full `SUPABASE_MVP_SCHEMA.md` for tracker tables + flipping provider to `'supabase'`)
+- Reputation scoring (+/− on confirms/retracts)
+- Local "move your car" notifications (Web Notifications API)
+- "Generate QR code for my zone" feature (cold-start distribution)
+- First-time user landing page with seeded zone preview
+- Capacitor wrap → TestFlight → App Store
+
+## Live infrastructure
+
+- **GitHub Pages:** https://kevhox1.github.io/parkmap (auto-deploys on push to `main`)
+- **Supabase project:** `https://jiispshyqerscdoferaw.supabase.co` (created 2026-04-22, free tier)
+  - Tables: `profiles`, `zones`, `zone_messages` (chat schema)
+  - Tracker tables NOT yet applied — `SUPABASE_MVP_SCHEMA.md` is the spec but unapplied
+  - Realtime publication includes `zone_messages`
+  - Auth Site URL: `https://kevhox1.github.io/parkmap/`
+- **Tracker provider:** still `'mock'` (localStorage). Flip to `'supabase'` after applying tracker schema.
 
 ## How to work in this repo
 
