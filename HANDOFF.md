@@ -13,48 +13,53 @@ Don't re-derive specs from chat memory. The docs are the source.
 
 WePark is **a community-driven parking app for NYC street parkers**. The product has three layers, in order of importance to the user:
 
-1. **Parked-car management** (daily-active hook) — Smart Move, ASP-suspension banner, My Car pin, sign verification. Replaces the user's reliance on Twitter (for ASP suspensions) and Calendar (for "move your car" alarms).
-2. **Community** (the moat) — pseudonymous neighborhood chat per zone, structured tracker reports (sweeper / ticket-agent / block-cleaned), reputation scoring, real-time alerts.
-3. **Driving Mode** (the in-car experience, _NEW priority as of 2026-04-26_) — full-screen, glanceable, voice-narrated. Tells the driver what parking is on the LEFT and RIGHT of the street they're currently on, framed as "free until X" actionable answers.
+1. **Parked-car management** (daily-active hook) — Smart Move, ASP-suspension banner, My Car pin, sign verification.
+2. **Community** (the moat) — pseudonymous neighborhood chat per zone, structured tracker reports, reputation scoring.
+3. **Drive Mode** (the in-car experience) — Apple-Maps-class navigation focused on free parking. Heading-up rotation, top turn ribbon, voice, parking-aware route selection, side-of-street green highlights. The biggest active investment.
 
-**Distribution:** PWA (live at https://kevhox1.github.io/parkmap/) → Capacitor wrap for iOS App Store → eventual native iOS rewrite. Repo: https://github.com/kevhox1/parkmap.
+**Distribution:** PWA (live at https://kevhox1.github.io/parkmap/) → **iOS native app** (form factor TBD — see "Open decisions"). Repo: https://github.com/kevhox1/parkmap.
 
 ## Current MVP roadmap (state-of-world)
 
-**Shipped:**
-- ✅ Phase 1 (PWA + tile-based map + ASP suspension data load)
-- ✅ Phase 2 (Smart Score, Smart Move, My Car, Find Parking Near Me with one-way-aware coverage sweep)
-- ✅ Phase 3 (Threat Tracker UI, mock provider, Supabase-ready provider with connectivity probe)
-- ✅ ASP suspension banner (kills Twitter dependency)
-- ✅ PWA install hint (iOS Add-to-Home-Screen prompt)
-- ✅ Email magic-link auth + pseudonymous username + `profiles` table
-- ✅ SOHO/LES zone chat with Supabase Realtime
-- ✅ Self-healing service worker (auto-update + version chip + one-tap escape hatch)
+**Shipped (PWA, live at `wepark-v30`):**
+- ✅ Phase 1: PWA + tile-based map + ASP suspension banner
+- ✅ Phase 2: Smart Score, Smart Move, My Car pin, Find Parking Near Me (one-way-aware coverage sweep)
+- ✅ Phase 3: Threat Tracker UI (mock + Supabase-ready provider with connectivity probe)
+- ✅ Self-healing service worker (auto-update on every push, no more manual cache-clearing)
+- ✅ Email magic-link auth, pseudonymous username, `profiles` table
+- ✅ SOHO/LES zone chat with Supabase Realtime + chat diagnostics button
+- ✅ ASP suspension calendar (hardcoded 2026 — see fix note below)
+- ✅ Drive Mode v3 full: Mapbox Search Box destination input, Mapbox Directions API, parking-aware alternative-route selection, top turn ribbon (Apple Maps green/blue/purple), turn-by-turn voice tiers, heading-up map rotation, re-routing on deviation, arrival prompt, nearby safe-blocks green overlay, iOS PWA safe-area insets
 
-**Live blockers / waiting on Kevin:**
-- ⏳ Kevin needs to **end-to-end test sign-in + chat on real device** (was wedged on cache; v19 ships self-healing SW, should now work after one final clear)
+**Open decisions (waiting on Kevin):**
+- 🤔 **iOS launch form factor**: Capacitor wrap (1-2 wk, web code in native shell, fastest validation) vs Swift native rewrite (8-16 wk, polished launch, longer ROI). Kevin leaning Swift native ("classic standard approach"). Decision blocks Phase 5.
+- 🤔 **NYC 311 real-time API for snow emergencies**: blocked by CORS in browser. Two paths: (a) Cloudflare Worker proxy (~15 min setup, free), or (b) skip until iOS native (no CORS, direct fetch works). Currently leaning (b).
+- 🤔 **Supabase tracker schema**: `SUPABASE_MVP_SCHEMA.md` defines tracker tables/RPCs but NOT yet applied. Required before flipping `tracker-config.js` provider from `'mock'` to `'supabase'` and enabling cross-pollination.
 
-**In flight:**
-- 🚧 **Driving Mode v1** (the active feature). See `docs/driving-mode.md` for spec.
+**Drive-test pending:**
+- 🚗 Kevin needs to take Drive Mode v3 out for a real Manhattan drive with phone mounted on dashboard. Voice timing, rotation smoothness, ribbon legibility while driving, side-highlight density — all need real-world feedback.
 
-**Backlog (not started, ordered by priority):**
-- Cross-pollination: tracker reports auto-post to zone chat as `system_tracker` messages (requires applying full `SUPABASE_MVP_SCHEMA.md` for tracker tables + flipping provider to `'supabase'`)
-- Reputation scoring (+/− on confirms/retracts)
-- Local "move your car" notifications (Web Notifications API)
-- "Generate QR code for my zone" feature (cold-start distribution)
-- First-time user landing page with seeded zone preview
-- Capacitor wrap → TestFlight → App Store
+**Backlog (ordered by priority):**
+- **Phase 2d**: Cross-pollination — tracker reports auto-post to zone chat as `system_tracker` messages. Requires `SUPABASE_MVP_SCHEMA.md` applied + provider flipped to `'supabase'`.
+- **Phase 2e**: Reputation scoring (+/− on confirms/retracts). Schema field `profiles.reputation` already exists.
+- **Phase 3 polish**: Local "move your car" notifications via Web Notifications API.
+- **Phase 4a**: "Generate QR code for my zone" — cold-start distribution per Kevin's "stickers on windshields" idea.
+- **Phase 4b**: First-time user landing page with seeded zone preview.
+- **Phase 5**: iOS launch (Capacitor or Swift native — see open decision above).
+- **2027 ASP calendar refresh**: hardcoded 2026 calendar in `loadASPSuspensions()` will need annual update each Dec/Jan when NYC publishes the new PDF. OR wire NYC 311 API once on native.
 
 ## Live infrastructure
 
-- **GitHub Pages:** https://kevhox1.github.io/parkmap (auto-deploys on push to `main`)
-- **Supabase project:** `https://jiispshyqerscdoferaw.supabase.co` (created 2026-04-22, free tier)
-  - Tables: `profiles`, `zones`, `zone_messages` (chat schema)
-  - Tracker tables NOT yet applied — `SUPABASE_MVP_SCHEMA.md` is the spec but unapplied
-  - Realtime publication includes `zone_messages`
-  - Auth Site URL: `https://kevhox1.github.io/parkmap/`
+- **GitHub Pages:** https://kevhox1.github.io/parkmap (auto-deploys on push to `main`).
+- **Supabase project:** `https://jiispshyqerscdoferaw.supabase.co` (created 2026-04-22, free tier).
+  - Tables: `profiles`, `zones`, `zone_messages` (chat schema applied via `supabase/01-mvp-schema.sql`).
+  - **Tracker tables NOT yet applied** — `SUPABASE_MVP_SCHEMA.md` is the spec; runs in SQL editor when ready.
+  - Realtime publication includes `zone_messages`.
+  - Auth Site URL: `https://kevhox1.github.io/parkmap/`. Email magic-link auth enabled.
 - **Tracker provider:** still `'mock'` (localStorage). Flip to `'supabase'` after applying tracker schema.
-- **Mapbox token (Drive Mode v3):** **shipped in `tracker-config.js` as `mapboxToken`** — single shared token for all users. Created 2026-05-01, public, URL-restricted at Mapbox to `kevhox1.github.io` + `localhost:8765`. Kevin had to disable GitHub Push Protection on this repo (it false-positives `pk.*` Mapbox tokens). `localStorage.wepark_mapbox_token` works as a power-user override but isn't normal flow — `getMapboxToken()` checks localStorage first, then falls back to the config token.
+- **Mapbox token (Drive Mode v3):** shipped in `tracker-config.js` as `mapboxToken` — single shared token. Created 2026-05-01, public `pk.*`, URL-restricted at Mapbox to `kevhox1.github.io` + `localhost:8765`. Kevin disabled GitHub Push Protection on this repo to allow the `pk.*` token (it false-positives Mapbox public tokens). `localStorage.wepark_mapbox_token` works as a power-user override but isn't normal flow.
+- **NYC 311 API:** keys created 2026-05-01 but **NOT used in the app** due to browser CORS. Keys live with Kevin (1Password etc.). Will be wired directly when iOS native lands (no CORS in native HTTP). Endpoint: `https://api.nyc.gov/public/api/GetCalendar?fromdate=YYYY-MM-DD&todate=YYYY-MM-DD` with header `Ocp-Apim-Subscription-Key`. Response shape: `{ days: [{ today_id: 'YYYYMMDD', items: [{ type: 'Alternate Side Parking', status: 'IN EFFECT' | 'SUSPENDED', details }] }] }`.
+- **ASP suspension data:** hardcoded 2026 calendar in `index.html` (`ASP_SUSPENSIONS_2026` constant — 41 dates from official NYC DOT PDF). Powers `aspSuspensions` map → `isASPSuspended()` → `computeNextRestrictionHours()` → `actionableSafetyLabel()` → green highlights + "Free until X" labels + suspension banner. Snow emergencies NOT covered until NYC 311 API wired (post-native).
 
 ## How to work in this repo
 
