@@ -5289,6 +5289,15 @@ const DRIVING_VOICE_MIN_GAP_MS = 12000; // don't talk more often than this
 const DRIVING_ZOOM = 18;            // locked zoom while in drive mode (close enough that current block dominates the view)
 let drivingSideHighlights = [];     // L/R side polylines drawn on top of map for the current block
 let drivingLastHighlightedBlock = null;
+// Nearby "safe to park right now" highlight overlay — extends the side-of-street
+// coloring to ALL blocks the driver can see, not just the one they're on.
+let drivingNearbyHighlights = [];
+let drivingNearbyLastUpdateAt = 0;
+let drivingNearbyLastUserLat = null;
+let drivingNearbyLastUserLng = null;
+const NEARBY_HIGHLIGHT_RADIUS_M = 250;
+const NEARBY_HIGHLIGHT_REFRESH_MS = 3000;
+const NEARBY_HIGHLIGHT_MOVE_THRESHOLD_M = 40;
 
 // Compass bearing of each side ("N"/"S"/"E"/"W") in degrees relative to north
 const SIDE_BEARING = { N: 0, E: 90, S: 180, W: 270 };
@@ -5370,6 +5379,10 @@ async function exitDrivingMode() {
   }
   drivingUserMarker = null;
   clearDrivingSideHighlights();
+  clearDrivingNearbyHighlights();
+  drivingNearbyLastUpdateAt = 0;
+  drivingNearbyLastUserLat = null;
+  drivingNearbyLastUserLng = null;
   drivingLastHighlightedBlock = null;
   removeDriveRouteLayers();
   drivingDestination = null;
@@ -5435,6 +5448,59 @@ function clearDrivingSideHighlights() {
   }
   drivingSideHighlights = [];
 }
+// Highlight ALL nearby block faces by their current parking-safety severity,
+// not just the user's current block. Driver can glance at the map and see
+// "everything green ahead is safe to park right now."
+//
+// Throttled: only recomputes when user has moved >40m OR every 3s. Each
+// recompute is cheap because we filter by viewport bounds + radius first.
+function renderNearbySafeHighlights(userLat, userLng) {
+  if (typeof map === 'undefined' || !map) return;
+  if (!segmentLayers || !segmentLayers.length) return;
+  const now = Date.now();
+  if (drivingNearbyLastUserLat != null) {
+    const movedM = haversineMeters([userLat, userLng], [drivingNearbyLastUserLat, drivingNearbyLastUserLng]);
+    if (movedM < NEARBY_HIGHLIGHT_MOVE_THRESHOLD_M && (now - drivingNearbyLastUpdateAt) < NEARBY_HIGHLIGHT_REFRESH_MS) return;
+  }
+  drivingNearbyLastUpdateAt = now;
+  drivingNearbyLastUserLat = userLat;
+  drivingNearbyLastUserLng = userLng;
+  clearDrivingNearbyHighlights();
+  const refLat = userLat;
+  const radiusSq = NEARBY_HIGHLIGHT_RADIUS_M * NEARBY_HIGHLIGHT_RADIUS_M;
+  const cosLat = Math.cos(refLat * Math.PI / 180);
+  let bounds = null;
+  try { bounds = map.getBounds(); } catch (e) {}
+  for (const seg of segmentLayers) {
+    if (!seg.line || seg.line.length < 2) continue;
+    const mid = seg.line[Math.floor(seg.line.length / 2)];
+    const dLat = (mid[0] - userLat) * 111320;
+    const dLng = (mid[1] - userLng) * 111320 * cosLat;
+    if (dLat * dLat + dLng * dLng > radiusSq) continue;
+    if (bounds && !bounds.contains([mid[0], mid[1]])) continue;
+    const label = actionableSafetyLabel(seg);
+    // Only highlight things the driver actually cares about: 'free' is a
+    // green pass; 'metered' is paid-but-parkable. Skip restricted (already
+    // visible in red on regular map) and unknown (no signal).
+    if (label.severity !== 'free' && label.severity !== 'metered') continue;
+    const color = label.severity === 'free' ? '#16a34a' : '#f59e0b';
+    const top = L.polyline(seg.line, {
+      color, weight: 7, opacity: 0.92,
+      lineCap: 'round', lineJoin: 'round', interactive: false,
+      className: 'dm-side-highlight'
+    });
+    top.addTo(map);
+    drivingNearbyHighlights.push(top);
+  }
+}
+function clearDrivingNearbyHighlights() {
+  if (typeof map === 'undefined' || !map) return;
+  for (const layer of drivingNearbyHighlights) {
+    try { map.removeLayer(layer); } catch (e) {}
+  }
+  drivingNearbyHighlights = [];
+}
+
 function renderDrivingSideHighlights(ctx) {
   if (typeof map === 'undefined' || !map) return;
   if (!ctx) { clearDrivingSideHighlights(); drivingLastHighlightedBlock = null; return; }
@@ -5527,6 +5593,8 @@ function onDrivingGeoUpdate(position) {
   const ctx = getCurrentDrivingContext(latitude, longitude, heading);
   renderDrivingContext(ctx, { speed, accuracy });
   renderDrivingSideHighlights(ctx);
+  // All nearby blocks colored by safety status (not just current block)
+  renderNearbySafeHighlights(latitude, longitude);
   // Turn-by-turn (Phase 3b)
   if (drivingMapboxRoute) {
     updateTurnRibbon(latitude, longitude);
@@ -7537,7 +7605,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v28';
+const APP_VERSION = 'wepark-v29';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
