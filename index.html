@@ -807,37 +807,40 @@ body.driving-mode .leaflet-control-zoom { display: none; }
   margin-top: 6px;
   display: flex; justify-content: space-between;
 }
-/* User marker: large blue dot with white triangle pointing in heading */
+/* User marker: Apple-Maps-style car icon, rotates with heading. The car emoji
+   renders as a red sedan on iOS — looks great on the target device. The
+   gentle pulse outline tells the user "this is alive / GPS is current." */
 .dm-user-marker {
-  width: 36px; height: 36px;
+  width: 56px; height: 56px;
   position: relative;
+  pointer-events: none;
 }
-.dm-user-marker .dm-user-dot {
-  position: absolute; inset: 6px;
-  background: #2563eb;
+.dm-user-marker .dm-car-bg {
+  position: absolute; inset: 0;
+  background: white;
   border-radius: 50%;
-  border: 3px solid white;
-  box-shadow: 0 4px 12px rgba(37,99,235,0.55);
+  box-shadow: 0 4px 14px rgba(37,99,235,0.45);
+  border: 3px solid #2563eb;
 }
-.dm-user-marker .dm-user-arrow {
-  position: absolute; top: -2px; left: 50%;
-  transform: translateX(-50%);
-  width: 0; height: 0;
-  border-left: 8px solid transparent;
-  border-right: 8px solid transparent;
-  border-bottom: 14px solid #2563eb;
-  filter: drop-shadow(0 2px 3px rgba(37,99,235,0.45));
+.dm-user-marker .dm-car-icon {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px; line-height: 1;
+  /* Heading rotation applied inline; transform-origin centers the rotation */
+  transform-origin: center center;
 }
-.dm-user-marker .dm-user-pulse {
-  position: absolute; inset: -8px;
+.dm-user-marker .dm-car-pulse {
+  position: absolute; inset: -10px;
   border-radius: 50%;
-  background: rgba(37,99,235,0.18);
+  background: rgba(37,99,235,0.22);
   animation: dmPulse 2s ease-out infinite;
 }
 @keyframes dmPulse {
-  0% { transform: scale(0.6); opacity: 0.7; }
-  100% { transform: scale(1.4); opacity: 0; }
+  0% { transform: scale(0.65); opacity: 0.75; }
+  100% { transform: scale(1.45); opacity: 0; }
 }
+/* Current-block side-of-street highlight overlays */
+.dm-side-highlight { mix-blend-mode: normal; }
 .dm-entry-btn {
   width: 100%; padding: 14px;
   background: linear-gradient(180deg, #1e293b, #0f172a);
@@ -5060,7 +5063,9 @@ let drivingVoiceMuted = false;      // persisted in localStorage
 let drivingUserMarker = null;       // L.marker showing user position + heading
 let drivingPreEntryView = null;     // {center, zoom} to restore on exit
 const DRIVING_VOICE_MIN_GAP_MS = 12000; // don't talk more often than this
-const DRIVING_ZOOM = 17;            // locked zoom while in drive mode
+const DRIVING_ZOOM = 18;            // locked zoom while in drive mode (close enough that current block dominates the view)
+let drivingSideHighlights = [];     // L/R side polylines drawn on top of map for the current block
+let drivingLastHighlightedBlock = null;
 
 // Compass bearing of each side ("N"/"S"/"E"/"W") in degrees relative to north
 const SIDE_BEARING = { N: 0, E: 90, S: 180, W: 270 };
@@ -5177,11 +5182,13 @@ async function exitDrivingMode() {
     try { await drivingWakeLock.release(); } catch (e) {}
     drivingWakeLock = null;
   }
-  // Remove user marker
+  // Remove user marker + side highlights
   if (drivingUserMarker && typeof map !== 'undefined' && map) {
     try { map.removeLayer(drivingUserMarker); } catch (e) {}
   }
   drivingUserMarker = null;
+  clearDrivingSideHighlights();
+  drivingLastHighlightedBlock = null;
   // Restore pre-entry map view
   if (drivingPreEntryView && typeof map !== 'undefined' && map) {
     map.setView(drivingPreEntryView.center, drivingPreEntryView.zoom, { animate: false });
@@ -5218,15 +5225,64 @@ function ensureDrivingUserMarker(lat, lng, heading) {
   }
 }
 
+// Highlight the current block's LEFT and RIGHT side polylines on top of the
+// map with thick saturated colors. Drivers can immediately see "the green
+// line is the side I should be looking at." Removed when the block changes.
+const DRIVING_SIDE_COLORS = {
+  free: '#16a34a',
+  metered: '#f59e0b',
+  restricted: '#dc2626',
+  unknown: '#94a3b8'
+};
+function clearDrivingSideHighlights() {
+  if (typeof map === 'undefined' || !map) return;
+  for (const layer of drivingSideHighlights) {
+    try { map.removeLayer(layer); } catch (e) {}
+  }
+  drivingSideHighlights = [];
+}
+function renderDrivingSideHighlights(ctx) {
+  if (typeof map === 'undefined' || !map) return;
+  if (!ctx) { clearDrivingSideHighlights(); drivingLastHighlightedBlock = null; return; }
+  const blockKey = `${ctx.street}|${ctx.from}|${ctx.to}`;
+  if (blockKey === drivingLastHighlightedBlock) return; // already drawn
+  clearDrivingSideHighlights();
+  drivingLastHighlightedBlock = blockKey;
+
+  const drawSide = (seg, severity) => {
+    if (!seg || !seg.line || seg.line.length < 2) return;
+    const color = DRIVING_SIDE_COLORS[severity] || DRIVING_SIDE_COLORS.unknown;
+    // White underglow for contrast against the basemap, then the colored line on top
+    const underglow = L.polyline(seg.line, {
+      color: '#ffffff', weight: 14, opacity: 0.85,
+      lineCap: 'round', lineJoin: 'round', interactive: false,
+      className: 'dm-side-highlight'
+    });
+    underglow.addTo(map);
+    drivingSideHighlights.push(underglow);
+    const top = L.polyline(seg.line, {
+      color, weight: 9, opacity: 0.95,
+      lineCap: 'round', lineJoin: 'round', interactive: false,
+      className: 'dm-side-highlight'
+    });
+    top.addTo(map);
+    drivingSideHighlights.push(top);
+  };
+  drawSide(ctx.leftSeg, ctx.leftLabel?.severity);
+  drawSide(ctx.rightSeg, ctx.rightLabel?.severity);
+}
+
 function buildUserMarkerHTML(headingDeg) {
-  const arrowStyle = headingDeg != null
-    ? `transform:translateX(-50%) rotate(${headingDeg}deg);transform-origin:center 24px`
-    : 'display:none';
+  // 🚗 emoji renders as a red car on iOS Safari (Apple's design) — looks
+  // very Apple-Maps. The car emoji's natural orientation faces RIGHT (east),
+  // so to align with compass heading (where 0° = north), we subtract 90°.
+  const carRotation = headingDeg != null ? (headingDeg - 90) : 0;
+  const carStyle = `transform:rotate(${carRotation}deg)`;
   return (
     '<div class="dm-user-marker">' +
-      '<div class="dm-user-pulse"></div>' +
-      '<div class="dm-user-arrow" style="' + arrowStyle + '"></div>' +
-      '<div class="dm-user-dot"></div>' +
+      '<div class="dm-car-pulse"></div>' +
+      '<div class="dm-car-bg"></div>' +
+      '<div class="dm-car-icon" style="' + carStyle + '">🚗</div>' +
     '</div>'
   );
 }
@@ -5274,6 +5330,7 @@ function onDrivingGeoUpdate(position) {
   ensureDrivingUserMarker(latitude, longitude, heading);
   const ctx = getCurrentDrivingContext(latitude, longitude, heading);
   renderDrivingContext(ctx, { speed, accuracy });
+  renderDrivingSideHighlights(ctx);
 }
 
 function renderDrivingContext(ctx, meta) {
@@ -6581,7 +6638,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v22';
+const APP_VERSION = 'wepark-v23';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {

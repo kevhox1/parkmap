@@ -58,7 +58,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 ## How to work in this repo
 
 - **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
-- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v22`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
+- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v23`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
 - **Tile data is pre-built and committed.** The `tiles/` directory holds 976 pre-generated JSON tiles (~6.39 MB). Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large.
 - **No automated test suite exists.** QA is done via:
   - Independent QA subagent review (see `TRACKER_QA_VERIFY.md` for the pattern)
@@ -89,6 +89,15 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Data sources:** NYC parking sign data (merged ASP + main), pre-tiled into 976 JSON tiles under `tiles/`
 
 ## Changelog
+
+### 2026-05-01 — Drive Mode v2.1 (visual polish)
+- Replaced the blue dot user marker with an Apple-Maps-style **🚗 car emoji** in a white circle with a blue ring + pulse outline. Rotates with GPS heading (offset −90° because the car emoji's natural orientation faces east, not north).
+- Bumped Drive Mode zoom from 17 → **18** so the current block dominates the view, like Apple Maps in turn-by-turn mode.
+- New **side-of-street highlight overlay**: when the current block is detected, both LEFT and RIGHT side polylines are drawn extra-thick (weight 9) on top of the regular map, with a white underglow (weight 14) for legibility, and colored by parking severity (free=green, metered=yellow/orange, restricted=red, unknown=grey). Driver can immediately see which side of the road they should be looking at, with the colors matching the bottom-card text.
+- Highlights cleared + redrawn only when the block changes (no per-tick churn).
+- Cleanup on Drive Mode exit: highlights removed and pre-entry map view restored.
+- New spec file `docs/drive-mode-routing.md` for the v3 build (destination input + Mapbox routing + parking-aware path selection). Build deferred — needs Kevin to create a Mapbox account first.
+- SW cache bumped to `wepark-v23`.
 
 ### 2026-04-26 — Drive Mode v2 (map-centric, Waze/Google Maps-style)
 - v1 missed the mark per first user — black-screen text-card UI lost spatial context. v2 rebuilds Drive Mode as a transparent overlay *on top* of the existing Leaflet map, so the map IS the interface.
