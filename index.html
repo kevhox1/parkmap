@@ -732,10 +732,113 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .park-status-safe { background: #dcfce7; color: #15803d; }
 .park-status-warn { background: #fef3c7; color: #92400e; }
 .park-status-danger { background: #fee2e2; color: #dc2626; }
+
+/* ==== Driving Mode (full-screen takeover, glanceable, voice-narrated) ==== */
+#drivingMode {
+  position: fixed; inset: 0; z-index: 12000;
+  background: #0f172a; color: white;
+  display: none; flex-direction: column;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  user-select: none; -webkit-user-select: none;
+}
+#drivingMode.active { display: flex; }
+.dm-topbar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 18px; flex-shrink: 0;
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.dm-topbar button {
+  background: rgba(255,255,255,0.1); color: white;
+  border: none; border-radius: 12px;
+  padding: 12px 18px; font-size: 16px; font-weight: 600;
+  cursor: pointer; min-height: 44px; min-width: 44px;
+}
+.dm-topbar button:active { background: rgba(255,255,255,0.2); }
+.dm-content {
+  flex: 1; display: flex; flex-direction: column;
+  padding: 30px 24px; gap: 22px;
+  overflow-y: auto;
+}
+.dm-street {
+  font-size: clamp(48px, 12vw, 96px); font-weight: 800;
+  text-align: center; line-height: 1.05;
+  letter-spacing: -0.02em;
+  word-break: break-word;
+}
+.dm-color-band {
+  height: 14px; border-radius: 8px;
+  background: #6b7280;
+}
+.dm-color-band.free { background: #16a34a; }
+.dm-color-band.metered { background: #f59e0b; }
+.dm-color-band.restricted { background: #dc2626; }
+.dm-color-band.unknown { background: #6b7280; }
+.dm-side {
+  background: rgba(255,255,255,0.06);
+  border-radius: 16px;
+  padding: 18px 20px;
+  border-left: 6px solid #6b7280;
+}
+.dm-side.free { border-left-color: #16a34a; }
+.dm-side.metered { border-left-color: #f59e0b; }
+.dm-side.restricted { border-left-color: #dc2626; }
+.dm-side-label {
+  font-size: 14px; font-weight: 600;
+  color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em;
+  margin-bottom: 6px;
+}
+.dm-side-text {
+  font-size: clamp(22px, 5vw, 32px); font-weight: 700;
+  line-height: 1.2;
+}
+.dm-status-line {
+  font-size: 13px; color: #94a3b8;
+  text-align: center;
+  margin-top: auto;
+  padding-top: 14px;
+}
+.dm-empty {
+  text-align: center; color: #94a3b8; padding: 40px 20px;
+  font-size: 16px;
+}
+.dm-entry-btn {
+  width: 100%; padding: 14px;
+  background: linear-gradient(180deg, #1e293b, #0f172a);
+  color: white;
+  border: 1px solid #334155; border-radius: 12px;
+  font-size: 15px; font-weight: 700;
+  cursor: pointer; min-height: 48px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  margin-bottom: 10px;
+}
+.dm-entry-btn:active { transform: scale(0.99); }
 </style>
 </head>
 <body>
 <div id="map"></div>
+
+<!-- Driving Mode (full-screen overlay) -->
+<div id="drivingMode" role="region" aria-label="Driving Mode">
+  <div class="dm-topbar">
+    <button onclick="exitDrivingMode()" aria-label="Exit driving mode">✕ Exit</button>
+    <div style="display:flex;gap:8px">
+      <button id="dmMuteBtn" onclick="toggleDrivingModeVoice()" aria-label="Toggle voice">🔊</button>
+    </div>
+  </div>
+  <div class="dm-content">
+    <div id="dmStreet" class="dm-street">—</div>
+    <div id="dmColorBand" class="dm-color-band unknown"></div>
+    <div id="dmLeftSide" class="dm-side">
+      <div class="dm-side-label">⬅️ Left side</div>
+      <div id="dmLeftText" class="dm-side-text">—</div>
+    </div>
+    <div id="dmRightSide" class="dm-side">
+      <div class="dm-side-label">➡️ Right side</div>
+      <div id="dmRightText" class="dm-side-text">—</div>
+    </div>
+    <div id="dmStatusLine" class="dm-status-line">Waiting for GPS…</div>
+  </div>
+</div>
 
 <!-- Auth: Sign-in modal -->
 <div id="signInModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10000;align-items:center;justify-content:center;padding:20px">
@@ -802,6 +905,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 
   <div class="panel-body" id="panelBody">
     <div id="aspStatusBanner" style="display:none;margin-bottom:10px;padding:10px 12px;border-radius:10px;font-size:13px;font-weight:600;line-height:1.3"></div>
+    <button class="dm-entry-btn" onclick="enterDrivingMode()" aria-label="Enter driving mode">🚗 Driving Mode</button>
     <div class="mode-tabs">
       <div class="mode-tab active" data-mode="signs" onclick="setMode('signs')">Signs</div>
       <div class="mode-tab" data-mode="free-today" onclick="setMode('free-today')">Free Today</div>
@@ -4859,6 +4963,282 @@ function getNextRestrictionTimeLabel(hours) {
   return `${dayLabel} ${timeStr}`;
 }
 
+// ==== Driving Mode helpers ====
+// actionableSafetyLabel returns the driver-friendly answer to "can I park here
+// and for how long?" — formatted as "Free until Thu 9:30am", "Metered until 7pm",
+// "No parking", etc. Returns { text, severity } where severity is one of
+// 'free' (green), 'metered' (yellow), 'restricted' (red), or 'unknown'.
+function actionableSafetyLabel(seg) {
+  if (!seg) return { text: '—', severity: 'unknown' };
+  const rules = seg.rules || [];
+  if (!rules.length) return { text: 'No data', severity: 'unknown' };
+
+  const restriction = computeNextRestrictionHours(seg);
+  const dom = seg.dominantCategory || mostRestrictiveCategory(rules);
+
+  // Active "no parking" / "no standing" / special right now → red
+  if (restriction && restriction.hours === 0) {
+    if (restriction.cat === 'NO_STANDING') return { text: 'No standing', severity: 'restricted' };
+    if (restriction.cat === 'NO_PARKING') return { text: 'No parking', severity: 'restricted' };
+    if (restriction.cat === 'TRUCK_LOADING') return { text: 'No parking (truck loading)', severity: 'restricted' };
+    if (restriction.cat === 'SPECIAL') return { text: 'Restricted', severity: 'restricted' };
+    if (isASPCategory(restriction.cat)) {
+      const label = (CATEGORIES[restriction.cat] && CATEGORIES[restriction.cat].label) || restriction.cat;
+      return { text: 'No parking (' + label + ')', severity: 'restricted' };
+    }
+    return { text: 'Restricted', severity: 'restricted' };
+  }
+
+  // ASP / no-parking style restriction coming later → "Free until <when>"
+  if (restriction && restriction.hours < 168 && isASPCategory(restriction.cat)) {
+    return { text: 'Free until ' + getNextRestrictionTimeLabel(restriction.hours), severity: 'free' };
+  }
+  if (restriction && restriction.hours < 168 && (restriction.cat === 'NO_PARKING' || restriction.cat === 'TRUCK_LOADING')) {
+    return { text: 'Free until ' + getNextRestrictionTimeLabel(restriction.hours), severity: 'free' };
+  }
+
+  // Metered: paid now or free now? Reuse meteredStatusLabel which does the
+  // sub-day formatting (paid until 7pm / free until 9am).
+  if (dom === 'METERED' || rules.some(r => r.category === 'METERED')) {
+    const lbl = meteredStatusLabel(seg);
+    // meteredStatusLabel returns "Metered (paid until 7pm)" / "Metered (free until 9am)"
+    // Translate to severity for the color band.
+    if (/paid until/i.test(lbl)) return { text: lbl.replace(/^Metered \(|\)$/g, ''), severity: 'metered' };
+    return { text: lbl.replace(/^Metered \(|\)$/g, ''), severity: 'free' };
+  }
+
+  // No upcoming restriction at all (rare but possible)
+  return { text: 'Free', severity: 'free' };
+}
+
+// ==== Driving Mode runtime ====
+// State
+let drivingModeActive = false;
+let drivingGeoWatchId = null;
+let drivingWakeLock = null;
+let drivingLastStreet = null;       // "STREET|FROM|TO" of last announced street
+let drivingLastSpoken = 0;          // timestamp of last voice announcement
+let drivingVoiceMuted = false;      // persisted in localStorage
+const DRIVING_VOICE_MIN_GAP_MS = 12000; // don't talk more often than this
+
+// Compass bearing of each side ("N"/"S"/"E"/"W") in degrees relative to north
+const SIDE_BEARING = { N: 0, E: 90, S: 180, W: 270 };
+
+// Smallest angular distance between two compass bearings (in degrees, 0-180)
+function bearingDelta(a, b) {
+  const d = Math.abs(((a - b) % 360 + 360) % 360);
+  return d > 180 ? 360 - d : d;
+}
+
+// Given driver heading and a side ("N"/"S"/"E"/"W"), return 'left' or 'right'
+// based on which one is on the driver's left or right.
+function sideRelativeToHeading(heading, side) {
+  if (heading == null || isNaN(heading)) return null;
+  const sideBearing = SIDE_BEARING[side];
+  if (sideBearing == null) return null;
+  // LEFT of driver = heading - 90 (counterclockwise rotation)
+  const leftBearing = (heading - 90 + 360) % 360;
+  const rightBearing = (heading + 90) % 360;
+  const dLeft = bearingDelta(sideBearing, leftBearing);
+  const dRight = bearingDelta(sideBearing, rightBearing);
+  return dLeft <= dRight ? 'left' : 'right';
+}
+
+// Find the BLOCK (street + from + to) that the user is currently on, with
+// both LEFT and RIGHT side segments resolved relative to driving heading.
+// Returns { street, from, to, leftSeg, rightSeg, leftLabel, rightLabel } or null.
+function getCurrentDrivingContext(lat, lng, heading) {
+  if (!segmentLayers || !segmentLayers.length) return null;
+  // Find closest segment overall
+  const closest = findClosestSegment(lat, lng);
+  if (!closest) return null;
+  const block = { street: closest.street, from: closest.from, to: closest.to };
+  // For each side that exists in segmentLayers, classify left/right
+  const sides = ['N', 'S', 'E', 'W']
+    .map(s => ({ s, seg: findSegmentByBlock(block.street, block.from, block.to, s) }))
+    .filter(x => x.seg);
+  let leftSeg = null, rightSeg = null;
+  for (const { s, seg } of sides) {
+    const which = sideRelativeToHeading(heading, s);
+    if (which === 'left' && !leftSeg) leftSeg = seg;
+    else if (which === 'right' && !rightSeg) rightSeg = seg;
+  }
+  // Fallback when heading is unavailable: just pick two opposing sides as
+  // L/R by convention. North/West -> Left, South/East -> Right.
+  if (!leftSeg && !rightSeg && sides.length) {
+    const fallbackLeft = sides.find(x => x.s === 'N' || x.s === 'W');
+    const fallbackRight = sides.find(x => x.s === 'S' || x.s === 'E');
+    leftSeg = fallbackLeft ? fallbackLeft.seg : (sides[0] && sides[0].seg) || null;
+    rightSeg = fallbackRight ? fallbackRight.seg : (sides[1] && sides[1].seg) || null;
+  }
+  return {
+    ...block,
+    leftSeg, rightSeg,
+    leftLabel: leftSeg ? actionableSafetyLabel(leftSeg) : { text: 'No data', severity: 'unknown' },
+    rightLabel: rightSeg ? actionableSafetyLabel(rightSeg) : { text: 'No data', severity: 'unknown' }
+  };
+}
+
+async function enterDrivingMode() {
+  if (drivingModeActive) return;
+  if (!navigator.geolocation) {
+    alert('GPS not available on this device.');
+    return;
+  }
+  drivingModeActive = true;
+  document.getElementById('drivingMode').classList.add('active');
+  drivingVoiceMuted = localStorage.getItem('wepark_dm_voice_muted') === '1';
+  document.getElementById('dmMuteBtn').textContent = drivingVoiceMuted ? '🔇' : '🔊';
+  setDrivingModeStatus('Acquiring GPS…');
+
+  // Wake lock so the screen stays on while driving
+  try {
+    if ('wakeLock' in navigator) {
+      drivingWakeLock = await navigator.wakeLock.request('screen');
+      drivingWakeLock.addEventListener?.('release', () => { drivingWakeLock = null; });
+    }
+  } catch (e) {
+    console.warn('Wake lock denied:', e);
+  }
+
+  // Start watching position
+  drivingGeoWatchId = navigator.geolocation.watchPosition(
+    onDrivingGeoUpdate,
+    (err) => {
+      console.warn('Geo error:', err);
+      setDrivingModeStatus('GPS error: ' + (err.message || err.code));
+    },
+    { enableHighAccuracy: true, maximumAge: 2000, timeout: 15000 }
+  );
+
+  // Re-acquire wake lock if visibility changes (iOS sometimes drops it)
+  document.addEventListener('visibilitychange', reacquireWakeLockOnVisible);
+}
+
+async function exitDrivingMode() {
+  drivingModeActive = false;
+  document.getElementById('drivingMode').classList.remove('active');
+  if (drivingGeoWatchId != null) {
+    navigator.geolocation.clearWatch(drivingGeoWatchId);
+    drivingGeoWatchId = null;
+  }
+  if (drivingWakeLock) {
+    try { await drivingWakeLock.release(); } catch (e) {}
+    drivingWakeLock = null;
+  }
+  drivingLastStreet = null;
+  document.removeEventListener('visibilitychange', reacquireWakeLockOnVisible);
+  // Stop any in-flight speech
+  try { window.speechSynthesis?.cancel(); } catch (e) {}
+}
+
+async function reacquireWakeLockOnVisible() {
+  if (!drivingModeActive) return;
+  if (document.visibilityState !== 'visible') return;
+  if (drivingWakeLock) return;
+  try {
+    if ('wakeLock' in navigator) {
+      drivingWakeLock = await navigator.wakeLock.request('screen');
+    }
+  } catch (e) {
+    /* user-gesture sometimes required; non-fatal */
+  }
+}
+
+function toggleDrivingModeVoice() {
+  drivingVoiceMuted = !drivingVoiceMuted;
+  localStorage.setItem('wepark_dm_voice_muted', drivingVoiceMuted ? '1' : '0');
+  document.getElementById('dmMuteBtn').textContent = drivingVoiceMuted ? '🔇' : '🔊';
+  if (drivingVoiceMuted) {
+    try { window.speechSynthesis?.cancel(); } catch (e) {}
+  }
+}
+
+function setDrivingModeStatus(text) {
+  const el = document.getElementById('dmStatusLine');
+  if (el) el.textContent = text || '';
+}
+
+function onDrivingGeoUpdate(position) {
+  if (!drivingModeActive) return;
+  const { latitude, longitude, heading, speed, accuracy } = position.coords;
+  // Nudge map to keep tiles loading around the user's location so segments are present
+  if (typeof map !== 'undefined' && map) {
+    map.panTo([latitude, longitude], { animate: false });
+  }
+  const ctx = getCurrentDrivingContext(latitude, longitude, heading);
+  renderDrivingContext(ctx, { speed, accuracy });
+}
+
+function renderDrivingContext(ctx, meta) {
+  const streetEl = document.getElementById('dmStreet');
+  const bandEl = document.getElementById('dmColorBand');
+  const leftEl = document.getElementById('dmLeftSide');
+  const leftText = document.getElementById('dmLeftText');
+  const rightEl = document.getElementById('dmRightSide');
+  const rightText = document.getElementById('dmRightText');
+
+  if (!ctx) {
+    streetEl.textContent = '—';
+    bandEl.className = 'dm-color-band unknown';
+    leftEl.className = 'dm-side';
+    rightEl.className = 'dm-side';
+    leftText.textContent = '—';
+    rightText.textContent = '—';
+    setDrivingModeStatus(meta && meta.accuracy ? `No street nearby (±${Math.round(meta.accuracy)}m)` : 'No street nearby');
+    return;
+  }
+
+  streetEl.textContent = toTitleCase(ctx.street || '');
+
+  // Color band picks the WORSE severity between the two sides — if either is
+  // restricted, the band is red so the driver doesn't think the block is fine.
+  const sevRank = { restricted: 3, metered: 2, free: 1, unknown: 0 };
+  const lSev = ctx.leftLabel.severity || 'unknown';
+  const rSev = ctx.rightLabel.severity || 'unknown';
+  const worseSev = sevRank[lSev] >= sevRank[rSev] ? lSev : rSev;
+  bandEl.className = 'dm-color-band ' + worseSev;
+
+  leftEl.className = 'dm-side ' + lSev;
+  rightEl.className = 'dm-side ' + rSev;
+  leftText.textContent = ctx.leftLabel.text;
+  rightText.textContent = ctx.rightLabel.text;
+
+  const speedKmh = meta && meta.speed != null && meta.speed >= 0 ? Math.round(meta.speed * 3.6) : null;
+  setDrivingModeStatus(speedKmh != null ? `${speedKmh} km/h · ±${Math.round(meta.accuracy || 0)}m GPS` : '');
+
+  // Voice — only when the BLOCK changes (street+from+to)
+  const blockKey = `${ctx.street}|${ctx.from}|${ctx.to}`;
+  if (blockKey !== drivingLastStreet) {
+    drivingLastStreet = blockKey;
+    speakDrivingContext(ctx);
+  }
+}
+
+function speakDrivingContext(ctx) {
+  if (drivingVoiceMuted) return;
+  if (!('speechSynthesis' in window)) return;
+  const now = Date.now();
+  if (now - drivingLastSpoken < DRIVING_VOICE_MIN_GAP_MS) return;
+  drivingLastSpoken = now;
+
+  const street = toTitleCase(ctx.street || '').replace(/\bSt\b/g, 'Street').replace(/\bAve\b/g, 'Avenue');
+  const parts = [street + '.'];
+  const lLbl = ctx.leftLabel?.text;
+  const rLbl = ctx.rightLabel?.text;
+  if (lLbl && lLbl !== 'No data') parts.push('Left side, ' + lLbl + '.');
+  if (rLbl && rLbl !== 'No data') parts.push('Right side, ' + rLbl + '.');
+  const text = parts.join(' ');
+  try {
+    window.speechSynthesis.cancel();
+    const utt = new SpeechSynthesisUtterance(text);
+    utt.rate = 1.0; utt.pitch = 1.0;
+    window.speechSynthesis.speak(utt);
+  } catch (e) {
+    console.warn('Speech failed:', e);
+  }
+}
+
 function clearSmartMoveOverlay() {
   if (smartMoveMarker) {
     map.removeLayer(smartMoveMarker);
@@ -5953,7 +6333,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v19';
+const APP_VERSION = 'wepark-v20';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {

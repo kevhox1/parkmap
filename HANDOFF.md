@@ -58,7 +58,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 ## How to work in this repo
 
 - **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
-- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v19`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
+- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v20`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
 - **Tile data is pre-built and committed.** The `tiles/` directory holds 976 pre-generated JSON tiles (~6.39 MB). Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large.
 - **No automated test suite exists.** QA is done via:
   - Independent QA subagent review (see `TRACKER_QA_VERIFY.md` for the pattern)
@@ -89,6 +89,19 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Data sources:** NYC parking sign data (merged ASP + main), pre-tiled into 976 JSON tiles under `tiles/`
 
 ## Changelog
+
+### 2026-04-26 — Driving Mode v1 (PoC)
+- After real user feedback ("incredibly difficult to use live in the car"), introduced a separate full-screen **Driving Mode** view optimized for a phone propped on a dashboard mount. Spec: `docs/driving-mode.md`.
+- Entry: 🚗 Driving Mode button at the top of the panel body. Tap → request GPS + screen wake-lock → full-screen overlay takes over.
+- UI strips everything except the actionable info: giant street name, color band (green/yellow/red), LEFT side label, RIGHT side label. No map, no tabs, no chat — read-only, glanceable.
+- LEFT/RIGHT computed from GPS heading (`coords.heading`) vs each side polyline's compass bearing (W/E/N/S). Falls back to N/W=Left, S/E=Right if heading unavailable (e.g., user stopped).
+- New `actionableSafetyLabel(seg)` returns `{ text, severity }`. Reuses `computeNextRestrictionHours` and `meteredStatusLabel`. Examples: "Free until Thu 9:30am", "Metered until 7pm", "Free until 9am" (overnight metered), "No parking", "No standing".
+- New `getCurrentDrivingContext(lat, lng, heading)` resolves the user's current block (street + from + to) via `findClosestSegment`, then both side segments via `findSegmentByBlock`, then assigns LEFT/RIGHT.
+- Voice via `window.speechSynthesis`, fired only on block change (not every GPS tick), rate-limited to once per 12s, mutable via 🔊/🔇 button (preference persisted in localStorage). Format: "Bowery. Left side, free until Thursday 9:30am. Right side, metered until 7pm."
+- Wake lock acquired on entry (`navigator.wakeLock`); re-acquired on tab visibility change; released on exit.
+- Map auto-pans to user's GPS location while in driving mode so tiles for the current area keep loading.
+- Out of v1 scope: turn-by-turn navigation, pre-set "intent" mode, voice commands, "Park here now" auto-detect.
+- SW cache bumped to `wepark-v20`.
 
 ### 2026-04-22 — Park-pin & route polish
 - **Park pin no longer snaps.** The "Park My Car Here" flow used to snap the marker onto the side polyline of the auto-detected segment after the user confirmed N/S/E/W. At corners and intersections this could move the marker 30-50m away from where the user actually tapped (and onto the wrong street). The marker now stays at the exact lat/lng the user picked. The detected segment is still used for parking-rules lookup but no longer for visual placement.
