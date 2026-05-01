@@ -998,6 +998,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
         <button id="zoneChatSendBtn" onclick="sendZoneMessage()" disabled style="padding:8px 14px;border:none;border-radius:8px;background:#2563eb;color:white;font-weight:600;font-size:13px;cursor:pointer;min-height:44px">Send</button>
       </div>
       <div id="zoneChatStatus" style="font-size:11px;color:#6b7280;margin-top:4px;min-height:14px"></div>
+      <button onclick="runChatDiagnostics()" style="margin-top:6px;width:100%;padding:6px 10px;border:1px solid #d1d5db;border-radius:8px;background:#f9fafb;color:#6b7280;font-size:11px;cursor:pointer">🩺 Run chat diagnostics</button>
     </div>
 
     <div style="margin-top:12px;padding-top:10px;border-top:1px solid #eee">
@@ -5801,6 +5802,15 @@ document.getElementById('puDate').addEventListener('change', () => { if (current
 document.getElementById('puTime').addEventListener('change', () => { if (currentMode === 'park-until') updateMap(); });
 window.addEventListener('resize', syncResponsivePanels);
 
+// Auth state declared HERE (before any code runs that touches it). Previously
+// these were declared further down in the script and the early renderAuthChip()
+// call below tripped the temporal dead zone (TDZ) — accessing currentUser
+// before its `let` was reached threw a ReferenceError that killed the rest of
+// the boot script (including SW registration and the version chip IIFE).
+let supabaseAuthClient = null;
+let currentUser = null;
+let supabaseAuthReady = null;
+
 init();
 setupPWAInstallHint();
 // Render the auth chip immediately with default state so the user always sees
@@ -5958,6 +5968,122 @@ function renderZoneChatMessages() {
   container.scrollTop = container.scrollHeight;
 }
 
+// ==== Chat diagnostics — one-tap health check across every layer ====
+async function runChatDiagnostics() {
+  const results = [];
+  const ok = (label, ...details) => results.push('✅ ' + label + (details.length ? ' — ' + details.join(' ') : ''));
+  const fail = (label, err) => results.push('❌ ' + label + ' — ' + (err && err.message ? err.message : String(err)));
+  const info = (label, val) => results.push('ℹ️  ' + label + ': ' + val);
+
+  info('App version', APP_VERSION || 'unknown');
+
+  // Layer 1: Supabase client initialized?
+  if (!supabaseAuthClient) {
+    fail('Supabase client', 'not initialized — config or network failure');
+    return showDiagnostics(results);
+  }
+  ok('Supabase client');
+
+  // Layer 2: Auth state
+  try {
+    const { data: { session }, error } = await supabaseAuthClient.auth.getSession();
+    if (error) { fail('Auth session', error); return showDiagnostics(results); }
+    if (!session) {
+      info('Auth session', 'NOT signed in');
+      results.push('ℹ️  Stopping — sign in first to test the rest.');
+      return showDiagnostics(results);
+    }
+    ok('Auth session', 'signed in as ' + session.user.email);
+    info('User ID', session.user.id);
+    info('user_metadata.username', session.user.user_metadata?.username || '(none set)');
+  } catch (e) { fail('Auth session', e); return showDiagnostics(results); }
+
+  // Layer 3: Profile row
+  try {
+    const { data, error } = await supabaseAuthClient
+      .from('profiles')
+      .select('id, username, reputation')
+      .eq('id', currentUser.id)
+      .maybeSingle();
+    if (error) fail('Profile row', error);
+    else if (!data) results.push('⚠️  Profile row missing — sign in flow may not have inserted it. Try setting your username again.');
+    else ok('Profile row', '@' + data.username + ' rep=' + data.reputation);
+  } catch (e) { fail('Profile row', e); }
+
+  // Layer 4: Can read zone_messages?
+  try {
+    const { data, error, count } = await supabaseAuthClient
+      .from('zone_messages')
+      .select('id', { count: 'exact', head: true })
+      .eq('zone_id', CURRENT_ZONE_ID);
+    if (error) fail('Read zone_messages', error);
+    else ok('Read zone_messages', 'rows=' + (count ?? '?'));
+  } catch (e) { fail('Read zone_messages', e); }
+
+  // Layer 5: Can insert a test message?
+  let insertedId = null;
+  try {
+    const testBody = '🩺 diagnostic ping ' + new Date().toISOString();
+    const { data, error } = await supabaseAuthClient
+      .from('zone_messages')
+      .insert({ zone_id: CURRENT_ZONE_ID, author_id: currentUser.id, message_type: 'user', body: testBody })
+      .select('id')
+      .single();
+    if (error) fail('Insert test message', error);
+    else { ok('Insert test message', 'id=' + data.id); insertedId = data.id; }
+  } catch (e) { fail('Insert test message', e); }
+
+  // Clean up the test message so the chat doesn't get spammed
+  if (insertedId) {
+    try {
+      const { error } = await supabaseAuthClient
+        .from('zone_messages')
+        .delete()
+        .eq('id', insertedId)
+        .eq('author_id', currentUser.id);
+      if (!error) ok('Cleaned up test message');
+      // RLS may block the delete (no delete policy yet) — that's fine, log it
+      else results.push('ℹ️  Test message remains (no DELETE policy yet): ' + error.message);
+    } catch (e) { results.push('ℹ️  Cleanup skipped: ' + (e.message || e)); }
+  }
+
+  // Layer 6: Realtime channel state
+  try {
+    if (zoneChatSubscription) {
+      const state = zoneChatSubscription.state || 'unknown';
+      ok('Realtime channel', 'state=' + state);
+    } else {
+      results.push('⚠️  Realtime channel not subscribed yet.');
+    }
+  } catch (e) { fail('Realtime channel', e); }
+
+  showDiagnostics(results);
+}
+
+function showDiagnostics(results) {
+  const text = results.join('\n');
+  // Show in a modal-like alert. For mobile, alert() truncates; use a custom popup.
+  const existing = document.getElementById('weparkDiagnosticsModal');
+  if (existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.id = 'weparkDiagnosticsModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.7);z-index:13000;display:flex;align-items:center;justify-content:center;padding:20px';
+  const inner = document.createElement('div');
+  inner.style.cssText = 'background:white;border-radius:12px;max-width:500px;max-height:80vh;width:100%;overflow:auto;padding:18px;box-shadow:0 20px 50px rgba(0,0,0,0.3)';
+  inner.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+      <h3 style="margin:0;font-size:16px">🩺 Chat Diagnostics</h3>
+      <button onclick="document.getElementById('weparkDiagnosticsModal')?.remove()" style="width:30px;height:30px;border-radius:6px;border:none;background:#f3f4f6;font-size:16px;cursor:pointer">×</button>
+    </div>
+    <pre style="font-size:11px;line-height:1.5;white-space:pre-wrap;word-break:break-word;background:#f9fafb;padding:10px;border-radius:8px;margin:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace">${escapeHtml(text)}</pre>
+    <div style="margin-top:10px;display:flex;gap:6px">
+      <button onclick="navigator.clipboard?.writeText(${JSON.stringify(text)}).then(()=>alert('Copied'))" style="flex:1;padding:8px;border:1px solid #d1d5db;border-radius:8px;background:white;cursor:pointer;font-size:12px">📋 Copy</button>
+    </div>
+  `;
+  modal.appendChild(inner);
+  document.body.appendChild(modal);
+}
+
 function renderZoneChatMessage(msg) {
   const ts = new Date(msg.created_at);
   const tsLabel = ts.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
@@ -5984,12 +6110,9 @@ function renderZoneChatMessage(msg) {
 }
 
 // ==== Supabase Auth (email magic link, pseudonymous username in user_metadata) ====
-let supabaseAuthClient = null;
-let currentUser = null;
-// Promise that resolves once the initial getSession() round-trip completes,
-// regardless of whether a session was found. Other modules (e.g. zone chat)
-// await this so they don't read currentUser=null prematurely.
-let supabaseAuthReady = null;
+// State variables (supabaseAuthClient, currentUser, supabaseAuthReady) are
+// declared near the top of the boot block to avoid TDZ when renderAuthChip()
+// is called early in the script.
 
 function notifyAuthStateUpdated() {
   if (typeof renderAuthChip === 'function') renderAuthChip();
@@ -6333,7 +6456,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v20';
+const APP_VERSION = 'wepark-v21';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
