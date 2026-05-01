@@ -81,7 +81,7 @@ Per Kevin's call:
 - Mapbox Directions: 100k free requests/month. We hit this only on initial-route + re-route, not per-tick. For a single user driving 5 trips/day = 150 Directions calls/month. We're fine.
 - Mapbox Geocoding: 100k free/month. One call per destination entry. Tiny.
 - Mapbox Tile API: 50k tile loads/month free. Currently we use OpenStreetMap CARTO tiles (free, no key) — leave them as is unless we want Mapbox's tiles for visual consistency.
-- Mapbox API key needed: stored as `window.WEPARK_MAPBOX_TOKEN` in `tracker-config.js` or a new `mapbox-config.js`. Public token is fine for client-side use.
+- Mapbox API key needed: stored at runtime in `localStorage.wepark_mapbox_token`. **NOT in source** because GitHub's secret scanner blocks `pk.*` Mapbox tokens at push time even though they're designed to be public. The v3 build will add a "🗝️ Set Mapbox token" entry UI that prompts the user once and saves to localStorage. Public token, URL-restricted to `kevhox1.github.io` + `localhost:8765` — safe.
 
 ## What we already have (reuse)
 

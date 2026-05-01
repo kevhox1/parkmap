@@ -54,6 +54,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
   - Realtime publication includes `zone_messages`
   - Auth Site URL: `https://kevhox1.github.io/parkmap/`
 - **Tracker provider:** still `'mock'` (localStorage). Flip to `'supabase'` after applying tracker schema.
+- **Mapbox token (Drive Mode v3):** stored at runtime in `localStorage.wepark_mapbox_token`. Created 2026-05-01, public token, URL-restricted to `kevhox1.github.io` + `localhost:8765`. **NOT committed to source** — GitHub's push protection blocks `pk.*` Mapbox tokens even though they're designed to be public, so we read from localStorage instead. The Drive Mode v3 build (per `docs/drive-mode-routing.md`) will surface a "🗝️ Set Mapbox token" UI flow on first use; in the meantime Kevin can preset it via `localStorage.setItem('wepark_mapbox_token', '<the_pk_string>')` in DevTools.
 
 ## How to work in this repo
 
