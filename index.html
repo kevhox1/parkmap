@@ -742,6 +742,14 @@ body.driving-mode #startScreen,
 body.driving-mode #pwaInstallHint,
 body.driving-mode #weparkVersionChip { display: none !important; }
 body.driving-mode .leaflet-control-zoom { display: none; }
+/* Map rotation: when user has a heading, rotate the map so the direction of
+   travel is "up" on screen. CSS variable updated each GPS tick from JS.
+   Scale slightly so corners stay covered as we rotate. */
+body.driving-mode #map {
+  transform: rotate(var(--dm-heading-rot, 0deg)) scale(1.45);
+  transform-origin: center center;
+  transition: transform 600ms cubic-bezier(0.4, 0, 0.2, 1);
+}
 #drivingMode {
   position: fixed; inset: 0; z-index: 12000;
   pointer-events: none; /* let map gestures pass through; bars opt back in */
@@ -853,9 +861,42 @@ body.driving-mode .leaflet-control-zoom { display: none; }
 }
 .dm-entry-btn:active { transform: scale(0.99); }
 
-/* ==== Drive Mode v3 — destination strip (top of overlay) ==== */
+/* ==== Drive Mode v3 — top turn-by-turn ribbon (Apple Maps green band) ==== */
+.dm-turn-ribbon {
+  position: absolute;
+  top: 14px; left: 14px; right: 14px;
+  pointer-events: auto;
+  background: linear-gradient(180deg, #16a34a, #15803d);
+  color: white;
+  border-radius: 18px;
+  padding: 14px 18px;
+  box-shadow: 0 10px 30px rgba(22,163,74,0.35);
+  display: none; align-items: center; gap: 14px;
+  max-width: 540px; margin: 0 auto;
+}
+.dm-turn-ribbon.active { display: flex; }
+.dm-turn-ribbon.dm-turn-soon { background: linear-gradient(180deg, #2563eb, #1d4ed8); box-shadow: 0 10px 30px rgba(37,99,235,0.35); }
+.dm-turn-ribbon.dm-turn-arrived { background: linear-gradient(180deg, #7c3aed, #6d28d9); box-shadow: 0 10px 30px rgba(124,58,237,0.35); }
+.dm-turn-icon {
+  flex-shrink: 0;
+  font-size: 32px; line-height: 1;
+  width: 44px; text-align: center;
+}
+.dm-turn-info { flex: 1; min-width: 0; }
+.dm-turn-distance {
+  font-size: 18px; font-weight: 800; line-height: 1;
+  margin-bottom: 4px;
+  letter-spacing: -0.01em;
+}
+.dm-turn-instruction {
+  font-size: 14px; font-weight: 600; line-height: 1.3;
+  opacity: 0.95;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ==== Drive Mode v3 — destination strip (below turn ribbon, smaller) ==== */
 .dm-dest-strip {
-  position: absolute; top: 14px; left: 70px; right: 70px;
+  position: absolute; top: 96px; left: 70px; right: 70px;
   pointer-events: auto;
   background: rgba(255,255,255,0.97);
   backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
@@ -1021,6 +1062,13 @@ body.driving-mode .leaflet-control-zoom { display: none; }
   <div class="dm-topbar">
     <button onclick="exitDrivingMode()" aria-label="Exit driving mode">✕</button>
     <button id="dmMuteBtn" onclick="toggleDrivingModeVoice()" aria-label="Toggle voice">🔊</button>
+  </div>
+  <div id="dmTurnRibbon" class="dm-turn-ribbon" role="status" aria-live="polite">
+    <div id="dmTurnIcon" class="dm-turn-icon">⬆️</div>
+    <div class="dm-turn-info">
+      <div id="dmTurnDistance" class="dm-turn-distance">—</div>
+      <div id="dmTurnInstruction" class="dm-turn-instruction">—</div>
+    </div>
   </div>
   <div id="dmDestStrip" class="dm-dest-strip">
     <span class="dm-dest-strip-icon">🎯</span>
@@ -5315,7 +5363,15 @@ async function exitDrivingMode() {
   removeDriveRouteLayers();
   drivingDestination = null;
   drivingMapboxRoute = null;
+  drivingRouteSteps = [];
+  drivingCurrentStepIndex = 0;
+  drivingLastTurnVoiceStepIdx = -1;
+  drivingLastTurnVoiceTier = -1;
+  drivingOffRouteSince = 0;
+  drivingArrivalSpoken = false;
+  clearDrivingMapRotation();
   document.getElementById('dmDestStrip')?.classList.remove('active');
+  document.getElementById('dmTurnRibbon')?.classList.remove('active', 'dm-turn-soon', 'dm-turn-arrived');
   // Restore pre-entry map view
   if (drivingPreEntryView && typeof map !== 'undefined' && map) {
     map.setView(drivingPreEntryView.center, drivingPreEntryView.zoom, { animate: false });
@@ -5454,10 +5510,21 @@ function onDrivingGeoUpdate(position) {
   if (typeof map !== 'undefined' && map) {
     map.setView([latitude, longitude], DRIVING_ZOOM, { animate: false });
   }
+  // Heading-up rotation (Phase 3b+)
+  setDrivingMapRotation(heading);
   ensureDrivingUserMarker(latitude, longitude, heading);
   const ctx = getCurrentDrivingContext(latitude, longitude, heading);
   renderDrivingContext(ctx, { speed, accuracy });
   renderDrivingSideHighlights(ctx);
+  // Turn-by-turn (Phase 3b)
+  if (drivingMapboxRoute) {
+    updateTurnRibbon(latitude, longitude);
+    speakTurnIfNeeded(latitude, longitude);
+    // Re-routing (Phase 3d)
+    checkDeviationAndReroute(latitude, longitude);
+    // Arrival (Phase 3e)
+    checkArrival(latitude, longitude, speed);
+  }
 }
 
 function renderDrivingContext(ctx, meta) {
@@ -5558,6 +5625,8 @@ const MAPBOX_DIRECTIONS_URL = 'https://api.mapbox.com/directions/v5/mapbox/drivi
 // State
 let drivingDestination = null;       // { lat, lng, name } currently active
 let drivingMapboxRoute = null;       // raw Mapbox response
+let drivingRouteSteps = [];          // flattened steps from all legs (Phase 3b)
+let drivingCurrentStepIndex = 0;     // which step the user is currently on
 let drivingRouteLayer = null;        // Leaflet polyline of the route
 let drivingDestMarker = null;        // Leaflet marker at destination lat/lng
 let drivingTargetBlockMarker = null; // Pulse marker on the chosen parking block
@@ -5721,9 +5790,16 @@ function setDriveDestination(dest) {
 function clearDriveDestination() {
   drivingDestination = null;
   drivingMapboxRoute = null;
+  drivingRouteSteps = [];
+  drivingCurrentStepIndex = 0;
+  drivingLastTurnVoiceStepIdx = -1;
+  drivingLastTurnVoiceTier = -1;
+  drivingOffRouteSince = 0;
+  drivingArrivalSpoken = false;
   removeDriveRouteLayers();
-  // Hide top strip
+  // Hide top strip + turn ribbon
   document.getElementById('dmDestStrip').classList.remove('active');
+  document.getElementById('dmTurnRibbon').classList.remove('active', 'dm-turn-soon', 'dm-turn-arrived');
 }
 
 function removeDriveRouteLayers() {
@@ -5738,24 +5814,29 @@ function removeDriveRouteLayers() {
   drivingTargetBlockHighlight = null;
 }
 
-async function fetchAndRenderRoute() {
+async function fetchAndRenderRoute(fromLatLng) {
   if (!drivingDestination) return;
   if (typeof map === 'undefined' || !map) return;
   const token = getMapboxToken();
   if (!token) return;
-  // Need user position; if we don't have one yet, try a one-shot getCurrentPosition
-  let userLat = null, userLng = null;
-  try {
-    const pos = await new Promise((resolve, reject) => {
-      navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
-    });
-    userLat = pos.coords.latitude; userLng = pos.coords.longitude;
-  } catch (e) {
-    console.warn('Could not get user position for route:', e);
-    return;
+  let userLat, userLng;
+  if (fromLatLng) {
+    userLat = fromLatLng.lat; userLng = fromLatLng.lng;
+  } else {
+    try {
+      const pos = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 8000 });
+      });
+      userLat = pos.coords.latitude; userLng = pos.coords.longitude;
+    } catch (e) {
+      console.warn('Could not get user position for route:', e);
+      return;
+    }
   }
+  // alternatives=true returns up to 3 routes — we'll pick the one with the
+  // most free-parking exposure (Phase 3c parking-aware route selection)
   const url = `${MAPBOX_DIRECTIONS_URL}${userLng},${userLat};${drivingDestination.lng},${drivingDestination.lat}` +
-    `?access_token=${token}&geometries=geojson&steps=true&overview=full&alternatives=false`;
+    `?access_token=${token}&geometries=geojson&steps=true&overview=full&alternatives=true`;
   try {
     const resp = await fetch(url);
     const data = await resp.json();
@@ -5763,13 +5844,238 @@ async function fetchAndRenderRoute() {
       console.warn('No Mapbox route returned:', data);
       return;
     }
-    drivingMapboxRoute = data.routes[0];
+    // Score alternatives by parking exposure; pick best
+    drivingMapboxRoute = pickBestParkingAwareRoute(data.routes);
+    drivingRouteSteps = flattenSteps(drivingMapboxRoute);
+    drivingCurrentStepIndex = 0;
     renderRouteOnMap(drivingMapboxRoute);
     renderTargetParkingBlock(drivingDestination);
     renderDestinationStrip();
   } catch (e) {
     console.warn('Mapbox Directions failed:', e);
   }
+}
+
+// ---- Parking-aware route selection (Phase 3c) ----
+// Score each candidate route by counting how many block faces with free or
+// metered parking sit within ~30m of the route polyline. The highest-scoring
+// route wins. Falls back to first route if scoring fails.
+function pickBestParkingAwareRoute(routes) {
+  if (!routes || !routes.length) return null;
+  if (routes.length === 1) return routes[0];
+  let best = routes[0], bestScore = -Infinity;
+  for (const route of routes) {
+    let score = 0;
+    try {
+      const coords = route.geometry?.coordinates || [];
+      if (!coords.length) continue;
+      // Sample every Nth point to keep this fast
+      const stride = Math.max(1, Math.floor(coords.length / 60));
+      const samplePoints = coords.filter((_, i) => i % stride === 0);
+      // Build a coarse "is near route" check: for each segment, check distance
+      // to nearest sample point. If ≤30m, count it.
+      const SKIP = new Set(['NO_STANDING', 'NO_PARKING', 'SPECIAL', 'TRUCK_LOADING', 'UNKNOWN']);
+      const counted = new Set();
+      for (const seg of (segmentLayers || [])) {
+        if (!seg.line || seg.line.length < 2) continue;
+        const dom = seg.dominantCategory || mostRestrictiveCategory(seg.rules);
+        if (SKIP.has(dom)) continue;
+        const segMid = seg.line[Math.floor(seg.line.length / 2)];
+        let nearAny = false;
+        for (const sp of samplePoints) {
+          const dx = (sp[0] - segMid[1]) * 111320 * Math.cos(segMid[0] * Math.PI / 180);
+          const dy = (sp[1] - segMid[0]) * 111320;
+          if (dx * dx + dy * dy <= 900) { nearAny = true; break; } // 30m
+        }
+        if (!nearAny) continue;
+        const blockKey = (seg.street || '') + '|' + (seg.from || '') + '|' + (seg.to || '');
+        if (counted.has(blockKey)) continue;
+        counted.add(blockKey);
+        const label = actionableSafetyLabel(seg);
+        if (label.severity === 'free') score += 3;
+        else if (label.severity === 'metered') score += 1;
+      }
+      // Also slightly penalize total duration so we don't pick a 30-min detour
+      // for one extra free block. Mapbox `duration` is in seconds.
+      score -= (route.duration || 0) / 600;
+    } catch (e) { console.warn('Score route failed:', e); }
+    if (score > bestScore) { bestScore = score; best = route; }
+  }
+  return best;
+}
+
+function flattenSteps(route) {
+  const out = [];
+  for (const leg of (route?.legs || [])) {
+    for (const step of (leg.steps || [])) out.push(step);
+  }
+  return out;
+}
+
+// ---- Step tracking + top turn ribbon (Phase 3b) ----
+function updateTurnRibbon(userLat, userLng) {
+  const ribbon = document.getElementById('dmTurnRibbon');
+  if (!drivingRouteSteps || !drivingRouteSteps.length) {
+    ribbon.classList.remove('active', 'dm-turn-soon', 'dm-turn-arrived');
+    return;
+  }
+  // Advance currentStepIndex: if user is past the maneuver location of the
+  // current step (closer to next step's maneuver), advance.
+  while (drivingCurrentStepIndex < drivingRouteSteps.length - 1) {
+    const cur = drivingRouteSteps[drivingCurrentStepIndex];
+    const next = drivingRouteSteps[drivingCurrentStepIndex + 1];
+    const dCurEnd = haversineMeters([userLat, userLng], [cur.maneuver.location[1], cur.maneuver.location[0]]);
+    const dNextEnd = haversineMeters([userLat, userLng], [next.maneuver.location[1], next.maneuver.location[0]]);
+    if (dNextEnd < dCurEnd && dCurEnd < 30) drivingCurrentStepIndex++;
+    else break;
+  }
+  // The "next maneuver" is the one we're approaching — usually the END of the
+  // current step (its maneuver location is the turn we're about to do).
+  const step = drivingRouteSteps[drivingCurrentStepIndex];
+  if (!step) { ribbon.classList.remove('active'); return; }
+  const distToManeuver = haversineMeters(
+    [userLat, userLng],
+    [step.maneuver.location[1], step.maneuver.location[0]]
+  );
+  const isArriving = drivingCurrentStepIndex === drivingRouteSteps.length - 1 && distToManeuver < 80;
+  const iconEl = document.getElementById('dmTurnIcon');
+  const distEl = document.getElementById('dmTurnDistance');
+  const instrEl = document.getElementById('dmTurnInstruction');
+  ribbon.classList.add('active');
+  ribbon.classList.toggle('dm-turn-soon', distToManeuver < 200 && !isArriving);
+  ribbon.classList.toggle('dm-turn-arrived', isArriving);
+  iconEl.textContent = maneuverIcon(step.maneuver);
+  distEl.textContent = isArriving
+    ? "You've arrived"
+    : formatDistanceForTurn(distToManeuver);
+  instrEl.textContent = step.maneuver.instruction || step.name || '';
+}
+
+function formatDistanceForTurn(m) {
+  if (m < 30) return 'Now';
+  if (m < 1000) {
+    // Round to nearest 10ft increments below ~150m, then 50ft, etc.
+    const ft = Math.round(m * 3.281);
+    if (ft < 100) return Math.round(ft / 10) * 10 + ' ft';
+    if (ft < 500) return Math.round(ft / 50) * 50 + ' ft';
+    return Math.round(ft / 100) * 100 + ' ft';
+  }
+  return (m / 1609).toFixed(1) + ' mi';
+}
+
+function maneuverIcon(maneuver) {
+  if (!maneuver) return '⬆️';
+  const t = maneuver.type || '';
+  const m = maneuver.modifier || '';
+  if (t === 'arrive') return '🏁';
+  if (t === 'depart' || t === 'continue' || t === 'new name') return '⬆️';
+  if (m.includes('left')) return '↰';
+  if (m.includes('right')) return '↱';
+  if (m === 'uturn') return '↩';
+  if (m === 'straight') return '⬆️';
+  if (t === 'roundabout' || t === 'rotary') return '⟳';
+  return '⬆️';
+}
+
+// ---- Turn voice (Phase 3b) ----
+let drivingLastTurnVoiceStepIdx = -1;
+let drivingLastTurnVoiceTier = -1; // 0 = far, 1 = ~400m, 2 = ~150m, 3 = imminent
+function speakTurnIfNeeded(userLat, userLng) {
+  if (drivingVoiceMuted) return;
+  if (!drivingRouteSteps || !drivingRouteSteps.length) return;
+  const step = drivingRouteSteps[drivingCurrentStepIndex];
+  if (!step) return;
+  const d = haversineMeters([userLat, userLng], [step.maneuver.location[1], step.maneuver.location[0]]);
+  let tier = -1;
+  if (d < 25) tier = 3;
+  else if (d < 150) tier = 2;
+  else if (d < 400) tier = 1;
+  if (tier < 0) return;
+  // Only speak when we cross to a HIGHER tier or a new step
+  if (drivingCurrentStepIndex !== drivingLastTurnVoiceStepIdx) {
+    drivingLastTurnVoiceStepIdx = drivingCurrentStepIndex;
+    drivingLastTurnVoiceTier = -1;
+  }
+  if (tier <= drivingLastTurnVoiceTier) return;
+  drivingLastTurnVoiceTier = tier;
+  const instr = (step.maneuver.instruction || step.name || '').replace(/\b(St|Ave|Blvd|Rd)\b\.?/g, m => ({St:'Street',Ave:'Avenue',Blvd:'Boulevard',Rd:'Road'}[m.replace('.','')] || m));
+  const distLabel = tier === 3 ? 'Now' : tier === 2 ? 'In about 500 feet' : 'In about a quarter mile';
+  const text = (tier === 3 ? '' : distLabel + ': ') + instr;
+  try {
+    if ('speechSynthesis' in window) {
+      // Don't cancel parking voice if mid-utterance — just queue
+      const utt = new SpeechSynthesisUtterance(text);
+      utt.rate = 1.0; utt.pitch = 1.0;
+      window.speechSynthesis.speak(utt);
+    }
+  } catch (e) { console.warn('Turn voice failed:', e); }
+}
+
+// ---- Re-routing on deviation (Phase 3d) ----
+let drivingOffRouteSince = 0;
+async function checkDeviationAndReroute(userLat, userLng) {
+  if (!drivingMapboxRoute || !drivingMapboxRoute.geometry) return;
+  const coords = drivingMapboxRoute.geometry.coordinates || [];
+  if (!coords.length) return;
+  // Find min distance from user to any vertex on the route polyline
+  let minDist = Infinity;
+  for (const c of coords) {
+    const d = haversineMeters([userLat, userLng], [c[1], c[0]]);
+    if (d < minDist) minDist = d;
+    if (minDist < 30) break;
+  }
+  if (minDist > 50) {
+    if (drivingOffRouteSince === 0) drivingOffRouteSince = Date.now();
+    const offFor = Date.now() - drivingOffRouteSince;
+    if (offFor > 5000) {
+      drivingOffRouteSince = 0;
+      // Re-route from current position
+      console.log('Off-route for >5s, re-routing…');
+      try { window.speechSynthesis?.speak(new SpeechSynthesisUtterance('Recalculating')); } catch(e){}
+      await fetchAndRenderRoute({ lat: userLat, lng: userLng });
+    }
+  } else {
+    drivingOffRouteSince = 0;
+  }
+}
+
+// ---- Arrival prompt (Phase 3e) ----
+let drivingArrivalSpeakSince = 0;
+let drivingArrivalSpoken = false;
+function checkArrival(userLat, userLng, speedMs) {
+  if (!drivingDestination) return;
+  const distToDest = haversineMeters([userLat, userLng], [drivingDestination.lat, drivingDestination.lng]);
+  if (distToDest > 40) { drivingArrivalSpoken = false; return; }
+  if (drivingArrivalSpoken) return;
+  if (speedMs == null || speedMs > 1.5) return; // still moving
+  drivingArrivalSpoken = true;
+  // Voice + show in turn ribbon
+  try {
+    if (!drivingVoiceMuted && 'speechSynthesis' in window) {
+      const target = drivingTargetBlockHighlight ? ' Park here?' : '';
+      window.speechSynthesis.speak(new SpeechSynthesisUtterance("You've arrived." + target));
+    }
+  } catch (e) {}
+  // The turn ribbon's "arrived" tier already shows visually.
+}
+
+// ---- Map rotation by heading (heading-up like Waze/Apple Maps) ----
+// Smooth-ish rotation: only update if heading changed by >5° to reduce churn.
+let drivingLastAppliedHeading = null;
+function setDrivingMapRotation(heading) {
+  if (heading == null || isNaN(heading)) return;
+  if (drivingLastAppliedHeading != null) {
+    const diff = Math.abs(((heading - drivingLastAppliedHeading) + 540) % 360 - 180);
+    if (diff < 5) return;
+  }
+  drivingLastAppliedHeading = heading;
+  const mapEl = document.getElementById('map');
+  if (mapEl) mapEl.style.setProperty('--dm-heading-rot', `${-heading}deg`);
+}
+function clearDrivingMapRotation() {
+  drivingLastAppliedHeading = null;
+  const mapEl = document.getElementById('map');
+  if (mapEl) mapEl.style.removeProperty('--dm-heading-rot');
 }
 
 function renderRouteOnMap(route) {
@@ -7147,7 +7453,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v25';
+const APP_VERSION = 'wepark-v26';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
