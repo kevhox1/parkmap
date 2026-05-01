@@ -1,6 +1,9 @@
-# Driving Mode v1 — Spec
+# Driving Mode — Spec
 
-**Status:** in flight (build started 2026-04-26)
+**Status:**
+- v1 shipped 2026-04-26, abandoned same day. Black-screen text-card UI lost spatial context; first-user feedback was "this isn't what I had in mind."
+- **v2 in flight 2026-04-26.** Map-centric, Google Maps / Waze style.
+
 **Owner:** Kevin (product), Claude (build)
 
 ## Why
@@ -9,26 +12,35 @@ Real user feedback (2026-04-26): "incredibly difficult to use live in the car." 
 
 Driving Mode is a **separate full-screen view** optimized for **a phone propped on a dashboard mount** (not CarPlay — that requires native + Apple entitlement, deferred to native iOS phase).
 
-## Scope — v1 ships only this
+## Scope — v2 ships this
 
-### What the user sees (full screen, replaces the entire app UI)
+### What the user sees (map IS the screen, like Google Maps / Waze)
 
 ```
 ┌─────────────────────────────────────┐
-│ ✕ Exit                       🔇 🔊  │
+│  ✕                            🔊    │ ← thin floating top bar
+│                                     │   (transparent over map)
+│       [LIVE LEAFLET MAP, full       │
+│        bleed, auto-follows GPS,     │
+│        zoom locked at ~17, streets  │
+│        already color-coded by       │
+│        parking rules]               │
+│                                     │
+│             ▲                       │ ← user marker, big blue circle
+│           (you)                     │   with arrow pointing in heading
+│                                     │
+│                                     │
 ├─────────────────────────────────────┤
-│                                     │
-│           BOWERY                    │  ← giant street name
-│       ━━━━━━━━━━━━━━━              │  ← thick color bar (green/yellow/red)
-│                                     │
-│  ⬅️ LEFT SIDE                       │
-│   Free until Thursday 9:30am        │  ← actionable answer
-│                                     │
-│  ➡️ RIGHT SIDE                      │
-│   Metered until 7pm                 │
-│                                     │
+│  BOWERY                             │ ← floating bottom card
+│  ⬅ Free until Thu 9:30am           │
+│  ➡ Metered until 7pm               │
 └─────────────────────────────────────┘
 ```
+
+The map is the existing Leaflet instance — already full-bleed, already
+color-codes every street by parking category. Drive Mode just hides
+the right-side panel, repositions the user marker, locks zoom + auto-pan,
+and floats a top bar + bottom card on top.
 
 ### What the user hears (voice synthesis, Web Speech API)
 

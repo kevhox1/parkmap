@@ -733,73 +733,110 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 .park-status-warn { background: #fef3c7; color: #92400e; }
 .park-status-danger { background: #fee2e2; color: #dc2626; }
 
-/* ==== Driving Mode (full-screen takeover, glanceable, voice-narrated) ==== */
+/* ==== Drive Mode v2 — map-centric, Waze/Google Maps-style overlay ==== */
+/* The map IS the interface. Overlay sits transparently above #map and floats
+   only the top bar + bottom card. body.driving-mode hides the right panel
+   and start screen so the map fills the screen. */
+body.driving-mode #controlPanel,
+body.driving-mode #startScreen,
+body.driving-mode #pwaInstallHint,
+body.driving-mode #weparkVersionChip { display: none !important; }
+body.driving-mode .leaflet-control-zoom { display: none; }
 #drivingMode {
   position: fixed; inset: 0; z-index: 12000;
-  background: #0f172a; color: white;
-  display: none; flex-direction: column;
+  pointer-events: none; /* let map gestures pass through; bars opt back in */
+  display: none;
   font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   user-select: none; -webkit-user-select: none;
 }
-#drivingMode.active { display: flex; }
+#drivingMode.active { display: block; }
 .dm-topbar {
+  position: absolute; top: 14px; left: 14px; right: 14px;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 18px; flex-shrink: 0;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  pointer-events: none;
 }
 .dm-topbar button {
-  background: rgba(255,255,255,0.1); color: white;
-  border: none; border-radius: 12px;
-  padding: 12px 18px; font-size: 16px; font-weight: 600;
+  pointer-events: auto;
+  background: rgba(15,23,42,0.85); color: white;
+  border: none; border-radius: 999px;
+  padding: 10px 16px; font-size: 15px; font-weight: 700;
   cursor: pointer; min-height: 44px; min-width: 44px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  box-shadow: 0 4px 14px rgba(0,0,0,0.25);
 }
-.dm-topbar button:active { background: rgba(255,255,255,0.2); }
-.dm-content {
-  flex: 1; display: flex; flex-direction: column;
-  padding: 30px 24px; gap: 22px;
-  overflow-y: auto;
-}
-.dm-street {
-  font-size: clamp(48px, 12vw, 96px); font-weight: 800;
-  text-align: center; line-height: 1.05;
-  letter-spacing: -0.02em;
-  word-break: break-word;
-}
-.dm-color-band {
-  height: 14px; border-radius: 8px;
-  background: #6b7280;
-}
-.dm-color-band.free { background: #16a34a; }
-.dm-color-band.metered { background: #f59e0b; }
-.dm-color-band.restricted { background: #dc2626; }
-.dm-color-band.unknown { background: #6b7280; }
-.dm-side {
-  background: rgba(255,255,255,0.06);
-  border-radius: 16px;
-  padding: 18px 20px;
+.dm-topbar button:active { transform: scale(0.96); }
+.dm-bottom-card {
+  position: absolute; bottom: 18px; left: 14px; right: 14px;
+  pointer-events: auto;
+  background: rgba(255,255,255,0.97);
+  backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  border-radius: 18px;
+  padding: 14px 16px;
+  box-shadow: 0 8px 28px rgba(15,23,42,0.25);
   border-left: 6px solid #6b7280;
+  max-width: 540px; margin: 0 auto;
 }
-.dm-side.free { border-left-color: #16a34a; }
-.dm-side.metered { border-left-color: #f59e0b; }
-.dm-side.restricted { border-left-color: #dc2626; }
-.dm-side-label {
-  font-size: 14px; font-weight: 600;
-  color: #94a3b8; text-transform: uppercase; letter-spacing: 0.06em;
-  margin-bottom: 6px;
+.dm-bottom-card.free { border-left-color: #16a34a; }
+.dm-bottom-card.metered { border-left-color: #f59e0b; }
+.dm-bottom-card.restricted { border-left-color: #dc2626; }
+.dm-bottom-card.unknown { border-left-color: #6b7280; }
+.dm-street {
+  font-size: clamp(20px, 5vw, 26px);
+  font-weight: 800; line-height: 1.15;
+  margin: 0 0 6px 0;
+  color: #0f172a; letter-spacing: -0.01em;
 }
-.dm-side-text {
-  font-size: clamp(22px, 5vw, 32px); font-weight: 700;
-  line-height: 1.2;
+.dm-side-row {
+  display: flex; align-items: center; gap: 8px;
+  font-size: clamp(14px, 3.5vw, 16px); font-weight: 600;
+  margin-top: 4px; line-height: 1.25; color: #1f2937;
 }
-.dm-status-line {
-  font-size: 13px; color: #94a3b8;
-  text-align: center;
-  margin-top: auto;
-  padding-top: 14px;
+.dm-side-row .dm-side-icon {
+  flex-shrink: 0; width: 22px; text-align: center;
+  font-size: 16px; opacity: 0.8;
 }
-.dm-empty {
-  text-align: center; color: #94a3b8; padding: 40px 20px;
-  font-size: 16px;
+.dm-side-row.free { color: #15803d; }
+.dm-side-row.metered { color: #b45309; }
+.dm-side-row.restricted { color: #b91c1c; }
+.dm-empty-status {
+  font-size: 12px; color: #6b7280; text-align: center;
+  padding: 4px 0;
+}
+.dm-meta {
+  font-size: 11px; color: #94a3b8;
+  margin-top: 6px;
+  display: flex; justify-content: space-between;
+}
+/* User marker: large blue dot with white triangle pointing in heading */
+.dm-user-marker {
+  width: 36px; height: 36px;
+  position: relative;
+}
+.dm-user-marker .dm-user-dot {
+  position: absolute; inset: 6px;
+  background: #2563eb;
+  border-radius: 50%;
+  border: 3px solid white;
+  box-shadow: 0 4px 12px rgba(37,99,235,0.55);
+}
+.dm-user-marker .dm-user-arrow {
+  position: absolute; top: -2px; left: 50%;
+  transform: translateX(-50%);
+  width: 0; height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 14px solid #2563eb;
+  filter: drop-shadow(0 2px 3px rgba(37,99,235,0.45));
+}
+.dm-user-marker .dm-user-pulse {
+  position: absolute; inset: -8px;
+  border-radius: 50%;
+  background: rgba(37,99,235,0.18);
+  animation: dmPulse 2s ease-out infinite;
+}
+@keyframes dmPulse {
+  0% { transform: scale(0.6); opacity: 0.7; }
+  100% { transform: scale(1.4); opacity: 0; }
 }
 .dm-entry-btn {
   width: 100%; padding: 14px;
@@ -817,26 +854,26 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
 <body>
 <div id="map"></div>
 
-<!-- Driving Mode (full-screen overlay) -->
-<div id="drivingMode" role="region" aria-label="Driving Mode">
+<!-- Drive Mode v2 — transparent overlay; map underneath is the interface -->
+<div id="drivingMode" role="region" aria-label="Drive Mode">
   <div class="dm-topbar">
-    <button onclick="exitDrivingMode()" aria-label="Exit driving mode">✕ Exit</button>
-    <div style="display:flex;gap:8px">
-      <button id="dmMuteBtn" onclick="toggleDrivingModeVoice()" aria-label="Toggle voice">🔊</button>
-    </div>
+    <button onclick="exitDrivingMode()" aria-label="Exit driving mode">✕</button>
+    <button id="dmMuteBtn" onclick="toggleDrivingModeVoice()" aria-label="Toggle voice">🔊</button>
   </div>
-  <div class="dm-content">
-    <div id="dmStreet" class="dm-street">—</div>
-    <div id="dmColorBand" class="dm-color-band unknown"></div>
-    <div id="dmLeftSide" class="dm-side">
-      <div class="dm-side-label">⬅️ Left side</div>
-      <div id="dmLeftText" class="dm-side-text">—</div>
+  <div id="dmBottomCard" class="dm-bottom-card unknown">
+    <div id="dmStreet" class="dm-street">Waiting for GPS…</div>
+    <div id="dmEmptyStatus" class="dm-empty-status" style="display:none">Acquiring location…</div>
+    <div id="dmLeftRow" class="dm-side-row" style="display:none">
+      <span class="dm-side-icon">⬅</span>
+      <span id="dmLeftText">—</span>
     </div>
-    <div id="dmRightSide" class="dm-side">
-      <div class="dm-side-label">➡️ Right side</div>
-      <div id="dmRightText" class="dm-side-text">—</div>
+    <div id="dmRightRow" class="dm-side-row" style="display:none">
+      <span class="dm-side-icon">➡</span>
+      <span id="dmRightText">—</span>
     </div>
-    <div id="dmStatusLine" class="dm-status-line">Waiting for GPS…</div>
+    <div id="dmMeta" class="dm-meta" style="display:none">
+      <span id="dmSpeed"></span><span id="dmAccuracy"></span>
+    </div>
   </div>
 </div>
 
@@ -5012,7 +5049,7 @@ function actionableSafetyLabel(seg) {
   return { text: 'Free', severity: 'free' };
 }
 
-// ==== Driving Mode runtime ====
+// ==== Drive Mode v2 runtime (map-centric) ====
 // State
 let drivingModeActive = false;
 let drivingGeoWatchId = null;
@@ -5020,7 +5057,10 @@ let drivingWakeLock = null;
 let drivingLastStreet = null;       // "STREET|FROM|TO" of last announced street
 let drivingLastSpoken = 0;          // timestamp of last voice announcement
 let drivingVoiceMuted = false;      // persisted in localStorage
+let drivingUserMarker = null;       // L.marker showing user position + heading
+let drivingPreEntryView = null;     // {center, zoom} to restore on exit
 const DRIVING_VOICE_MIN_GAP_MS = 12000; // don't talk more often than this
+const DRIVING_ZOOM = 17;            // locked zoom while in drive mode
 
 // Compass bearing of each side ("N"/"S"/"E"/"W") in degrees relative to north
 const SIDE_BEARING = { N: 0, E: 90, S: 180, W: 270 };
@@ -5087,10 +5127,19 @@ async function enterDrivingMode() {
     return;
   }
   drivingModeActive = true;
+  // body class hides the right control panel + start screen + version chip
+  document.body.classList.add('driving-mode');
   document.getElementById('drivingMode').classList.add('active');
   drivingVoiceMuted = localStorage.getItem('wepark_dm_voice_muted') === '1';
   document.getElementById('dmMuteBtn').textContent = drivingVoiceMuted ? '🔇' : '🔊';
   setDrivingModeStatus('Acquiring GPS…');
+
+  // Stash the current map view so we can restore on exit
+  if (typeof map !== 'undefined' && map) {
+    drivingPreEntryView = { center: map.getCenter(), zoom: map.getZoom() };
+    map.setZoom(DRIVING_ZOOM);
+    map.invalidateSize();
+  }
 
   // Wake lock so the screen stays on while driving
   try {
@@ -5118,6 +5167,7 @@ async function enterDrivingMode() {
 
 async function exitDrivingMode() {
   drivingModeActive = false;
+  document.body.classList.remove('driving-mode');
   document.getElementById('drivingMode').classList.remove('active');
   if (drivingGeoWatchId != null) {
     navigator.geolocation.clearWatch(drivingGeoWatchId);
@@ -5127,10 +5177,58 @@ async function exitDrivingMode() {
     try { await drivingWakeLock.release(); } catch (e) {}
     drivingWakeLock = null;
   }
+  // Remove user marker
+  if (drivingUserMarker && typeof map !== 'undefined' && map) {
+    try { map.removeLayer(drivingUserMarker); } catch (e) {}
+  }
+  drivingUserMarker = null;
+  // Restore pre-entry map view
+  if (drivingPreEntryView && typeof map !== 'undefined' && map) {
+    map.setView(drivingPreEntryView.center, drivingPreEntryView.zoom, { animate: false });
+    map.invalidateSize();
+  }
+  drivingPreEntryView = null;
   drivingLastStreet = null;
   document.removeEventListener('visibilitychange', reacquireWakeLockOnVisible);
   // Stop any in-flight speech
   try { window.speechSynthesis?.cancel(); } catch (e) {}
+}
+
+// Build/refresh the user-position marker (blue dot + heading arrow)
+function ensureDrivingUserMarker(lat, lng, heading) {
+  if (typeof map === 'undefined' || !map) return;
+  const headingDeg = (heading == null || isNaN(heading)) ? null : heading;
+  if (!drivingUserMarker) {
+    drivingUserMarker = L.marker([lat, lng], {
+      icon: L.divIcon({
+        className: '',
+        html: buildUserMarkerHTML(headingDeg),
+        iconSize: [36, 36], iconAnchor: [18, 18]
+      }),
+      pane: 'carPin',
+      interactive: false
+    }).addTo(map);
+  } else {
+    drivingUserMarker.setLatLng([lat, lng]);
+    drivingUserMarker.setIcon(L.divIcon({
+      className: '',
+      html: buildUserMarkerHTML(headingDeg),
+      iconSize: [36, 36], iconAnchor: [18, 18]
+    }));
+  }
+}
+
+function buildUserMarkerHTML(headingDeg) {
+  const arrowStyle = headingDeg != null
+    ? `transform:translateX(-50%) rotate(${headingDeg}deg);transform-origin:center 24px`
+    : 'display:none';
+  return (
+    '<div class="dm-user-marker">' +
+      '<div class="dm-user-pulse"></div>' +
+      '<div class="dm-user-arrow" style="' + arrowStyle + '"></div>' +
+      '<div class="dm-user-dot"></div>' +
+    '</div>'
+  );
 }
 
 async function reacquireWakeLockOnVisible() {
@@ -5156,57 +5254,84 @@ function toggleDrivingModeVoice() {
 }
 
 function setDrivingModeStatus(text) {
-  const el = document.getElementById('dmStatusLine');
-  if (el) el.textContent = text || '';
+  const el = document.getElementById('dmEmptyStatus');
+  if (!el) return;
+  if (text) {
+    el.textContent = text;
+    el.style.display = 'block';
+  } else {
+    el.style.display = 'none';
+  }
 }
 
 function onDrivingGeoUpdate(position) {
   if (!drivingModeActive) return;
   const { latitude, longitude, heading, speed, accuracy } = position.coords;
-  // Nudge map to keep tiles loading around the user's location so segments are present
+  // Map auto-follows: pan to user position so the user pin stays centered.
   if (typeof map !== 'undefined' && map) {
-    map.panTo([latitude, longitude], { animate: false });
+    map.setView([latitude, longitude], DRIVING_ZOOM, { animate: false });
   }
+  ensureDrivingUserMarker(latitude, longitude, heading);
   const ctx = getCurrentDrivingContext(latitude, longitude, heading);
   renderDrivingContext(ctx, { speed, accuracy });
 }
 
 function renderDrivingContext(ctx, meta) {
+  const card = document.getElementById('dmBottomCard');
   const streetEl = document.getElementById('dmStreet');
-  const bandEl = document.getElementById('dmColorBand');
-  const leftEl = document.getElementById('dmLeftSide');
+  const leftRow = document.getElementById('dmLeftRow');
+  const rightRow = document.getElementById('dmRightRow');
   const leftText = document.getElementById('dmLeftText');
-  const rightEl = document.getElementById('dmRightSide');
   const rightText = document.getElementById('dmRightText');
+  const metaEl = document.getElementById('dmMeta');
+  const speedEl = document.getElementById('dmSpeed');
+  const accuracyEl = document.getElementById('dmAccuracy');
 
   if (!ctx) {
-    streetEl.textContent = '—';
-    bandEl.className = 'dm-color-band unknown';
-    leftEl.className = 'dm-side';
-    rightEl.className = 'dm-side';
-    leftText.textContent = '—';
-    rightText.textContent = '—';
-    setDrivingModeStatus(meta && meta.accuracy ? `No street nearby (±${Math.round(meta.accuracy)}m)` : 'No street nearby');
+    card.className = 'dm-bottom-card unknown';
+    streetEl.textContent = 'Looking for street…';
+    leftRow.style.display = 'none';
+    rightRow.style.display = 'none';
+    setDrivingModeStatus(meta && meta.accuracy ? `No street within reach (GPS ±${Math.round(meta.accuracy)}m)` : 'No street within reach');
     return;
   }
 
   streetEl.textContent = toTitleCase(ctx.street || '');
+  setDrivingModeStatus('');
 
-  // Color band picks the WORSE severity between the two sides — if either is
-  // restricted, the band is red so the driver doesn't think the block is fine.
+  // Color the card's left border by the WORST severity between the two sides
   const sevRank = { restricted: 3, metered: 2, free: 1, unknown: 0 };
   const lSev = ctx.leftLabel.severity || 'unknown';
   const rSev = ctx.rightLabel.severity || 'unknown';
   const worseSev = sevRank[lSev] >= sevRank[rSev] ? lSev : rSev;
-  bandEl.className = 'dm-color-band ' + worseSev;
+  card.className = 'dm-bottom-card ' + worseSev;
 
-  leftEl.className = 'dm-side ' + lSev;
-  rightEl.className = 'dm-side ' + rSev;
-  leftText.textContent = ctx.leftLabel.text;
-  rightText.textContent = ctx.rightLabel.text;
+  // Left side row
+  if (ctx.leftLabel && ctx.leftLabel.text && ctx.leftLabel.text !== 'No data') {
+    leftRow.style.display = 'flex';
+    leftRow.className = 'dm-side-row ' + lSev;
+    leftText.textContent = ctx.leftLabel.text;
+  } else {
+    leftRow.style.display = 'none';
+  }
+  // Right side row
+  if (ctx.rightLabel && ctx.rightLabel.text && ctx.rightLabel.text !== 'No data') {
+    rightRow.style.display = 'flex';
+    rightRow.className = 'dm-side-row ' + rSev;
+    rightText.textContent = ctx.rightLabel.text;
+  } else {
+    rightRow.style.display = 'none';
+  }
 
-  const speedKmh = meta && meta.speed != null && meta.speed >= 0 ? Math.round(meta.speed * 3.6) : null;
-  setDrivingModeStatus(speedKmh != null ? `${speedKmh} km/h · ±${Math.round(meta.accuracy || 0)}m GPS` : '');
+  // Meta line — speed (mph) and GPS accuracy
+  const speedMph = meta && meta.speed != null && meta.speed >= 0 ? Math.round(meta.speed * 2.237) : null;
+  if (speedMph != null) {
+    speedEl.textContent = speedMph + ' mph';
+    accuracyEl.textContent = '±' + Math.round(meta.accuracy || 0) + 'm';
+    metaEl.style.display = 'flex';
+  } else {
+    metaEl.style.display = 'none';
+  }
 
   // Voice — only when the BLOCK changes (street+from+to)
   const blockKey = `${ctx.street}|${ctx.from}|${ctx.to}`;
@@ -6456,7 +6581,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v21';
+const APP_VERSION = 'wepark-v22';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {

@@ -58,7 +58,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 ## How to work in this repo
 
 - **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
-- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v21`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
+- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v22`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
 - **Tile data is pre-built and committed.** The `tiles/` directory holds 976 pre-generated JSON tiles (~6.39 MB). Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large.
 - **No automated test suite exists.** QA is done via:
   - Independent QA subagent review (see `TRACKER_QA_VERIFY.md` for the pattern)
@@ -90,7 +90,18 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 
 ## Changelog
 
-### 2026-04-26 — Driving Mode v1 (PoC)
+### 2026-04-26 — Drive Mode v2 (map-centric, Waze/Google Maps-style)
+- v1 missed the mark per first user — black-screen text-card UI lost spatial context. v2 rebuilds Drive Mode as a transparent overlay *on top* of the existing Leaflet map, so the map IS the interface.
+- `body.driving-mode` class hides `#controlPanel`, `#startScreen`, `#pwaInstallHint`, `#weparkVersionChip`, and Leaflet zoom controls so the map fills the whole screen.
+- `#drivingMode` is now `pointer-events: none` so map gestures pass through; only the floating top bar (✕ Exit, 🔊/🔇 mute) and the floating bottom card opt back into pointer events.
+- On entry: stash current map view (center+zoom), set zoom 17, attach a pulsing custom user marker (`L.divIcon` blue dot + heading-rotated arrow + animated pulse ring). On exit: remove marker, restore the prior view.
+- `onDrivingGeoUpdate` now `setView`s the map (not just panTo) so zoom stays locked at 17 and the user pin remains centered. Marker icon is rebuilt every tick with the current heading rotation.
+- Bottom card replaces the v1 card layout — compact glanceable strip with street name + LEFT/RIGHT actionable rows + speed/accuracy meta. Border-left color band uses the worse-severity of L vs R.
+- Voice unchanged from v1 (street-change announcements, rate-limited, mutable).
+- Out of v2 scope: map auto-rotation by heading (Leaflet doesn't natively rotate; would need a plugin or CSS transform — deferred to v3 if user wants it). Streets are colored by parking category via the existing rules layer; no extra current-street highlight in v2.
+- SW cache bumped to `wepark-v22`.
+
+### 2026-04-26 — Driving Mode v1 (PoC, abandoned same day)
 - After real user feedback ("incredibly difficult to use live in the car"), introduced a separate full-screen **Driving Mode** view optimized for a phone propped on a dashboard mount. Spec: `docs/driving-mode.md`.
 - Entry: 🚗 Driving Mode button at the top of the panel body. Tap → request GPS + screen wake-lock → full-screen overlay takes over.
 - UI strips everything except the actionable info: giant street name, color band (green/yellow/red), LEFT side label, RIGHT side label. No map, no tabs, no chat — read-only, glanceable.
