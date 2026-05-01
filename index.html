@@ -5619,8 +5619,11 @@ function speakDrivingContext(ctx) {
 // ==== Drive Mode v3 — Mapbox token, destination, routing ====
 const MAPBOX_TOKEN_KEY = 'wepark_mapbox_token';
 const DRIVE_RECENT_DESTS_KEY = 'wepark_drive_recent_destinations';
-const MAPBOX_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places/';
+const MAPBOX_GEOCODE_URL = 'https://api.mapbox.com/geocoding/v5/mapbox.places/'; // legacy fallback only
+const MAPBOX_SEARCH_SUGGEST_URL = 'https://api.mapbox.com/search/searchbox/v1/suggest';
+const MAPBOX_SEARCH_RETRIEVE_URL = 'https://api.mapbox.com/search/searchbox/v1/retrieve/';
 const MAPBOX_DIRECTIONS_URL = 'https://api.mapbox.com/directions/v5/mapbox/driving/';
+let _dmSearchSessionToken = null;
 
 // State
 let drivingDestination = null;       // { lat, lng, name } currently active
@@ -5732,6 +5735,22 @@ function onDmDestInput() {
   _dmGeoDebounceTimer = setTimeout(() => doMapboxGeocode(q), 280);
 }
 
+// Mapbox Search Box API (newer than Geocoding v5) — supports POIs, brands,
+// businesses, and addresses with much richer data. Two-step: /suggest for
+// autocomplete, /retrieve to get the coordinates of the picked suggestion.
+// Same Mapbox session_token across both calls = single billed search.
+function ensureSearchSessionToken() {
+  if (_dmSearchSessionToken) return _dmSearchSessionToken;
+  // Generate a UUIDv4-ish token (Mapbox accepts any UUID-format string)
+  const u = (typeof crypto !== 'undefined' && crypto.randomUUID)
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0; return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
+  _dmSearchSessionToken = u;
+  return u;
+}
+
 async function doMapboxGeocode(query) {
   const token = getMapboxToken();
   if (!token) return;
@@ -5739,47 +5758,101 @@ async function doMapboxGeocode(query) {
   const resultsEl = document.getElementById('dmDestResults');
   statusEl.textContent = 'Searching…';
   statusEl.style.display = 'block';
-  // Bias toward Manhattan / NYC: proximity center on Times Square; bbox covers all 5 boroughs
+  // Bias toward Manhattan / NYC
   const proximity = '-74.0,40.75';
   const bbox = '-74.27,40.49,-73.68,40.92';
-  const url = `${MAPBOX_GEOCODE_URL}${encodeURIComponent(query)}.json` +
-    `?access_token=${token}&autocomplete=true&country=us&types=address,poi,place,neighborhood,locality` +
-    `&proximity=${proximity}&bbox=${bbox}&limit=5`;
+  const session = ensureSearchSessionToken();
+  const url = `${MAPBOX_SEARCH_SUGGEST_URL}` +
+    `?q=${encodeURIComponent(query)}` +
+    `&access_token=${token}` +
+    `&session_token=${session}` +
+    `&proximity=${proximity}` +
+    `&bbox=${bbox}` +
+    `&country=us` +
+    `&language=en` +
+    `&limit=6` +
+    `&types=poi,address,category,brand,place,neighborhood,locality,street`;
   try {
     const resp = await fetch(url);
     const data = await resp.json();
     statusEl.style.display = 'none';
-    const features = data.features || [];
-    if (!features.length) {
+    const suggestions = data.suggestions || [];
+    if (!suggestions.length) {
       resultsEl.innerHTML = '<div class="dm-geo-status">No matches in NYC area.</div>';
       resultsEl.classList.add('active');
       return;
     }
-    resultsEl.innerHTML = features.map((f, i) => {
-      const name = escapeHtml(f.text || '');
-      const ctx = escapeHtml(f.place_name || '');
+    resultsEl.innerHTML = suggestions.map((s, i) => {
+      const name = escapeHtml(s.name || '');
+      // Build a "context" line: address + place_formatted is most useful
+      const ctxParts = [];
+      if (s.address) ctxParts.push(s.address);
+      if (s.place_formatted && s.place_formatted !== s.address) ctxParts.push(s.place_formatted);
+      if (!ctxParts.length && s.full_address) ctxParts.push(s.full_address);
+      const ctx = escapeHtml(ctxParts.join(' · '));
+      const icon = pickPoiIcon(s);
       return `<div class="dm-geo-result" onclick="useGeocodeResult(${i})" data-idx="${i}">
-        <div class="dm-geo-result-name">${name}</div>
+        <div class="dm-geo-result-name">${icon} ${name}</div>
         <div class="dm-geo-result-context">${ctx}</div>
       </div>`;
     }).join('');
     resultsEl.classList.add('active');
-    // Stash the raw features so we can read them in useGeocodeResult
-    resultsEl._features = features;
+    // Stash the raw suggestions so we can /retrieve on pick
+    resultsEl._suggestions = suggestions;
   } catch (e) {
-    console.warn('Geocode failed:', e);
-    statusEl.textContent = 'Geocoding error: ' + (e.message || e);
+    console.warn('Search Box suggest failed:', e);
+    statusEl.textContent = 'Search error: ' + (e.message || e);
     statusEl.style.display = 'block';
   }
 }
 
-function useGeocodeResult(index) {
+function pickPoiIcon(s) {
+  const cats = (s.poi_category || []).join(' ').toLowerCase();
+  if (s.feature_type === 'address' || s.feature_type === 'street') return '📍';
+  if (cats.includes('restaurant') || cats.includes('food') || cats.includes('cafe') || cats.includes('coffee')) return '🍽️';
+  if (cats.includes('grocery') || cats.includes('supermarket')) return '🛒';
+  if (cats.includes('bar') || cats.includes('nightlife')) return '🍺';
+  if (cats.includes('shopping') || cats.includes('clothing') || cats.includes('store')) return '🛍️';
+  if (cats.includes('gym') || cats.includes('fitness')) return '🏋️';
+  if (cats.includes('hospital') || cats.includes('medical') || cats.includes('pharmacy')) return '🏥';
+  if (cats.includes('park') || cats.includes('outdoor')) return '🌳';
+  if (cats.includes('school') || cats.includes('university') || cats.includes('education')) return '🎓';
+  if (cats.includes('hotel') || cats.includes('lodging')) return '🏨';
+  if (cats.includes('gas') || cats.includes('fuel')) return '⛽';
+  return '📌';
+}
+
+async function useGeocodeResult(index) {
   const resultsEl = document.getElementById('dmDestResults');
-  const feature = (resultsEl._features || [])[index];
-  if (!feature) return;
-  const [lng, lat] = feature.center;
-  setDriveDestination({ lat, lng, name: feature.place_name || feature.text });
-  closeDriveDestModal(false);
+  const suggestion = (resultsEl._suggestions || [])[index];
+  if (!suggestion) return;
+  // Search Box suggestions don't include coordinates — must /retrieve them
+  const token = getMapboxToken();
+  if (!token) return;
+  const session = ensureSearchSessionToken();
+  const statusEl = document.getElementById('dmDestStatus');
+  statusEl.textContent = 'Loading destination…';
+  statusEl.style.display = 'block';
+  try {
+    const url = `${MAPBOX_SEARCH_RETRIEVE_URL}${encodeURIComponent(suggestion.mapbox_id)}` +
+      `?access_token=${token}&session_token=${session}`;
+    const resp = await fetch(url);
+    const data = await resp.json();
+    statusEl.style.display = 'none';
+    const feat = (data.features || [])[0];
+    if (!feat) throw new Error('No feature returned');
+    const [lng, lat] = feat.geometry.coordinates;
+    const name = suggestion.name + (suggestion.address ? ' · ' + suggestion.address : '');
+    setDriveDestination({ lat, lng, name });
+    // Reset the session token after a destination is picked — next search
+    // is a new session and will be billed separately.
+    _dmSearchSessionToken = null;
+    closeDriveDestModal(false);
+  } catch (e) {
+    console.warn('Search Box retrieve failed:', e);
+    statusEl.textContent = 'Could not load destination: ' + (e.message || e);
+    statusEl.style.display = 'block';
+  }
 }
 
 function setDriveDestination(dest) {
@@ -7453,7 +7526,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v26';
+const APP_VERSION = 'wepark-v27';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
