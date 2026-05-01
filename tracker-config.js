@@ -8,6 +8,12 @@ window.WEPARK_TRACKER_CONFIG = {
   supabaseUrl: 'https://jiispshyqerscdoferaw.supabase.co',
   supabaseAnonKey: 'sb_publishable_SEIuWH-HscK3X7wtbLMCqw_ZjRCevRR',
 
+  // Mapbox public access token (created 2026-05-01). URL-restricted at Mapbox
+  // to kevhox1.github.io + localhost:8765 — even if leaked, it can't be used
+  // from another origin. Single shared token for all users; designed to be
+  // shipped in client-side source per Mapbox's intended usage.
+  mapboxToken: 'pk.eyJ1IjoibW9zZWhvbnNlIiwiYSI6ImNtb21lZGN3dDA0ZTUyd3EwbnF0NXV4eHUifQ.cggQksHOj7qAf_GcxGpziQ',
+
   // If Supabase init fails, the UI falls back to the local mock provider.
   allowMockFallback: true,
 

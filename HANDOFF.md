@@ -54,12 +54,12 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
   - Realtime publication includes `zone_messages`
   - Auth Site URL: `https://kevhox1.github.io/parkmap/`
 - **Tracker provider:** still `'mock'` (localStorage). Flip to `'supabase'` after applying tracker schema.
-- **Mapbox token (Drive Mode v3):** stored at runtime in `localStorage.wepark_mapbox_token`. Created 2026-05-01, public token, URL-restricted to `kevhox1.github.io` + `localhost:8765`. **NOT committed to source** — GitHub's push protection blocks `pk.*` Mapbox tokens even though they're designed to be public, so we read from localStorage instead. The Drive Mode v3 build (per `docs/drive-mode-routing.md`) will surface a "🗝️ Set Mapbox token" UI flow on first use; in the meantime Kevin can preset it via `localStorage.setItem('wepark_mapbox_token', '<the_pk_string>')` in DevTools.
+- **Mapbox token (Drive Mode v3):** **shipped in `tracker-config.js` as `mapboxToken`** — single shared token for all users. Created 2026-05-01, public, URL-restricted at Mapbox to `kevhox1.github.io` + `localhost:8765`. Kevin had to disable GitHub Push Protection on this repo (it false-positives `pk.*` Mapbox tokens). `localStorage.wepark_mapbox_token` works as a power-user override but isn't normal flow — `getMapboxToken()` checks localStorage first, then falls back to the config token.
 
 ## How to work in this repo
 
 - **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
-- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v24`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
+- **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v25`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
 - **Tile data is pre-built and committed.** The `tiles/` directory holds 976 pre-generated JSON tiles (~6.39 MB). Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large.
 - **No automated test suite exists.** QA is done via:
   - Independent QA subagent review (see `TRACKER_QA_VERIFY.md` for the pattern)
@@ -101,7 +101,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - Cleanup: all v3 layers (route, dest pin, target block highlight, target marker) removed on Drive Mode exit OR on destination clear.
 - **Token NOT in source code** — GitHub's push protection blocks `pk.*` Mapbox tokens. Kevin's existing token (created 2026-05-01, URL-restricted to `kevhox1.github.io` + `localhost:8765`) stored only in `localStorage.wepark_mapbox_token`. The token modal handles first-use entry; Kevin can also preset via DevTools `localStorage.setItem('wepark_mapbox_token', '<pk.string>')`.
 - Out of v3 Phase 3a: turn-by-turn voice (Phase 3b), parking-aware alt-route selection (3c), re-routing on deviation (3d), arrival prompt (3e). All in `docs/drive-mode-routing.md`.
-- SW cache bumped to `wepark-v24`.
+- SW cache bumped to `wepark-v25`.
 
 ### 2026-05-01 — Drive Mode v2.1 (visual polish)
 - Replaced the blue dot user marker with an Apple-Maps-style **🚗 car emoji** in a white circle with a blue ring + pulse outline. Rotates with GPS heading (offset −90° because the car emoji's natural orientation faces east, not north).

@@ -5566,7 +5566,16 @@ let drivingDestModalSkipped = false; // user clicked Skip in this session
 let _dmGeoDebounceTimer = null;
 
 function getMapboxToken() {
-  try { return localStorage.getItem(MAPBOX_TOKEN_KEY); } catch (e) { return null; }
+  // Shared token shipped in tracker-config.js (URL-restricted at Mapbox to our
+  // domain + localhost) is the default for all users. localStorage is a
+  // power-user override — useful only if someone wants to swap in their own
+  // token for higher rate limits or testing.
+  try {
+    const localOverride = localStorage.getItem(MAPBOX_TOKEN_KEY);
+    if (localOverride) return localOverride;
+  } catch (e) {}
+  const cfg = window.WEPARK_TRACKER_CONFIG || {};
+  return cfg.mapboxToken || null;
 }
 function setMapboxToken(token) {
   try { localStorage.setItem(MAPBOX_TOKEN_KEY, token); } catch (e) {}
@@ -7138,7 +7147,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v24';
+const APP_VERSION = 'wepark-v25';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
