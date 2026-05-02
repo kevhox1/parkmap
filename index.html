@@ -1572,18 +1572,37 @@ const CATEGORIES = {
 
 // ==== Map ====
 const map = L.map('map', { preferCanvas: true }).setView([40.7831, -73.9712], 13);
-// Base map without labels (underneath parking lines)
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
-  attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
-}).addTo(map);
 
-// Street labels on top of everything (added to a pane above overlays)
+// Labels pane sits above parking polylines so street names always stay legible
+// (we may add a labels-only overlay layer here later if Mapbox tiles get
+// obscured by overlays in some zoom ranges).
 map.createPane('labels');
 map.getPane('labels').style.zIndex = 650;
 map.getPane('labels').style.pointerEvents = 'none';
-L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
-  maxZoom: 20, pane: 'labels'
-}).addTo(map);
+
+// Basemap: prefer Mapbox `navigation-day-v1` (Apple-Maps-like styling — soft
+// pastels, POI icons, clean SF-style typography on the map itself, subtle
+// building shapes). Falls back to CARTO Positron if no Mapbox token is set.
+const _mbToken = (window.WEPARK_TRACKER_CONFIG || {}).mapboxToken
+  || (function(){ try { return localStorage.getItem('wepark_mapbox_token'); } catch (e) { return null; } })();
+if (_mbToken) {
+  // Mapbox raster tiles: 512px tiles + zoomOffset -1 keeps Leaflet zoom math correct
+  L.tileLayer(
+    `https://api.mapbox.com/styles/v1/mapbox/navigation-day-v1/tiles/{z}/{x}/{y}@2x?access_token=${_mbToken}`,
+    {
+      attribution: '© <a href="https://www.mapbox.com/about/maps/">Mapbox</a> © <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
+      maxZoom: 22, tileSize: 512, zoomOffset: -1, crossOrigin: true
+    }
+  ).addTo(map);
+} else {
+  // CARTO fallback (functional but visually washed out — used only if Mapbox token absent)
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_nolabels/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OpenStreetMap &copy; CARTO', maxZoom: 20
+  }).addTo(map);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/light_only_labels/{z}/{x}/{y}{r}.png', {
+    maxZoom: 20, pane: 'labels'
+  }).addTo(map);
+}
 
 // ==== State ====
 let currentMode = 'signs';
@@ -7968,7 +7987,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v31';
+const APP_VERSION = 'wepark-v32';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
