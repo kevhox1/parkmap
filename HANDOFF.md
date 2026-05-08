@@ -5,9 +5,28 @@ This document is the operating manual for any future Claude session working on W
 ## Session opening protocol
 
 When Kevin starts a new session, default response:
-> "Read `HANDOFF.md`, then `docs/<current-feature>.md`, then continue building."
+> "Read `HANDOFF.md`, then `.claude/TEAM.md`, then `docs/<current-feature>.md`, then continue building."
 
 Don't re-derive specs from chat memory. The docs are the source.
+
+## Agent team (since 2026-05-07)
+
+Work is divided across six specialized agents in `.claude/agents/`. See `.claude/TEAM.md` for the full operating manual — when to invoke each, parallelization rules, lifecycle of a feature, hand-off discipline.
+
+| Role | File | Owns |
+|---|---|---|
+| Tech Lead / Planner | `.claude/agents/tech-lead.md` | Specs at `docs/<feature>.md` |
+| iOS Engineer | `.claude/agents/ios-engineer.md` | All Swift / SwiftUI under `ios/` |
+| PWA Maintainer | `.claude/agents/pwa-maintainer.md` | `index.html`, `sw.js`, `manifest.json` |
+| Backend / Data | `.claude/agents/backend-data.md` | Supabase, `tiles/`, `scripts/` |
+| Designer | `.claude/agents/designer.md` | Reviews at `docs/design/` (read-only on code) |
+| QA / Verifier | `.claude/agents/qa-verifier.md` | Reports at `docs/qa/` (read-only on code) |
+
+**Critical invariants:**
+- QA is **never** the same agent that built the feature.
+- Designer and QA are **read-only** on source — they file feedback, engineers act on it.
+- Engineering agents on disjoint files **run in parallel** (single message, multiple Agent tool calls).
+- Tech Lead writes specs, not code.
 
 ## Project Overview
 
@@ -31,9 +50,11 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - ✅ ASP suspension calendar (hardcoded 2026 — see fix note below)
 - ✅ Drive Mode v3 full: Mapbox Search Box destination input, Mapbox Directions API, parking-aware alternative-route selection, top turn ribbon (Apple Maps green/blue/purple), turn-by-turn voice tiers, heading-up map rotation, re-routing on deviation, arrival prompt, nearby safe-blocks green overlay, iOS PWA safe-area insets
 
+**Decided (2026-05-07):**
+- ✅ **iOS launch form factor**: **Swift native, TestFlight distribution.** iOS-only initially; Android deferred. Estimated 8–16 weeks to TestFlight build at PWA parity. PWA continues to be the live product during the rewrite. Kevin's reasoning: "classic standard approach" — wants a polished launch and is OK with the longer build, accepts iOS-only for v1.
+
 **Open decisions (waiting on Kevin):**
-- 🤔 **iOS launch form factor**: Capacitor wrap (1-2 wk, web code in native shell, fastest validation) vs Swift native rewrite (8-16 wk, polished launch, longer ROI). Kevin leaning Swift native ("classic standard approach"). Decision blocks Phase 5.
-- 🤔 **NYC 311 real-time API for snow emergencies**: blocked by CORS in browser. Two paths: (a) Cloudflare Worker proxy (~15 min setup, free), or (b) skip until iOS native (no CORS, direct fetch works). Currently leaning (b).
+- 🤔 **NYC 311 real-time API for snow emergencies**: blocked by CORS in browser. Two paths: (a) Cloudflare Worker proxy (~15 min setup, free), or (b) skip until iOS native (no CORS, direct fetch works). Currently leaning (b) — and now that Swift native is decided, this naturally falls out for free in the Swift port.
 - 🤔 **Supabase tracker schema**: `SUPABASE_MVP_SCHEMA.md` defines tracker tables/RPCs but NOT yet applied. Required before flipping `tracker-config.js` provider from `'mock'` to `'supabase'` and enabling cross-pollination.
 
 **Drive-test pending:**
@@ -45,7 +66,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Phase 3 polish**: Local "move your car" notifications via Web Notifications API.
 - **Phase 4a**: "Generate QR code for my zone" — cold-start distribution per Kevin's "stickers on windshields" idea.
 - **Phase 4b**: First-time user landing page with seeded zone preview.
-- **Phase 5**: iOS launch (Capacitor or Swift native — see open decision above).
+- **Phase 5**: iOS launch — **Swift native + TestFlight** (decided 2026-05-07). Major sub-steps: Apple Developer Program enrollment, Xcode project skeleton, MapKit/Mapbox iOS SDK + tile loading, port parking-rules logic to Swift, port Smart Move + My Car + ASP banner, port Drive Mode (turn-by-turn, voice via AVSpeechSynthesizer, heading-up), Supabase Swift SDK + Sign in with Apple, APNs push for "move your car" alerts, first internal TestFlight build, then external TestFlight, then App Store submission.
 - **2027 ASP calendar refresh**: hardcoded 2026 calendar in `loadASPSuspensions()` will need annual update each Dec/Jan when NYC publishes the new PDF. OR wire NYC 311 API once on native.
 
 ## Live infrastructure

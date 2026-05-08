@@ -1,2 +1,6 @@
-.claude/
+# Claude Code local-only state — keep out of git
+.claude/settings.local.json
+.claude/worktrees/
+
+# OS junk
 .DS_Store
