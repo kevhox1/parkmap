@@ -11,7 +11,7 @@
 
 ## Data Status
 - **Parking Signs:** 17,134 unique (merged ASP + main datasets)
-- **Segments:** 12,560 across 976 tiles (~6.39 MB total)
+- **Segments:** 40,664 raw segments across 1,028 tiles (~27 MB on disk; ~7–9 MB compressed in IPA when bundled). *(Earlier reads of "12,560 segments / 976 tiles / 6.39 MB" reflected a stale snapshot — corrected 2026-05-08. The 12,560 number may have referred to unique-after-dedupe; flagged for engineer/QA to verify when porting.)*
 - **Coverage:** All Manhattan including ASP-only streets
 - **Tile data:** Pre-built, committed to repo under `tiles/`. Do not regenerate without reason.
 

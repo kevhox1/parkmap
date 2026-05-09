@@ -1,6 +1,6 @@
 # WePark iOS MVP — TestFlight build
 
-**Status:** Draft, awaiting Kevin's sign-off on the open decisions in §3.
+**Status:** All §3 decisions locked 2026-05-08. Ready for `@ios-engineer` to start W1 once Apple Developer enrollment + Xcode are ready.
 **Owner:** @ios-engineer (build), Tech Lead (spec).
 **Distribution target:** TestFlight (internal).
 **Source PWA:** `https://kevhox1.github.io/parkmap/` (stays live in maintenance mode while this is built).
@@ -99,95 +99,90 @@ If something seems useful but isn't on the In list, it's Out. Push it to the
 
 ---
 
-## 3. Open decisions (Kevin to confirm before any code starts)
+## 3. Decisions (locked 2026-05-08)
 
-These need a yes/no from Kevin. Listed in the order he should resolve them.
-Each has a recommendation, but the recommendation is not a decision — Kevin
-picks.
+Resolved with Kevin in chat. Each entry is now binding; deviations from these
+require a fresh conversation, not unilateral judgment by an engineer.
 
-### 3.1 Mapbox iOS SDK vs Apple MapKit  *(blocking — affects everything)*
+### 3.1 Map SDK — Decided: **Apple MapKit**
 
-- **Trade-off.** Mapbox iOS SDK gives parity with the PWA's existing Mapbox
-  navigation-day-v1 styling (already shipped at `index.html`:1591) and
-  preserves the Drive Mode investment for when we port it. It is paid above
-  the free monthly tier (50k MAU free, then ~$5/k). MapKit is native, free,
-  visually polished by default, but has fewer customization knobs and would
-  require us to re-style for Drive Mode parity later.
-- **Recommendation.** Mapbox iOS SDK. The Drive Mode experience is the long-
-  term moat (per `HANDOFF.md`:18, "the biggest active investment") and we
-  don't want to rebuild it twice. MAU costs are negligible at TestFlight
-  scale.
-- **Risk if MapKit is picked instead.** The Drive Mode port has to do its own
-  custom styling on MapKit, which Apple's docs allow but are limited around.
-  Side-of-street polyline highlighting, route polyline rendering, and
-  heading-up rotation are all doable on MapKit but not free.
-- **Open research item for the engineer either way.** Confirm whether the
-  chosen SDK can render ~12k–40k polylines from in-memory GeoJSON without
-  frame drops on an iPhone 12. Mapbox's vector-tile + custom-source approach
-  should handle it; MapKit's `MKMultiPolyline` is less battle-tested at this
-  density.
+- **Why MapKit, not Mapbox iOS SDK.** Kevin doesn't love the current PWA
+  aesthetic (which already attempts an "Apple Maps look" via Mapbox's
+  `navigation-day-v1` style at `index.html`:1591). Going to MapKit isn't
+  approximating Apple Maps — it's *using* Apple Maps' rendering substrate.
+  Free forever, no third-party SDK, native gesture/animation polish, automatic
+  Dark Mode for the base map.
+- **Trade-off accepted.** When Drive Mode eventually ports, its visual styling
+  will be redone from scratch on MapKit. Acceptable because Kevin doesn't
+  love the current Drive Mode look anyway.
+- **Polyline density risk — explicitly accepted.** Rendering 12k–40k colored
+  block-face polylines on top of MapKit at zoom 14–18 is the unknown.
+  Mitigation plan, in priority order:
+  1. Cull off-screen polylines via visible-bounds gating (port the PWA's
+     `loadVisibleTiles` pattern at `index.html`:3456).
+  2. Hide polylines below a zoom threshold (e.g., zoom < 14 shows nothing —
+     consistent with how Apple Maps hides road labels at low zoom).
+  3. **If polylines still feel cluttered or perform poorly, escalate to
+     `@designer` to prototype 2–3 alternative visualizations** — colored
+     building footprints, colored block-center dots, shaded zones — and pick
+     the most glanceable one. Decision: line-on-line is the default; fall
+     back to alternatives if it doesn't read.
 
-### 3.2 App bundle identifier  *(blocking — affects App Store Connect setup)*
+### 3.2 Bundle ID — Decided: **`com.wepark.app`**
 
-- **Trade-off.** Bundle ID is permanent once published.
-- **Recommendation.** `com.kevinhoxha.wepark`. Personal-domain reverse-DNS,
-  consistent with the GitHub username (`kevhox1`), product name `wepark`.
-  Avoids `parkmap` (which is the repo name but not the product name).
-- **Alternates.** `nyc.wepark.app`, `com.wepark.ios` (would need domain
-  ownership of `wepark.com` / `wepark.app`).
+Brand-forward reverse-DNS, no personal name. Apple doesn't verify the
+matching domain (`wepark.com` / `wepark.app` — not currently owned). Risk: if
+the trademark or domain is held by another party, future App Store dispute
+could force a rename. For an MVP TestFlight build with no real users, this
+risk is near-zero. Optional mitigation later: register `wepark.app` ($10–15/yr)
+to make the bundle-ID claim defensible.
 
-### 3.3 Tile bundling  *(blocking — affects app size + offline UX)*
+**Note:** App Store "Seller" name is driven by Apple Developer account type,
+not bundle ID. Kevin is enrolling Individual, so seller will read "Kevin
+Hoxha" until/unless he transfers the app to an LLC dev account later.
 
-- **Trade-off.** Bundling all 1,028 tile JSONs into the app means the map
-  works fully offline (great UX in subway / dead zones) and the data is
-  versioned with the binary (no stale-cache bugs). Cost: increases the IPA by
-  ~6–8 MB compressed (raw is ~27 MB on disk; tile JSONs compress well — text
-  with repetition). Lazy-loading from a CDN is smaller, but requires
-  connectivity for first paint and brings back the SW-cache-versioning class
-  of bugs the PWA still has.
-- **Recommendation.** **Bundle.** Tile data is static and refreshes ~quarterly
-  with NYC DOT data. The IPA size hit is acceptable — TestFlight size limit
-  is 4 GB; we're nowhere near it. Update path: ship a new app version when
-  the tile data refreshes (same cadence as PWA today, just a different
-  delivery mechanism).
-- **Note for engineer.** Copy `tiles/index.json` and `tiles/tile_*.json`
-  verbatim into `Resources/`. Don't re-encode — the JSON shape is the
-  contract. (See `HANDOFF.md`:96: "Don't regenerate unless Kevin has changed
-  upstream NYC source data.")
-- **Discrepancy to flag to Kevin.** `HANDOFF.md` says "976 tile JSONs (~6.39
-  MB)" but the actual `tiles/index.json` reports `totalTiles: 1028,
-  totalSegments: 40664`, and `du -sh tiles/` returns 27 MB on disk. Likely
-  the 6.39 MB was a gzipped-over-the-wire number from an older snapshot.
-  Confirm before sizing the bundle.
+### 3.3 Tile delivery — Decided: **Bundle all tiles in the app**
 
-### 3.4 Local-notification permission timing  *(blocking — affects App Store review)*
+- All 1,028 tile JSONs (`tiles/index.json` + `tiles/tile_*.json`) ship inside
+  the app bundle at `ios/WePark/Resources/tiles/`.
+- IPA size impact: ~7–9 MB compressed (raw 27 MB on disk). Acceptable.
+- Update cadence: ship a new app version when NYC publishes new sign data
+  (~quarterly). Same cadence as PWA today, different delivery mechanism.
+- Avoids the SW-cache-versioning class of bugs the PWA still has — the data
+  refresh is atomic with the binary install.
+- **Note for engineer.** Copy verbatim from repo root `tiles/`. Don't
+  re-encode — the JSON shape is the contract.
+- **HANDOFF.md tile-count mismatch (976 vs 1,028) was fixed in the same PR
+  that locked these decisions.** Reference numbers going forward: 1,028
+  tiles, 27 MB on disk.
 
-- **Trade-off.** Asking up front on first launch is the simplest code path
-  but App Store reviewers and savvy users see it as a poor-UX dark pattern.
-  Asking on first pin drop is more contextual ("you parked your car, want a
-  reminder?") and aligns with Apple's HIG, but adds a code branch.
-- **Recommendation.** **Ask on first pin drop.** Use a simple in-app
-  rationale sheet ("WePark uses a notification to remind you to move your car
-  before alternate-side parking starts. We never send marketing
-  notifications.") immediately before the system prompt. If the user denies,
-  the pin still drops; we just show a one-time inline message that the
-  reminder was skipped.
-- **Location permission** (separate prompt) — same pattern: ask the first
-  time the user taps the "center on me" button, not on launch.
+### 3.4 Notification & location permission timing — Decided: **Contextual, with rationale**
 
-### 3.5 Minimum iOS version  *(blocking — affects SwiftUI APIs and Mapbox SDK)*
+- **Notifications:** Asked on **first pin drop**, not on app launch. Flow:
+  user drops pin → in-app rationale sheet appears → on tap "Got it" → iOS
+  system permission prompt. Denial doesn't block the pin save; we show a
+  one-time inline note that no reminder was scheduled.
+- **Location:** Same pattern. Asked on **first "center on me" tap**, not on
+  app launch. Map renders without it; just won't auto-center until granted.
+- Both align with Apple HIG and avoid App Store reviewer flags for "asking
+  for permissions out of context."
 
-- **Recommendation.** **iOS 17.** Reasons:
-  - SwiftUI `@Observable` macro (cleaner than `ObservableObject`) needs 17.
-  - Mapbox iOS SDK v11 (current) requires iOS 14+ and works cleanly on 17.
-  - iOS 17 adoption is >85% as of 2026-05; the long tail isn't worth the
-    SwiftUI tax.
-- **Alternate.** iOS 16 if Kevin has a personal device on 16. Costs
-  ~10% more boilerplate for state management.
+### 3.5 Minimum iOS — Decided: **iOS 17**
 
-### 3.6 `Info.plist` privacy strings  *(blocking — App Store review will reject without these)*
+- SwiftUI's MapKit API got a major rebuild in iOS 17 — the new `Map { }`
+  builder with `MapContentBuilder` is dramatically cleaner for our custom
+  polyline + pin overlays than the iOS 16 path (which forces `MKMapView` in
+  `UIViewRepresentable`).
+- `@Observable` macro available, simplifying state management for the parked
+  car, banner state, and mute toggle.
+- ~85% iOS adoption as of May 2026. Cuts ~13% of iPhone owners on iOS 16,
+  who skew older devices and are not the primary NYC street-parker
+  demographic.
 
-Concrete copy proposals:
+### 3.6 `Info.plist` privacy strings — Decided: **As-drafted**
+
+Use both strings verbatim. They satisfy App Store review's "specific +
+honest + user-facing" requirements.
 
 - **`NSLocationWhenInUseUsageDescription`** —
   *"WePark uses your location to center the map on your block and recommend
@@ -196,31 +191,30 @@ Concrete copy proposals:
   *"Get a reminder before alternate-side parking starts so you never get
   ticketed. Notifications are scheduled on-device only."*
 
-Kevin: confirm the wording is a fair description of the actual MVP behavior.
+**Heads-up for future expansion:** the "we don't send marketing
+notifications" framing is correct for MVP but soften when Pro features
+introduce promotional pushes. Re-litigate as part of v1.1 paywall work.
 
-### 3.7 Color match for parking categories  *(non-blocking — but lock the answer before pixel-pushing starts)*
+### 3.7 Color palette — Decided: **iOS-native semantic colors, Designer-led redesign during W1**
 
-- **Trade-off.** Port the PWA's exact hex values (consistency, fewer surprises
-  for users coming from the PWA) vs adopt iOS system semantic colors
-  (`Color.red`, `Color.yellow`) for automatic Dark Mode handling.
-- **Recommendation.** **PWA hex for MVP.** Dark Mode polish is later. The
-  exact values are in `CATEGORIES` at `index.html`:1558 — copy them verbatim
-  into a Swift `ParkingColors` enum.
-
-| Category | Hex | Meaning |
-|---|---|---|
-| `ASP_MON_THU` | `#8b5cf6` | Mon/Thu street cleaning |
-| `ASP_TUE_FRI` | `#f97316` | Tue/Fri street cleaning |
-| `ASP_OVERNIGHT_MWF` | `#ec4899` | Overnight Mon/Wed/Fri |
-| `ASP_OVERNIGHT_TTHS` | `#06b6d4` | Overnight Tue/Thu/Sat |
-| `ASP_DAILY` | `#eab308` | Daily street cleaning |
-| `METERED` | `#3b82f6` | Metered |
-| `TRUCK_LOADING` | `#92400e` | Truck loading zone |
-| `NO_PARKING` | `#ef4444` | No parking |
-| `NO_STANDING` | `#7f1d1d` | No standing/stopping |
-| `SPECIAL` | `#1f2937` | Special restriction |
-| `FREE` | `#22c55e` | Free parking |
-| `UNKNOWN` | `#d1d5db` | Unknown / no data |
+- **Reject** the PWA hex palette. PWA has no real users (Kevin is the only
+  one); preserving "consistency for users coming from PWA" was a non-reason.
+- **Adopt** SwiftUI system colors (`Color.green`, `.orange`, `.red`,
+  `.blue`, `.gray`) as the starting palette — they auto-adapt for Dark Mode,
+  feel iOS-native, and don't require manual hex management.
+- **Collapse the 12-category palette into 4–5 decisive colors.** Sub-
+  categories like "Mon/Thu vs Tue/Fri ASP" become *text* in the block
+  detail sheet, not different colors on the map. Driver glanceability >
+  taxonomic completeness.
+- **Suggested starting collapsed palette** (Designer to refine during W1):
+  - **Free** → `Color.green`
+  - **Metered** → `Color.blue`
+  - **ASP street cleaning** (any flavor) → `Color.orange`
+  - **Restricted** (NO_PARKING, NO_STANDING, TRUCK_LOADING, SPECIAL) → `Color.red`
+  - **Unknown** → `Color.gray.opacity(0.4)`
+- **Designer-owned W1 task** (added in §5): produce the final palette spec
+  + 2–3 visualization alternatives if line-on-line proves cluttered. iOS
+  Engineer gates pixel-pushing on Designer's sign-off.
 
 ---
 
@@ -264,7 +258,7 @@ ios/WePark/
     SafetyLabel.swift                # text + severity (free | metered | restricted | unknown)
     NextRestriction.swift            # hours, label, category?, rule?
   Views/
-    MapView.swift                    # SwiftUI wrapper around Mapbox or MapKit
+    MapView.swift                    # SwiftUI wrapper around MapKit (iOS 17 `Map { }` API)
     BlockDetailSheet.swift           # rules list + safety label + "Park here" button
     ParkPinSheet.swift               # confirm + side-picker (when ambiguous) + drop pin
     ASPBanner.swift                  # red/yellow/green banner reading ASPSuspensionService
@@ -357,11 +351,31 @@ worth calling out so dependencies are visible.
 
 ### W1 — Project bootstrap *(blocks everything; no parallelism)*
 
-- New Xcode project, bundle ID, signing, TestFlight provisioning profile.
+- New Xcode project, bundle ID `com.wepark.app`, signing, TestFlight
+  provisioning profile.
 - Target iOS 17, Swift 5.9+, SwiftUI lifecycle.
 - `Info.plist` privacy strings (§3.6).
 - Owner: @ios-engineer. Depends on: Kevin's Apple Developer enrollment
   finishing (§3 prerequisite).
+
+### W1.5 — Designer-led palette + visualization spec *(parallel with W1)*
+
+- Owner: @designer.
+- Output: a short doc at `docs/design/ios-mvp-palette.md` containing:
+  1. **Final color palette** — refined version of the §3.7 starting set,
+     specified as SwiftUI `Color` values (system semantic where possible,
+     custom hex only if a system color genuinely doesn't fit).
+  2. **Block visualization decision** — line-on-line is the default; Designer
+     can propose 2–3 alternatives (block-center colored dots, shaded
+     building footprints, etc.) if there's reason to believe lines won't
+     read on a real device. Final pick is Designer's call, with @ios-engineer
+     consulted on perf trade-offs.
+  3. **Banner color spec** — three states (today suspended → red, tomorrow
+     → yellow, otherwise → green confirmation). System semantic preferred.
+- **Must complete before W4 (block detail sheet) ships** so the palette is
+  locked when pixel work begins. Can finalize during W2's prototyping.
+- This is independent of Apple Developer enrollment — `@designer` can start
+  immediately.
 
 ### W2 — Models + tile loading + map render *(parallel with W3 once W1 done)*
 
@@ -369,7 +383,12 @@ worth calling out so dependencies are visible.
 - `TileLoader` reads bundled `tiles/index.json`, lazily decodes the
   `tile_R_C.json` for visible map bounds (port `getTilesForBounds` from
   `index.html`:2221).
-- `MapView` renders polylines colored by `dominantCategory`.
+- `MapView` renders polylines colored per `@designer`'s palette spec (W1.5),
+  using the iOS 17 `Map { }` builder API on MapKit.
+- **Stress test on Day 2** with all visible tiles in viewport at zoom 14 over
+  Manhattan. If frame rate drops below 30fps, escalate to the §3.1
+  mitigation plan (cull off-screen, zoom-threshold gating, alternative
+  visualization).
 - Owner: @ios-engineer.
 
 ### W3 — ParkingRulesEngine port *(parallel with W2)*
@@ -421,7 +440,7 @@ NYC 311 proxy. The bundled tile JSONs and bundled `asp-2026.json` are the only
 data dependencies, both already at HEAD in this repo.
 **@backend-data is not on the critical path for this spec.**
 
-**Suggested order.** W1 → (W2 ‖ W3) → W4 → W5 → (W6 ‖ W7) → W8.
+**Suggested order.** (W1 ‖ W1.5) → (W2 ‖ W3) → W4 → W5 → (W6 ‖ W7) → W8.
 
 **Rough sizing.** With Kevin solo and ramping on Swift, this is plausibly a
 3–5 week build to a TestFlight-able binary. Don't hold him to a number —
@@ -490,10 +509,15 @@ before TestFlight submission. *AC-3* and *AC-5* are the high-risk ones.
 These aren't blocking decisions for Kevin — they're things the iOS Engineer
 should resolve early in the build because they could move scope.
 
-- **R1.** Can Mapbox iOS SDK render ~12,560 polylines (the Manhattan tile
-  segments at full coverage) without dropped frames at zoom 16? If not, the
-  fallback is to clip to the visible viewport (the PWA does this implicitly
-  via `loadVisibleTiles` at `index.html`:3456) — port that pattern.
+- **R1. MapKit polyline density at Manhattan scale.** Rendering ~12,560
+  unique block-face polylines (40,664 raw segments across 1,028 tiles) on
+  `MKMapView` / iOS-17 `Map { }` builder at zoom 14–18 is unproven at this
+  density. Mitigation hierarchy from §3.1: visible-bounds culling first
+  (port `loadVisibleTiles` from `index.html`:3456), zoom-threshold gating
+  second, then escalate to `@designer` for alternative visualizations
+  (block-center dots, building footprints, shaded zones). **Stress test
+  this on a real iPhone 12 within W2.** If frames drop below 30fps under
+  the full mitigation stack, escalate before W4 starts.
 - **R2.** `computeNextRestrictionHours` 14-day walker has an edge case at
   week boundaries that hasn't been independently audited — when a rule's
   `timeRanges` is empty AND `offset === 0` AND `now` is mid-day on a
@@ -502,23 +526,12 @@ should resolve early in the build because they could move scope.
   with at least 5 boundary cases (Saturday → Sunday rollover, end-of-month,
   start-of-year, suspended-day adjacent to non-suspended-day, midnight ET
   exactly). Surface any deltas to Kevin before sign-off.
-- **R3.** **The HANDOFF.md tile-count mismatch flagged in §3.3** —
-  `HANDOFF.md` says 976 tiles / 6.39 MB, actual is 1,028 tiles / 27 MB
-  on disk. Engineer should run `du -sh tiles/` themselves before sizing the
-  app bundle; 6.39 MB might be a stale post-gzip wire size from an earlier
-  snapshot.
-- **R4.** Mapbox SDK token strategy. The PWA ships a `pk.*` token in
-  `tracker-config.js` URL-restricted to `kevhox1.github.io` + `localhost`.
-  For iOS, Mapbox supports per-app **secret** tokens (`sk.*`) for SDK
-  downloads and per-app **public** tokens for runtime. We need a separate
-  iOS-restricted token, NOT to reuse the web one. Engineer: create a new
-  Mapbox token scoped to the iOS bundle ID before W1 ships.
-- **R5.** Permission denied edge cases. If the user denies notifications, we
+- **R3.** Permission denied edge cases. If the user denies notifications, we
   fall back to "no reminders" silently. If they deny then re-enable in iOS
   Settings, the next pin drop should reschedule — verify
   `UNUserNotificationCenter.current().getNotificationSettings()` is checked
   on every pin drop, not cached at app launch.
-- **R6.** Time-zone edge case on user travel. If a user parks in NYC then
+- **R4.** Time-zone edge case on user travel. If a user parks in NYC then
   flies to LA, the device clock changes but `nowET()` is the right reference
   for "when does ASP start." Confirm the notification scheduler uses
   absolute Unix time (computed via the ET calendar) so the notification

@@ -86,16 +86,18 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 
 - **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
 - **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v30`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
-- **Tile data is pre-built and committed.** The `tiles/` directory holds 976 pre-generated JSON tiles (~6.39 MB). Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large.
+- **Tile data is pre-built and committed.** The `tiles/` directory holds 1,028 pre-generated JSON tiles (~27 MB on disk; ~7–9 MB compressed when bundled in an IPA per `docs/ios-mvp-spec.md` §3.3). `tiles/index.json` reports `totalTiles: 1028, totalSegments: 40664`. Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large. *(Note: this used to read "976 tiles / 6.39 MB" — that was a stale post-gzip wire-size from an older snapshot. Corrected 2026-05-08.)*
 - **No automated test suite exists.** QA is done via:
   - Independent QA subagent review (see `TRACKER_QA_VERIFY.md` for the pattern)
   - Manual smoke on the live site after deploy
   - Code review in PRs
   Never let the agent that built a feature also sign off on it — spawn a separate QA subagent.
 - **Deploy target: GitHub Pages, auto-deploy on push to `main`.** There is no build step. `.nojekyll` is present so GitHub Pages serves files as-is.
-- **Specs live at the repo root.** Key docs:
+- **Specs live at the repo root and `docs/`.** Key docs:
   - `PROJECT.md` — current status, phase checklist
   - `PRODUCT.md` — product vision
+  - `docs/ios-mvp-spec.md` — iOS MVP TestFlight build spec. **All §3 decisions locked 2026-05-08**: MapKit (not Mapbox), `com.wepark.app`, bundle tiles, contextual permission prompts, iOS 17 min, iOS-native semantic palette via Designer. `@ios-engineer` builds against this once Apple Developer enrollment completes.
+  - `docs/business-model.md` — revenue strategy (Free + WePark Pro, $4.99/mo or $29.99/yr, 7-day trial). MVP ships free; paywall lands in v1.1 post-validation.
   - `TRACKER_MVP_SPEC.md` — tracker feature spec (read before touching tracker code)
   - `SUPABASE_MVP_SCHEMA.md` — backend tables + RPC functions (the Supabase provider in `index.html` calls the RPC names defined here)
   - `BACKEND_OPTIONS.md` — backend trade-off notes
@@ -113,7 +115,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Backend (in progress):** Supabase (Postgres + PostgREST + Realtime + Anonymous Auth). Provider is loaded dynamically as an ESM import from jsdelivr when `tracker-config.js` is set to `provider: 'supabase'`.
 - **Tracker provider config:** `tracker-config.js` at repo root — empty creds by default, falls back to local mock
 - **Hosting:** GitHub Pages, auto-deploy on push to `main`
-- **Data sources:** NYC parking sign data (merged ASP + main), pre-tiled into 976 JSON tiles under `tiles/`
+- **Data sources:** NYC parking sign data (merged ASP + main), pre-tiled into 1,028 JSON tiles under `tiles/` (~27 MB on disk)
 
 ## Changelog
 
