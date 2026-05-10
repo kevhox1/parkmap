@@ -241,14 +241,21 @@ User taps "Park here"
 
 No network calls in MVP. No async backend. The whole app is offline-first.
 
-### 4.2 Module layout (`ios/WePark/`)
+### 4.2 Module layout (`ios/WePark/WePark/`)
+
+> **Note on path nesting:** When Kevin created the Xcode project in a parent
+> folder (`ios/WePark/`), Xcode's wizard nested the app sources one level
+> deeper, producing `ios/WePark/WePark/` (target folder inside project folder).
+> All source file paths below reflect the actual on-disk layout.
+> The Xcode project file is at `ios/WePark/WePark.xcodeproj/`.
 
 This is a sketch; the iOS Engineer owns the final Xcode project structure. Don't
 take this as prescriptive beyond the boundaries between modules.
 
 ```
-ios/WePark/
+ios/WePark/WePark/
   WeParkApp.swift                    # @main, app entry, root scene
+  ContentView.swift                  # Root view (MapKit stub in W1; full map in W2)
   Models/
     Segment.swift                    # Mirrors tile JSON shape (id, street, from, to, side, line, rules, dominantCategory)
     ParkingRule.swift                # category, days, timeRanges, anytime, arrow
@@ -258,12 +265,12 @@ ios/WePark/
     SafetyLabel.swift                # text + severity (free | metered | restricted | unknown)
     NextRestriction.swift            # hours, label, category?, rule?
   Views/
-    MapView.swift                    # SwiftUI wrapper around MapKit (iOS 17 `Map { }` API)
     BlockDetailSheet.swift           # rules list + safety label + "Park here" button
     ParkPinSheet.swift               # confirm + side-picker (when ambiguous) + drop pin
     ASPBanner.swift                  # red/yellow/green banner reading ASPSuspensionService
     SettingsSheet.swift              # mute toggle + version info
   Services/
+    Constants.swift                  # AppConstants: manhattanCenter, notificationRationale
     TileLoader.swift                 # loads bundled tile_R_C.json on demand for visible bounds
     ParkingRulesEngine.swift         # the rules port — see §4.3
     ASPSuspensionService.swift       # today/tomorrow lookup; loads asp-2026.json once
@@ -275,6 +282,26 @@ ios/WePark/
     tiles/tile_*.json                # 1,028 files
     asp-2026.json                    # extracted from ASP_SUSPENSIONS_2026 (see §4.4)
 ```
+
+> **⚠️ App-bundle layout note (W1a QA finding #1, 2026-05-10):** The on-disk
+> source paths above are accurate, but at **build time** Xcode 16's
+> `PBXFileSystemSynchronizedRootGroup` (the modern folder-sync mode used by
+> this project) **flattens `Resources/` and its subdirectories into the app
+> bundle root**. Confirmed in `DerivedData/.../WePark.app/`: `tile_0_3.json`
+> and `asp-2026.json` are at the bundle root, **NOT** under `WePark.app/tiles/`.
+>
+> **Implication for engineers:** Load resources with `Bundle.main.url(forResource:withExtension:)`,
+> which doesn't care about subpaths. **Do NOT construct paths like**
+> `"\(Bundle.main.bundlePath)/tiles/tile_0_3.json"` — they will silently fail at
+> runtime. This affects `TileLoader.swift` and `ASPSuspensionService.swift`
+> in W2/W3.
+>
+> If you ever want to preserve the `tiles/` subdirectory in the bundle (e.g.,
+> for clearer organization in a Files.app browse view), the workaround is to
+> change the `Resources/tiles/` group from a folder-sync group to a regular
+> Xcode "Create folder reference" (blue folder icon) in `project.pbxproj`. Not
+> recommended for MVP — the flat-bundle behavior is fine if you use the
+> `forResource:` API.
 
 ### 4.3 ParkingRulesEngine — the port from JS
 
@@ -316,8 +343,8 @@ See acceptance criterion AC-3 in §6.
 ### 4.4 ASP suspension calendar — extract to data
 
 The PWA holds the calendar as a JS object literal at `index.html`:2030
-(`ASP_SUSPENSIONS_2026`, 41 dates). For iOS, propose extracting it to
-`ios/WePark/Resources/asp-2026.json`:
+(`ASP_SUSPENSIONS_2026`, 42 dates). For iOS, propose extracting it to
+`ios/WePark/WePark/Resources/asp-2026.json`:
 
 ```json
 {
@@ -332,7 +359,7 @@ The PWA holds the calendar as a JS object literal at `index.html`:2030
 
 This decouples the data refresh path from code (annual update is a JSON edit,
 not a Swift edit) and matches the future shape we'll get when NYC 311 API gets
-wired post-MVP. The 41 dates are listed in full at `index.html`:2030–2073.
+wired post-MVP. The 42 dates are listed in full at `index.html`:2031–2072.
 
 ### 4.5 What's intentionally absent
 

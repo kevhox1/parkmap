@@ -2,5 +2,17 @@
 .claude/settings.local.json
 .claude/worktrees/
 
+# Xcode — user-specific UI state, build artifacts, derived data
+**/xcuserdata/
+**/*.xcuserstate
+**/*.xcuserdatad/
+ios/**/build/
+DerivedData/
+
+# Swift Package Manager
+.swiftpm/
+Package.resolved
+.build/
+
 # OS junk
 .DS_Store
