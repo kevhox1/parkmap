@@ -68,6 +68,10 @@ final class TileLoader {
     private var tileSet: Set<String> = []
     /// In-memory cache of decoded segments per tile key ("row_col").
     private var cache: [String: [Segment]] = [:]
+    /// Tracks the most-recently-requested region. In-flight Tasks read this
+    /// at execution time (not capture time) so rapid panning can't cause a
+    /// late-finishing Task to overwrite segments with a stale viewport.
+    private var currentRegion: MKCoordinateRegion?
 
     // MARK: Init
     init() {
@@ -80,9 +84,18 @@ final class TileLoader {
     /// intersect the new bounds and aren't already cached. The `segments`
     /// property updates when new tiles finish loading, triggering a re-render.
     func loadTiles(forRegion region: MKCoordinateRegion) {
+        // Update currentRegion first. Any Task that finishes after a later
+        // pan will read this value at execution time, not the captured arg.
+        currentRegion = region
+
         let keys = tileKeys(forRegion: region)
         let uncached = keys.filter { cache[$0] == nil }
-        guard !uncached.isEmpty else { return }
+        guard !uncached.isEmpty else {
+            // All tiles already cached — still rebuild in case currentRegion
+            // advanced while a prior Task was in flight.
+            rebuildSegments(forKeys: keys)
+            return
+        }
 
         // Decode each uncached tile concurrently then merge back on the main actor.
         Task { @MainActor in
@@ -102,7 +115,10 @@ final class TileLoader {
                     }
                 }
             }
-            rebuildSegments(forKeys: tileKeys(forRegion: region))
+            // Use self.currentRegion — NOT the captured `region` argument —
+            // so a Task that finishes late always renders the live viewport.
+            guard let liveRegion = self.currentRegion else { return }
+            rebuildSegments(forKeys: tileKeys(forRegion: liveRegion))
         }
     }
 
