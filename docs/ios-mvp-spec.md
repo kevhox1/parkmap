@@ -195,26 +195,43 @@ honest + user-facing" requirements.
 notifications" framing is correct for MVP but soften when Pro features
 introduce promotional pushes. Re-litigate as part of v1.1 paywall work.
 
-### 3.7 Color palette — Decided: **iOS-native semantic colors, Designer-led redesign during W1**
+### 3.7 Color palette — Decided: **iOS-native semantic colors, dynamic state color (Option B)**
+
+**Final palette spec lives in `docs/design/ios-mvp-palette.md`** (produced
+by `@designer` in W1.5). Summary of the locked decisions:
 
 - **Reject** the PWA hex palette. PWA has no real users (Kevin is the only
   one); preserving "consistency for users coming from PWA" was a non-reason.
-- **Adopt** SwiftUI system colors (`Color.green`, `.orange`, `.red`,
-  `.blue`, `.gray`) as the starting palette — they auto-adapt for Dark Mode,
-  feel iOS-native, and don't require manual hex management.
-- **Collapse the 12-category palette into 4–5 decisive colors.** Sub-
-  categories like "Mon/Thu vs Tue/Fri ASP" become *text* in the block
-  detail sheet, not different colors on the map. Driver glanceability >
-  taxonomic completeness.
-- **Suggested starting collapsed palette** (Designer to refine during W1):
-  - **Free** → `Color.green`
-  - **Metered** → `Color.blue`
-  - **ASP street cleaning** (any flavor) → `Color.orange`
-  - **Restricted** (NO_PARKING, NO_STANDING, TRUCK_LOADING, SPECIAL) → `Color.red`
-  - **Unknown** → `Color.gray.opacity(0.4)`
-- **Designer-owned W1 task** (added in §5): produce the final palette spec
-  + 2–3 visualization alternatives if line-on-line proves cluttered. iOS
-  Engineer gates pixel-pushing on Designer's sign-off.
+- **Adopt** SwiftUI system colors (`Color.red`, `.orange`, amber-yellow,
+  `.green`, `.gray`) — they auto-adapt for Dark Mode, feel iOS-native, no
+  manual hex management.
+- **Color encodes CURRENT STATE, not static category** (decided 2026-05-10).
+  Severity-spectrum palette where the color tells the driver *what's true
+  right now* on this block, not *what kind of restrictions exist here*.
+  Same ASP_MON_THU block on the map changes color throughout the week as
+  its current state changes — this is intentional, not a bug.
+
+#### Color-to-state mapping
+
+| Color | Meaning right now | Triggered by |
+|---|---|---|
+| **🔴 Red** | Can't park right now | Block is currently restricted: NO_PARKING anytime; ASP active in its current window; NO_STANDING; TRUCK_LOADING; SPECIAL active now |
+| **🟠 Orange** | Free now, but a restriction is starting soon (engine decides "soon" — recommend ≤24h) | ASP block whose next active window begins within 24h. Warning state — fine for a quick errand, not for overnight parking. |
+| **🟡 Amber-yellow** | Metered right now (pay to park) | METERED block during its active hours. Slightly amber-shifted from system yellow to remain readable against Apple Maps' tan basemap — see palette doc §2.3. |
+| **🟢 Green** | Free now with no restriction imminent | FREE block; or ASP block whose next window is >24h away; or METERED block during its free hours. Comfortable for overnight parking. |
+| **⚪️ Gray** | Unknown | No data. Outside the spectrum. |
+
+**Implementation note for W3** (`@ios-engineer`): the `ParkingRulesEngine`
+must expose a `currentStateColor(for: Segment, at: Date) -> Color` method
+that maps the rule set + current time to the right spectrum color. Recompute
+on app foreground + map camera change. The starting palette in this section
+was used by W2 (static `dominantCategory.swiftUIColor`) as an interim — W3
+refactors `ContentView` polyline rendering to call
+`engine.currentStateColor(for: segment, at: .now)`.
+
+**Designer-owned W1 task** (in §5): produce the final palette spec +
+visualization alternatives. ✅ Complete as of `design/ios-mvp-palette`
+branch (PR #14).
 
 ---
 
