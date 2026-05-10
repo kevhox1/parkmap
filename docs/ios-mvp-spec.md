@@ -241,14 +241,21 @@ User taps "Park here"
 
 No network calls in MVP. No async backend. The whole app is offline-first.
 
-### 4.2 Module layout (`ios/WePark/`)
+### 4.2 Module layout (`ios/WePark/WePark/`)
+
+> **Note on path nesting:** When Kevin created the Xcode project in a parent
+> folder (`ios/WePark/`), Xcode's wizard nested the app sources one level
+> deeper, producing `ios/WePark/WePark/` (target folder inside project folder).
+> All source file paths below reflect the actual on-disk layout.
+> The Xcode project file is at `ios/WePark/WePark.xcodeproj/`.
 
 This is a sketch; the iOS Engineer owns the final Xcode project structure. Don't
 take this as prescriptive beyond the boundaries between modules.
 
 ```
-ios/WePark/
+ios/WePark/WePark/
   WeParkApp.swift                    # @main, app entry, root scene
+  ContentView.swift                  # Root view (MapKit stub in W1; full map in W2)
   Models/
     Segment.swift                    # Mirrors tile JSON shape (id, street, from, to, side, line, rules, dominantCategory)
     ParkingRule.swift                # category, days, timeRanges, anytime, arrow
@@ -258,12 +265,12 @@ ios/WePark/
     SafetyLabel.swift                # text + severity (free | metered | restricted | unknown)
     NextRestriction.swift            # hours, label, category?, rule?
   Views/
-    MapView.swift                    # SwiftUI wrapper around MapKit (iOS 17 `Map { }` API)
     BlockDetailSheet.swift           # rules list + safety label + "Park here" button
     ParkPinSheet.swift               # confirm + side-picker (when ambiguous) + drop pin
     ASPBanner.swift                  # red/yellow/green banner reading ASPSuspensionService
     SettingsSheet.swift              # mute toggle + version info
   Services/
+    Constants.swift                  # AppConstants: manhattanCenter, notificationRationale
     TileLoader.swift                 # loads bundled tile_R_C.json on demand for visible bounds
     ParkingRulesEngine.swift         # the rules port — see §4.3
     ASPSuspensionService.swift       # today/tomorrow lookup; loads asp-2026.json once
