@@ -1,6 +1,6 @@
 # WePark iOS MVP — Color Palette & Block Visualization Spec
 
-**Status:** Revised 2026-05-10 (severity-spectrum reframe, open questions closed).
+**Status:** Revised 2026-05-10 (severity-spectrum + dynamic-state reframe, open questions closed).
 **Owner:** @designer.
 **Feeds into:** `docs/ios-mvp-spec.md` §3.7 and W1.5.
 **Gating:** iOS Engineer does not start pixel work on map polylines, block detail sheet, or ASP banner until this doc is marked complete.
@@ -9,9 +9,11 @@
 
 ## 1. Design premise
 
-WePark's parking states sit on a natural severity gradient — from a block where you'll get ticketed and towed if you park wrong, down to a block where you can leave the car for days. Color should encode that gradient. A driver who glances at the map for two seconds while stopped at a light should read severity from color without counting on being able to tap into details.
+**Color encodes CURRENT STATE, not static category.** The same ASP_MON_THU block changes color throughout the week as its actual parking state changes — red when ASP is active Thursday 7-9:30am, orange Wednesday evening (restriction coming in <24h), green for the two days in between. This is intentional. A driver mid-search wants the visual answer to *"where do I park RIGHT NOW"*, not a list of *"what kind of restrictions exist on each block."*
 
-The revised palette adopts a traffic-light-plus-amber spectrum: red (worst) → orange → yellow → green (best). All four colors are SwiftUI system semantic colors; all four carry matching Apple HIG semantic meanings (red = destructive/critical, orange = warning, yellow = caution, green = success/go). All four auto-adapt for Dark Mode without any manual dark-hex management.
+WePark's parking states sit on a natural severity gradient — from a block where you'll get ticketed and towed if you park wrong, down to a block where you can leave the car for days. Color encodes that gradient *as it applies right now*. A driver who glances at the map for two seconds while stopped at a light should read current-state severity from color without counting on being able to tap into details.
+
+The palette is a traffic-light-plus-amber spectrum: red (worst) → orange → amber-yellow → green (best). All four are SwiftUI system semantic colors; all four carry matching Apple HIG semantic meanings (red = destructive/critical, orange = warning, yellow = caution, green = success/go). All auto-adapt for Dark Mode without any manual dark-hex management.
 
 Source: Apple Human Interface Guidelines — Color: https://developer.apple.com/design/human-interface-guidelines/color
 
@@ -19,54 +21,91 @@ Source: Apple Human Interface Guidelines — Color: https://developer.apple.com/
 
 ## 2. Palette
 
-### 2.1 Collapsed categories
+### 2.1 Color-to-current-state mapping
 
-The PWA has 12 sign categories. For the map, collapse them into 5 visual buckets. Sub-category detail (Mon/Thu vs Tue/Fri ASP, truck loading vs no standing) is text in the block detail sheet — not a separate color.
+The PWA has 12 sign categories. For the map, color is determined not by the category but by the **current state** at evaluation time. The same block changes color as its current state changes throughout the day or week. Sub-category detail (Mon/Thu vs Tue/Fri ASP, truck loading vs no standing) is text in the block detail sheet — not a separate color.
 
-| Severity rank | Parking state | Categories collapsed | SwiftUI color | Rationale |
+| Severity rank | Current state right now | Triggered by | SwiftUI color | Rationale |
 |---|---|---|---|---|
-| 1 (worst) | Restricted | NO_PARKING, NO_STANDING, TRUCK_LOADING, SPECIAL | `Color.red` | You cannot park here. Ticket + potential tow. |
-| 2 | ASP street cleaning | ASP_MON_THU, ASP_TUE_FRI, ASP_DAILY, ASP_MON_SAT, and any other ASP variant | `Color.orange` | Looks free now but has a hard deadline where the car gets ticketed and towed (~$185 + ticket). Tow is worse than a meter ticket. |
-| 3 | Metered | METERED | `Color.yellow` (see §2.3 for implementation note) | Pay-or-ticket. No tow risk. Manageable. |
-| 4 (best) | Free | FREE | `Color.green` | Park freely; no schedule, no risk. |
-| neutral | Unknown | any segment with no rules or unrecognized category | `Color.gray.opacity(0.35)` | No data. User should look at the signs. Sits outside the severity spectrum. |
+| 1 (worst) | **Can't park** | NO_PARKING anytime; ASP block during its active window (e.g., Thu 7–9:30am for an ASP_MON_THU block); NO_STANDING; TRUCK_LOADING active now; SPECIAL active now | `Color.red` | You cannot park here at this moment. Ticket + potential tow. |
+| 2 | **Free now, restriction coming soon** | ASP block whose next active window starts within ~24 hours (engine decides exact threshold) | `Color.orange` | Warning state. Fine for a quick errand, not safe for overnight parking. Driver gets the "be careful, set a timer" signal at a glance. |
+| 3 | **Metered (pay to park) right now** | METERED block during its active billing hours | `Color(red: 0.92, green: 0.76, blue: 0.0)` — amber-shifted yellow (see §2.3) | Pay-or-ticket. No tow risk. Manageable. |
+| 4 (best) | **Free now, no restriction imminent** | FREE block; OR ASP block whose next active window is >24h away; OR METERED block during its free hours | `Color.green` | Park comfortably. Safe for overnight if no near-term restriction. |
+| neutral | **Unknown** | Segment with no rules or unrecognized category | `Color.gray.opacity(0.35)` | No data. User should look at the signs. Sits outside the severity spectrum. |
+
+**Same block, different color through the week** — concrete example, ASP_MON_THU block (street cleaning Mon + Thu, 7–9:30am):
+
+| Wall-clock time (ET) | Current state | Color |
+|---|---|---|
+| Mon 7:00–9:30am | ASP active | 🔴 Red |
+| Mon 9:30am – Wed evening (next ASP > 24h away) | Free now, far from next | 🟢 Green |
+| Wed evening – Thu 6:59am (within 24h of next ASP) | Free now, restriction coming | 🟠 Orange |
+| Thu 7:00–9:30am | ASP active | 🔴 Red |
+| Thu 9:30am – Sun (next ASP is Mon, > 24h away) | Free now, far from next | 🟢 Green |
+
+The exact "soon" threshold (24h, 12h, "today") is the engine's call — `@ios-engineer` may tune based on user testing. 24h is the spec's recommendation.
 
 ### 2.2 SwiftUI implementation
+
+Color enum lives at `ios/WePark/WePark/Services/ParkingColors.swift`:
 
 ```swift
 import SwiftUI
 
 enum ParkingColors {
-    /// Ticket + tow risk. NO_PARKING, NO_STANDING, TRUCK_LOADING, SPECIAL.
+    /// Cannot park right now. NO_PARKING; ASP active in current window; NO_STANDING; etc.
     static let restricted = Color.red
 
-    /// ASP street cleaning — looks free now, tow risk at next window.
-    static let asp = Color.orange
+    /// Free right now, but a restriction is starting within ~24 hours.
+    static let restrictionComingSoon = Color.orange
 
-    /// Metered — pay-or-ticket, no tow. See note below on map legibility.
-    static let metered = Color.yellow
+    /// Metered (pay to park) right now. See §2.3 on amber-shift.
+    static let meteredActive = Color(red: 0.92, green: 0.76, blue: 0.0)
 
-    /// Free parking — no restriction, no schedule.
-    static let free = Color.green
+    /// Free right now with no restriction imminent.
+    static let freeComfortably = Color.green
 
     /// Unknown — no data available.
     static let unknown = Color.gray.opacity(0.35)
 }
 ```
 
-Map polyline usage (iOS 17 MapKit `MapPolyline`):
+The current-state-to-color mapping lives in `ParkingRulesEngine` (W3), not in the color enum — the engine computes the live state and returns the right color. Pseudocode:
+
+```swift
+extension ParkingRulesEngine {
+    /// Returns the SwiftUI color representing the segment's CURRENT parking state.
+    /// Recomputed on app foreground + map camera change.
+    func currentStateColor(for segment: Segment, at now: Date) -> Color {
+        let state = currentState(for: segment, at: now)   // existing helper
+        switch state {
+        case .restrictedNow:           return ParkingColors.restricted
+        case .freeButRestrictionSoon:  return ParkingColors.restrictionComingSoon
+        case .meteredActive:           return ParkingColors.meteredActive
+        case .freeComfortably:         return ParkingColors.freeComfortably
+        case .unknown:                 return ParkingColors.unknown
+        }
+    }
+}
+```
+
+Map polyline usage (iOS 17 MapKit `MapPolyline`, from `ContentView`):
 
 ```swift
 MapPolyline(coordinates: segment.coordinates)
-    .stroke(ParkingColors.color(for: segment.resolvedCategory),
+    .stroke(engine.currentStateColor(for: segment, at: .now),
             style: StrokeStyle(
-                lineWidth: segment.resolvedCategory == .metered ? 4 : 3,
+                lineWidth: engine.isMeteredActive(for: segment, at: .now) ? 4 : 3,
                 lineCap: .round,
                 lineJoin: .round
             ))
 ```
 
-The `lineWidth` bump for metered is addressed in §2.3 below.
+**Recompute cadence**: when the app enters foreground; when the map camera region settles (after pan/zoom); not on a timer. Recomputation is local-data, cheap.
+
+**Interim state**: W2 (PR #13) renders polylines with the old static `dominantCategory.swiftUIColor`. W3's PR refactors `ContentView` to call `engine.currentStateColor` instead. Until W3 lands, the map will display ASP blocks as orange even when they're currently free — a known interim issue tolerated for ~one PR cycle.
+
+The `lineWidth` bump for active-metered is addressed in §2.3 below.
 
 ### 2.3 Yellow on a map — implementation note
 
