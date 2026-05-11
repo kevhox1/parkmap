@@ -22,9 +22,17 @@
 //  W4 fix-pass-1 (2026-05-11): Added LRU eviction to `cache`. Previously the cache
 //  grew monotonically — after 5 minutes of panning Manhattan, all 1,028 tiles and
 //  their decoded [Segment] arrays would accumulate in RAM (~200–500 MB). The cache
-//  is now capped at `maxCachedTiles` (50). On eviction the LRU tile is removed,
-//  freeing its [Segment] array. The evicted tile will be re-decoded on next access
-//  (from the bundle, which is cheap — ~1ms per tile on the simulator).
+//  is now capped at `maxCachedTiles`. On eviction the LRU tile is removed, freeing
+//  its [Segment] array. The evicted tile will be re-decoded on next access (from the
+//  bundle, which is cheap — ~1ms per tile on the simulator).
+//
+//  Rendering architecture refactor (2026-05-11): Cap raised from 50 → 200.
+//  With MKMultiPolyline overlays (6 total, replacing 40k MapPolylines), per-render
+//  cost is negligible. The previous cap of 50 tiles caused cache thrashing during
+//  aggressive panning — evicted tiles were immediately re-requested, producing the
+//  "only upper-Manhattan rendering" symptom Kevin observed. 200 tiles × ~25 KB decoded
+//  ≈ 5 MB segment data — well within budget. Total tile set is 1,028 tiles × ~25 KB
+//  ≈ 25 MB; caching all 1,028 would be fine too, but 200 (~25%) is conservative.
 //
 
 import Foundation
@@ -81,8 +89,11 @@ final class TileLoader {
     /// which are stored as [] in cache but still count against the cap).
     private var lruOrder: [String] = []
     /// Maximum number of tiles to keep in cache simultaneously.
-    /// At ~40 segments/tile × ~1KB decoded/segment, 50 tiles ≈ ~2 MB of segment data.
-    private let maxCachedTiles = 50
+    /// Raised to 200 in the rendering-architecture refactor (2026-05-11).
+    /// At ~40 segments/tile × ~25KB decoded/tile, 200 tiles ≈ ~5 MB of segment data.
+    /// The previous cap of 50 caused cache thrashing that contributed to the
+    /// "only upper-Manhattan rendering" symptom. 200 = ~25% of all 1,028 tiles.
+    private let maxCachedTiles = 200
     /// Tracks the most-recently-requested region. In-flight Tasks read this
     /// at execution time (not capture time) so rapid panning can't cause a
     /// late-finishing Task to overwrite segments with a stale viewport.
