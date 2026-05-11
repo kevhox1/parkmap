@@ -53,6 +53,27 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 **Decided (2026-05-07):**
 - ✅ **iOS launch form factor**: **Swift native, TestFlight distribution.** iOS-only initially; Android deferred. Estimated 8–16 weeks to TestFlight build at PWA parity. PWA continues to be the live product during the rewrite. Kevin's reasoning: "classic standard approach" — wants a polished launch and is OK with the longer build, accepts iOS-only for v1.
 
+**Phase 5 progress (iOS Swift native build):**
+
+Work-stream status as of 2026-05-10:
+
+| Stream | Status | Notes |
+|---|---|---|
+| **W1a** — Xcode scaffold + module structure + tile bundle + ASP JSON + MapKit stub | ✅ merged (PR #12) | Project at `ios/WePark/WePark.xcodeproj`. Bundle ID `com.wepark.app`. iOS 17 min, iPhone-only, portrait-only. All 1,028 tiles + `asp-2026.json` bundled. **Resources land flat at app bundle root** — load via `Bundle.main.url(forResource:withExtension:)`, NOT constructed `/tiles/` subpaths. See `docs/ios-mvp-spec.md` §4.2 callout. |
+| **W1.5** — Palette + visualization design spec | ✅ merged (PR #14) | `docs/design/ios-mvp-palette.md`. **Color encodes CURRENT STATE, not static category** (Option B). 4-color severity spectrum + neutral: red (restricted) → orange (free, restriction <24h) → amber-yellow `Color(red: 0.92, green: 0.76, blue: 0.0)` (metered active) → green (free, no restriction <24h) → gray.opacity(0.35) (unknown). |
+| **W2** — Tile loader + colored polylines | ✅ merged (PR #13) | `Models/Segment.swift`, `Models/ParkingRule.swift`, `Models/Category.swift`, `Services/TileLoader.swift`. Coordinate order is `[lat, lng]` (visually verified). Stale-region race fixed via `currentRegion` property reading at Task execution time. |
+| **W3** — `ParkingRulesEngine` port + dynamic state color | ✅ merged (PR #15) | `Services/ParkingRulesEngine.swift`, `Services/ASPSuspensionService.swift`, `Services/StreetNameNormalizer.swift`, `Services/Date+ET.swift`, `Services/ParkingColors.swift`, plus `Models/SafetyLabel.swift`, `Models/NextRestriction.swift`, `Models/CurrentState.swift`, `Models/ASPSuspension.swift`. **All time math uses `Calendar.easternTime`** — zero `Calendar.current` use. 43 parity tests pass (all 5 R2 boundary cases covered). ContentView refactored to call `engine.currentStateColor(for: segment, at: now)`; recompute on app foreground + camera settle + 60s timer (timer is intentional — see palette doc §2.2). |
+| **W4** — Block detail sheet on tap | ⏳ next | Tap a block → sheet showing `engine.safetyLabel(...).text` + rules list. First interactive feature. |
+| **W5** — Pin drop + persistence | ⏳ | `UserDefaults`-backed `ParkPinService`. Mirrors PWA "no snap" behavior. |
+| **W6** — Local notifications + permission flow | ⏳ | `UNUserNotificationCenter`. Rationale sheet on first pin drop (per spec §3.4). |
+| **W7** — ASP banner + settings | ⏳ | `ASPSuspensionService.suspensionState(at:)` API is already there for the banner to consume. Mute toggle in settings. |
+| **W8** — TestFlight build | ⏸️ blocked on Apple Developer Program | Enrollment status unknown as of last session — Kevin to check. |
+
+**Carry-over deferrals (not blocking next stream):**
+- Live PWA-captured parity tests (W3 QA finding #3). Engine's `safetyLabel` strings are reasoning-checked; could diverge in subtle locale/format ways from real PWA output. Recommend a small "live snapshot" PR pre-W4 or pre-W8.
+- Tile resource folder reference (Xcode) vs synchronized group. The current synced-group approach forces 1,028 individual resource-copy ops per clean build — likely a major build-time bottleneck on memory-constrained Macs. Refactor to a folder reference would: (a) drop to one resource-copy op, (b) preserve `tiles/` subdirectory in the bundle (removing the flat-bundle workaround). Out of W4's scope; worth a small dedicated PR.
+- W3 QA minor findings (#6, #7, #8) — informational/deferrable cosmetic items. See `docs/qa/w3-pass-1-2026-05-10.md`.
+
 **Open decisions (waiting on Kevin):**
 - 🤔 **NYC 311 real-time API for snow emergencies**: blocked by CORS in browser. Two paths: (a) Cloudflare Worker proxy (~15 min setup, free), or (b) skip until iOS native (no CORS, direct fetch works). Currently leaning (b) — and now that Swift native is decided, this naturally falls out for free in the Swift port.
 - 🤔 **Supabase tracker schema**: `SUPABASE_MVP_SCHEMA.md` defines tracker tables/RPCs but NOT yet applied. Required before flipping `tracker-config.js` provider from `'mock'` to `'supabase'` and enabling cross-pollination.
@@ -66,7 +87,7 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Phase 3 polish**: Local "move your car" notifications via Web Notifications API.
 - **Phase 4a**: "Generate QR code for my zone" — cold-start distribution per Kevin's "stickers on windshields" idea.
 - **Phase 4b**: First-time user landing page with seeded zone preview.
-- **Phase 5**: iOS launch — **Swift native + TestFlight** (decided 2026-05-07). Major sub-steps: Apple Developer Program enrollment, Xcode project skeleton, MapKit/Mapbox iOS SDK + tile loading, port parking-rules logic to Swift, port Smart Move + My Car + ASP banner, port Drive Mode (turn-by-turn, voice via AVSpeechSynthesizer, heading-up), Supabase Swift SDK + Sign in with Apple, APNs push for "move your car" alerts, first internal TestFlight build, then external TestFlight, then App Store submission.
+- **Phase 5**: iOS launch — **Swift native + TestFlight** (decided 2026-05-07; in active development since 2026-05-08). MVP streams W1a, W1.5, W2, W3 are merged to `main`. See "Phase 5 progress" table above for stream status. Next stream: W4 (block detail sheet). After W4 → W5 (pin) → W6 (notifications) → W7 (banner) → W8 (TestFlight, blocked on Apple Dev approval). Post-MVP follow-on phases (5b/5c): port Drive Mode (turn-by-turn, voice, heading-up rotation, parking-aware route selection), threat tracker UI, zone chat, Smart Move recommendations, address search, snow emergency / NYC 311 API, paywall + StoreKit (see `docs/business-model.md`).
 - **2027 ASP calendar refresh**: hardcoded 2026 calendar in `loadASPSuspensions()` will need annual update each Dec/Jan when NYC publishes the new PDF. OR wire NYC 311 API once on native.
 
 ## Live infrastructure
@@ -84,7 +105,11 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 
 ## How to work in this repo
 
-- **Single-file architecture.** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
+- **Two codebases under one repo.**
+  - **PWA** (the live product, maintenance mode): `index.html` + `sw.js` + `manifest.json` + `tracker-config.js` at repo root. Owned by `@pwa-maintainer`.
+  - **iOS app** (active investment): everything under `ios/WePark/`. Owned by `@ios-engineer`. Xcode project at `ios/WePark/WePark.xcodeproj`; source files at `ios/WePark/WePark/{Models,Views,Services,Resources}/`; tests at `ios/WePark/WeParkTests/`. **Resources land flat at app bundle root at build time** — `Bundle.main.url(forResource:withExtension:)` is the correct loading API, NEVER construct `bundle/tiles/X.json` paths. See `docs/ios-mvp-spec.md` §4.2 callout (born from W1a QA finding #1).
+  - Shared between both: `tiles/` (the data — see below), `docs/` (specs + design + QA reports).
+- **Single-file architecture (PWA).** `index.html` contains the HTML, CSS, and all application JS. Don't split it into modules without an explicit conversation with Kevin. The file is ~186KB and that's fine.
 - **Service worker cache version must be bumped on every asset change.** Edit `CACHE_VERSION` at the top of `sw.js` AND `APP_VERSION` in index.html (currently both `wepark-v30`). The two should match — the page compares them to detect updates and auto-reload. SW now self-heals: on activation it broadcasts to all clients which auto-reload to pick up fresh code. No more manual cache-clearing. Without a bump, users get stale versions via the cache-first strategy on tiles and stale static assets on intermittent network.
 - **Tile data is pre-built and committed.** The `tiles/` directory holds 1,028 pre-generated JSON tiles (~27 MB on disk; ~7–9 MB compressed when bundled in an IPA per `docs/ios-mvp-spec.md` §3.3). `tiles/index.json` reports `totalTiles: 1028, totalSegments: 40664`. Don't regenerate unless Kevin has changed upstream NYC source data or the tiling algorithm — regeneration is expensive and the churn is large. *(Note: this used to read "976 tiles / 6.39 MB" — that was a stale post-gzip wire-size from an older snapshot. Corrected 2026-05-08.)*
 - **No automated test suite exists.** QA is done via:
@@ -96,8 +121,10 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Specs live at the repo root and `docs/`.** Key docs:
   - `PROJECT.md` — current status, phase checklist
   - `PRODUCT.md` — product vision
-  - `docs/ios-mvp-spec.md` — iOS MVP TestFlight build spec. **All §3 decisions locked 2026-05-08**: MapKit (not Mapbox), `com.wepark.app`, bundle tiles, contextual permission prompts, iOS 17 min, iOS-native semantic palette via Designer. `@ios-engineer` builds against this once Apple Developer enrollment completes.
-  - `docs/business-model.md` — revenue strategy (Free + WePark Pro, $4.99/mo or $29.99/yr, 7-day trial). MVP ships free; paywall lands in v1.1 post-validation.
+  - `docs/ios-mvp-spec.md` — iOS MVP TestFlight build spec. All §3 decisions locked. §3.7 is reframed around **Option B (dynamic state color)** as of 2026-05-10 — read this before touching anything color-related in iOS.
+  - `docs/design/ios-mvp-palette.md` — palette + visualization spec produced in W1.5. Defines the 4-color severity spectrum, `ParkingColors` enum constants, `MapPolyline` styling, and ASP banner spec.
+  - `docs/qa/` — independent QA reports per W-series stream (W1a, W2, W3 each have a `*-pass-1-*.md`). Read the latest before merging anything in that work stream's neighborhood; it documents subtle gotchas (flat-bundle layout, ASP_DAILY day-mask bug fix, etc.).
+  - `docs/business-model.md` — revenue strategy (Free + WePark Pro, $4.99/mo or $29.99/yr, 7-day trial). **MVP ships free**; paywall + StoreKit land in v1.1 post-validation. DO NOT build StoreKit into MVP scope.
   - `TRACKER_MVP_SPEC.md` — tracker feature spec (read before touching tracker code)
   - `SUPABASE_MVP_SCHEMA.md` — backend tables + RPC functions (the Supabase provider in `index.html` calls the RPC names defined here)
   - `BACKEND_OPTIONS.md` — backend trade-off notes
@@ -117,7 +144,35 @@ WePark is **a community-driven parking app for NYC street parkers**. The product
 - **Hosting:** GitHub Pages, auto-deploy on push to `main`
 - **Data sources:** NYC parking sign data (merged ASP + main), pre-tiled into 1,028 JSON tiles under `tiles/` (~27 MB on disk)
 
+## Build time / hardware note (iOS)
+
+`xcodebuild` clean builds of the iOS app are slow on memory-constrained machines (8 GB RAM observed at 10–15 min). The bundled 1,028 tile JSONs are processed as individual file copies under Xcode 16's `PBXFileSystemSynchronizedRootGroup`. On a 16 GB+ Mac, clean builds drop to 2–3 min and incremental builds to seconds. Folder-reference refactor (see "Carry-over deferrals" above) would also help. If a session reports slow builds, suggest: (a) close Chrome/Spotify/OneDrive/heavy apps, (b) Cmd+. between runs to release the running app's 1.8GB, (c) Cmd+R not Cmd+Shift+K+R (don't clean every time), (d) hardware upgrade to 16 GB long-term.
+
 ## Changelog
+
+### 2026-05-10 — Phase 5 iOS Swift native build, W1a–W3 merged
+
+Massive week. Built the iOS app from zero to "tappable map with live dynamic colors" in five PRs across two days:
+
+- **PR #12 — W1a (Xcode scaffold).** Xcode 16 project at `ios/WePark/WePark.xcodeproj`. Bundle ID `com.wepark.app`, iOS 17 deployment, iPhone-only, portrait-only. Privacy strings for location + notifications. Module structure under `WePark/{Models,Views,Services,Resources}/`. All 1,028 tiles bundled + `asp-2026.json` (42 ASP suspension dates). MapKit stub showing Manhattan. **QA caught**: Xcode 16's `PBXFileSystemSynchronizedRootGroup` flattens `Resources/` subdirs into the app bundle root → `Bundle.main.url(forResource:withExtension:)` is the only safe loading path.
+- **PR #14 — W1.5 (palette + viz spec).** `docs/design/ios-mvp-palette.md`. **Option B locked**: color encodes CURRENT STATE, not static category. 4-color severity spectrum red→orange→amber-yellow→green + gray for unknown. Same ASP block changes color through the week as its current state changes. Amber-shifted yellow `Color(red: 0.92, green: 0.76, blue: 0.0)` for metered to remain readable against Apple Maps' tan basemap.
+- **PR #13 — W2 (tile loader + polylines).** `Models/{Segment,ParkingRule,Category}.swift`, `Services/TileLoader.swift`, `ContentView.swift` polyline rendering. Coordinate order is `[lat, lng]` (visually verified — polylines align with real streets). **QA caught**: stale-region race in `TileLoader.loadTiles(forRegion:)` Task closure — rapid pans could let a late-finishing Task overwrite the segments with the older viewport's tiles. Fixed by reading `self.currentRegion` at Task execution time instead of the captured `region` parameter.
+- **PR #15 — W3 (rules engine + dynamic state color).** `Services/ParkingRulesEngine.swift` (port of `actionableSafetyLabel`, `computeNextRestrictionHours`, `meteredStatusLabel`, etc. from `index.html`), `Services/ASPSuspensionService.swift`, `Services/StreetNameNormalizer.swift`, `Services/Date+ET.swift`, `Services/ParkingColors.swift`, plus `Models/{SafetyLabel,NextRestriction,CurrentState,ASPSuspension}.swift`. 43 parity tests pass (all 5 R2 boundary cases — Sat→Sun rollover, end-of-month, start-of-year, suspended-day adjacency, midnight ET exactly). All time math via `Calendar.easternTime` — zero `Calendar.current` usage. ContentView refactored to use `engine.currentStateColor(for: segment, at: now)`; 60s timer + onAppear + camera-settle recompute cadence. **QA caught**: HP-11 test assertion bound was wrong (assumed ASP_TUE_FRI only hits Fridays, ignored Tuesdays). **Side effect: W2 had a subtle ASP_DAILY day-mask bug** (returned true for all 7 days including Sunday) — fixed in this PR per JS behavior (Mon-Sat only).
+- **QA reports**: `docs/qa/{w1a,w2,w3}-pass-1-*.md` each landed alongside their feature.
+
+Repo now has:
+- 3 PRs of agent-team / spec / business model setup (PRs #9, #10, #11)
+- 4 PRs of iOS code (PRs #12, #13, #14, #15)
+- The independent-QA pattern (engineering agent ≠ QA agent) validated three times in a row; each pass caught at least one finding the implementer missed.
+- Memory note: clean builds slow on 8 GB Macs (10–15 min). Hardware upgrade or folder-reference refactor on tiles recommended.
+
+Visual confirmation done in simulator at end of session: Manhattan map renders with all polyline colors correct for the current time (Mon ASP blocks orange because Mon morning is <24h away, Tue/Fri ASP blocks green because next cycle is >24h, NO_PARKING blocks red, midtown metered blocks amber-yellow).
+
+### 2026-05-08 — Agent team setup + iOS launch decision + business model
+
+- PR #9: Six-agent team under `.claude/agents/` (`tech-lead`, `ios-engineer`, `pwa-maintainer`, `backend-data`, `designer`, `qa-verifier`) + operating manual at `.claude/TEAM.md`. Independent-QA pattern codified as a structural invariant. Engineering agents on disjoint files can run in parallel.
+- PR #10: First iOS MVP spec (`docs/ios-mvp-spec.md`). Decision-density format: §3 lists every binding choice with rationale.
+- PR #11: 7 spec decisions locked (MapKit not Mapbox; `com.wepark.app`; bundle tiles; contextual permissions; iOS 17 min; privacy strings as-drafted; iOS-native semantic palette via Designer). `docs/business-model.md` captures Free+Pro subscription strategy ($4.99/mo, $29.99/yr, 7-day trial, MVP ships free, paywall in v1.1). HANDOFF + PROJECT tile counts corrected (976 → 1,028; 6.39 MB → 27 MB on disk).
 
 ### 2026-05-01 — Drive Mode v3 search upgrade (Mapbox Search Box API)
 - Replaced legacy Mapbox Geocoding v5 (`/geocoding/v5/mapbox.places/`) with **Search Box API** (`/search/searchbox/v1/suggest` + `/retrieve`). Search Box has dramatically better POI/business/brand coverage — "Whole Foods Bowery", "Joe's Pizza", "Trader Joe's" now resolve to actual restaurant/store locations the way Apple Maps does.
