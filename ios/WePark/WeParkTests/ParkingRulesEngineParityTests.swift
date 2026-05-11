@@ -542,10 +542,20 @@ final class HappyPathParityTests: XCTestCase {
 
     // MARK: HP-11: ASP suspended — skip to next unsuspended day
 
-    /// 2026-05-22 is Shavuoth (suspended). 2026-05-23 is also Shavuoth (suspended).
-    /// ASP_TUE_FRI queried on Mon May 18 at noon: normally next Fri May 22 → but suspended.
-    /// 2026-05-22 = Fri, 2026-05-23 = Sat. Next Fri after May 22 is May 29.
-    /// Tue May 26 is not suspended. So next ASP is Tue May 26 at 7:30am (450min).
+    /// ASP_TUE_FRI queried on Mon May 18 2026 at noon.
+    ///
+    /// The 14-day walker visits days in calendar order:
+    ///   May 18 Mon  — not a Tue/Fri ASP day, skip.
+    ///   May 19 Tue  — IS a Tue/Fri ASP day. Not in asp-2026.json (not suspended). STOP here.
+    ///
+    /// The engine finds Tue May 19 FIRST — it does NOT need to skip to May 22 (Fri/Shavuoth)
+    /// because May 19 is a valid non-suspended Tuesday. The old comment was wrong: it assumed
+    /// the walker would jump over May 19 to May 22, but May 19 is neither suspended nor skipped.
+    ///
+    /// Hours from Mon May 18 noon to Tue May 19 7:30am (450 min = 7h30m):
+    ///   12h remaining May 18 + 7.5h to 7:30am May 19 = 19.5h
+    ///
+    /// As a secondary check: May 22 (Fri/Shavuoth) and May 25 (Memorial Day) ARE suspended.
     func testHP11_ASPSuspendedSkipToNext() {
         let seg = makeSegment(
             id: "BAXTER_STREET_GRAND_STREET_HESTER_STREET_E_0",
@@ -556,13 +566,43 @@ final class HappyPathParityTests: XCTestCase {
         let now = etDate(year: 2026, month: 5, day: 18, hour: 12, minute: 0)
         let result = engine.nextRestriction(for: seg, at: now)
 
-        // Fri May 22 is suspended → skip. Tue May 26 is NOT in suspended list.
-        // Hours from Mon May 18 noon to Tue May 26 7:30am:
-        //   12h (rest May 18) + 24*7 days (May 19-25) + 7.5h = 12 + 168 + 7.5 = 187.5h
         XCTAssertFalse(result.isActiveNow)
-        // Check that the result is close to Tue May 26 7:30am (but allow ± for daylight saving)
-        XCTAssertGreaterThan(result.hours, 186.0, "Should skip suspended Fri May 22, find Tue May 26")
-        XCTAssertLessThan(result.hours, 189.0, "Got: \(result.hours)h")
+
+        // Engine finds Tue May 19 7:30am as the next ASP window (~19.5h away).
+        // Tight bound: must be > 19h and < 20h to confirm the walker stopped at May 19
+        // and did not erroneously skip a valid Tuesday.
+        XCTAssertGreaterThan(result.hours, 19.0, "Should find Tue May 19 7:30am (~19.5h from Mon May 18 noon)")
+        XCTAssertLessThan(result.hours, 20.0, "Got: \(result.hours)h — expected ~19.5h to May 19 7:30am")
+
+        // Confirm suspension service correctly identifies the suspended dates in this window.
+        let aspSvc = ASPSuspensionService()
+        let may22 = etDate(year: 2026, month: 5, day: 22) // Fri, Shavuoth — suspended
+        XCTAssertTrue(aspSvc.isSuspended(may22), "May 22 (Shavuoth) should be suspended")
+        let may25 = etDate(year: 2026, month: 5, day: 25) // Mon, Memorial Day — suspended
+        XCTAssertTrue(aspSvc.isSuspended(may25), "May 25 (Memorial Day) should be suspended")
+    }
+
+    // MARK: HP-12: Bare FREE-category segment
+
+    /// A segment whose only rule has category == .free and anytime == true should return
+    /// SafetyLabel(text: "Free", severity: .free). This exercises the final fallthrough
+    /// in safetyLabel(for:at:). Required explicitly by spec AC-3 (§6).
+    ///
+    /// The engine's safetyLabel path for a FREE-category segment:
+    ///   - nextRestriction returns hours == 168 (sentinel — no move-your-car restriction)
+    ///   - restriction.isActiveNow == false
+    ///   - restriction.hours >= 168 → "Free until" branch not taken
+    ///   - dominantCategory == .free → not .metered
+    ///   - Falls through to the final return SafetyLabel(text: "Free", severity: .free)
+    func testHP12_BareFreeBlock() {
+        let seg = makeSegment(
+            dominantCategory: .free,
+            rules: [rule(category: .free, days: [], timeRanges: [], anytime: true)]
+        )
+        let anyTime = etDate(year: 2026, month: 5, day: 10, hour: 14, minute: 0)
+        let label = engine.safetyLabel(for: seg, at: anyTime)
+        XCTAssertEqual(label.text, "Free", "FREE-category segment should return 'Free'")
+        XCTAssertEqual(label.severity, .free, "FREE-category segment should have .free severity")
     }
 }
 

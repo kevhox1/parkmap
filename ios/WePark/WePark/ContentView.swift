@@ -100,16 +100,18 @@ struct ContentView: View {
                     // Option B dynamic state color: color reflects CURRENT parking state,
                     // not static category. Recomputed on lastEvaluatedAt tick (once/min).
                     // W3 replaces the W2 static `segment.dominantCategory?.swiftUIColor`.
-                    let now = lastEvaluatedAt
-                    let color = engine.currentStateColor(for: segment, at: now)
+                    //
+                    // Cache currentState() in a local so we call the engine once per segment
+                    // per render — not twice (once for color, once for lineWidth). At 1,000+
+                    // visible segments that halves engine invocations per frame.
+                    let state = engine.currentState(for: segment, at: lastEvaluatedAt)
                     // Metered segments use lineWidth: 4 for legibility against
                     // Apple Maps' tan basemap (palette doc §2.3).
-                    let isMetered = engine.currentState(for: segment, at: now) == .meteredActive
                     MapPolyline(coordinates: coords)
                         .stroke(
-                            color,
+                            state.swiftUIColor,
                             style: StrokeStyle(
-                                lineWidth: isMetered ? 4 : 3,
+                                lineWidth: state == .meteredActive ? 4 : 3,
                                 lineCap: .round,
                                 lineJoin: .round
                             )

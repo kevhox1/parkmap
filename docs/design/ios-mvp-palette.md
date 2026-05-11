@@ -101,7 +101,7 @@ MapPolyline(coordinates: segment.coordinates)
             ))
 ```
 
-**Recompute cadence**: when the app enters foreground; when the map camera region settles (after pan/zoom); not on a timer. Recomputation is local-data, cheap.
+**Recompute cadence**: when the app enters foreground; when the map camera region settles after pan/zoom; AND on a 60-second timer while the app is active. The timer covers the "user leaves app open and idle" case — without it, colors would drift stale as the clock passes ASP-window boundaries. Power cost is negligible for a foreground app. Recomputation is local-data, cheap.
 
 **Interim state**: W2 (PR #13) renders polylines with the old static `dominantCategory.swiftUIColor`. W3's PR refactors `ContentView` to call `engine.currentStateColor` instead. Until W3 lands, the map will display ASP blocks as orange even when they're currently free — a known interim issue tolerated for ~one PR cycle.
 
