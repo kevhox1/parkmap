@@ -23,6 +23,10 @@
 //  via the default JSONDecoder strategy, EXCEPT "from" which is a Swift keyword.
 //  We define explicit CodingKeys to map "from" → `fromStreet`.
 //
+//  W3 change: removed `polylineColor` — coloring is now handled entirely by
+//  ParkingRulesEngine.currentStateColor(for:at:), which encodes CURRENT STATE
+//  rather than static category. ContentView calls the engine directly.
+//
 
 import Foundation
 import CoreLocation
@@ -72,11 +76,6 @@ struct Segment: Codable, Identifiable {
         return coords[mid]
     }
 
-    /// The display color for this segment's polyline.
-    var polylineColor: Color {
-        (dominantCategory ?? .unknown).swiftUIColor
-    }
-
     // MARK: - CodingKeys
     enum CodingKeys: String, CodingKey {
         case id
@@ -89,6 +88,3 @@ struct Segment: Codable, Identifiable {
         case dominantCategory
     }
 }
-
-// MARK: - Color import for polylineColor
-import SwiftUI
