@@ -74,14 +74,20 @@ struct BlockDetailView: View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
                 // "<StreetName> — <SideLabel>"
+                // Marked accessibilityHidden so that VoiceOver's sequential focus
+                // order skips the title and subtitle, making the safety label below
+                // the first announced element per spec §3.5 / palette §5.1 point 2.
+                // Sighted users see the text normally. (QA finding #1.)
                 Text(blockHeaderTitle)
                     .font(.title2.bold())
                     .foregroundStyle(.primary)
+                    .accessibilityHidden(true)
 
                 // "between <from> and <to>"
                 Text(blockHeaderSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
             }
             Spacer()
             // ✕ close button (44pt tap target per HIG)

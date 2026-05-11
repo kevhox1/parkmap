@@ -25,6 +25,16 @@
 //  parking-rule state changes, which are at minimum 30-minute windows). This avoids
 //  the perf trap of recomputing on every animation frame.
 //
+//  W4 fix-pass-1 (2026-05-11): The Annotation-based VoiceOver overlay added in W4 was
+//  dropped. At Manhattan street-level zoom a viewport contains 2,000–5,000 visible
+//  segments; placing one SwiftUI-hosted Annotation per segment created thousands of
+//  UIHostingController shells, gesture recognizers, and Metal-backed render layers in
+//  the simulator — producing 26 GB RSS (reported by Kevin). The annotation approach is
+//  correct in concept but does not scale to 40k-segment tile density on real hardware
+//  (jetsam ceiling ~200–500 MB). Dropped per Option A: VoiceOver map-navigation of
+//  individual blocks is deferred as a post-MVP follow-up. In-sheet accessibility (safety
+//  label, ✕ button, rule rows) is fully intact. Filed as a known carry-over.
+//
 
 import SwiftUI
 import MapKit
@@ -163,9 +173,13 @@ struct ContentView: View {
 
     // MARK: - Dismiss helper
 
+    /// Triggers the sheet dismiss animation by setting isSheetPresented = false.
+    /// Does NOT clear selectedSegmentID here — the onDismiss closure does that,
+    /// and it fires after the animation completes (for both swipe-down and ✕ paths).
+    /// This means BlockDetailView's segment reference stays live during the animation,
+    /// preventing the sheet content from blanking mid-dismiss. (QA finding #2.)
     private func dismissSheet() {
         isSheetPresented = false
-        selectedSegmentID = nil
     }
 
     // MARK: - Map content builder
@@ -207,33 +221,10 @@ struct ContentView: View {
                         )
                 }
             }
-
-            // W4 accessibility: invisible Annotation at each segment midpoint.
-            // Per spec §3.5 / palette §5.1: each tap target must have an accessibilityLabel
-            // so VoiceOver users can navigate blocks by swipe without precise tapping.
-            // The Annotation button is hidden to sighted users (opacity 0, zero frame)
-            // but remains in the accessibility tree.
-            // Note: MapPolyline does not accept .accessibilityLabel in @MapContentBuilder
-            // (the modifier breaks the ForEach result-builder type inference in iOS 17 —
-            // see W4 implementation note in ContentView header). Annotation is the solution.
-            ForEach(tileLoader.segments) { segment in
-                if let midpoint = segment.midpoint {
-                    let a11yLabel = accessibilityLabel(for: segment)
-                    Annotation("", coordinate: midpoint) {
-                        Button {
-                            selectedSegmentID = segment.id
-                            isSheetPresented = true
-                        } label: {
-                            Color.clear
-                                .frame(width: 44, height: 44)
-                        }
-                        .accessibilityLabel(a11yLabel)
-                        .accessibilityHint("Opens the block details sheet.")
-                    }
-                    .annotationTitles(.hidden)
-                }
-            }
         }
+        // NOTE (W4 fix-pass-1): The Annotation-based VoiceOver overlay was removed here.
+        // See file header for rationale. VoiceOver map-navigation of individual polylines
+        // is a known post-MVP follow-up.
     }
 
     // MARK: - Tap handling
@@ -331,27 +322,6 @@ struct ContentView: View {
         return 2 * R * asin(sqrt(h))
     }
 
-    // MARK: - Accessibility label (for the invisible tap-target polyline)
-
-    /// Generates the accessibility label for a segment's tap-target overlay.
-    /// Format: "Parking on <street>, <side>. <safetyLabel>. Tap for details."
-    private func accessibilityLabel(for segment: Segment) -> String {
-        let street = StreetNameNormalizer.canonical(segment.street)
-        let side = sideLabel(segment.side)
-        let label = engine.safetyLabel(for: segment, at: lastEvaluatedAt).text
-        return "Parking on \(street), \(side). \(label). Tap for details."
-    }
-
-    /// View-level side label helper (mirrors the one in BlockDetailView).
-    private func sideLabel(_ code: String) -> String {
-        switch code.uppercased() {
-        case "N": return "North side"
-        case "S": return "South side"
-        case "E": return "East side"
-        case "W": return "West side"
-        default:  return "\(code) side"
-        }
-    }
 }
 
 #Preview {
