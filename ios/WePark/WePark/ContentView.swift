@@ -2,9 +2,17 @@
 //  ContentView.swift
 //  WePark
 //
+//  W3: refactored to use ParkingRulesEngine.currentStateColor (Option B dynamic state).
+//  Previously (W2) used segment.dominantCategory?.swiftUIColor — static interim, now removed.
+//
+//  The engine is computed once per minute via a Timer (sufficient granularity for
+//  parking-rule state changes, which are at minimum 30-minute windows). This avoids
+//  the perf trap of recomputing on every animation frame.
+//
 
 import SwiftUI
 import MapKit
+import Combine
 
 struct ContentView: View {
 
@@ -25,6 +33,10 @@ struct ContentView: View {
     /// lifetime of ContentView without requiring @StateObject / ObservableObject.
     @State private var tileLoader = TileLoader()
 
+    /// ParkingRulesEngine: stateless pure-logic module. @State keeps the instance alive;
+    /// it is safe to share because all its methods are pure (no mutation).
+    @State private var engine = ParkingRulesEngine()
+
     /// Current map region, updated on camera change and used for tile culling.
     @State private var visibleRegion: MKCoordinateRegion = MKCoordinateRegion(
         center: CLLocationCoordinate2D(
@@ -33,6 +45,11 @@ struct ContentView: View {
         ),
         span: MKCoordinateSpan(latitudeDelta: 0.07, longitudeDelta: 0.05)
     )
+
+    /// Flipped every 60 seconds by the timer. SwiftUI re-evaluates the body
+    /// when this changes, which causes currentStateColor to be re-evaluated
+    /// with the current time — without triggering recompute every animation frame.
+    @State private var lastEvaluatedAt: Date = .now
 
     // MARK: - Zoom threshold
     /// Hide all polylines when the user is zoomed out further than this span.
@@ -56,6 +73,17 @@ struct ContentView: View {
             // Kick off the initial tile load for the default Manhattan view.
             tileLoader.loadTiles(forRegion: visibleRegion)
         }
+        .onAppear {
+            // Immediately stamp the evaluation time on appear.
+            lastEvaluatedAt = .now
+        }
+        .onReceive(
+            Timer.publish(every: 60, on: .main, in: .common).autoconnect()
+        ) { _ in
+            // Tick once per minute so time-based color changes propagate.
+            // This is the only timer-driven recompute — not every animation frame.
+            lastEvaluatedAt = .now
+        }
     }
 
     // MARK: - Map content builder
@@ -69,10 +97,24 @@ struct ContentView: View {
             ForEach(tileLoader.segments) { segment in
                 let coords = segment.coordinates
                 if coords.count >= 2 {
+                    // Option B dynamic state color: color reflects CURRENT parking state,
+                    // not static category. Recomputed on lastEvaluatedAt tick (once/min).
+                    // W3 replaces the W2 static `segment.dominantCategory?.swiftUIColor`.
+                    //
+                    // Cache currentState() in a local so we call the engine once per segment
+                    // per render — not twice (once for color, once for lineWidth). At 1,000+
+                    // visible segments that halves engine invocations per frame.
+                    let state = engine.currentState(for: segment, at: lastEvaluatedAt)
+                    // Metered segments use lineWidth: 4 for legibility against
+                    // Apple Maps' tan basemap (palette doc §2.3).
                     MapPolyline(coordinates: coords)
                         .stroke(
-                            segment.dominantCategory?.swiftUIColor ?? Color.gray.opacity(0.4),
-                            lineWidth: 3
+                            state.swiftUIColor,
+                            style: StrokeStyle(
+                                lineWidth: state == .meteredActive ? 4 : 3,
+                                lineCap: .round,
+                                lineJoin: .round
+                            )
                         )
                 }
             }

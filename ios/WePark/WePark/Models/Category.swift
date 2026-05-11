@@ -6,11 +6,16 @@
 //  index.html:1558 character-for-character. Do not rename cases without
 //  auditing every tile JSON file — the string values are stored in tile data.
 //
+//  W3 change: removed `swiftUIColor` (the static interim added in W2).
+//  Dynamic color is now produced by ParkingRulesEngine.currentStateColor(for:at:),
+//  which reflects the block's CURRENT parking state rather than its static category.
+//  Callers that used `category.swiftUIColor` should migrate to the engine.
+//
 
-import SwiftUI
+import Foundation
 
 enum Category: String, Codable, CaseIterable {
-    // ASP variants (collapsed to .orange on the map per §3.7)
+    // ASP variants
     case aspMonThu       = "ASP_MON_THU"
     case aspTueFri       = "ASP_TUE_FRI"
     case aspOvernightMWF = "ASP_OVERNIGHT_MWF"
@@ -49,31 +54,8 @@ enum Category: String, Codable, CaseIterable {
         }
     }
 
-    // MARK: - Map color
-    /// SwiftUI color for polyline rendering.
-    /// Uses the §3.7 collapsed palette:
-    ///   FREE        → .green
-    ///   METERED     → .blue
-    ///   ASP (any)   → .orange
-    ///   Restricted  → .red
-    ///   UNKNOWN     → .gray @ 0.4 opacity
-    var swiftUIColor: Color {
-        switch self {
-        case .free:
-            return .green
-        case .metered:
-            return .blue
-        case .aspMonThu, .aspTueFri, .aspOvernightMWF, .aspOvernightTTHS, .aspDaily:
-            return .orange
-        case .truckLoading, .noParking, .noStanding, .special:
-            return .red
-        case .unknown:
-            return Color.gray.opacity(0.4)
-        }
-    }
-
     // MARK: - Priority (mirrors JS CATEGORIES.priority; lower = more restrictive)
-    /// Used by TileLoader/ParkingRulesEngine when computing mostRestrictiveCategory.
+    /// Used by ParkingRulesEngine when computing dominantCategory.
     var priority: Int {
         switch self {
         case .noStanding:       return 1
@@ -91,7 +73,7 @@ enum Category: String, Codable, CaseIterable {
         }
     }
 
-    // MARK: - ASP helpers (for W3 ParkingRulesEngine)
+    // MARK: - ASP helpers
     /// True for any alternate-side-parking street-cleaning category.
     var isASP: Bool {
         switch self {
@@ -115,7 +97,8 @@ enum Category: String, Codable, CaseIterable {
         case .aspOvernightTTHS:
             return dayOfWeek == 2 || dayOfWeek == 4 || dayOfWeek == 6 // Tue, Thu, Sat
         case .aspDaily:
-            return true
+            // ASP_DAILY applies Mon–Sat; Sunday is never an ASP day.
+            return dayOfWeek >= 1 && dayOfWeek <= 6
         default:
             return false
         }

@@ -8,6 +8,7 @@
 
 /* Begin PBXFileReference section */
 		38CA21BE2FB12B780080B4F5 /* WePark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WePark.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0001000000000000000AA01 /* WeParkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WeParkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -16,10 +17,22 @@
 			path = WePark;
 			sourceTree = "<group>";
 		};
+		A0001000000000000000AA02 /* WeParkTests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WeParkTests;
+			sourceTree = "<group>";
+		};
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		38CA21BB2FB12B780080B4F5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		A0001000000000000000AA03 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -33,6 +46,7 @@
 			isa = PBXGroup;
 			children = (
 				38CA21C02FB12B780080B4F5 /* WePark */,
+				A0001000000000000000AA02 /* WeParkTests */,
 				38CA21BF2FB12B780080B4F5 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -41,6 +55,7 @@
 			isa = PBXGroup;
 			children = (
 				38CA21BE2FB12B780080B4F5 /* WePark.app */,
+				A0001000000000000000AA01 /* WeParkTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -70,6 +85,28 @@
 			productReference = 38CA21BE2FB12B780080B4F5 /* WePark.app */;
 			productType = "com.apple.product-type.application";
 		};
+		A0001000000000000000AA04 /* WeParkTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A0001000000000000000AA07 /* Build configuration list for PBXNativeTarget "WeParkTests" */;
+			buildPhases = (
+				A0001000000000000000AA05 /* Sources */,
+				A0001000000000000000AA03 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A0001000000000000000AA08 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				A0001000000000000000AA02 /* WeParkTests */,
+			);
+			name = WeParkTests;
+			packageProductDependencies = (
+			);
+			productName = WeParkTests;
+			productReference = A0001000000000000000AA01 /* WeParkTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -82,6 +119,10 @@
 				TargetAttributes = {
 					38CA21BD2FB12B780080B4F5 = {
 						CreatedOnToolsVersion = 26.4.1;
+					};
+					A0001000000000000000AA04 = {
+						CreatedOnToolsVersion = 26.4.1;
+						TestTargetID = 38CA21BD2FB12B780080B4F5;
 					};
 				};
 			};
@@ -100,6 +141,7 @@
 			projectRoot = "";
 			targets = (
 				38CA21BD2FB12B780080B4F5 /* WePark */,
+				A0001000000000000000AA04 /* WeParkTests */,
 			);
 		};
 /* End PBXProject section */
@@ -122,7 +164,32 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		A0001000000000000000AA05 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A0001000000000000000AA08 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 38CA21BD2FB12B780080B4F5 /* WePark */;
+			targetProxy = A0001000000000000000AA09 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin PBXContainerItemProxy section */
+		A0001000000000000000AA09 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 38CA21B62FB12B780080B4F5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 38CA21BD2FB12B780080B4F5;
+			remoteInfo = WePark;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin XCBuildConfiguration section */
 		38CA21C72FB12B7B0080B4F5 /* Debug */ = {
@@ -252,14 +319,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
-				EXCLUDED_SOURCE_FILE_NAMES = ".gitkeep";
+				EXCLUDED_SOURCE_FILE_NAMES = .gitkeep;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend parking nearby. Your location is never sent off your device.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -286,14 +353,14 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				ENABLE_PREVIEWS = YES;
-				EXCLUDED_SOURCE_FILE_NAMES = ".gitkeep";
+				EXCLUDED_SOURCE_FILE_NAMES = .gitkeep;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend parking nearby. Your location is never sent off your device.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
-				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -309,6 +376,50 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		A0001000000000000000AA0A /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wepark.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WePark.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WePark";
+			};
+			name = Debug;
+		};
+		A0001000000000000000AA0B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.wepark.app.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WePark.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/WePark";
 			};
 			name = Release;
 		};
@@ -329,6 +440,15 @@
 			buildConfigurations = (
 				38CA21CA2FB12B7B0080B4F5 /* Debug */,
 				38CA21CB2FB12B7B0080B4F5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A0001000000000000000AA07 /* Build configuration list for PBXNativeTarget "WeParkTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A0001000000000000000AA0A /* Debug */,
+				A0001000000000000000AA0B /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

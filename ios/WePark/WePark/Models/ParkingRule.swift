@@ -29,7 +29,7 @@ struct TimeRange: Codable, Equatable {
     let end: Int
 }
 
-struct ParkingRule: Codable {
+struct ParkingRule: Codable, Equatable {
     /// Parking restriction category.
     let category: Category
 
