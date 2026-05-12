@@ -9,7 +9,7 @@
 
 ## 1. Design premise
 
-**Color encodes CURRENT STATE, not static category.** The same ASP_MON_THU block changes color throughout the week as its actual parking state changes — red when ASP is active Thursday 7-9:30am, orange Wednesday evening (restriction coming in <24h), green for the two days in between. This is intentional. A driver mid-search wants the visual answer to *"where do I park RIGHT NOW"*, not a list of *"what kind of restrictions exist on each block."*
+**Color encodes CURRENT STATE, not static category.** The same ASP_MON_THU block changes color throughout the week as its actual parking state changes — red when ASP is active Thursday 7-9:30am, orange Thursday around 1am (within 6h of next ASP), green for the rest of the week. This is intentional. A driver mid-search wants the visual answer to *"where do I park RIGHT NOW"*, not a list of *"what kind of restrictions exist on each block."*
 
 WePark's parking states sit on a natural severity gradient — from a block where you'll get ticketed and towed if you park wrong, down to a block where you can leave the car for days. Color encodes that gradient *as it applies right now*. A driver who glances at the map for two seconds while stopped at a light should read current-state severity from color without counting on being able to tap into details.
 
@@ -28,22 +28,22 @@ The PWA has 12 sign categories. For the map, color is determined not by the cate
 | Severity rank | Current state right now | Triggered by | SwiftUI color | Rationale |
 |---|---|---|---|---|
 | 1 (worst) | **Can't park** | NO_PARKING anytime; ASP block during its active window (e.g., Thu 7–9:30am for an ASP_MON_THU block); NO_STANDING; TRUCK_LOADING active now; SPECIAL active now | `Color.red` | You cannot park here at this moment. Ticket + potential tow. |
-| 2 | **Free now, restriction coming soon** | ASP block whose next active window starts within ~24 hours (engine decides exact threshold) | `Color.orange` | Warning state. Fine for a quick errand, not safe for overnight parking. Driver gets the "be careful, set a timer" signal at a glance. |
+| 2 | **Free now, restriction coming soon** | ASP block whose next active window starts within ~6 hours. Warning state. Fine if you're staying less than 6 hours; set a timer if you are. Orange. | `Color.orange` | Warning state. Fine for a quick errand, not safe for overnight parking. Driver gets the "be careful, set a timer" signal at a glance. |
 | 3 | **Metered (pay to park) right now** | METERED block during its active billing hours | `Color(red: 0.92, green: 0.76, blue: 0.0)` — amber-shifted yellow (see §2.3) | Pay-or-ticket. No tow risk. Manageable. |
-| 4 (best) | **Free now, no restriction imminent** | FREE block; OR ASP block whose next active window is >24h away; OR METERED block during its free hours | `Color.green` | Park comfortably. Safe for overnight if no near-term restriction. |
+| 4 (best) | **Free now, no restriction imminent** | FREE block; OR ASP block whose next active window is >6h away; OR METERED block during its free hours | `Color.green` | Park comfortably. Safe for overnight if no near-term restriction. |
 | neutral | **Unknown** | Segment with no rules or unrecognized category | `Color.gray.opacity(0.35)` | No data. User should look at the signs. Sits outside the severity spectrum. |
 
 **Same block, different color through the week** — concrete example, ASP_MON_THU block (street cleaning Mon + Thu, 7–9:30am):
 
-| Wall-clock time (ET) | Current state | Color |
+| Wall-clock time (ET), ASP_MON_THU (Mon + Thu 7–9:30am) | Current state | Color |
 |---|---|---|
 | Mon 7:00–9:30am | ASP active | 🔴 Red |
-| Mon 9:30am – Wed evening (next ASP > 24h away) | Free now, far from next | 🟢 Green |
-| Wed evening – Thu 6:59am (within 24h of next ASP) | Free now, restriction coming | 🟠 Orange |
+| Mon 9:30am – Thu 1:00am (next ASP > 6h away) | Free now, far from next | 🟢 Green |
+| Thu 1:00am – Thu 6:59am (within 6h of next ASP) | Free now, restriction coming | 🟠 Orange |
 | Thu 7:00–9:30am | ASP active | 🔴 Red |
-| Thu 9:30am – Sun (next ASP is Mon, > 24h away) | Free now, far from next | 🟢 Green |
+| Thu 9:30am – Mon 1:00am (next ASP > 6h away) | Free now, far from next | 🟢 Green |
 
-The exact "soon" threshold (24h, 12h, "today") is the engine's call — `@ios-engineer` may tune based on user testing. 24h is the spec's recommendation.
+The "soon" threshold is 6h (W4.5 — lowered from 24h). See `docs/ios-color-threshold-spec.md` for rationale.
 
 ### 2.2 SwiftUI implementation
 
@@ -56,7 +56,7 @@ enum ParkingColors {
     /// Cannot park right now. NO_PARKING; ASP active in current window; NO_STANDING; etc.
     static let restricted = Color.red
 
-    /// Free right now, but a restriction is starting within ~24 hours.
+    /// Free right now, but a restriction is starting within ~6 hours.
     static let restrictionComingSoon = Color.orange
 
     /// Metered (pay to park) right now. See §2.3 on amber-shift.
@@ -225,3 +225,4 @@ All interactive elements on the map — polyline tap areas, "Park here" button, 
 |---|---|---|
 | 2026-05-10 (original) | Produced initial palette spec. Open questions: (1) severity-spectrum vs arbitrary color assignment, (2) banner state-3 wording, (3) unknown opacity. | Created doc. Proposed red/blue/orange/green. |
 | 2026-05-10 (this revision) | Severity-spectrum reframe (Kevin's direction). Open questions #2 and #3 closed. | Replaced blue (metered) with amber-yellow; replaced orange (ASP) to remain orange; reordered so red > orange > yellow > green encodes severity worst-to-best. Banner state-3 wording locked to "ASP in Effect Today". Unknown opacity locked to 0.35. Added §2.3 legibility mitigations for yellow. Updated accessibility section with honest colorblind analysis. |
+| 2026-05-11 | `nearFutureWindow` lowered from 24h to 6h. Dual-persona analysis surfaced during W4 verification; 6h chosen to serve the short-stay visitor as the primary map-color persona. Overnight resident served by text label + W6 notification. See `docs/ios-color-threshold-spec.md`. |  |
