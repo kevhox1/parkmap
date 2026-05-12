@@ -19,6 +19,21 @@
 //  Bundle.main.bundlePath + "/tiles/..." paths; they silently fail at runtime.
 //  (Confirmed in W1a QA finding #1, docs/ios-mvp-spec.md §4.2.)
 //
+//  W4 fix-pass-1 (2026-05-11): Added LRU eviction to `cache`. Previously the cache
+//  grew monotonically — after 5 minutes of panning Manhattan, all 1,028 tiles and
+//  their decoded [Segment] arrays would accumulate in RAM (~200–500 MB). The cache
+//  is now capped at `maxCachedTiles`. On eviction the LRU tile is removed, freeing
+//  its [Segment] array. The evicted tile will be re-decoded on next access (from the
+//  bundle, which is cheap — ~1ms per tile on the simulator).
+//
+//  Rendering architecture refactor (2026-05-11): Cap raised from 50 → 200.
+//  With MKMultiPolyline overlays (6 total, replacing 40k MapPolylines), per-render
+//  cost is negligible. The previous cap of 50 tiles caused cache thrashing during
+//  aggressive panning — evicted tiles were immediately re-requested, producing the
+//  "only upper-Manhattan rendering" symptom Kevin observed. 200 tiles × ~25 KB decoded
+//  ≈ 5 MB segment data — well within budget. Total tile set is 1,028 tiles × ~25 KB
+//  ≈ 25 MB; caching all 1,028 would be fine too, but 200 (~25%) is conservative.
+//
 
 import Foundation
 import MapKit
@@ -67,7 +82,18 @@ final class TileLoader {
     /// Quick lookup: "row_col" → true, for tiles that actually exist.
     private var tileSet: Set<String> = []
     /// In-memory cache of decoded segments per tile key ("row_col").
+    /// Bounded by `maxCachedTiles` via LRU eviction. (W4 fix-pass-1.)
     private var cache: [String: [Segment]] = [:]
+    /// LRU access-order list. Most-recently-used key is at the end.
+    /// Invariant: `lruOrder.count == cache.count` at all times (excluding empty-tile sentinels,
+    /// which are stored as [] in cache but still count against the cap).
+    private var lruOrder: [String] = []
+    /// Maximum number of tiles to keep in cache simultaneously.
+    /// Raised to 200 in the rendering-architecture refactor (2026-05-11).
+    /// At ~40 segments/tile × ~25KB decoded/tile, 200 tiles ≈ ~5 MB of segment data.
+    /// The previous cap of 50 caused cache thrashing that contributed to the
+    /// "only upper-Manhattan rendering" symptom. 200 = ~25% of all 1,028 tiles.
+    private let maxCachedTiles = 200
     /// Tracks the most-recently-requested region. In-flight Tasks read this
     /// at execution time (not capture time) so rapid panning can't cause a
     /// late-finishing Task to overwrite segments with a stale viewport.
@@ -91,8 +117,9 @@ final class TileLoader {
         let keys = tileKeys(forRegion: region)
         let uncached = keys.filter { cache[$0] == nil }
         guard !uncached.isEmpty else {
-            // All tiles already cached — still rebuild in case currentRegion
-            // advanced while a prior Task was in flight.
+            // All tiles already cached — touch each key to refresh LRU order,
+            // then rebuild. This prevents tiles in active view from being evicted.
+            for key in keys { touchInCache(key: key) }
             rebuildSegments(forKeys: keys)
             return
         }
@@ -107,12 +134,8 @@ final class TileLoader {
                     }
                 }
                 for await (key, decoded) in group {
-                    if let segs = decoded {
-                        self.cache[key] = segs
-                    } else {
-                        // Mark as empty so we don't retry on every pan.
-                        self.cache[key] = []
-                    }
+                    let segs = decoded ?? []
+                    self.insertIntoCache(key: key, segments: segs)
                 }
             }
             // Use self.currentRegion — NOT the captured `region` argument —
@@ -199,6 +222,38 @@ final class TileLoader {
         }
         return result
     }
+
+    // MARK: - LRU cache helpers
+
+    /// Inserts or updates a key in the cache, then evicts the LRU entry if
+    /// the cache has grown beyond `maxCachedTiles`.
+    private func insertIntoCache(key: String, segments: [Segment]) {
+        if cache[key] != nil {
+            // Already present — treat as an access, move to MRU end.
+            lruOrder.removeAll { $0 == key }
+        }
+        cache[key] = segments
+        lruOrder.append(key)
+        evictIfNeeded()
+    }
+
+    /// Records an access hit for an already-cached key, moving it to the MRU end.
+    /// No-op if the key is not in cache.
+    private func touchInCache(key: String) {
+        guard cache[key] != nil else { return }
+        lruOrder.removeAll { $0 == key }
+        lruOrder.append(key)
+    }
+
+    /// Evicts the least-recently-used entry while the cache exceeds `maxCachedTiles`.
+    private func evictIfNeeded() {
+        while cache.count > maxCachedTiles, let oldest = lruOrder.first {
+            cache.removeValue(forKey: oldest)
+            lruOrder.removeFirst()
+        }
+    }
+
+    // MARK: - Segment rebuild
 
     /// Flattens all cached segments for the given tile keys into `self.segments`.
     private func rebuildSegments(forKeys keys: [String]) {
