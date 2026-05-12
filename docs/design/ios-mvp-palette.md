@@ -9,7 +9,7 @@
 
 ## 1. Design premise
 
-**Color encodes CURRENT STATE, not static category.** The same ASP_MON_THU block changes color throughout the week as its actual parking state changes — red when ASP is active Thursday 7-9:30am, orange Wednesday evening (restriction coming in <24h), green for the two days in between. This is intentional. A driver mid-search wants the visual answer to *"where do I park RIGHT NOW"*, not a list of *"what kind of restrictions exist on each block."*
+**Color encodes CURRENT STATE, not static category.** The same ASP_MON_THU block changes color throughout the week as its actual parking state changes — red when ASP is active Thursday 7-9:30am, orange Thursday around 1am (within 6h of next ASP), green for the rest of the week. This is intentional. A driver mid-search wants the visual answer to *"where do I park RIGHT NOW"*, not a list of *"what kind of restrictions exist on each block."*
 
 WePark's parking states sit on a natural severity gradient — from a block where you'll get ticketed and towed if you park wrong, down to a block where you can leave the car for days. Color encodes that gradient *as it applies right now*. A driver who glances at the map for two seconds while stopped at a light should read current-state severity from color without counting on being able to tap into details.
 
@@ -30,7 +30,7 @@ The PWA has 12 sign categories. For the map, color is determined not by the cate
 | 1 (worst) | **Can't park** | NO_PARKING anytime; ASP block during its active window (e.g., Thu 7–9:30am for an ASP_MON_THU block); NO_STANDING; TRUCK_LOADING active now; SPECIAL active now | `Color.red` | You cannot park here at this moment. Ticket + potential tow. |
 | 2 | **Free now, restriction coming soon** | ASP block whose next active window starts within ~6 hours. Warning state. Fine if you're staying less than 6 hours; set a timer if you are. Orange. | `Color.orange` | Warning state. Fine for a quick errand, not safe for overnight parking. Driver gets the "be careful, set a timer" signal at a glance. |
 | 3 | **Metered (pay to park) right now** | METERED block during its active billing hours | `Color(red: 0.92, green: 0.76, blue: 0.0)` — amber-shifted yellow (see §2.3) | Pay-or-ticket. No tow risk. Manageable. |
-| 4 (best) | **Free now, no restriction imminent** | FREE block; OR ASP block whose next active window is >24h away; OR METERED block during its free hours | `Color.green` | Park comfortably. Safe for overnight if no near-term restriction. |
+| 4 (best) | **Free now, no restriction imminent** | FREE block; OR ASP block whose next active window is >6h away; OR METERED block during its free hours | `Color.green` | Park comfortably. Safe for overnight if no near-term restriction. |
 | neutral | **Unknown** | Segment with no rules or unrecognized category | `Color.gray.opacity(0.35)` | No data. User should look at the signs. Sits outside the severity spectrum. |
 
 **Same block, different color through the week** — concrete example, ASP_MON_THU block (street cleaning Mon + Thu, 7–9:30am):
