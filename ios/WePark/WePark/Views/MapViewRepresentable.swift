@@ -29,11 +29,22 @@
 //  The coordinate is passed to the `onTap` closure, which lives in ContentView and
 //  runs the existing haversine point-to-segment search unchanged.
 //
+//  W5 additions:
+//    - UILongPressGestureRecognizer (0.4s min duration) → onLongPress closure.
+//    - CarPinAnnotation: MKPointAnnotation subclass for the parked-car pin.
+//    - carPin: ParkedCar? input — drives annotation add/remove in updateUIView.
+//    - onCarPinTapped: () -> Void — fired when the tap hits the car pin instead of map.
+//    - Car pin tap disambiguation: if tap coordinate is within ~30pt of the car pin
+//      annotation view center, fire onCarPinTapped instead of onTap.
+//
 //  State bridging to SwiftUI:
 //    - `region` Binding<MKCoordinateRegion>: two-way camera state
 //    - `selectedSegmentID` Binding<String?>: drives highlight overlay
 //    - `onTap(CLLocationCoordinate2D)`: closure into ContentView tap handler
+//    - `onLongPress(CLLocationCoordinate2D)`: closure into ContentView long-press handler (W5)
 //    - `onRegionChanged(MKCoordinateRegion)`: closure for tile loading
+//    - `onCarPinTapped()`: closure into ContentView car-pin tap handler (W5)
+//    - `carPin: ParkedCar?`: drives car pin annotation state (W5)
 //
 //  API availability: MKMultiPolyline and MKMultiPolylineRenderer available since iOS 13.
 //  All APIs used here are available on the iOS 17 deployment target.
@@ -71,6 +82,14 @@ private final class SelectedPolyline: MKPolyline {
     var currentState: CurrentState = .unknown
 }
 
+// MARK: - CarPinAnnotation
+
+/// MKPointAnnotation subclass for the user's parked car.
+/// Identified by type in viewFor(annotation:) to render the custom pin.
+final class CarPinAnnotation: MKPointAnnotation {
+    // No extra state needed — identity is by type.
+}
+
 // MARK: - MapViewRepresentable
 
 struct MapViewRepresentable: UIViewRepresentable {
@@ -84,19 +103,28 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Currently selected segment ID — drives the highlight overlay.
     @Binding var selectedSegmentID: String?
 
-    /// Called when the user taps the map. ContentView runs the haversine search.
+    /// Called when the user taps the map (not the car pin). ContentView runs haversine search.
     let onTap: (CLLocationCoordinate2D) -> Void
+
+    /// W5: Called when the user long-presses the map. ContentView runs segment detection.
+    let onLongPress: (CLLocationCoordinate2D) -> Void
 
     /// Called when the visible region changes (user pan/zoom ended). ContentView
     /// forwards to TileLoader.
     let onRegionChanged: (MKCoordinateRegion) -> Void
 
+    /// W5: Called when the user taps the car-pin annotation. ContentView presents
+    /// ParkedCarDetailView.
+    let onCarPinTapped: () -> Void
+
+    /// W5: Current parked car from ParkPinService. Non-nil → annotation visible on map.
+    /// Nil → annotation removed.
+    let carPin: ParkedCar?
+
     // MARK: Overlay update API
     // Called from ContentView on every 60-second tick and on initial load.
 
     /// Holds the overlay state to apply in updateUIView.
-    /// ContentView calls updateOverlays(segments:engine:now:) → mutates this → triggers
-    /// SwiftUI diff → updateUIView is called on the Coordinator.
     var overlayPayload: OverlayPayload
 
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
@@ -168,6 +196,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         mapView.showsCompass = true
         mapView.showsScale = true
 
+        // Register the CarPinAnnotation view class.
+        mapView.register(
+            MKAnnotationView.self,
+            forAnnotationViewWithReuseIdentifier: Coordinator.carPinReuseID
+        )
+
         // Set initial camera region.
         mapView.setRegion(region, animated: false)
 
@@ -181,6 +215,17 @@ struct MapViewRepresentable: UIViewRepresentable {
         tap.delegate = context.coordinator
         mapView.addGestureRecognizer(tap)
 
+        // W5: UILongPressGestureRecognizer for pin-drop.
+        // 0.4s minimum duration — slightly faster than iOS default (0.5s) for better
+        // responsiveness on a small phone. Above the 0.3s accidental-tap-hold threshold.
+        let longPress = UILongPressGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleLongPress(_:))
+        )
+        longPress.minimumPressDuration = 0.4
+        longPress.delegate = context.coordinator
+        mapView.addGestureRecognizer(longPress)
+
         context.coordinator.mapView = mapView
         return mapView
     }
@@ -193,6 +238,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             context.coordinator.applyOverlayPayload(overlayPayload, to: mapView)
             context.coordinator.lastAppliedGeneration = overlayPayload.generation
         }
+
+        // W5: Sync car pin annotation state.
+        context.coordinator.syncCarPin(carPin, on: mapView)
 
         // Sync camera only if it diverged from the map's current region by more than
         // a threshold — avoids fighting the user's pan/zoom gestures.
@@ -217,6 +265,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Current live overlays (strong refs so we can removeOverlay them later).
         private var multiPolylines: [OverlayTag: TaggedMultiPolyline] = [:]
         private var selectedPolyline: SelectedPolyline? = nil
+
+        // W5: Car pin annotation state.
+        static let carPinReuseID = "CarPinAnnotation"
+        private var carPinAnnotation: CarPinAnnotation? = nil
+        /// The UUID of the currently-rendered car pin (nil if none).
+        /// Used to detect when the pin changes identity (new pin, clear, or replace).
+        private var renderedCarPinID: UUID? = nil
 
         init(parent: MapViewRepresentable) {
             self.parent = parent
@@ -272,6 +327,76 @@ struct MapViewRepresentable: UIViewRepresentable {
                 selectedPolyline = sel
                 mapView.addOverlay(sel, level: .aboveRoads)
             }
+        }
+
+        // MARK: - W5: Car pin annotation management
+
+        /// Syncs the car-pin annotation to match the current ParkedCar state.
+        /// Called from updateUIView on every SwiftUI render cycle.
+        func syncCarPin(_ car: ParkedCar?, on mapView: MKMapView) {
+            let newID = car?.id
+
+            // Fast path: nothing changed.
+            if renderedCarPinID == newID { return }
+
+            // Remove old annotation if present.
+            if let old = carPinAnnotation {
+                mapView.removeAnnotation(old)
+                carPinAnnotation = nil
+            }
+
+            // Add new annotation if a car pin is set.
+            if let car = car {
+                let annotation = CarPinAnnotation()
+                annotation.coordinate = CLLocationCoordinate2D(
+                    latitude: car.latitude,
+                    longitude: car.longitude
+                )
+                annotation.accessibilityLabel = "My parked car. Tap for parking details."
+                carPinAnnotation = annotation
+                mapView.addAnnotation(annotation)
+            }
+
+            renderedCarPinID = newID
+        }
+
+        // MARK: - MKMapViewDelegate: annotation view
+
+        func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // Only handle CarPinAnnotation — let the map handle user location etc.
+            guard annotation is CarPinAnnotation else { return nil }
+
+            let view = mapView.dequeueReusableAnnotationView(
+                withIdentifier: Coordinator.carPinReuseID,
+                for: annotation
+            )
+
+            // W5 spec §5.1: mappin.circle.fill, 36pt, palette mode, white + systemBlue.
+            let config = UIImage.SymbolConfiguration(pointSize: 36, weight: .medium)
+                .applying(UIImage.SymbolConfiguration(paletteColors: [.white, .systemBlue]))
+            let image = UIImage(systemName: "mappin.circle.fill", withConfiguration: config)
+            view.image = image
+
+            // Shift the annotation view so its bottom tip sits at the coordinate.
+            // The symbol is 36pt tall; center is at 18pt from top → offset up by 18pt.
+            view.centerOffset = CGPoint(x: 0, y: -18)
+
+            // Drop shadow for visual separation from polylines.
+            view.layer.shadowColor = UIColor.black.cgColor
+            view.layer.shadowOpacity = 0.3
+            view.layer.shadowOffset = CGSize(width: 0, height: 2)
+            view.layer.shadowRadius = 3
+
+            // Accessibility: read as a distinct tap target.
+            view.isAccessibilityElement = true
+            view.accessibilityLabel = "My parked car. Tap for parking details."
+            view.accessibilityTraits = .button
+
+            // canShowCallout = false — we handle taps via gesture recognizer to
+            // show ParkedCarDetailView (a full sheet) rather than a callout bubble.
+            view.canShowCallout = false
+
+            return view
         }
 
         // MARK: - MKMapViewDelegate: renderer
@@ -332,15 +457,43 @@ struct MapViewRepresentable: UIViewRepresentable {
             guard let mapView = mapView,
                   recognizer.state == .ended else { return }
             let screenPoint = recognizer.location(in: mapView)
+
+            // W5: Check if the tap is on the car-pin annotation view before
+            // forwarding to the block-selection handler.
+            if let pinAnnotation = carPinAnnotation,
+               let pinView = mapView.view(for: pinAnnotation) {
+                // Hit-test within a 30pt radius of the pin view center.
+                let pinCenter = mapView.convert(pinAnnotation.coordinate, toPointTo: mapView)
+                let dx = screenPoint.x - pinCenter.x
+                let dy = screenPoint.y - pinCenter.y
+                let distancePt = sqrt(dx * dx + dy * dy)
+                if distancePt <= 30 {
+                    // The tap is on the car pin — suppress map-tap and fire car-pin handler.
+                    _ = pinView  // suppress unused-variable warning
+                    parent.onCarPinTapped()
+                    return
+                }
+            }
+
             let coordinate = mapView.convert(screenPoint, toCoordinateFrom: mapView)
             parent.onTap(coordinate)
         }
 
+        // MARK: - W5: Long-press handling
+
+        @objc func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
+            guard let mapView = mapView,
+                  recognizer.state == .began else { return }
+            let screenPoint = recognizer.location(in: mapView)
+            let coordinate = mapView.convert(screenPoint, toCoordinateFrom: mapView)
+            parent.onLongPress(coordinate)
+        }
+
         // MARK: - UIGestureRecognizerDelegate
 
-        /// Allow the tap recognizer to fire simultaneously with MKMapView's built-in
+        /// Allow all recognizers to fire simultaneously with MKMapView's built-in
         /// recognizers so that map gestures (pan, pinch, double-tap-to-zoom) continue
-        /// to work alongside our block-tap logic.
+        /// to work alongside our block-tap and long-press logic.
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherRecognizer: UIGestureRecognizer
