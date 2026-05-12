@@ -1,6 +1,6 @@
 # Drive Mode — iOS v1.0 Scope Decision
 
-**Status:** Pending Kevin's decision on §0 open questions before dispatch.
+**Status:** Decisions locked 2026-05-12 — see §11.
 **Author:** @tech-lead
 **Date:** 2026-05-12
 **Supersedes:** Nothing — `docs/drive-mode-routing.md` is the PWA v3 reference and stays as historical context. This spec governs the iOS v1.0 question only.
@@ -417,9 +417,77 @@ The following PWA Drive Mode v3 features are **not being ported in v1.0 iOS Driv
 
 ## Cross-references
 
-- `HANDOFF.md` §"Drive-test pending" — the drive-test this spec depends on.
+- `HANDOFF.md` §"Drive-test pending" — superseded by §11 below. Kevin completed the drive-test 2026-05-11; findings captured in §11.
 - `HANDOFF.md` §"Phase 5 progress" — W5/W6/W7/W7.5 must ship before W8.5 starts (Option E sequencing).
 - `docs/ios-mvp-spec.md` §2.2 — Drive Mode is currently explicitly out of scope. If Kevin picks Options A/B/C, that line is superseded by this spec. Do not edit the mvp-spec directly; this spec is the override.
 - `docs/drive-mode-routing.md` — PWA v3 reference spec. Read before starting W8.5b (routing). Not binding for iOS v1.0 scope decisions, but the architecture section (§Architecture, §Data flow) is a useful reference for the Swift port.
 - `docs/w5-pin-drop-spec.md` §6.2 — the `pinDropped` hook that Drive Mode's arrival flow (AC-DM.20) will trigger.
 - `docs/ios-color-threshold-spec.md` §8 — W7.5 "Park Until X" overlap with Drive Mode (§7 of this spec).
+
+---
+
+## §11 — Decisions Locked + Drive-Test Findings (2026-05-12)
+
+Kevin reviewed the §0 open questions on 2026-05-12 and locked the following answers. All five align with tech-lead recommendations.
+
+### Locked decisions
+
+| # | Decision | Rationale |
+|---|---|---|
+| OQ-1 | **Option E (phased rollout)** | TF1 ships without Drive Mode; TF2 adds it. Decouples early TestFlight feedback from Drive Mode build time. |
+| OQ-2 | **Drive-test already complete** (see findings below) | Kevin had already driven the PWA before this spec was written; findings supersede the "drive-test pending" carry-over. |
+| OQ-3 | **Mapbox HTTP-only** (no SDK) | 100k req/month free tier covers TestFlight + early App Store scale. The Mapbox Navigation iOS SDK's 100 MAU / 1k trips free tier is too tight (verified 2026-05-12). |
+| OQ-4 | **Yes — parking-aware route scoring is required in v1.0** | Kevin: "some version of parking-aware route scoring is going to be important." Reinforces Mapbox HTTP choice (MKDirections doesn't reliably return alternatives in dense Manhattan). 0.5 engineer-session add to Option B. |
+| OQ-5 | **TF2** | Pin drop + notifications + ASP banner + Park Until X ship in TF1; Drive Mode ships in TF2. |
+
+### Drive-test findings — PWA Drive Mode v3 in real Manhattan driving (Kevin, 2026-05-11)
+
+Kevin completed the dashboard-mount drive test on the PWA. **The Drive Mode v3 experience was poor.** These are real-world product findings that must shape the iOS W8.5 / W9 spec when it is written.
+
+**Reported problems:**
+
+1. **User-location icon does not track movement well.** Visible lag and jitter between actual position and on-screen position. Likely root cause: browser `navigator.geolocation.watchPosition` has implementation-dependent update frequency and accuracy, often worse than native equivalents.
+2. **One-way street direction is unclear on the map.** The PWA has `osm_oneway.json` data (NYC DOT centerline with TF/FT/TW direction flags) and uses it for routing, but the data is invisible to the user on the map. A driver can't see "this street is one-way the wrong direction" until the route already routes them around it.
+3. **Lag during interaction.** General sluggishness — could be Leaflet DOM-based rendering, JavaScript main-thread blocking, or network latency for tile loads. Compounds the GPS tracking issue.
+4. **Display quality is not great.** Vague but consistent — visual polish, contrast, readability from a dashboard mount under varying lighting. The PWA uses CSS that wasn't optimized for in-car readability.
+
+### Why this matters for iOS Drive Mode (W8.5 / W9)
+
+Each of the four PWA problems is **expected to improve significantly on iOS native:**
+
+| PWA problem | iOS native expected improvement | Mechanism |
+|---|---|---|
+| GPS tracking lag/jitter | Large | `CoreLocation` with `kCLLocationAccuracyBestForNavigation`, `CLLocationManager.activityType = .automotiveNavigation`, native Kalman filtering by iOS. Much smoother than browser geolocation. |
+| One-way direction unclear | Solvable | The `osm_oneway.json` data is in the iOS bundle (W2 brings the tiles + ASP data; one-way data can ship the same way). iOS can render directional arrows as `MKMapOverlay`s on each one-way street segment — a visual feature the PWA never built. |
+| General lag | Large | UIKit + MapKit + Metal-backed `MKMapView` rendering vs. Leaflet + DOM. The W4 rendering refactor already demonstrated the order-of-magnitude difference (19.92 GB → 137.5 MB; 25× over Metal threshold → comfortably under it). |
+| Display quality | Medium-Large | iOS Dynamic Type, dark mode, system color tokens, high-contrast accessibility settings. Custom UI components designed for dashboard mount distance + glare. |
+
+**This validates the decision to build iOS native rather than continue investing in the PWA's Drive Mode.** Kevin's drive test was the experience that pushed him toward the iOS rewrite in the first place. The §1 vision (parking commentary as headline, fear reduction as success metric) sits on top of fixing these four foundational problems.
+
+### Required additions to W8.5 / W9 spec when it is written
+
+Anyone writing the eventual `docs/w8.5-drive-mode-spec.md` (or `docs/w9-drive-mode-spec.md` depending on stream numbering) must address each of the four PWA problems explicitly:
+
+1. **GPS accuracy + update strategy.** Specify `CLLocationManager` configuration: `desiredAccuracy = kCLLocationAccuracyBestForNavigation`, `distanceFilter = kCLDistanceFilterNone` (every update), `activityType = .automotiveNavigation`, `pausesLocationUpdatesAutomatically = false` (driver doesn't want pauses on red lights). AC: user-position marker visibly tracks the car with < 1 second perceived lag.
+2. **One-way street visualization.** Spec the visual treatment — likely a small arrow `MKAnnotation` mid-segment on each one-way street, only rendered at zoom 16+ (denser at higher zoom). Color matches palette doc gray.opacity(0.6). AC: a user can glance at the map and immediately see which streets are one-way and which direction they flow.
+3. **Rendering performance.** No-regress AC: pan + GPS-follow + voice + route overlay at Manhattan zoom 17 stays at 60 fps on iPhone 15 and above; 30+ fps minimum on iPhone 12. Measured via Instruments.
+4. **Dashboard-mount UI polish.** Designer must do a pass on Drive Mode UI specifically for dashboard-mount conditions: font sizes scaled up beyond Dynamic Type defaults, high-contrast color tokens, large tap targets for exit / mute, voice volume normalization. AC: Kevin (or another tester) reports the dashboard experience as "clearly better than the PWA" in a follow-up drive test.
+
+### Re-test gate
+
+Before iOS Drive Mode ships in TF2, Kevin (or a designated TestFlight tester) must drive-test the iOS build under the same conditions as the PWA drive test (Manhattan, dashboard mount, daytime) and confirm at least three of the four PWA problems are demonstrably improved. If fewer than three improve, hold the TF2 release and address findings before shipping.
+
+### Updated work-stream sequence
+
+Given the locked decisions:
+
+| Stream | Status | Notes |
+|---|---|---|
+| W5 — Pin drop | 📋 spec ready, OQs answered | Engineer dispatchable. |
+| W6 — Notifications | ⏳ | Spec to be written after W5 lands. |
+| W7 — ASP banner | ⏳ | Spec to be written after W6 lands. |
+| W7.5 — Park Until X | 📋 queued | Builds on W5 pin drop. |
+| W8 — TestFlight 1 | ⏸️ blocked on Apple Dev approval | Ships W5+W6+W7+W7.5 to first beta cohort. |
+| **W8.5 — Drive Mode** | 📋 scope locked (this doc) | Spec to be written by tech-lead after W7.5 ships. Vision-focused port (Option B scope). Mapbox HTTP routing, parking-aware route scoring, fixes for the four PWA problems above. ~4-7 engineer sessions + designer + QA. |
+| W9 — TestFlight 2 | ⏸️ depends on W8.5 | Ships TF1 features + Drive Mode to expanded beta cohort. Re-test gate must pass before W9. |
+| v1.0 App Store launch | ⏸️ depends on W9 feedback | Launch story: "WePark = Apple-Maps-class parking, including the in-car experience." |
