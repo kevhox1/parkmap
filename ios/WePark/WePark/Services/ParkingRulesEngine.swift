@@ -38,8 +38,9 @@ final class ParkingRulesEngine {
 
     /// Threshold for "restriction coming soon" (Option B dynamic state color).
     /// A block whose next restriction starts within this window shows orange.
-    /// Spec §3.7 / palette doc §2.1: recommended 24 hours, tunable via user testing.
-    private static let nearFutureWindow: TimeInterval = 24 * 3600   // 24 hours
+    /// Spec §3.7 / palette doc §2.1: lowered from 24h to 6h (W4.5) — serves the
+    /// short-stay visitor as the primary map-color persona. See docs/ios-color-threshold-spec.md.
+    private static let nearFutureWindow: TimeInterval = 6 * 3600   // 6 hours
 
     // MARK: - Init
 
@@ -284,7 +285,7 @@ final class ParkingRulesEngine {
     ///
     /// Classification logic:
     ///   1. If a restriction is active right now → .restrictedNow
-    ///   2. If a restriction starts within nearFutureWindow (24h) → .freeButRestrictionSoon
+    ///   2. If a restriction starts within nearFutureWindow (6h) → .freeButRestrictionSoon
     ///   3. If the block is metered and currently in paid hours → .meteredActive
     ///   4. If free with no imminent restriction → .freeComfortably
     ///   5. Unknown / no rules → .unknown
@@ -322,7 +323,7 @@ final class ParkingRulesEngine {
             if isMeteredNow { return .meteredActive }
         }
 
-        // Free comfortably — either FREE category, or no restriction within 24h
+        // Free comfortably — either FREE category, or no restriction within 6h
         return .freeComfortably
     }
 

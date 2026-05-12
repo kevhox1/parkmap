@@ -216,9 +216,9 @@ by `@designer` in W1.5). Summary of the locked decisions:
 | Color | Meaning right now | Triggered by |
 |---|---|---|
 | **🔴 Red** | Can't park right now | Block is currently restricted: NO_PARKING anytime; ASP active in its current window; NO_STANDING; TRUCK_LOADING; SPECIAL active now |
-| **🟠 Orange** | Free now, but a restriction is starting soon (engine decides "soon" — recommend ≤24h) | ASP block whose next active window begins within 24h. Warning state — fine for a quick errand, not for overnight parking. |
+| **🟠 Orange** | Free now, but a restriction is starting soon (≤6h) | ASP block whose next active window begins within 6h. Warning state — fine if you're staying less than 6 hours; set a timer if you are. |
 | **🟡 Amber-yellow** | Metered right now (pay to park) | METERED block during its active hours. Slightly amber-shifted from system yellow to remain readable against Apple Maps' tan basemap — see palette doc §2.3. |
-| **🟢 Green** | Free now with no restriction imminent | FREE block; or ASP block whose next window is >24h away; or METERED block during its free hours. Comfortable for overnight parking. |
+| **🟢 Green** | Free now with no restriction imminent | FREE block; or ASP block whose next window is >6h away; or METERED block during its free hours. Safe for short stays; resident should rely on text label + W6 notification for overnight safety. |
 | **⚪️ Gray** | Unknown | No data. Outside the spectrum. |
 
 **Implementation note for W3** (`@ios-engineer`): the `ParkingRulesEngine`

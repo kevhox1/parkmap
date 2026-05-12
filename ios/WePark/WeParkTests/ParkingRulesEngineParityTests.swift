@@ -631,20 +631,25 @@ final class CurrentStateClassificationTests: XCTestCase {
         XCTAssertEqual(engine.currentStateColor(for: seg, at: etDate(year: 2026, month: 5, day: 10, hour: 10)), ParkingColors.restricted)
     }
 
-    func testCurrentState_ASPWithin24h_RestrictionComingSoon() {
-        // ASP_MON_THU: at Sunday 11pm, next Mon 7am is ~8h → orange (within 24h)
+    // W4.5: threshold lowered from 24h to 6h. A restriction 8h away (Sunday 11pm → Mon 7am)
+    // was previously orange (within 24h). It is now green (beyond 6h). Test name updated
+    // from "Within24h_RestrictionComingSoon" to "8hAway_FreeComfortably" to reflect the new
+    // semantic: 8h > 6h threshold → freeComfortably.
+    func testCurrentState_ASP8hAway_FreeComfortably() {
+        // ASP_MON_THU: at Sunday 11pm, next Mon 7am is ~8h → green (beyond 6h threshold)
         let seg = makeSegment(
             dominantCategory: .aspMonThu,
             rules: [rule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
         )
         let now = etDate(year: 2026, month: 5, day: 10, hour: 23, minute: 0) // Sunday 11pm
         let state = engine.currentState(for: seg, at: now)
-        XCTAssertEqual(state, .freeButRestrictionSoon)
-        XCTAssertEqual(engine.currentStateColor(for: seg, at: now), ParkingColors.restrictionComingSoon)
+        XCTAssertEqual(state, .freeComfortably,
+            "8h to next ASP > 6h threshold → should be freeComfortably (W4.5: was freeButRestrictionSoon under 24h)")
+        XCTAssertEqual(engine.currentStateColor(for: seg, at: now), ParkingColors.freeComfortably)
     }
 
     func testCurrentState_ASPBeyond24h_FreeComfortably() {
-        // ASP_MON_THU: Friday noon → next Mon 7am is ~67h → green
+        // ASP_MON_THU: Friday noon → next Mon 7am is ~67h → green (well beyond 6h threshold)
         let seg = makeSegment(
             dominantCategory: .aspMonThu,
             rules: [rule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
@@ -652,6 +657,52 @@ final class CurrentStateClassificationTests: XCTestCase {
         let now = etDate(year: 2026, month: 5, day: 8, hour: 12, minute: 0) // Friday noon
         let state = engine.currentState(for: seg, at: now)
         XCTAssertEqual(state, .freeComfortably)
+        XCTAssertEqual(engine.currentStateColor(for: seg, at: now), ParkingColors.freeComfortably)
+    }
+
+    // MARK: W4.5 boundary tests — 6h threshold explicit coverage
+
+    /// Lower boundary: restriction ~5.5h away → still orange (within 6h threshold).
+    ///
+    /// ASP_MON_THU with ASP at Mon 7am. Query at Mon 1:30am (01:30 ET).
+    /// Hours to 7am = 5.5h → < 6h → freeButRestrictionSoon (orange).
+    func testCurrentState_ASP5_5hAway_RestrictionComingSoon() {
+        // Monday 2026-05-11 at 01:30 ET — 5.5h before Mon 7am ASP
+        let seg = makeSegment(
+            dominantCategory: .aspMonThu,
+            rules: [rule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let now = etDate(year: 2026, month: 5, day: 11, hour: 1, minute: 30)
+        let result = engine.nextRestriction(for: seg, at: now)
+        // Verify the hours computation is indeed ~5.5h
+        XCTAssertGreaterThan(result.hours, 5.4, "Should be ~5.5h to Mon 7am")
+        XCTAssertLessThan(result.hours, 5.6, "Should be ~5.5h to Mon 7am")
+
+        let state = engine.currentState(for: seg, at: now)
+        XCTAssertEqual(state, .freeButRestrictionSoon,
+            "5.5h to next ASP < 6h threshold → should be freeButRestrictionSoon (orange)")
+        XCTAssertEqual(engine.currentStateColor(for: seg, at: now), ParkingColors.restrictionComingSoon)
+    }
+
+    /// Upper boundary: restriction ~6.5h away → green (just beyond 6h threshold).
+    ///
+    /// ASP_MON_THU with ASP at Mon 7am. Query at Mon 0:30am (00:30 ET).
+    /// Hours to 7am = 6.5h → > 6h → freeComfortably (green).
+    func testCurrentState_ASP6_5hAway_FreeComfortably() {
+        // Monday 2026-05-11 at 00:30 ET — 6.5h before Mon 7am ASP
+        let seg = makeSegment(
+            dominantCategory: .aspMonThu,
+            rules: [rule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let now = etDate(year: 2026, month: 5, day: 11, hour: 0, minute: 30)
+        let result = engine.nextRestriction(for: seg, at: now)
+        // Verify the hours computation is indeed ~6.5h
+        XCTAssertGreaterThan(result.hours, 6.4, "Should be ~6.5h to Mon 7am")
+        XCTAssertLessThan(result.hours, 6.6, "Should be ~6.5h to Mon 7am")
+
+        let state = engine.currentState(for: seg, at: now)
+        XCTAssertEqual(state, .freeComfortably,
+            "6.5h to next ASP > 6h threshold → should be freeComfortably (green)")
         XCTAssertEqual(engine.currentStateColor(for: seg, at: now), ParkingColors.freeComfortably)
     }
 
