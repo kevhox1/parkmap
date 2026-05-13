@@ -28,6 +28,10 @@ struct BlockDetailView: View {
     let engine: ParkingRulesEngine
     let onDismiss: () -> Void
 
+    /// W5: Called when the user taps "Park here →". When nil, the button stays
+    /// disabled with the "Coming next" caption (preview / standalone use).
+    let onParkHere: (() -> Void)?
+
     // Evaluate once at sheet-open time (stable reference time for the whole sheet).
     private let now: Date = .nowET
 
@@ -130,12 +134,12 @@ struct BlockDetailView: View {
         }
     }
 
-    // MARK: - Park here stub
+    // MARK: - Park here button (W5: live when onParkHere is non-nil)
 
     private var parkHereStub: some View {
         VStack(spacing: 4) {
             Button {
-                // No-op: W5 will wire this.
+                onParkHere?()
             } label: {
                 Text("Park here \u{2192}")
                     .font(.headline)
@@ -143,14 +147,19 @@ struct BlockDetailView: View {
                     .frame(minHeight: 44)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(true)
-            .foregroundStyle(.secondary)
-            .accessibilityLabel("Park here. Coming in next update.")
-            .accessibilityHint("Disabled.")
+            .disabled(onParkHere == nil)
+            .accessibilityLabel(
+                onParkHere == nil
+                    ? "Park here. Coming in next update."
+                    : "Park here. Confirm your parking spot."
+            )
+            .accessibilityHint(onParkHere == nil ? "Disabled." : "")
 
-            Text("Coming next")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            if onParkHere == nil {
+                Text("Coming next")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.top, 8)
     }
@@ -187,7 +196,9 @@ struct BlockDetailView: View {
 
 // MARK: - RuleRow
 
-private struct RuleRow: View {
+/// Shared rule-row component used by BlockDetailView and ParkedCarDetailView.
+/// Internal (not private) so both views in the same module can access it.
+struct RuleRow: View {
 
     let rule: ParkingRule
 
@@ -367,6 +378,6 @@ private struct RuleRow: View {
     let segData = try! JSONSerialization.data(withJSONObject: segDict)
     let segment = try! JSONDecoder().decode(Segment.self, from: segData)
 
-    return BlockDetailView(segment: segment, engine: engine, onDismiss: {})
+    return BlockDetailView(segment: segment, engine: engine, onDismiss: {}, onParkHere: nil)
         .presentationDetents([.medium, .large])
 }

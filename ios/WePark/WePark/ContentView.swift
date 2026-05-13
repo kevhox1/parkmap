@@ -30,6 +30,23 @@
 //    - Sheet dismiss via onDismiss closure (not concurrent with animation)
 //    - A11y: safety label is first focusable element, ✕ reads "Close block details"
 //
+//  W5 additions:
+//    - ParkPinService: @State var parkPinService (loaded on appear)
+//    - @State var pinDropIntent: PinDropIntent? — drives ParkConfirmView sheet
+//    - @State var parkedCarDetailItem: ParkedCar? — drives ParkedCarDetailView sheet
+//    - Long-press → handleLongPress(at:) → segment detection → ParkConfirmView
+//    - "Park here →" button in BlockDetailView wired via onParkHere closure
+//    - Car pin annotation in MapViewRepresentable driven by parkPinService.parkedCar
+//    - ParkedCarDetailView sheet on car-pin tap
+//    - findCandidateSegments: multi-candidate search for "Wrong street?" alternatives
+//
+//  Sheet stacking: SwiftUI allows only one .sheet(item:) to be active at a time.
+//  ContentView manages mutually-exclusive presentation:
+//    - pinDropIntent → ParkConfirmView (dismisses blockDetailSegment if set)
+//    - parkedCarDetailItem → ParkedCarDetailView
+//    - selectedSegmentID → BlockDetailView
+//  All are separate .sheet(item:) bindings. SwiftUI handles the constraint.
+//
 
 import SwiftUI
 import MapKit
@@ -55,11 +72,20 @@ struct ContentView: View {
     /// Flipped every 60 seconds to drive overlay recompute.
     @State private var lastEvaluatedAt: Date = .now
 
-    /// W4: Selected segment ID. Drives highlight overlay + sheet presentation.
+    /// W4: Selected segment ID. Drives highlight overlay + BlockDetailView sheet.
     @State private var selectedSegmentID: String? = nil
 
-    /// W4: Sheet presentation flag.
+    /// W4: BlockDetailView sheet presentation (driven by selectedSegmentID).
     @State private var isSheetPresented: Bool = false
+
+    /// W5: In-flight pin-drop intent. Non-nil → ParkConfirmView is presented.
+    @State private var pinDropIntent: PinDropIntent? = nil
+
+    /// W5: Parked-car detail item. Non-nil → ParkedCarDetailView is presented.
+    @State private var parkedCarDetailItem: ParkedCar? = nil
+
+    /// W5: Single-pin persistence service. Loaded once at app launch.
+    @State private var parkPinService = ParkPinService()
 
     /// Overlay payload passed into MapViewRepresentable.
     /// Rebuilt on every tick or when selectedSegmentID changes.
@@ -78,6 +104,9 @@ struct ContentView: View {
     /// Tap hit threshold in meters (matches W4 behavior).
     private let tapHitThresholdMeters: Double = 20.0
 
+    /// W5: Radius for candidate-segment search (matches PWA findCandidateSegments).
+    private let pinDropRadiusMeters: Double = 35.0
+
     // MARK: - Derived
 
     private var selectedSegment: Segment? {
@@ -94,14 +123,24 @@ struct ContentView: View {
             onTap: { coordinate in
                 handleMapTap(at: coordinate)
             },
+            onLongPress: { coordinate in
+                handleLongPress(at: coordinate)
+            },
             onRegionChanged: { newRegion in
                 region = newRegion
                 tileLoader.loadTiles(forRegion: newRegion)
             },
+            onCarPinTapped: {
+                openParkedCarDetail()
+            },
+            carPin: parkPinService.parkedCar,
             overlayPayload: overlayPayload
         )
         .ignoresSafeArea()
         .task {
+            // W5: Load persisted car pin on app launch.
+            parkPinService.load()
+
             tileLoader.loadTiles(forRegion: region)
             lastEvaluatedAt = .now
             rebuildOverlays(at: lastEvaluatedAt)
@@ -123,7 +162,7 @@ struct ContentView: View {
         .onChange(of: selectedSegmentID) { _, _ in
             rebuildOverlays(at: lastEvaluatedAt)
         }
-        // W4: sheet presentation.
+        // W4: BlockDetailView sheet.
         .sheet(isPresented: $isSheetPresented, onDismiss: {
             selectedSegmentID = nil
         }) {
@@ -131,13 +170,54 @@ struct ContentView: View {
                 BlockDetailView(
                     segment: segment,
                     engine: engine,
-                    onDismiss: { dismissSheet() }
+                    onDismiss: { dismissBlockDetail() },
+                    onParkHere: {
+                        // W5: Path B — segment already known; use midpoint as coordinate.
+                        initiatePathBPinDrop(from: segment)
+                    }
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
                 .presentationBackground(.regularMaterial)
                 .presentationCornerRadius(20)
             }
+        }
+        // W5: ParkConfirmView sheet.
+        .sheet(item: $pinDropIntent) { intent in
+            ParkConfirmView(
+                intent: intent,
+                engine: engine,
+                onConfirm: { confirmedIntent in
+                    pinDropIntent = nil
+                    confirmPinDrop(intent: confirmedIntent)
+                },
+                onCancel: {
+                    pinDropIntent = nil
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+        }
+        // W5: ParkedCarDetailView sheet.
+        .sheet(item: $parkedCarDetailItem) { car in
+            ParkedCarDetailView(
+                parkedCar: car,
+                engine: engine,
+                loadedSegments: tileLoader.segments,
+                onDismiss: {
+                    parkedCarDetailItem = nil
+                },
+                onClearPin: {
+                    parkedCarDetailItem = nil
+                    parkPinService.clearPin()
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
         }
     }
 
@@ -206,12 +286,10 @@ struct ContentView: View {
         )
     }
 
-    // MARK: - Dismiss helper
+    // MARK: - Dismiss helpers
 
-    /// Triggers the sheet dismiss animation.
-    /// onDismiss closure (set on the sheet modifier) clears selectedSegmentID
-    /// after the animation completes — segment reference stays live during dismiss.
-    private func dismissSheet() {
+    /// Triggers the BlockDetailView dismiss animation.
+    private func dismissBlockDetail() {
         isSheetPresented = false
     }
 
@@ -219,7 +297,7 @@ struct ContentView: View {
 
     private func handleMapTap(at coordinate: CLLocationCoordinate2D) {
         guard !tileLoader.segments.isEmpty else {
-            dismissSheet()
+            dismissBlockDetail()
             return
         }
 
@@ -240,9 +318,129 @@ struct ContentView: View {
             selectedSegmentID = id
             isSheetPresented = true
         } else {
-            dismissSheet()
+            dismissBlockDetail()
         }
     }
+
+    // MARK: - W5: Long-press handling
+
+    private func handleLongPress(at coordinate: CLLocationCoordinate2D) {
+        // Dismiss any open BlockDetailView — only one sheet at a time.
+        isSheetPresented = false
+        selectedSegmentID = nil
+
+        // Run candidate-segment detection (Path A).
+        let candidates = findCandidateSegments(
+            lat: coordinate.latitude,
+            lng: coordinate.longitude,
+            radius: pinDropRadiusMeters,
+            max: 4
+        )
+
+        let detected = candidates.first?.segment
+        let alternatives = Array(candidates.dropFirst())
+
+        pinDropIntent = PinDropIntent(
+            pinLat: coordinate.latitude,
+            pinLng: coordinate.longitude,
+            detectedSegment: detected,
+            alternativeCandidates: alternatives
+        )
+    }
+
+    // MARK: - W5: "Park here →" Path B (from BlockDetailView)
+
+    private func initiatePathBPinDrop(from segment: Segment) {
+        // Dismiss BlockDetailView first.
+        isSheetPresented = false
+        selectedSegmentID = nil
+
+        // Path B: segment already known; coordinate is midpoint (spec §3.2).
+        // If midpoint is nil (malformed segment), fall back to first coordinate.
+        let midpoint = segment.midpoint ?? segment.coordinates.first
+        guard let coord = midpoint else { return }
+
+        // No alternative candidates for Path B (user already picked this block).
+        pinDropIntent = PinDropIntent(
+            pinLat: coord.latitude,
+            pinLng: coord.longitude,
+            detectedSegment: segment,
+            alternativeCandidates: []
+        )
+    }
+
+    // MARK: - W5: Confirm pin drop (from ParkConfirmView)
+
+    private func confirmPinDrop(intent: PinDropIntent) {
+        let car = ParkedCar(
+            id: UUID(),
+            latitude: intent.pinLat,
+            longitude: intent.pinLng,
+            detectedSegmentID: intent.detectedSegment?.id,
+            detectedSide: intent.detectedSegment?.side,
+            street: intent.detectedSegment?.street,
+            fromStreet: intent.detectedSegment?.fromStreet,
+            toStreet: intent.detectedSegment?.to,
+            parkedAt: .nowET
+        )
+        parkPinService.save(car)
+    }
+
+    // MARK: - W5: Open ParkedCarDetailView
+
+    private func openParkedCarDetail() {
+        guard let car = parkPinService.parkedCar else { return }
+        parkedCarDetailItem = car
+    }
+
+    // MARK: - W5: findCandidateSegments
+
+    /// Finds segments within `radius` meters of the given coordinate, sorted by distance.
+    /// Port of findCandidateSegments() at index.html:5096-5111.
+    ///
+    /// Deduplication: groups by block key (street|from|to) — the same block face may
+    /// span multiple segments. Returns the closest segment per unique block key.
+    /// Returns up to `max` results.
+    ///
+    /// This is the multi-candidate version of the haversine point-to-segment search
+    /// already used in handleMapTap. W5 spec §4.2 path A.
+    private func findCandidateSegments(
+        lat: Double,
+        lng: Double,
+        radius: Double,
+        max maxResults: Int
+    ) -> [CandidateSegment] {
+
+        let tapCoord = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        // Track closest segment per block key (street|from|to) to deduplicate.
+        var bestByBlockKey: [String: (segment: Segment, distance: Double)] = [:]
+
+        for segment in tileLoader.segments {
+            let coords = segment.coordinates
+            guard coords.count >= 2 else { continue }
+            let dist = pointToPolylineDistance(from: tapCoord, polyline: coords)
+            guard dist <= radius else { continue }
+
+            // Block key: same as the PWA's dedup key — street|from|to (case-insensitive).
+            // We keep all-caps (as stored in tile data) for consistency.
+            let key = "\(segment.street)|\(segment.fromStreet)|\(segment.to)"
+            if let existing = bestByBlockKey[key] {
+                if dist < existing.distance {
+                    bestByBlockKey[key] = (segment, dist)
+                }
+            } else {
+                bestByBlockKey[key] = (segment, dist)
+            }
+        }
+
+        // Sort by distance, take top `maxResults`.
+        return bestByBlockKey.values
+            .sorted { $0.distance < $1.distance }
+            .prefix(maxResults)
+            .map { CandidateSegment(segment: $0.segment, distanceMeters: $0.distance) }
+    }
+
+    // MARK: - Geometry helpers (unchanged from W4)
 
     private func pointToPolylineDistance(from point: CLLocationCoordinate2D,
                                           polyline: [CLLocationCoordinate2D]) -> Double {
