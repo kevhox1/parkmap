@@ -391,6 +391,30 @@ function extractPolylineBetween(streetOsmName, ptA, ptB) {
   return result;
 }
 
+// Intersection setback: block-face polylines emitted by extractPolylineBetween()
+// start/end at the centerline crossing of the intersecting street (~6-7m into the
+// intersection box). Trimming each end by INTERSECTION_SETBACK_M moves the visible
+// endpoints to approximately the curbline. See docs/tile-geometry-investigation.md.
+const INTERSECTION_SETBACK_M = 6;
+const INTERSECTION_SETBACK_FT = INTERSECTION_SETBACK_M * 3.28084; // ≈ 19.685ft
+
+function trimIntersectionSetback(blockGeo) {
+  if (!blockGeo) return blockGeo;
+  const { blockLenFt } = blockGeo;
+  // Skip blocks too short to safely trim (need >3× setback to leave a usable middle)
+  if (blockLenFt < INTERSECTION_SETBACK_FT * 3) return blockGeo;
+  const trimmedLine = extractSubSegment(blockGeo, INTERSECTION_SETBACK_FT, blockLenFt - INTERSECTION_SETBACK_FT);
+  if (!trimmedLine || trimmedLine.length < 2) return blockGeo;
+  const trimmedTotalLen = cumulativeDists(trimmedLine);
+  const trimmedBlockLenM = trimmedTotalLen[trimmedTotalLen.length - 1];
+  return {
+    line: trimmedLine,
+    totalLen: trimmedTotalLen,
+    blockLenM: trimmedBlockLenM,
+    blockLenFt: trimmedBlockLenM * 3.28084
+  };
+}
+
 function getBlockPolyline(block) {
   const streetOsm = osmName(block.street);
   const fromOsm = osmName(block.from);
@@ -410,7 +434,8 @@ function getBlockPolyline(block) {
   const blockLenM = totalLen[totalLen.length - 1];
   const blockLenFt = blockLenM * 3.28084;
 
-  return { line, totalLen, blockLenM, blockLenFt };
+  const rawBlockGeo = { line, totalLen, blockLenM, blockLenFt };
+  return trimIntersectionSetback(rawBlockGeo);
 }
 
 function interpolateOnBlockLine(blockGeo, distFt) {
