@@ -77,17 +77,28 @@ extension LocationService: CLLocationManagerDelegate {
 
     func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
         let status = manager.authorizationStatus
-        isAuthorized = [.authorizedWhenInUse, .authorizedAlways].contains(status)
-        // If the user just granted permission, fetch a location now.
-        if isAuthorized {
-            manager.requestLocation()
+        let authorized = [.authorizedWhenInUse, .authorizedAlways].contains(status)
+        // Defer the @Observable property write to the next run loop cycle.
+        // CLLocationManager delegates can fire during a SwiftUI render pass, and writing
+        // @Observable state synchronously from a delegate method triggers
+        // "Modifying state during view update" warnings.
+        DispatchQueue.main.async { [weak self] in
+            self?.isAuthorized = authorized
+            if authorized {
+                manager.requestLocation()
+            }
         }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let loc = locations.last else { return }
-        userLocation = loc.coordinate
-        locationUpdateCount += 1
+        let coordinate = loc.coordinate
+        // Defer the @Observable property writes to the next run loop cycle (same reason
+        // as locationManagerDidChangeAuthorization above).
+        DispatchQueue.main.async { [weak self] in
+            self?.userLocation = coordinate
+            self?.locationUpdateCount += 1
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
