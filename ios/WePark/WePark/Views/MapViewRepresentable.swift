@@ -190,7 +190,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
-        mapView.showsUserLocation = false
+        mapView.showsUserLocation = true  // W5.1: show blue dot for recenter feature
         mapView.isRotateEnabled = false
         mapView.isPitchEnabled = false
         mapView.showsCompass = true
@@ -447,8 +447,13 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             let region = mapView.region
-            // Notify ContentView so it can load tiles for the new viewport.
-            parent.onRegionChanged(region)
+            // Defer the SwiftUI state write to the next run loop cycle.
+            // regionDidChangeAnimated fires from a MapKit animation callback that can
+            // overlap with SwiftUI's render pass — writing @State synchronously here
+            // triggers "Modifying state during view update" warnings.
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onRegionChanged(region)
+            }
         }
 
         // MARK: - Tap handling
@@ -470,13 +475,19 @@ struct MapViewRepresentable: UIViewRepresentable {
                 if distancePt <= 30 {
                     // The tap is on the car pin — suppress map-tap and fire car-pin handler.
                     _ = pinView  // suppress unused-variable warning
-                    parent.onCarPinTapped()
+                    // Defer SwiftUI state mutation out of the UIKit gesture callback.
+                    DispatchQueue.main.async { [weak self] in
+                        self?.parent.onCarPinTapped()
+                    }
                     return
                 }
             }
 
             let coordinate = mapView.convert(screenPoint, toCoordinateFrom: mapView)
-            parent.onTap(coordinate)
+            // Defer SwiftUI state mutation out of the UIKit gesture callback.
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onTap(coordinate)
+            }
         }
 
         // MARK: - W5: Long-press handling
@@ -486,7 +497,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                   recognizer.state == .began else { return }
             let screenPoint = recognizer.location(in: mapView)
             let coordinate = mapView.convert(screenPoint, toCoordinateFrom: mapView)
-            parent.onLongPress(coordinate)
+            // Defer SwiftUI state mutation out of the UIKit gesture callback.
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onLongPress(coordinate)
+            }
         }
 
         // MARK: - UIGestureRecognizerDelegate

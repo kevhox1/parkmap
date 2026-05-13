@@ -32,25 +32,47 @@
 //
 //  W5 additions:
 //    - ParkPinService: @State var parkPinService (loaded on appear)
-//    - @State var pinDropIntent: PinDropIntent? — drives ParkConfirmView sheet
-//    - @State var parkedCarDetailItem: ParkedCar? — drives ParkedCarDetailView sheet
 //    - Long-press → handleLongPress(at:) → segment detection → ParkConfirmView
 //    - "Park here →" button in BlockDetailView wired via onParkHere closure
 //    - Car pin annotation in MapViewRepresentable driven by parkPinService.parkedCar
 //    - ParkedCarDetailView sheet on car-pin tap
 //    - findCandidateSegments: multi-candidate search for "Wrong street?" alternatives
 //
-//  Sheet stacking: SwiftUI allows only one .sheet(item:) to be active at a time.
-//  ContentView manages mutually-exclusive presentation:
-//    - pinDropIntent → ParkConfirmView (dismisses blockDetailSegment if set)
-//    - parkedCarDetailItem → ParkedCarDetailView
-//    - selectedSegmentID → BlockDetailView
-//  All are separate .sheet(item:) bindings. SwiftUI handles the constraint.
+//  W5.1 additions (polish pass):
+//    - Recenter buttons overlay (top-right): "Find me" (location.fill) + "Find my car" (car.fill)
+//    - LocationService: CLLocationManager wrapper for .whenInUse permission + single-shot fix
+//    - MKMapView.showsUserLocation = true (blue dot when permission granted)
+//    - QA Fix #1: pinDropped.send() moved inside do-catch block in ParkPinService.save()
+//    - QA Fix #2: "Wrong street?" alternatives list rebuilt after selection in ParkConfirmView
+//
+//  Sheet stacking: SwiftUI only supports a single .sheet() host per view.
+//  W5.1 fix-pass (Bug 2): Collapsed three separate .sheet(item:) bindings into one
+//  enum-driven ActiveSheet binding. One .sheet() modifier, one @State var — SwiftUI
+//  handles mutual exclusivity automatically. See ActiveSheet enum below.
 //
 
 import SwiftUI
 import MapKit
 import Combine
+
+// MARK: - ActiveSheet
+
+/// Enum-driven single-sheet pattern (Option A).
+/// All sheet presentations in ContentView flow through this type.
+/// Adding a new sheet in W6/W7/W8 means adding a new case — no structural change needed.
+enum ActiveSheet: Identifiable {
+    case blockDetail(Segment)
+    case parkConfirm(PinDropIntent)
+    case parkedCarDetail(ParkedCar)
+
+    var id: String {
+        switch self {
+        case .blockDetail(let seg):    return "blockDetail-\(seg.id)"
+        case .parkConfirm(let intent): return "parkConfirm-\(intent.id)"
+        case .parkedCarDetail(let car): return "parkedCarDetail-\(car.id)"
+        }
+    }
+}
 
 struct ContentView: View {
 
@@ -72,20 +94,24 @@ struct ContentView: View {
     /// Flipped every 60 seconds to drive overlay recompute.
     @State private var lastEvaluatedAt: Date = .now
 
-    /// W4: Selected segment ID. Drives highlight overlay + BlockDetailView sheet.
+    /// W4: Selected segment ID. Drives the highlight overlay in MapViewRepresentable.
+    /// Kept independent of activeSheet so the highlight stays alive while a sheet is open.
     @State private var selectedSegmentID: String? = nil
 
-    /// W4: BlockDetailView sheet presentation (driven by selectedSegmentID).
-    @State private var isSheetPresented: Bool = false
-
-    /// W5: In-flight pin-drop intent. Non-nil → ParkConfirmView is presented.
-    @State private var pinDropIntent: PinDropIntent? = nil
-
-    /// W5: Parked-car detail item. Non-nil → ParkedCarDetailView is presented.
-    @State private var parkedCarDetailItem: ParkedCar? = nil
+    /// W5.1 fix-pass Bug 2: Single enum-driven sheet binding.
+    /// Replaces the three separate sheet vars (isSheetPresented/pinDropIntent/parkedCarDetailItem)
+    /// that triggered "Currently, only presenting a single sheet is supported" warnings.
+    @State private var activeSheet: ActiveSheet? = nil
 
     /// W5: Single-pin persistence service. Loaded once at app launch.
     @State private var parkPinService = ParkPinService()
+
+    /// W5.1: User location service for the recenter button.
+    @State private var locationService = LocationService()
+
+    /// W5.1: Set to true when the user taps "Recenter on my location".
+    /// Cleared after the next userLocation update triggers the recenter.
+    @State private var recenterOnUserRequested: Bool = false
 
     /// Overlay payload passed into MapViewRepresentable.
     /// Rebuilt on every tick or when selectedSegmentID changes.
@@ -117,26 +143,36 @@ struct ContentView: View {
     // MARK: - Body
 
     var body: some View {
-        MapViewRepresentable(
-            region: $region,
-            selectedSegmentID: $selectedSegmentID,
-            onTap: { coordinate in
-                handleMapTap(at: coordinate)
-            },
-            onLongPress: { coordinate in
-                handleLongPress(at: coordinate)
-            },
-            onRegionChanged: { newRegion in
-                region = newRegion
-                tileLoader.loadTiles(forRegion: newRegion)
-            },
-            onCarPinTapped: {
-                openParkedCarDetail()
-            },
-            carPin: parkPinService.parkedCar,
-            overlayPayload: overlayPayload
-        )
-        .ignoresSafeArea()
+        ZStack(alignment: .topTrailing) {
+            MapViewRepresentable(
+                region: $region,
+                selectedSegmentID: $selectedSegmentID,
+                onTap: { coordinate in
+                    handleMapTap(at: coordinate)
+                },
+                onLongPress: { coordinate in
+                    handleLongPress(at: coordinate)
+                },
+                onRegionChanged: { newRegion in
+                    region = newRegion
+                    tileLoader.loadTiles(forRegion: newRegion)
+                },
+                onCarPinTapped: {
+                    openParkedCarDetail()
+                },
+                carPin: parkPinService.parkedCar,
+                overlayPayload: overlayPayload
+            )
+            // Map fills the full screen including safe area.
+            .ignoresSafeArea()
+
+            // W5.1: Recenter buttons — top-right, below status bar and compass rose.
+            // Using padding(.top, 60) positions them below the ~44pt status bar
+            // plus the MapKit compass rose (which lives at the top-right by default).
+            recenterButtonStack
+                .padding(.top, 60)
+                .padding(.trailing, 12)
+        }
         .task {
             // W5: Load persisted car pin on app launch.
             parkPinService.load()
@@ -162,11 +198,27 @@ struct ContentView: View {
         .onChange(of: selectedSegmentID) { _, _ in
             rebuildOverlays(at: lastEvaluatedAt)
         }
-        // W4: BlockDetailView sheet.
-        .sheet(isPresented: $isSheetPresented, onDismiss: {
-            selectedSegmentID = nil
-        }) {
-            if let segment = selectedSegment {
+        // W5.1: Recenter on user when a new location fix arrives after a recenter request.
+        // CLLocationCoordinate2D is not Equatable, so we observe a counter instead.
+        .onChange(of: locationService.locationUpdateCount) { _, _ in
+            guard recenterOnUserRequested, let loc = locationService.userLocation else { return }
+            recenterOnUserRequested = false
+            recenterMap(on: loc)
+        }
+        // W5.1 fix-pass Bug 2: Single enum-driven sheet.
+        // All three sheet cases are handled here; only one can be active at a time.
+        // SwiftUI presents/dismisses based on activeSheet becoming non-nil / nil.
+        // onDismiss clears selectedSegmentID when the block detail was showing,
+        // so the overlay highlight is removed after the sheet animates away.
+        .sheet(item: $activeSheet, onDismiss: {
+            // If the block-detail sheet was dismissed (by swipe-down), clear the selection.
+            // For parkConfirm / parkedCarDetail dismissal the selection is already nil.
+            if selectedSegmentID != nil {
+                selectedSegmentID = nil
+            }
+        }) { sheet in
+            switch sheet {
+            case .blockDetail(let segment):
                 BlockDetailView(
                     segment: segment,
                     engine: engine,
@@ -180,44 +232,42 @@ struct ContentView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(.regularMaterial)
                 .presentationCornerRadius(20)
+
+            case .parkConfirm(let intent):
+                ParkConfirmView(
+                    intent: intent,
+                    engine: engine,
+                    onConfirm: { confirmedIntent in
+                        activeSheet = nil
+                        confirmPinDrop(intent: confirmedIntent)
+                    },
+                    onCancel: {
+                        activeSheet = nil
+                    }
+                )
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(20)
+
+            case .parkedCarDetail(let car):
+                ParkedCarDetailView(
+                    parkedCar: car,
+                    engine: engine,
+                    loadedSegments: tileLoader.segments,
+                    onDismiss: {
+                        activeSheet = nil
+                    },
+                    onClearPin: {
+                        activeSheet = nil
+                        parkPinService.clearPin()
+                    }
+                )
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(20)
             }
-        }
-        // W5: ParkConfirmView sheet.
-        .sheet(item: $pinDropIntent) { intent in
-            ParkConfirmView(
-                intent: intent,
-                engine: engine,
-                onConfirm: { confirmedIntent in
-                    pinDropIntent = nil
-                    confirmPinDrop(intent: confirmedIntent)
-                },
-                onCancel: {
-                    pinDropIntent = nil
-                }
-            )
-            .presentationDetents([.medium])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(.regularMaterial)
-            .presentationCornerRadius(20)
-        }
-        // W5: ParkedCarDetailView sheet.
-        .sheet(item: $parkedCarDetailItem) { car in
-            ParkedCarDetailView(
-                parkedCar: car,
-                engine: engine,
-                loadedSegments: tileLoader.segments,
-                onDismiss: {
-                    parkedCarDetailItem = nil
-                },
-                onClearPin: {
-                    parkedCarDetailItem = nil
-                    parkPinService.clearPin()
-                }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(.regularMaterial)
-            .presentationCornerRadius(20)
         }
     }
 
@@ -286,11 +336,85 @@ struct ContentView: View {
         )
     }
 
+    // MARK: - W5.1: Recenter button stack
+
+    /// Two vertically-stacked recenter buttons, shown in the top-right of the map.
+    /// "Find me" is always shown. "Find my car" is shown only when a pin exists.
+    @ViewBuilder
+    private var recenterButtonStack: some View {
+        VStack(spacing: 8) {
+            // "Find me" — recenter on user's current GPS location.
+            Button {
+                recenterOnUser()
+            } label: {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .accessibilityLabel("Recenter on my location")
+            .accessibilityHint("Moves the map to show your current GPS position.")
+
+            // "Find my car" — shown only when a parked-car pin exists.
+            if parkPinService.parkedCar != nil {
+                Button {
+                    recenterOnCar()
+                } label: {
+                    Image(systemName: "car.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityLabel("Recenter on my parked car")
+                .accessibilityHint("Moves the map to show where you parked.")
+            }
+        }
+    }
+
+    // MARK: - W5.1: Recenter actions
+
+    /// Requests user location and recenters when the fix arrives.
+    /// If a cached location is available, recenters immediately and also refreshes
+    /// the fix so the next tap will have an up-to-date position.
+    private func recenterOnUser() {
+        if let loc = locationService.userLocation {
+            // We have a cached fix — recenter immediately.
+            recenterMap(on: loc)
+            // Also request a fresh fix in the background for next use.
+            locationService.requestAndFetchLocation()
+        } else {
+            // No fix yet — request one; .onChange(of: locationService.userLocation)
+            // will fire when the fix arrives and complete the recenter.
+            recenterOnUserRequested = true
+            locationService.requestAndFetchLocation()
+        }
+    }
+
+    /// Recenters the map on the parked car pin.
+    private func recenterOnCar() {
+        guard let car = parkPinService.parkedCar else { return }
+        let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
+        recenterMap(on: coord)
+    }
+
+    /// Animates the map region to center on the given coordinate at street-level zoom.
+    /// ~400m span shows the target block plus a few surrounding blocks.
+    private func recenterMap(on coordinate: CLLocationCoordinate2D) {
+        region = MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: 400,
+            longitudinalMeters: 400
+        )
+    }
+
     // MARK: - Dismiss helpers
 
-    /// Triggers the BlockDetailView dismiss animation.
+    /// Dismisses the BlockDetailView sheet and clears the selection highlight.
     private func dismissBlockDetail() {
-        isSheetPresented = false
+        activeSheet = nil
+        selectedSegmentID = nil
     }
 
     // MARK: - Tap handling (unchanged from W4 — only gesture source changed)
@@ -314,9 +438,10 @@ struct ContentView: View {
             }
         }
 
-        if closestDistance <= tapHitThresholdMeters, let id = closestID {
+        if closestDistance <= tapHitThresholdMeters, let id = closestID,
+           let segment = tileLoader.segments.first(where: { $0.id == id }) {
             selectedSegmentID = id
-            isSheetPresented = true
+            activeSheet = .blockDetail(segment)
         } else {
             dismissBlockDetail()
         }
@@ -325,9 +450,9 @@ struct ContentView: View {
     // MARK: - W5: Long-press handling
 
     private func handleLongPress(at coordinate: CLLocationCoordinate2D) {
-        // Dismiss any open BlockDetailView — only one sheet at a time.
-        isSheetPresented = false
+        // Clear any current selection and dismiss any open sheet before opening ParkConfirmView.
         selectedSegmentID = nil
+        activeSheet = nil
 
         // Run candidate-segment detection (Path A).
         let candidates = findCandidateSegments(
@@ -338,22 +463,25 @@ struct ContentView: View {
         )
 
         let detected = candidates.first?.segment
+        let detectedDistance = candidates.first?.distanceMeters
         let alternatives = Array(candidates.dropFirst())
 
-        pinDropIntent = PinDropIntent(
+        let intent = PinDropIntent(
             pinLat: coordinate.latitude,
             pinLng: coordinate.longitude,
             detectedSegment: detected,
+            detectedSegmentDistance: detectedDistance,
             alternativeCandidates: alternatives
         )
+        activeSheet = .parkConfirm(intent)
     }
 
     // MARK: - W5: "Park here →" Path B (from BlockDetailView)
 
     private func initiatePathBPinDrop(from segment: Segment) {
-        // Dismiss BlockDetailView first.
-        isSheetPresented = false
+        // Clear selection and dismiss BlockDetailView before presenting ParkConfirmView.
         selectedSegmentID = nil
+        activeSheet = nil
 
         // Path B: segment already known; coordinate is midpoint (spec §3.2).
         // If midpoint is nil (malformed segment), fall back to first coordinate.
@@ -361,12 +489,15 @@ struct ContentView: View {
         guard let coord = midpoint else { return }
 
         // No alternative candidates for Path B (user already picked this block).
-        pinDropIntent = PinDropIntent(
+        // detectedSegmentDistance is nil for Path B — no "Wrong street?" alternatives.
+        let intent = PinDropIntent(
             pinLat: coord.latitude,
             pinLng: coord.longitude,
             detectedSegment: segment,
+            detectedSegmentDistance: nil,
             alternativeCandidates: []
         )
+        activeSheet = .parkConfirm(intent)
     }
 
     // MARK: - W5: Confirm pin drop (from ParkConfirmView)
@@ -390,7 +521,7 @@ struct ContentView: View {
 
     private func openParkedCarDetail() {
         guard let car = parkPinService.parkedCar else { return }
-        parkedCarDetailItem = car
+        activeSheet = .parkedCarDetail(car)
     }
 
     // MARK: - W5: findCandidateSegments

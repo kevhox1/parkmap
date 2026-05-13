@@ -125,8 +125,25 @@ struct ParkConfirmView: View {
 
             ForEach(Array(intent.alternativeCandidates.prefix(3).enumerated()), id: \.offset) { _, candidate in
                 Button {
-                    // Re-assign detected segment without changing pin coordinate.
+                    // Swap the selected alternative into the detected position and
+                    // rebuild the alternatives list so the new detected block is
+                    // removed and the old detected block takes its place.
+                    // This prevents showing the currently-detected block as an
+                    // alternative simultaneously (QA Finding #2 / W5.1 Item 3).
+                    let previousDetected = intent.detectedSegment
+                    let previousDetectedDistance = intent.detectedSegmentDistance
+                    // Update detected segment and its distance.
                     intent.detectedSegment = candidate.segment
+                    intent.detectedSegmentDistance = candidate.distanceMeters
+                    // Rebuild alternatives: remove the just-selected candidate,
+                    // insert the previously-detected segment (with its real distance).
+                    var newAlts = intent.alternativeCandidates.filter { $0.segment.id != candidate.segment.id }
+                    if let prev = previousDetected {
+                        let dist = previousDetectedDistance ?? candidate.distanceMeters
+                        let prevCandidate = CandidateSegment(segment: prev, distanceMeters: dist)
+                        newAlts.insert(prevCandidate, at: 0)
+                    }
+                    intent.alternativeCandidates = newAlts
                 } label: {
                     HStack {
                         Text("\(StreetNameNormalizer.canonical(candidate.segment.street)) (\(Int(candidate.distanceMeters.rounded()))m)")
