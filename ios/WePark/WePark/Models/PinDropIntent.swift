@@ -42,6 +42,11 @@ struct PinDropIntent: Identifiable {
     /// Closest segment within 35m, or nil if no nearby data.
     var detectedSegment: Segment?
 
+    /// Distance (meters) from the pin to detectedSegment.
+    /// Used when rebuilding the alternatives list after a "Wrong street?" swap
+    /// so the previously-detected block re-enters the list with its real distance.
+    var detectedSegmentDistance: Double?
+
     /// Alternative candidate blocks for "Wrong street?" UI.
     /// Empty for Path B (user explicitly selected this block from BlockDetailView).
     var alternativeCandidates: [CandidateSegment]

@@ -190,7 +190,7 @@ struct MapViewRepresentable: UIViewRepresentable {
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
-        mapView.showsUserLocation = false
+        mapView.showsUserLocation = true  // W5.1: show blue dot for recenter feature
         mapView.isRotateEnabled = false
         mapView.isPitchEnabled = false
         mapView.showsCompass = true

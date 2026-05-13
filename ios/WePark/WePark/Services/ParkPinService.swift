@@ -72,14 +72,14 @@ final class ParkPinService {
             let data = try JSONEncoder().encode(car)
             defaults.set(data, forKey: storageKey)
             parkedCar = car
+            // W7.5 hook: fire inside the do block, after a successful write.
+            // Emits only when the pin was actually persisted (spec §6.2 contract).
+            pinDropped.send(car)
         } catch {
             // Encoding failure is not expected for a simple Codable struct;
             // log and swallow — the UI should not crash on a save error.
             assertionFailure("ParkPinService.save: encoding failed: \(error)")
         }
-
-        // W7.5 hook: fire after write so the parkedCar state is consistent.
-        pinDropped.send(car)
     }
 
     /// Remove the car pin. Does NOT clear hasEverParkedKey (W6 invariant).

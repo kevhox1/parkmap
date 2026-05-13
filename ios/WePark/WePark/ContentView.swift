@@ -40,6 +40,13 @@
 //    - ParkedCarDetailView sheet on car-pin tap
 //    - findCandidateSegments: multi-candidate search for "Wrong street?" alternatives
 //
+//  W5.1 additions (polish pass):
+//    - Recenter buttons overlay (top-right): "Find me" (location.fill) + "Find my car" (car.fill)
+//    - LocationService: CLLocationManager wrapper for .whenInUse permission + single-shot fix
+//    - MKMapView.showsUserLocation = true (blue dot when permission granted)
+//    - QA Fix #1: pinDropped.send() moved inside do-catch block in ParkPinService.save()
+//    - QA Fix #2: "Wrong street?" alternatives list rebuilt after selection in ParkConfirmView
+//
 //  Sheet stacking: SwiftUI allows only one .sheet(item:) to be active at a time.
 //  ContentView manages mutually-exclusive presentation:
 //    - pinDropIntent → ParkConfirmView (dismisses blockDetailSegment if set)
@@ -87,6 +94,13 @@ struct ContentView: View {
     /// W5: Single-pin persistence service. Loaded once at app launch.
     @State private var parkPinService = ParkPinService()
 
+    /// W5.1: User location service for the recenter button.
+    @State private var locationService = LocationService()
+
+    /// W5.1: Set to true when the user taps "Recenter on my location".
+    /// Cleared after the next userLocation update triggers the recenter.
+    @State private var recenterOnUserRequested: Bool = false
+
     /// Overlay payload passed into MapViewRepresentable.
     /// Rebuilt on every tick or when selectedSegmentID changes.
     @State private var overlayPayload = MapViewRepresentable.OverlayPayload()
@@ -117,26 +131,36 @@ struct ContentView: View {
     // MARK: - Body
 
     var body: some View {
-        MapViewRepresentable(
-            region: $region,
-            selectedSegmentID: $selectedSegmentID,
-            onTap: { coordinate in
-                handleMapTap(at: coordinate)
-            },
-            onLongPress: { coordinate in
-                handleLongPress(at: coordinate)
-            },
-            onRegionChanged: { newRegion in
-                region = newRegion
-                tileLoader.loadTiles(forRegion: newRegion)
-            },
-            onCarPinTapped: {
-                openParkedCarDetail()
-            },
-            carPin: parkPinService.parkedCar,
-            overlayPayload: overlayPayload
-        )
-        .ignoresSafeArea()
+        ZStack(alignment: .topTrailing) {
+            MapViewRepresentable(
+                region: $region,
+                selectedSegmentID: $selectedSegmentID,
+                onTap: { coordinate in
+                    handleMapTap(at: coordinate)
+                },
+                onLongPress: { coordinate in
+                    handleLongPress(at: coordinate)
+                },
+                onRegionChanged: { newRegion in
+                    region = newRegion
+                    tileLoader.loadTiles(forRegion: newRegion)
+                },
+                onCarPinTapped: {
+                    openParkedCarDetail()
+                },
+                carPin: parkPinService.parkedCar,
+                overlayPayload: overlayPayload
+            )
+            // Map fills the full screen including safe area.
+            .ignoresSafeArea()
+
+            // W5.1: Recenter buttons — top-right, below status bar and compass rose.
+            // Using padding(.top, 60) positions them below the ~44pt status bar
+            // plus the MapKit compass rose (which lives at the top-right by default).
+            recenterButtonStack
+                .padding(.top, 60)
+                .padding(.trailing, 12)
+        }
         .task {
             // W5: Load persisted car pin on app launch.
             parkPinService.load()
@@ -161,6 +185,13 @@ struct ContentView: View {
         // Rebuild selected-block highlight when selection changes.
         .onChange(of: selectedSegmentID) { _, _ in
             rebuildOverlays(at: lastEvaluatedAt)
+        }
+        // W5.1: Recenter on user when a new location fix arrives after a recenter request.
+        // CLLocationCoordinate2D is not Equatable, so we observe a counter instead.
+        .onChange(of: locationService.locationUpdateCount) { _, _ in
+            guard recenterOnUserRequested, let loc = locationService.userLocation else { return }
+            recenterOnUserRequested = false
+            recenterMap(on: loc)
         }
         // W4: BlockDetailView sheet.
         .sheet(isPresented: $isSheetPresented, onDismiss: {
@@ -286,6 +317,79 @@ struct ContentView: View {
         )
     }
 
+    // MARK: - W5.1: Recenter button stack
+
+    /// Two vertically-stacked recenter buttons, shown in the top-right of the map.
+    /// "Find me" is always shown. "Find my car" is shown only when a pin exists.
+    @ViewBuilder
+    private var recenterButtonStack: some View {
+        VStack(spacing: 8) {
+            // "Find me" — recenter on user's current GPS location.
+            Button {
+                recenterOnUser()
+            } label: {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(Color.accentColor)
+            }
+            .accessibilityLabel("Recenter on my location")
+            .accessibilityHint("Moves the map to show your current GPS position.")
+
+            // "Find my car" — shown only when a parked-car pin exists.
+            if parkPinService.parkedCar != nil {
+                Button {
+                    recenterOnCar()
+                } label: {
+                    Image(systemName: "car.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityLabel("Recenter on my parked car")
+                .accessibilityHint("Moves the map to show where you parked.")
+            }
+        }
+    }
+
+    // MARK: - W5.1: Recenter actions
+
+    /// Requests user location and recenters when the fix arrives.
+    /// If a cached location is available, recenters immediately and also refreshes
+    /// the fix so the next tap will have an up-to-date position.
+    private func recenterOnUser() {
+        if let loc = locationService.userLocation {
+            // We have a cached fix — recenter immediately.
+            recenterMap(on: loc)
+            // Also request a fresh fix in the background for next use.
+            locationService.requestAndFetchLocation()
+        } else {
+            // No fix yet — request one; .onChange(of: locationService.userLocation)
+            // will fire when the fix arrives and complete the recenter.
+            recenterOnUserRequested = true
+            locationService.requestAndFetchLocation()
+        }
+    }
+
+    /// Recenters the map on the parked car pin.
+    private func recenterOnCar() {
+        guard let car = parkPinService.parkedCar else { return }
+        let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
+        recenterMap(on: coord)
+    }
+
+    /// Animates the map region to center on the given coordinate at street-level zoom.
+    /// ~400m span shows the target block plus a few surrounding blocks.
+    private func recenterMap(on coordinate: CLLocationCoordinate2D) {
+        region = MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: 400,
+            longitudinalMeters: 400
+        )
+    }
+
     // MARK: - Dismiss helpers
 
     /// Triggers the BlockDetailView dismiss animation.
@@ -338,12 +442,14 @@ struct ContentView: View {
         )
 
         let detected = candidates.first?.segment
+        let detectedDistance = candidates.first?.distanceMeters
         let alternatives = Array(candidates.dropFirst())
 
         pinDropIntent = PinDropIntent(
             pinLat: coordinate.latitude,
             pinLng: coordinate.longitude,
             detectedSegment: detected,
+            detectedSegmentDistance: detectedDistance,
             alternativeCandidates: alternatives
         )
     }
@@ -361,10 +467,12 @@ struct ContentView: View {
         guard let coord = midpoint else { return }
 
         // No alternative candidates for Path B (user already picked this block).
+        // detectedSegmentDistance is nil for Path B — no "Wrong street?" alternatives.
         pinDropIntent = PinDropIntent(
             pinLat: coord.latitude,
             pinLng: coord.longitude,
             detectedSegment: segment,
+            detectedSegmentDistance: nil,
             alternativeCandidates: []
         )
     }
