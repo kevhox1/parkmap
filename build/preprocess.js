@@ -14,6 +14,13 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const OSM_DATA_PATH = path.join(ROOT, 'osm_data.json');
 const TILES_DIR = path.join(ROOT, 'tiles');
+// iOS app bundle reads tiles from this Resources path (see HANDOFF.md
+// "iOS app: Resources land flat at app bundle root at build time").
+// Build must keep this in sync with TILES_DIR or the iOS app will run
+// against stale tiles. Discovered 2026-05-14 when PRs #21 and #22
+// shipped tile updates that never reached the iOS bundle because only
+// TILES_DIR was being written.
+const IOS_TILES_DIR = path.join(ROOT, 'ios', 'WePark', 'WePark', 'Resources', 'tiles');
 
 // Two data sources: main signs + ASP-specific signs
 const SOCRATA_MAIN = 'https://data.cityofnewyork.us/resource/nfid-uabd.json';
@@ -395,8 +402,8 @@ function extractPolylineBetween(streetOsmName, ptA, ptB) {
 // start/end at the centerline crossing of the intersecting street (~6-7m into the
 // intersection box). Trimming each end by INTERSECTION_SETBACK_M moves the visible
 // endpoints to approximately the curbline. See docs/tile-geometry-investigation.md.
-const INTERSECTION_SETBACK_M = 6;
-const INTERSECTION_SETBACK_FT = INTERSECTION_SETBACK_M * 3.28084; // ≈ 19.685ft
+const INTERSECTION_SETBACK_M = 10;
+const INTERSECTION_SETBACK_FT = INTERSECTION_SETBACK_M * 3.28084; // ≈ 32.8ft
 
 function trimIntersectionSetback(blockGeo) {
   if (!blockGeo) return blockGeo;
@@ -896,6 +903,21 @@ async function main() {
   const indexJson = JSON.stringify(indexData, null, 2);
   fs.writeFileSync(path.join(TILES_DIR, 'index.json'), indexJson);
   totalSize += Buffer.byteLength(indexJson);
+
+  // 7b. Sync to iOS Resources path. The iOS app bundles tiles from
+  // ios/WePark/WePark/Resources/tiles/ at build time. Keep it in lock-step
+  // with TILES_DIR so the iOS app sees the same data as the PWA.
+  console.log('🔁 Syncing tiles to iOS Resources path...');
+  if (fs.existsSync(IOS_TILES_DIR)) {
+    for (const f of fs.readdirSync(IOS_TILES_DIR)) {
+      fs.unlinkSync(path.join(IOS_TILES_DIR, f));
+    }
+  } else {
+    fs.mkdirSync(IOS_TILES_DIR, { recursive: true });
+  }
+  for (const f of fs.readdirSync(TILES_DIR)) {
+    fs.copyFileSync(path.join(TILES_DIR, f), path.join(IOS_TILES_DIR, f));
+  }
 
   // 8. Summary
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
