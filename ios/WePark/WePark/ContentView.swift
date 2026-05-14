@@ -50,6 +50,16 @@
 //  enum-driven ActiveSheet binding. One .sheet() modifier, one @State var — SwiftUI
 //  handles mutual exclusivity automatically. See ActiveSheet enum below.
 //
+//  W6 additions:
+//    - ActiveSheet.notificationRationale case for the rationale sheet.
+//    - @State showNotificationRationale (drives the .sheet for NotificationRationaleView).
+//    - .onReceive(parkPinService.firstPinDropped): show rationale on first pin (gated by
+//      wepark_notification_rationale_shown UserDefaults flag).
+//    - .onReceive(parkPinService.pinDropped): cancel old notifications then schedule new ones.
+//      Captures the old car ID BEFORE the new car is received (spec §3.6 replace note).
+//    - .onReceive(appDelegate.notificationDeepLinkSubject): deep-link tap → open ParkedCarDetailView.
+//    - NotificationScheduler.shared.cancelAll(for:) called in onClearPin via confirmPinDrop.
+//
 
 import SwiftUI
 import MapKit
@@ -64,17 +74,26 @@ enum ActiveSheet: Identifiable {
     case blockDetail(Segment)
     case parkConfirm(PinDropIntent)
     case parkedCarDetail(ParkedCar)
+    /// W6: one-time notification rationale sheet (first pin drop).
+    case notificationRationale
 
     var id: String {
         switch self {
         case .blockDetail(let seg):    return "blockDetail-\(seg.id)"
         case .parkConfirm(let intent): return "parkConfirm-\(intent.id)"
         case .parkedCarDetail(let car): return "parkedCarDetail-\(car.id)"
+        case .notificationRationale:   return "notificationRationale"
         }
     }
 }
 
 struct ContentView: View {
+
+    // MARK: - W6: AppDelegate reference for notification deep-link routing
+
+    /// Injected from WeParkApp. ContentView observes `appDelegate.notificationDeepLinkSubject`
+    /// to open ParkedCarDetailView when the user taps a delivered notification.
+    let appDelegate: AppDelegate
 
     // MARK: - State
 
@@ -112,6 +131,11 @@ struct ContentView: View {
     /// W5.1: Set to true when the user taps "Recenter on my location".
     /// Cleared after the next userLocation update triggers the recenter.
     @State private var recenterOnUserRequested: Bool = false
+
+    /// W6: Tracks the UUID of the car that was parked BEFORE the most recent save().
+    /// Used by onReceive(pinDropped) to cancel the old car's notifications precisely.
+    /// Initialized from parkPinService.parkedCar at load time (in .task).
+    @State private var previousCarID: UUID? = nil
 
     /// Overlay payload passed into MapViewRepresentable.
     /// Rebuilt on every tick or when selectedSegmentID changes.
@@ -177,6 +201,10 @@ struct ContentView: View {
             // W5: Load persisted car pin on app launch.
             parkPinService.load()
 
+            // W6: Initialize previousCarID from the persisted car so that the first
+            // pin replace correctly cancels the pre-existing pin's notifications.
+            previousCarID = parkPinService.parkedCar?.id
+
             tileLoader.loadTiles(forRegion: region)
             lastEvaluatedAt = .now
             rebuildOverlays(at: lastEvaluatedAt)
@@ -204,6 +232,36 @@ struct ContentView: View {
             guard recenterOnUserRequested, let loc = locationService.userLocation else { return }
             recenterOnUserRequested = false
             recenterMap(on: loc)
+        }
+        // W6: First pin ever → show rationale sheet (once per install).
+        // Guard: belt-and-suspenders check on the UserDefaults flag in case
+        // `firstPinDropped` semantics ever drift from `hasEverParkedKey`.
+        .onReceive(parkPinService.firstPinDropped) {
+            if !UserDefaults.standard.bool(forKey: AppConstants.notificationRationaleShownKey) {
+                activeSheet = .notificationRationale
+            }
+        }
+        // W6: Every pin drop (including replacements) → cancel old notifications, schedule new.
+        // `previousCarID` is set by confirmPinDrop() BEFORE save() is called, so it holds
+        // the old car's UUID at this point. After scheduling, we don't need to update it here —
+        // the next confirmPinDrop() call will set it before the next save().
+        .onReceive(parkPinService.pinDropped) { newCar in
+            let oldID = previousCarID
+            Task { @MainActor in
+                NotificationScheduler.shared.cancelAllThenSchedule(
+                    for: newCar,
+                    oldCarID: oldID,
+                    loadedSegments: tileLoader.segments,
+                    engine: engine
+                )
+            }
+        }
+        // W6: Notification tap deep-link → open ParkedCarDetailView (AC-W6.11, OQ-W6-3).
+        .onReceive(appDelegate.notificationDeepLinkSubject) { carID in
+            // Verify the tapped notification is for the currently parked car.
+            guard let car = parkPinService.parkedCar, car.id == carID else { return }
+            // Dismiss any open sheet first, then present ParkedCarDetailView.
+            activeSheet = .parkedCarDetail(car)
         }
         // W5.1 fix-pass Bug 2: Single enum-driven sheet.
         // All three sheet cases are handled here; only one can be active at a time.
@@ -260,11 +318,37 @@ struct ContentView: View {
                     },
                     onClearPin: {
                         activeSheet = nil
+                        // W6: Cancel notifications before clearing the pin.
+                        NotificationScheduler.shared.cancelAll(for: car)
                         parkPinService.clearPin()
                     }
                 )
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(20)
+
+            case .notificationRationale:
+                // W6: One-time rationale sheet. interactiveDismissDisabled(true) prevents
+                // accidental swipe-away which would skip the permission request entirely.
+                NotificationRationaleView(
+                    onDismiss: {
+                        activeSheet = nil
+                    },
+                    onPermissionGranted: {
+                        // Schedule notifications for the current pin after permission is granted.
+                        guard let car = parkPinService.parkedCar else { return }
+                        Task { @MainActor in
+                            NotificationScheduler.shared.schedule(
+                                for: car,
+                                loadedSegments: tileLoader.segments,
+                                engine: engine
+                            )
+                        }
+                    }
+                )
+                .presentationDetents([.medium])
+                .interactiveDismissDisabled(true)
                 .presentationBackground(.regularMaterial)
                 .presentationCornerRadius(20)
             }
@@ -503,6 +587,12 @@ struct ContentView: View {
     // MARK: - W5: Confirm pin drop (from ParkConfirmView)
 
     private func confirmPinDrop(intent: PinDropIntent) {
+        // W6: Capture the current car ID BEFORE save() overwrites parkedCar.
+        // onReceive(pinDropped) will read `previousCarID` and cancel the old notifications.
+        // This must happen before save() is called — save() fires pinDropped synchronously
+        // from the main thread, which triggers onReceive before this function returns.
+        previousCarID = parkPinService.parkedCar?.id
+
         let car = ParkedCar(
             id: UUID(),
             latitude: intent.pinLat,
@@ -624,5 +714,5 @@ struct ContentView: View {
 }
 
 #Preview {
-    ContentView()
+    ContentView(appDelegate: AppDelegate())
 }
