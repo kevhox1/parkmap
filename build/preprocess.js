@@ -395,8 +395,8 @@ function extractPolylineBetween(streetOsmName, ptA, ptB) {
 // start/end at the centerline crossing of the intersecting street (~6-7m into the
 // intersection box). Trimming each end by INTERSECTION_SETBACK_M moves the visible
 // endpoints to approximately the curbline. See docs/tile-geometry-investigation.md.
-const INTERSECTION_SETBACK_M = 6;
-const INTERSECTION_SETBACK_FT = INTERSECTION_SETBACK_M * 3.28084; // ≈ 19.685ft
+const INTERSECTION_SETBACK_M = 10;
+const INTERSECTION_SETBACK_FT = INTERSECTION_SETBACK_M * 3.28084; // ≈ 32.8ft
 
 function trimIntersectionSetback(blockGeo) {
   if (!blockGeo) return blockGeo;

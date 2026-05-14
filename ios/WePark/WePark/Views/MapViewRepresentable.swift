@@ -404,7 +404,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
             if let multi = overlay as? TaggedMultiPolyline {
                 let renderer = MKMultiPolylineRenderer(multiPolyline: multi)
-                renderer.lineCap = .round
+                // .butt caps stop exactly at the polyline endpoint with no extension.
+                // Combined with the 10m intersection setback in build/preprocess.js, this
+                // produces visible gaps at intersections. .round caps would re-fill the gap
+                // by ~lineWidth/2 on each end. lineJoin stays .round for smooth segment
+                // bends within a block (mid-block curves on Manhattan avenues).
+                renderer.lineCap = .butt
                 renderer.lineJoin = .round
                 switch multi.overlayTag {
                 case .freeComfortably:
@@ -434,7 +439,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let renderer = MKPolylineRenderer(polyline: sel)
                 renderer.strokeColor = UIColor(sel.currentState.swiftUIColor)
                 renderer.lineWidth = 6
-                renderer.lineCap = .round
+                renderer.lineCap = .butt   // see TaggedMultiPolyline comment above
                 renderer.lineJoin = .round
                 return renderer
             }
