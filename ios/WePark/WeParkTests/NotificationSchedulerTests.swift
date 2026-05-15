@@ -125,7 +125,8 @@ extension XCTestCase {
         id: UUID = UUID(),
         segmentID: String?,
         street: String? = "MOTT STREET",
-        side: String? = "N"
+        side: String? = "N",
+        notifyOnRestriction: Bool = true
     ) -> ParkedCar {
         ParkedCar(
             id: id,
@@ -136,7 +137,8 @@ extension XCTestCase {
             street: street,
             fromStreet: "GRAND STREET",
             toStreet: "HESTER STREET",
-            parkedAt: Date()
+            parkedAt: Date(),
+            notifyOnRestriction: notifyOnRestriction
         )
     }
 }
@@ -380,7 +382,8 @@ final class NotificationSchedulerTests: XCTestCase {
             street: "MOTT STREET",
             fromStreet: "GRAND STREET",
             toStreet: "HESTER STREET",
-            parkedAt: Date()
+            parkedAt: Date(),
+            notifyOnRestriction: true
         )
 
         scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now)
