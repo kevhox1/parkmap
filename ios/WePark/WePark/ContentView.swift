@@ -381,11 +381,16 @@ struct ContentView: View {
         // (cold-kill / background-wake race: the delegate fires before SwiftUI finishes
         // mounting the view hierarchy).
         //
-        // Fix: AppDelegate buffers the carID in @Published pendingDeepLinkCarID. ContentView
-        // reads it via .onChange(of:), which fires as soon as the value changes — including
-        // when SwiftUI first attaches the modifier after a cold launch. After routing, the
-        // buffered ID is cleared to nil so the sheet does not re-present on subsequent
-        // foreground transitions (idempotency, AC criterion 4).
+        // Fix: AppDelegate buffers the carID in @Published pendingDeepLinkCarID. Two paths
+        // route a buffered carID to routePendingDeepLink:
+        //   (a) .onChange(of: pendingDeepLinkCarID) — covers foreground and background-wake:
+        //       fires when the delegate writes the property after this modifier is attached.
+        //   (b) .onChange(of: scenePhase) { .active } (above) — covers cold-kill: catches a
+        //       buffered value that was set BEFORE this view's .onChange modifier attached.
+        //       iOS 17's .onChange(of:) does NOT fire on initial value, so the scenePhase
+        //       handler is the only mechanism for that case.
+        // After routing, the buffered ID is cleared to nil so the sheet does not re-present
+        // on subsequent foreground transitions (idempotency, AC criterion 4).
         .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in
             routePendingDeepLink(carID)
         }
