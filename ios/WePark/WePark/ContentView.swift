@@ -57,7 +57,9 @@
 //      wepark_notification_rationale_shown UserDefaults flag).
 //    - .onReceive(parkPinService.pinDropped): cancel old notifications then schedule new ones.
 //      Captures the old car ID BEFORE the new car is received (spec §3.6 replace note).
-//    - .onReceive(appDelegate.notificationDeepLinkSubject): deep-link tap → open ParkedCarDetailView.
+//    - .onChange(of: appDelegate.pendingDeepLinkCarID): deep-link tap → open ParkedCarDetailView.
+//      W6.1 fix: replaced PassthroughSubject + .onReceive with @Published buffer + .onChange so
+//      the car ID survives the foreground transition in cold-kill / background-wake scenarios.
 //    - NotificationScheduler.shared.cancelAll(for:) called in onClearPin via confirmPinDrop.
 //
 //  W7 additions:
@@ -107,9 +109,10 @@ struct ContentView: View {
 
     // MARK: - W6: AppDelegate reference for notification deep-link routing
 
-    /// Injected from WeParkApp. ContentView observes `appDelegate.notificationDeepLinkSubject`
-    /// to open ParkedCarDetailView when the user taps a delivered notification.
-    let appDelegate: AppDelegate
+    /// Injected from WeParkApp. ContentView reads `appDelegate.pendingDeepLinkCarID`
+    /// (W6.1 fix: @Published buffer, replaces the former PassthroughSubject) to open
+    /// ParkedCarDetailView when the user taps a delivered notification.
+    @ObservedObject var appDelegate: AppDelegate
 
     // MARK: - Environment
 
@@ -299,11 +302,22 @@ struct ContentView: View {
             bannerState = aspService.suspensionState(at: .nowET)
         }
         // W7: Refresh banner state when app returns to foreground (handles midnight rollover).
+        // W6.1: Also replay any buffered notification deep-link on foreground transition.
+        //       This covers the cold-kill scenario: the delegate may have fired and set
+        //       pendingDeepLinkCarID while the view hierarchy was still settling. By the
+        //       time scenePhase reaches .active, .onChange(of: pendingDeepLinkCarID) will
+        //       have already fired if the value changed after the modifier was attached.
+        //       The second call here is a belt-and-suspenders guard for the case where the
+        //       value was already non-nil when the modifier first attached (value didn't
+        //       "change" — it was set before onChange was registered). Clearing after routing
+        //       ensures this path is idempotent across foreground cycles.
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .active {
                 bannerState = aspService.suspensionState(at: .nowET)
                 // Re-sync mute state in case it changed while backgrounded (edge case).
                 notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
+                // W6.1: Replay any buffered deep-link that arrived during the foreground transition.
+                routePendingDeepLink(appDelegate.pendingDeepLinkCarID)
             }
         }
         // W7: Keep UserDefaults in sync with @State notificationsMuted whenever it changes.
@@ -360,12 +374,20 @@ struct ContentView: View {
                 )
             }
         }
-        // W6: Notification tap deep-link → open ParkedCarDetailView (AC-W6.11, OQ-W6-3).
-        .onReceive(appDelegate.notificationDeepLinkSubject) { carID in
-            // Verify the tapped notification is for the currently parked car.
-            guard let car = parkPinService.parkedCar, car.id == carID else { return }
-            // Dismiss any open sheet first, then present ParkedCarDetailView.
-            activeSheet = .parkedCarDetail(car)
+        // W6.1 fix: Notification tap deep-link → open ParkedCarDetailView (AC-W6.11, OQ-W6-3).
+        //
+        // Previously used .onReceive(appDelegate.notificationDeepLinkSubject) with a
+        // PassthroughSubject. That dropped events when the subscriber hadn't attached yet
+        // (cold-kill / background-wake race: the delegate fires before SwiftUI finishes
+        // mounting the view hierarchy).
+        //
+        // Fix: AppDelegate buffers the carID in @Published pendingDeepLinkCarID. ContentView
+        // reads it via .onChange(of:), which fires as soon as the value changes — including
+        // when SwiftUI first attaches the modifier after a cold launch. After routing, the
+        // buffered ID is cleared to nil so the sheet does not re-present on subsequent
+        // foreground transitions (idempotency, AC criterion 4).
+        .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in
+            routePendingDeepLink(carID)
         }
         // W5.1 fix-pass Bug 2: Single enum-driven sheet.
         // All sheet cases are handled here; only one can be active at a time.
@@ -744,6 +766,33 @@ struct ContentView: View {
 
     private func openParkedCarDetail() {
         guard let car = parkPinService.parkedCar else { return }
+        activeSheet = .parkedCarDetail(car)
+    }
+
+    // MARK: - W6.1: Route buffered notification deep-link
+
+    /// Routes a buffered notification deep-link car ID to ParkedCarDetailView, then clears
+    /// the buffer so subsequent foreground transitions do not re-present the sheet.
+    ///
+    /// Called from:
+    ///   - .onChange(of: appDelegate.pendingDeepLinkCarID) — fires when the value changes,
+    ///     covering the foreground case (app already running) and the background-wake case
+    ///     (value set before or just after the modifier attaches).
+    ///   - .onChange(of: scenePhase) when newPhase == .active — belt-and-suspenders guard
+    ///     for the cold-kill case where pendingDeepLinkCarID was set before .onChange(of:)
+    ///     registered (value did not "change" from the modifier's perspective). By the time
+    ///     .active fires, the view is mounted and reading the buffered value is safe.
+    ///
+    /// Preserves the AC-W6.11 mismatched-carID guard: if the tapped notification's car is no
+    /// longer the currently parked car (user cleared or replaced the pin), no sheet presents.
+    ///
+    /// - Parameter carID: The car ID from `appDelegate.pendingDeepLinkCarID`, or nil to no-op.
+    private func routePendingDeepLink(_ carID: UUID?) {
+        guard let carID else { return }
+        // Always clear the buffer first — prevents idempotency issues even if the guard fails.
+        appDelegate.pendingDeepLinkCarID = nil
+        // AC-W6.11 / criterion 5: only present if the notification matches the current pin.
+        guard let car = parkPinService.parkedCar, car.id == carID else { return }
         activeSheet = .parkedCarDetail(car)
     }
 
