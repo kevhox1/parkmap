@@ -16,9 +16,11 @@
 //      the launch-priority logic is covered by simulator smoke (AC-B1 through AC-B6 in the spec)
 //      and the observable outcome (isInManhattanCoverage) is covered here.
 //
-//  Test count added by this file: 12
+//  Test count added by this file: 17
+//  Breakdown: IsInManhattanCoverageInsideTests (10) + IsInManhattanCoverageOutsideTests (7)
+//             (4 lng boundary tests added in QA pass-2: 2 inside, 2 outside)
 //  Pre-PR total: 79 (7 W61 + 12 W7 + 15 NotificationScheduler + 45 ParkingRulesEngineParity)
-//  Post-PR total: 91
+//  Post-PR total: 96
 //
 
 import XCTest
@@ -95,6 +97,24 @@ final class IsInManhattanCoverageInsideTests: XCTestCase {
         XCTAssertTrue(AppConstants.isInManhattanCoverage(coord),
                       "Coordinate on exact latMax boundary (40.882) must be included (<=)")
     }
+
+    // MARK: - testCoverage_exactBoundaryLngMin_isInside
+    // Coordinate exactly on the western boundary (lngMin -74.020) — should be inclusive.
+    // Uses mid-Manhattan latitude (40.750) to isolate the longitude dimension.
+    func testCoverage_exactBoundaryLngMin_isInside() {
+        let coord = CLLocationCoordinate2D(latitude: 40.750, longitude: -74.020)
+        XCTAssertTrue(AppConstants.isInManhattanCoverage(coord),
+                      "Coordinate on exact lngMin boundary (-74.020) must be included (>=)")
+    }
+
+    // MARK: - testCoverage_exactBoundaryLngMax_isInside
+    // Coordinate exactly on the eastern boundary (lngMax -73.907) — should be inclusive.
+    // Uses mid-Manhattan latitude (40.750) to isolate the longitude dimension.
+    func testCoverage_exactBoundaryLngMax_isInside() {
+        let coord = CLLocationCoordinate2D(latitude: 40.750, longitude: -73.907)
+        XCTAssertTrue(AppConstants.isInManhattanCoverage(coord),
+                      "Coordinate on exact lngMax boundary (-73.907) must be included (<=)")
+    }
 }
 
 // MARK: - isInManhattanCoverage: points outside the tile grid
@@ -140,5 +160,25 @@ final class IsInManhattanCoverageOutsideTests: XCTestCase {
         let coord = CLLocationCoordinate2D(latitude: 40.700 - 0.000001, longitude: -73.970)
         XCTAssertFalse(AppConstants.isInManhattanCoverage(coord),
                        "A latitude infinitesimally below latMin 40.700 must be outside coverage")
+    }
+
+    // MARK: - testCoverage_justWestOfLngMin_isOutside
+    // One epsilon west of lngMin (-74.020) — must be excluded.
+    // Uses mid-Manhattan latitude (40.750) to isolate the longitude dimension.
+    func testCoverage_justWestOfLngMin_isOutside() {
+        // -74.02000001 is just west of -74.020.
+        let coord = CLLocationCoordinate2D(latitude: 40.750, longitude: -74.02000001)
+        XCTAssertFalse(AppConstants.isInManhattanCoverage(coord),
+                       "A longitude infinitesimally west of lngMin -74.020 must be outside coverage")
+    }
+
+    // MARK: - testCoverage_justEastOfLngMax_isOutside
+    // One epsilon east of lngMax (-73.907) — must be excluded.
+    // Uses mid-Manhattan latitude (40.750) to isolate the longitude dimension.
+    func testCoverage_justEastOfLngMax_isOutside() {
+        // -73.90699999 is just east of -73.907.
+        let coord = CLLocationCoordinate2D(latitude: 40.750, longitude: -73.90699999)
+        XCTAssertFalse(AppConstants.isInManhattanCoverage(coord),
+                       "A longitude infinitesimally east of lngMax -73.907 must be outside coverage")
     }
 }
