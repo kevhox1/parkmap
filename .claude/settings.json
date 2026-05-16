@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xcodebuild *)"
+      "Bash(xcodebuild *)",
+      "Bash(git *)",
+      "Bash(gh *)",
+      "Edit",
+      "Write"
     ]
   }
 }
