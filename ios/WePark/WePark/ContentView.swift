@@ -866,6 +866,15 @@ struct ContentView: View {
         appDelegate.pendingDeepLinkCarID = nil
         // AC-W6.11 / criterion 5: only present if the notification matches the current pin.
         guard let car = parkPinService.parkedCar, car.id == carID else { return }
+        // viewport-polish pass-3 fix: also recenter the camera on the parked car. The Priority 1
+        // branch in `.task` may not fire on cold-kill because `pendingDeepLinkCarID` is set by
+        // the delegate AFTER `.task` evaluates — so the auto-center is missed and the user sees
+        // the sheet over a wide-Manhattan default map. This call ensures the camera always
+        // follows the deep-link route, whether triggered by `.task` Priority 1 (foreground-wake)
+        // or by this helper from `.onChange(of: pendingDeepLinkCarID)` (cold-kill race).
+        // Idempotent: if Priority 1 already fired, this recenter targets the same coordinate.
+        let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
+        recenterMap(on: coord)
         activeSheet = .parkedCarDetail(car)
     }
 
