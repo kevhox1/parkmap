@@ -609,4 +609,177 @@ final class ParkingRulesEngine {
         }
         return s
     }
+
+    // MARK: - W7.5: Park Until X interval query
+
+    /// Returns true if the segment has no active parking restriction during [from, until].
+    ///
+    /// "Active" means: the rule's schedule fires AND (for ASP) the date is not suspended.
+    /// Metered billing hours count as a restriction — a metered block with paid hours inside
+    /// the window returns false (matches PWA checkParkUntilSafety at index.html:4285).
+    ///
+    /// Precondition: until >= from. Returns true for zero-length windows with no instant
+    /// restriction (consistent with a half-open interval interpretation).
+    /// Practical cap: callers should enforce until - from <= 24 * 3600.
+    ///
+    /// All date math uses Calendar.easternTime — zero Calendar.current references.
+    ///
+    /// Port of checkParkUntilSafety at index.html:4285.
+    func isFree(segment: Segment, from: Date = .nowET, until: Date) -> Bool {
+        let rules = segment.rules
+        // Empty rules → always free.
+        guard !rules.isEmpty else { return true }
+
+        let cal = Calendar.easternTime
+
+        // Build the set of calendar dates spanned by [from, until].
+        // We walk day by day from the ET date of `from` up to the ET date of `until`.
+        let fromMidnight = from.startOfDayET()
+        let untilMidnight = until.startOfDayET()
+
+        // Number of full calendar days to walk (0 = same day, 1 = crosses one midnight, etc.)
+        let dayCount: Int = {
+            let comps = cal.dateComponents([.day], from: fromMidnight, to: untilMidnight)
+            return max(0, comps.day ?? 0)
+        }()
+
+        for rule in rules {
+            let cat = rule.category
+
+            // Fast path: anytime restriction → always conflicts.
+            if rule.anytime {
+                return false
+            }
+
+            // Walk each calendar date in the window.
+            for dayOffset in 0...dayCount {
+                guard let dayMidnight = cal.date(byAdding: .day, value: dayOffset, to: fromMidnight) else {
+                    continue
+                }
+
+                // Determine the sub-window of [from, until] that falls on this calendar date.
+                let nextMidnight = dayMidnight.addingTimeInterval(24 * 3600)
+                let windowStart = dayOffset == 0 ? from : dayMidnight
+                let windowEnd   = dayOffset == dayCount ? until : nextMidnight
+
+                let dayOfWeek = dayMidnight.dayOfWeekET
+
+                if cat.isASP {
+                    // Must be an ASP day for this category.
+                    guard cat.isASPDay(dayOfWeek) else { continue }
+                    // Rule.days may further restrict which days this rule applies.
+                    if !rule.days.isEmpty && !rule.days.contains(dayOfWeek) { continue }
+                    // Skip suspended dates — a suspended ASP day has no restriction.
+                    if aspService.isSuspended(dayMidnight) { continue }
+
+                    // No time ranges: rule is active all day on this ASP day.
+                    if rule.timeRanges.isEmpty {
+                        // The rule covers the entire calendar day. Any overlap with
+                        // [windowStart, windowEnd] is a conflict.
+                        // windowEnd > windowStart is always true for a non-degenerate window;
+                        // if they are equal (zero-length at midnight boundary) we still
+                        // treat it as no conflict (half-open semantics for zero-length).
+                        if windowEnd > windowStart {
+                            return false
+                        }
+                        continue
+                    }
+
+                    // Check each time range for overlap with the day's window.
+                    for tr in rule.timeRanges {
+                        if timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
+                                             windowStart: windowStart, windowEnd: windowEnd,
+                                             cal: cal) {
+                            return false
+                        }
+                    }
+
+                } else if cat == .noParking || cat == .truckLoading || cat == .noStanding || cat == .special {
+                    // Must be a matching day.
+                    if !rule.days.isEmpty && !rule.days.contains(dayOfWeek) { continue }
+
+                    // No time ranges: rule is active all day on matching days.
+                    if rule.timeRanges.isEmpty {
+                        if !rule.days.isEmpty {
+                            // The rule is active all day on this day — overlap exists.
+                            if windowEnd > windowStart { return false }
+                        }
+                        continue
+                    }
+
+                    for tr in rule.timeRanges {
+                        if timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
+                                             windowStart: windowStart, windowEnd: windowEnd,
+                                             cal: cal) {
+                            return false
+                        }
+                    }
+
+                } else if cat == .metered {
+                    // Metered billing hours count as a restriction in Park Until mode.
+                    if !rule.days.isEmpty && !rule.days.contains(dayOfWeek) { continue }
+
+                    if rule.timeRanges.isEmpty { continue }   // No time ranges → no metered conflict.
+
+                    for tr in rule.timeRanges {
+                        if timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
+                                             windowStart: windowStart, windowEnd: windowEnd,
+                                             cal: cal) {
+                            return false
+                        }
+                    }
+                }
+                // .free, .unknown: never a restriction.
+            }
+        }
+
+        return true
+    }
+
+    /// Returns true if the given TimeRange (expressed in minutes-of-day) overlaps with
+    /// the absolute [windowStart, windowEnd] interval on the given calendar day.
+    ///
+    /// Handles overnight time ranges (tr.start > tr.end) by splitting into two sub-ranges:
+    ///   [tr.start, midnight) and [midnight, tr.end) on the next day.
+    ///
+    /// Overlap semantics: half-open intervals ([start, end)). A window whose `until`
+    /// exactly equals the restriction start is treated as NO overlap (the user leaves
+    /// exactly as the restriction begins — consistent with the PWA's behavior at
+    /// index.html:4347 which uses strict `<` for the end comparison).
+    private func timeRangeOverlaps(
+        tr: TimeRange,
+        dayMidnight: Date,
+        windowStart: Date,
+        windowEnd: Date,
+        cal: Calendar
+    ) -> Bool {
+        if tr.start < tr.end {
+            // Normal (non-overnight) range.
+            let startHour = tr.start / 60
+            let startMin  = tr.start % 60
+            let endHour   = tr.end / 60
+            let endMin    = tr.end % 60
+            guard let rStart = cal.date(bySettingHour: startHour, minute: startMin, second: 0, of: dayMidnight),
+                  let rEnd   = cal.date(bySettingHour: endHour,   minute: endMin,   second: 0, of: dayMidnight)
+            else { return false }
+            // Half-open interval: [rStart, rEnd) overlaps [windowStart, windowEnd)?
+            return rStart < windowEnd && rEnd > windowStart
+        } else {
+            // Overnight range: wraps midnight. Split into two sub-ranges.
+            // Sub-range 1: [tr.start, midnight) on dayMidnight's day.
+            let startHour  = tr.start / 60
+            let startMin   = tr.start % 60
+            let nextMidnight = dayMidnight.addingTimeInterval(24 * 3600)
+            guard let rStart = cal.date(bySettingHour: startHour, minute: startMin, second: 0, of: dayMidnight)
+            else { return false }
+            if rStart < windowEnd && nextMidnight > windowStart { return true }
+
+            // Sub-range 2: [midnight, tr.end) on the next calendar day.
+            let endHour = tr.end / 60
+            let endMin  = tr.end % 60
+            guard let rEnd = cal.date(bySettingHour: endHour, minute: endMin, second: 0, of: nextMidnight)
+            else { return false }
+            return nextMidnight < windowEnd && rEnd > windowStart
+        }
+    }
 }
