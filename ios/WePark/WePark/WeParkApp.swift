@@ -6,10 +6,17 @@
 //    - AppDelegate: conforms to UNUserNotificationCenterDelegate.
 //      Sets UNUserNotificationCenter.current().delegate = self at launch.
 //      Handles notification tap deep-link to ParkedCarDetailView (AC-W6.11, OQ-W6-3).
-//    - notificationDeepLinkSubject: PassthroughSubject<UUID, Never> that ContentView
-//      observes to present ParkedCarDetailView when a notification is tapped.
 //    - UNUserNotificationCenter.current().delegate must be set before the app finishes
 //      launching — set in application(_:didFinishLaunchingWithOptions:) (AC-W6.18).
+//
+//  W6.1 fix:
+//    - Replaced PassthroughSubject<UUID, Never> with @Published var pendingDeepLinkCarID: UUID?.
+//      PassthroughSubject has no replay: if the delegate fires before ContentView's .onReceive
+//      subscriber is attached (cold-kill / deep-background wake), the event is silently dropped.
+//      @Published / ObservableObject stores the value; ContentView reads it via onChange(of:)
+//      AND on foreground transition (scenePhase == .active) so it arrives regardless of timing.
+//      After routing, pendingDeepLinkCarID is cleared to nil for idempotency — subsequent
+//      foreground events do not re-present the sheet.
 //
 
 import SwiftUI
@@ -18,13 +25,20 @@ import Combine
 
 // MARK: - AppDelegate
 
-final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate {
+final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCenterDelegate, ObservableObject {
 
-    // MARK: - Deep-link subject
+    // MARK: - Deep-link buffer (W6.1 fix)
 
-    /// Emits the car ID to present when a notification is tapped (OQ-W6-3).
-    /// ContentView subscribes via .onReceive and sets activeSheet = .parkedCarDetail.
-    let notificationDeepLinkSubject = PassthroughSubject<UUID, Never>()
+    /// Stores the car ID to present when a notification is tapped (OQ-W6-3).
+    ///
+    /// Previously a PassthroughSubject — that dropped events when ContentView's .onReceive
+    /// subscriber hadn't attached yet (cold-kill / background-wake race).
+    ///
+    /// Now @Published: the value persists until ContentView reads it. ContentView routes
+    /// on .onChange(of: appDelegate.pendingDeepLinkCarID) *and* on scenePhase .active,
+    /// covering both the foreground case and the cold-kill case. After routing, the caller
+    /// sets this back to nil so the sheet does not re-present on the next foreground event.
+    @Published var pendingDeepLinkCarID: UUID? = nil
 
     // MARK: - UIApplicationDelegate
 
@@ -51,7 +65,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     }
 
     /// Called when the user taps a delivered notification (foreground, background, or killed app).
-    /// Routes to ParkedCarDetailView via notificationDeepLinkSubject (AC-W6.11, OQ-W6-3).
+    /// Buffers the car ID in pendingDeepLinkCarID (W6.1 fix — replaces PassthroughSubject).
     func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         didReceive response: UNNotificationResponse,
@@ -67,10 +81,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             let carID = UUID(uuidString: carIDString)
         else { return }
 
-        // Route to ContentView on main thread. ContentView observes this subject
-        // and presents ParkedCarDetailView for the matching car.
+        // Buffer the car ID on the main thread. ContentView picks it up via onChange(of:)
+        // whether it subscribes immediately (foreground) or after the view hierarchy settles
+        // (cold-kill / background wake). The value persists until ContentView clears it.
         DispatchQueue.main.async { [weak self] in
-            self?.notificationDeepLinkSubject.send(carID)
+            self?.pendingDeepLinkCarID = carID
         }
     }
 }
