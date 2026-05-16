@@ -264,10 +264,16 @@ struct ContentView: View {
             // W7: Toast host — highest z-order layer. Positioned at the very top via VStack + Spacer.
             // Renders above the ASP banner (spec §3.E: toast overlays banner briefly — acceptable
             // because toast is transient 3s, banner is persistent).
-            VStack {
-                ToastHostView()
-                    .padding(.top, 8)
-                Spacer()
+            // Top padding reads `proxy.safeAreaInsets.top` so the toast clears the status bar /
+            // dynamic island on notched devices (QA pass-1 #2). GeometryReader is scoped to just
+            // this slot so it does not affect any other layer.
+            GeometryReader { proxy in
+                VStack(spacing: 0) {
+                    ToastHostView()
+                        .padding(.top, proxy.safeAreaInsets.top)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
             }
         }
         .task {
