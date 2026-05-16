@@ -22,7 +22,7 @@
 //    - Kept: BlockDetailView, sheet presentation mechanics (.sheet(isPresented:))
 //    - Kept: handleMapTap / pointToPolylineDistance / haversine (only gesture source changes)
 //    - Kept: 60s timer cadence; now also drives overlay recompute (replaces per-polyline recompute)
-//    - Kept: polylineHideSpanThreshold = 0.1 (zoom gating — hides overlays when zoomed out)
+//    - Kept: polylineHideSpanThreshold (zoom gating — hides overlays when zoomed out; lowered from 0.1 → 0.04 in viewport-polish)
 //    - Raised: maxCachedTiles from 50 → 200 (see TileLoader.swift; per decision doc §3 rationale)
 //
 //  W4 fix-pass-1 carry-overs still in effect:
