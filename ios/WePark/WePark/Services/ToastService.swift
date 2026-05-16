@@ -26,12 +26,11 @@
 //  Future callers (W7.5+): call `ToastService.shared.show(message:)` from any action site
 //  without changes to this file or ToastHostView.
 //
-//  No Calendar.current use. No import SwiftUI.
+//  No Calendar.current use. SwiftUI is imported only for `withAnimation`; no UI rendering
+//  belongs in this service.
 //
 
-import Foundation
 import SwiftUI
-import Observation
 
 @MainActor
 @Observable
@@ -40,7 +39,7 @@ final class ToastService {
     // MARK: - Singleton
 
     static let shared = ToastService()
-    init() {}
+    private init() {}
 
     // MARK: - State
 
@@ -79,4 +78,16 @@ final class ToastService {
             }
         }
     }
+
+#if DEBUG
+    /// Test-only: clear state synchronously without animation so tests don't bleed into
+    /// each other. Call in `setUp()` and `tearDown()` on the shared singleton. The
+    /// `private init()` enforces that production code cannot construct a fresh instance
+    /// to avoid state bleed — tests use this reset instead.
+    internal func resetForTesting() {
+        dismissTask?.cancel()
+        dismissTask = nil
+        currentMessage = nil
+    }
+#endif
 }

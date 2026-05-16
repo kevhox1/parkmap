@@ -274,16 +274,16 @@ final class W7ASPSuspensionServiceTests: XCTestCase {
 @MainActor
 final class W7ToastServiceTests: XCTestCase {
 
-    // Use a fresh ToastService per test to avoid singleton state bleed.
-    var toast: ToastService!
+    // ToastService is a singleton (private init enforced — QA pass-1 #1).
+    // resetForTesting() (DEBUG-only) clears state between tests to prevent bleed.
 
     override func setUp() {
         super.setUp()
-        toast = ToastService()
+        ToastService.shared.resetForTesting()
     }
 
     override func tearDown() {
-        toast = nil
+        ToastService.shared.resetForTesting()
         super.tearDown()
     }
 
@@ -291,8 +291,8 @@ final class W7ToastServiceTests: XCTestCase {
     // spec §7 row 6: show(message: "Hello") → currentMessage == "Hello" immediately.
 
     func testToastService_show_setsCurrentMessage() {
-        toast.show(message: "Hello")
-        XCTAssertEqual(toast.currentMessage, "Hello",
+        ToastService.shared.show(message: "Hello")
+        XCTAssertEqual(ToastService.shared.currentMessage, "Hello",
                        "currentMessage must be set immediately after show(message:)")
     }
 
@@ -300,11 +300,11 @@ final class W7ToastServiceTests: XCTestCase {
     // spec §7 row 7: show("A") then show("B") → currentMessage == "B", only one dismiss task.
 
     func testToastService_show_replacesExistingMessage() {
-        toast.show(message: "A", duration: 10.0)
-        XCTAssertEqual(toast.currentMessage, "A", "first show sets A")
+        ToastService.shared.show(message: "A", duration: 10.0)
+        XCTAssertEqual(ToastService.shared.currentMessage, "A", "first show sets A")
 
-        toast.show(message: "B", duration: 10.0)
-        XCTAssertEqual(toast.currentMessage, "B",
+        ToastService.shared.show(message: "B", duration: 10.0)
+        XCTAssertEqual(ToastService.shared.currentMessage, "B",
                        "Second show(message:B) must replace A immediately")
     }
 
@@ -312,13 +312,13 @@ final class W7ToastServiceTests: XCTestCase {
     // spec §7 row 8: show("X", duration: 0.1) → after 0.2s, currentMessage == nil.
 
     func testToastService_autoDismiss_clearsMessage() async throws {
-        toast.show(message: "X", duration: 0.1)
-        XCTAssertEqual(toast.currentMessage, "X", "message set immediately")
+        ToastService.shared.show(message: "X", duration: 0.1)
+        XCTAssertEqual(ToastService.shared.currentMessage, "X", "message set immediately")
 
         // Wait longer than the duration to allow auto-dismiss to fire.
         try await Task.sleep(for: .milliseconds(350))
 
-        XCTAssertNil(toast.currentMessage,
+        XCTAssertNil(ToastService.shared.currentMessage,
                      "After 0.35s with 0.1s duration, currentMessage must be nil (auto-dismissed)")
     }
 }
