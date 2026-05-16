@@ -22,7 +22,7 @@
 //    - Kept: BlockDetailView, sheet presentation mechanics (.sheet(isPresented:))
 //    - Kept: handleMapTap / pointToPolylineDistance / haversine (only gesture source changes)
 //    - Kept: 60s timer cadence; now also drives overlay recompute (replaces per-polyline recompute)
-//    - Kept: polylineHideSpanThreshold = 0.1 (zoom gating — hides overlays when zoomed out)
+//    - Kept: polylineHideSpanThreshold (zoom gating — hides overlays when zoomed out; lowered from 0.1 → 0.04 in viewport-polish)
 //    - Raised: maxCachedTiles from 50 → 200 (see TileLoader.swift; per decision doc §3 rationale)
 //
 //  W4 fix-pass-1 carry-overs still in effect:
@@ -155,6 +155,13 @@ struct ContentView: View {
     /// Cleared after the next userLocation update triggers the recenter.
     @State private var recenterOnUserRequested: Bool = false
 
+    /// Viewport-polish: Set to true at launch when auto-center is deferred waiting for a GPS fix.
+    /// Mirrors `recenterOnUserRequested` lifecycle but fires from the launch-time auto-center path.
+    /// The two flags are independent — a button tap while launch auto-center is still waiting
+    /// must not collapse into a single flag (they may arrive in any order).
+    /// Both are cleared in `.onChange(of: locationService.locationUpdateCount)`.
+    @State private var recenterOnUserAtLaunch: Bool = false
+
     /// W6: Tracks the UUID of the car that was parked BEFORE the most recent save().
     /// Used by onReceive(pinDropped) to cancel the old car's notifications precisely.
     /// Initialized from parkPinService.parkedCar at load time (in .task).
@@ -193,7 +200,10 @@ struct ContentView: View {
     // MARK: - Constants
 
     /// Hide all overlays when zoomed out beyond this span (same as W2/W3 behavior).
-    private let polylineHideSpanThreshold: Double = 0.1
+    /// Viewport-polish: lowered from 0.1 to 0.04 (4,453 m N-S, ~44 Manhattan blocks).
+    /// At 0.04° the LRU cap (200 tiles) covers the viewport without eviction patchwork.
+    /// Above 0.04° individual block faces are illegible anyway — hiding is correct UX.
+    private let polylineHideSpanThreshold: Double = 0.04
 
     /// Tap hit threshold in meters (matches W4 behavior).
     private let tapHitThresholdMeters: Double = 20.0
@@ -296,6 +306,46 @@ struct ContentView: View {
             tileLoader.loadTiles(forRegion: region)
             lastEvaluatedAt = .now
             rebuildOverlays(at: lastEvaluatedAt)
+
+            // Viewport-polish: Auto-center camera at launch.
+            // Three-priority decision (see viewport-polish-spec.md §5):
+            //
+            // Priority 1 — deep-link: notification tap has a resolved parked car.
+            //   Coverage check does NOT apply — user explicitly parked at that coordinate.
+            // Priority 2a — authorized + cached fix in coverage: snap immediately.
+            //   Set recenterOnUserAtLaunch = true so a fresher fix re-snaps via .onChange.
+            // Priority 2b — authorized + no cached fix: defer via flag + requestLocation().
+            //   .onChange fires when the fix arrives; recenters only if in coverage.
+            // Priority 3 — fallback: stay on manhattanCenter. No-op.
+            //
+            // This block does NOT call requestWhenInUseAuthorization() — that is gated behind
+            // the "Find me" button tap (W5.1 design). If isAuthorized == false, we skip entirely.
+            let pendingID = appDelegate.pendingDeepLinkCarID
+            if let carID = pendingID,
+               let car = parkPinService.parkedCar,
+               car.id == carID {
+                // Priority 1: deep-link — center on parked car, no coverage check.
+                let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
+                recenterMap(on: coord)
+            } else if locationService.isAuthorized {
+                if let cachedLoc = locationService.userLocation {
+                    if AppConstants.isInManhattanCoverage(cachedLoc) {
+                        // Priority 2a: cached fix in coverage — snap immediately.
+                        recenterMap(on: cachedLoc)
+                        // Allow re-snap if a fresher fix arrives within ~3s.
+                        recenterOnUserAtLaunch = true
+                    }
+                    // else: cached fix outside coverage → Priority 3 (manhattanCenter stays).
+                } else if pendingID == nil {
+                    // Priority 2b: authorized, no cached fix, no pending deep-link.
+                    // Defer until fix arrives. requestLocation() has a built-in timeout (~10-15s).
+                    recenterOnUserAtLaunch = true
+                    locationService.requestAndFetchLocation()
+                }
+                // else: pendingID != nil but parkedCar didn't resolve → fall through to Priority 3.
+            }
+            // Priority 3: permission denied / not determined, or unresolvable deep-link.
+            // Camera stays on the manhattanCenter default. No action.
         }
         .onAppear {
             lastEvaluatedAt = .now
@@ -346,10 +396,28 @@ struct ContentView: View {
         }
         // W5.1: Recenter on user when a new location fix arrives after a recenter request.
         // CLLocationCoordinate2D is not Equatable, so we observe a counter instead.
+        //
+        // Viewport-polish: Extended to handle recenterOnUserAtLaunch (Priority 2b).
+        //   - recenterOnUserRequested (W5.1 "Find me" button): recenters unconditionally.
+        //     The user explicitly tapped the button — no coverage check applies.
+        //   - recenterOnUserAtLaunch (launch auto-center): recenters only if
+        //     AppConstants.isInManhattanCoverage returns true for the new fix.
+        //     Prevents snapping to a user outside the tile grid (e.g., Hoboken, Yonkers).
+        //
+        // Both flags are cleared after acting to prevent re-snap on subsequent fixes
+        // (e.g., the next "Find me" tap or background location event).
         .onChange(of: locationService.locationUpdateCount) { _, _ in
-            guard recenterOnUserRequested, let loc = locationService.userLocation else { return }
-            recenterOnUserRequested = false
-            recenterMap(on: loc)
+            guard let loc = locationService.userLocation else { return }
+            if recenterOnUserRequested {
+                recenterOnUserRequested = false
+                recenterMap(on: loc)
+            }
+            if recenterOnUserAtLaunch {
+                recenterOnUserAtLaunch = false
+                if AppConstants.isInManhattanCoverage(loc) {
+                    recenterMap(on: loc)
+                }
+            }
         }
         // W6: First pin ever → show rationale sheet (once per install).
         // Guard: belt-and-suspenders check on the UserDefaults flag in case
@@ -798,6 +866,15 @@ struct ContentView: View {
         appDelegate.pendingDeepLinkCarID = nil
         // AC-W6.11 / criterion 5: only present if the notification matches the current pin.
         guard let car = parkPinService.parkedCar, car.id == carID else { return }
+        // viewport-polish pass-3 fix: also recenter the camera on the parked car. The Priority 1
+        // branch in `.task` may not fire on cold-kill because `pendingDeepLinkCarID` is set by
+        // the delegate AFTER `.task` evaluates — so the auto-center is missed and the user sees
+        // the sheet over a wide-Manhattan default map. This call ensures the camera always
+        // follows the deep-link route, whether triggered by `.task` Priority 1 (foreground-wake)
+        // or by this helper from `.onChange(of: pendingDeepLinkCarID)` (cold-kill race).
+        // Idempotent: if Priority 1 already fired, this recenter targets the same coordinate.
+        let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
+        recenterMap(on: coord)
         activeSheet = .parkedCarDetail(car)
     }
 

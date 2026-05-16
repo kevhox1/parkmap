@@ -1,19 +1,19 @@
 # Viewport Polish — Spec
 
 **Stream:** Viewport Polish (no W-number; slots between W7 and W7.5)
-**Status:** Draft — awaiting Kevin confirmation on open decisions below before dispatch. Amended 2026-05-16: deep-link cold-launch auto-center behavior corrected (see §5 W6.1 integration and AC-B4, AC-B-DL1–3).
+**Status:** Spec locked, amended 2026-05-16 (Kevin's OD-1, OD-2 resolved; coverage check switched from radius to tile bounds).
 **Owner:** @ios-engineer
 **Estimated effort:** 1 engineer session. One PR.
 **Dispatch timing:** After W6.1 merge wraps. Can run in parallel with the W7.5 spec-writing pass.
-**Touches:** `ContentView.swift` only. No new files, no new tests required (though one AC verifies simulator smoke).
+**Touches:** `ContentView.swift` and `AppConstants.swift` (one new constant). No new files beyond that, no new tests required (though one AC verifies simulator smoke).
 
 ---
 
-## Open decisions — surface first
+## Open decisions — resolved
 
-**OD-1 (Kevin must answer before code starts):** The auto-center feature requires `LocationService` to call `requestAndFetchLocation()` on app launch for users who have already granted `.whenInUse` permission. Today that call is not made at launch — it fires only on "Find me" button tap. This means the first call to `requestLocation()` at launch will attempt a fresh GPS fix, which may introduce a 0–3 second boot delay before the camera moves. Is that acceptable, or does Kevin prefer an instant snap to the last-known location from `CLLocationManager`? The spec below recommends the fresh-fix path but can be changed to a last-known path (see Part B mechanics).
+**OD-1 (RESOLVED 2026-05-16):** Use cached fix immediately at launch (Apple Maps pattern). Snap camera to last-known `CLLocation` in <200ms if available; if a fresher fix arrives within ~3s, animate to the new position. This is the Priority 2a / 2b split described in §5 below.
 
-**OD-2 (Kevin must answer before code starts):** The "user is too far from Manhattan" fallback in Part B needs a distance bound. The spec proposes 25 km from `AppConstants.manhattanCenter` as the fallback trigger. Confirm this is appropriate, or provide a tighter/looser bound. For reference: Newark airport is ~21 km, JFK is ~23 km, Hoboken is ~7 km, Flushing is ~16 km.
+**OD-2 (RESOLVED 2026-05-16):** Coverage check is NOT a radius. It is a tile-bounds check: auto-center only if the user's coordinate falls inside the tile grid bounding box read from `tiles/index.json`. A user in Hoboken at launch sees `manhattanCenter` (where the data actually is), not a confusing basemap of Hoboken with no overlays. See §5 for the `isInManhattanCoverage` constant and check function.
 
 ---
 
@@ -70,8 +70,9 @@ Logic added inside the existing `.task { }` modifier in `ContentView.swift:282`.
 | File | Change |
 |---|---|
 | `ios/WePark/WePark/ContentView.swift` | Part A: change constant on line 197. Part B: add launch auto-center logic in `.task { }`. |
+| `ios/WePark/WePark/Services/Constants.swift` | Add `manhattanCoverageBounds` tuple and `isInManhattanCoverage(coordinate:)` static function to `AppConstants`. |
 
-No other files are touched. `LocationService.swift`, `TileLoader.swift`, `MapViewRepresentable.swift`, `AppConstants`, all Models, all Services — unchanged.
+`LocationService.swift`, `TileLoader.swift`, `MapViewRepresentable.swift`, all Models — unchanged.
 
 ### Data flow
 
@@ -79,7 +80,7 @@ No new data flows. Both parts wire into existing infrastructure:
 
 **Part A:** `rebuildOverlays(at:)` already reads `region.span.latitudeDelta` and returns early if it exceeds `polylineHideSpanThreshold` (`ContentView.swift:527`). Changing the constant is the entire change.
 
-**Part B:** `.task { }` in `ContentView.swift:282` already runs the launch sequence (load pin, init mute state, init banner, load tiles, rebuild overlays). The auto-center hook runs at the end of that task, after `tileLoader.loadTiles(forRegion: region)` has been called, using the existing `locationService` instance and `recenterMap(on:)` helper.
+**Part B:** `.task { }` in `ContentView.swift:282` already runs the launch sequence (load pin, init mute state, init banner, load tiles, rebuild overlays). The auto-center hook runs at the end of that task, after `tileLoader.loadTiles(forRegion: region)` has been called, using the existing `locationService` instance and `recenterMap(on:)` helper. The coverage check calls `AppConstants.isInManhattanCoverage(coordinate:)` — a bounding-box test against `manhattanCoverageBounds` defined in `Services/Constants.swift`.
 
 ### No new tables, RPCs, or files
 
@@ -133,6 +134,7 @@ The auto-center logic runs inside the existing `.task { }` block in `ContentView
 
 ```
 // Priority 1: Cold launch from notification tap.
+// Coverage check does NOT apply — user explicitly parked there.
 if pendingDeepLinkCarID != nil
    AND parkPinService.parkedCar != nil
    AND parkPinService.parkedCar!.id == pendingDeepLinkCarID
@@ -141,33 +143,35 @@ then:
     // Uses the same ~400m latitudinalMeters span as normal auto-center.
     // The W6.1 routePendingDeepLink path then presents ParkedCarDetailView
     // on top. The map underneath shows the actual block where the car sits.
-    // NOTE: the 25 km Manhattan coverage guardrail does NOT apply here.
-    // The user explicitly parked at that coordinate; center there unconditionally.
 
-// Priority 2: Normal launch, location authorized, fix available.
+// Priority 2a: Authorized, cached location in coverage — snap immediately.
+// "Cached" = locationService.userLocation is non-nil at .task execution time
+// (CLLocationManager retains last-known location across launches).
 else if locationService.isAuthorized == true
-   AND locationService.userLocation is available immediately (cached from a previous session)
-   AND userLocation is within 25 km of manhattanCenter  ← coverage fallback
+   AND locationService.userLocation != nil          // cached fix present
+   AND AppConstants.isInManhattanCoverage(locationService.userLocation!)
 then:
-    recenterMap(on: locationService.userLocation!)
-    // loadTiles(forRegion:) is already called above in .task; it will be called again
-    // by the onRegionChanged callback that fires from MapViewRepresentable after the
-    // region binding update.
+    recenterMap(on: locationService.userLocation!)  // fires in <200ms
+    set recenterOnUserAtLaunch = true               // allow a refresh if fresher fix arrives within ~3s
+    // When locationUpdateCount increments (fresh fix arrives), .onChange checks
+    // recenterOnUserAtLaunch and recenters again with the refined position,
+    // then clears the flag. If no fresh fix arrives within CLLocationManager's
+    // built-in timeout, the flag clears harmlessly on next user-triggered event.
 
-// Priority 2b: Authorized, no cached fix yet — defer via flag.
+// Priority 2b: Authorized, no cached fix — defer via flag.
 else if locationService.isAuthorized == true
-   AND locationService.userLocation == nil  (no cached fix yet)
+   AND locationService.userLocation == nil
    AND pendingDeepLinkCarID == nil
 then:
-    set @State recenterOnUserAtLaunch = true
+    set recenterOnUserAtLaunch = true
     locationService.requestAndFetchLocation()
-    // The existing .onChange(of: locationService.locationUpdateCount) observer will
-    // fire when the fix arrives. We need a new flag so it knows this is a launch
-    // auto-center, not a button-tap recenter.
+    // .onChange(of: locationService.locationUpdateCount) fires when fix arrives.
+    // At that point: if AppConstants.isInManhattanCoverage(newFix) → recenterMap;
+    // else → stay on manhattanCenter. Flag clears either way.
 
-// Priority 3: Fallback — permission denied, out-of-coverage, or deep-link carID
-//             not found in parkPinService (pin was cleared between notification
-//             scheduling and launch).
+// Priority 3: Fallback.
+// Fires when: permission denied, cached fix is outside coverage, or deep-link
+// carID not resolvable (pin was cleared between notification scheduling and launch).
 else:
     // Do nothing. Default manhattanCenter region stays.
     // The W6.1 guard (car.id == carID) already blocks sheet presentation when
@@ -190,20 +194,39 @@ Both flags are cleared after the first fix, in the same `.onChange(of: locationS
 
 There is no 3-second hard timeout in this implementation. The "reasonable wait" framing in the task brief is satisfied by `requestLocation()`'s own built-in timeout (system-managed). A custom `Task.sleep` timeout would add complexity with no user-observable benefit.
 
-**The coverage fallback (OD-2):**
+**The coverage check (OD-2 resolved):**
 
-If the user's location fix is more than `launchAutoCenterMaxDistanceKm = 25.0` km from `AppConstants.manhattanCenter`, skip the auto-center and keep `manhattanCenter` as the default. This covers users in NJ, parts of Brooklyn, Queens, and the Bronx where WePark has no tile data. The constant `launchAutoCenterMaxDistanceKm` is defined as a private `let` in `ContentView`, mirroring the style of `tapHitThresholdMeters` and `pinDropRadiusMeters`.
+Coverage is a simple bounding-box test against the tile grid extents read directly from `tiles/index.json`:
 
-Distance check uses the same haversine helper already present in `ContentView` (`haversine(from:to:)`). No new dependency.
+```
+// AppConstants.swift — add to AppConstants enum
+static let manhattanCoverageBounds = (
+    latMin: 40.700,
+    latMax: 40.882,
+    lngMin: -74.020,
+    lngMax: -73.907
+)
 
-Approximate distances from `manhattanCenter` (40.7831, -73.9712):
-- Hoboken, NJ: ~7 km — within 25 km, but WePark has no NJ tile data. The user sees the basemap with no overlays, which is honest. No confusion beyond "no data here."
-- JFK: ~23 km — just inside 25 km bound. Kevin may want to tighten to 20 km (answer OD-2).
-- Newark Airport: ~21 km — just inside. Same as above.
-- Flushing (Queens): ~16 km — within.
-- Yonkers: ~26 km — outside 25 km bound, falls back to manhattanCenter. Correct.
+static func isInManhattanCoverage(_ coordinate: CLLocationCoordinate2D) -> Bool {
+    coordinate.latitude  >= manhattanCoverageBounds.latMin &&
+    coordinate.latitude  <= manhattanCoverageBounds.latMax &&
+    coordinate.longitude >= manhattanCoverageBounds.lngMin &&
+    coordinate.longitude <= manhattanCoverageBounds.lngMax
+}
+```
 
-If a user is in Hoboken (within 25 km), auto-center zooms to Hoboken at street level. No overlays render (no tile data there). This is not broken — the basemap is clean and honest. If Kevin finds this confusing, tighten OD-2 to ~15 km (covers Manhattan + near-Brooklyn/Queens only).
+These bounds come directly from `tiles/index.json` (`latMin`, `latMax`, `lngMin`, `lngMax` fields). They cover Manhattan proper, Roosevelt Island, Marble Hill, and the sliver of the Bronx/Queens that touch the tile grid edge — all of which is fine to auto-center on. The box deliberately excludes:
+
+- Hoboken, NJ (lon ~-74.032 — just west of `lngMin -74.020`): outside, stays on `manhattanCenter`.
+- Jersey City (lon ~-74.044): outside.
+- Newark Airport (lon ~-74.175): well outside.
+- JFK (lat ~40.641): below `latMin 40.700`, outside.
+- Yonkers (lat ~40.931): above `latMax 40.882`, outside.
+- Flushing, Queens (lon ~-73.833): east of `lngMax -73.907`, outside.
+
+Brooklyn (lat 40.65–40.71, lon -73.95 to -74.01) straddles the southern and western edges. Parts of northwest Brooklyn (DUMBO, Brooklyn Heights) may fall inside the box. That is acceptable — if a user is there, auto-centering to their location is not confusing, and the tile data covers the Manhattan-side blocks.
+
+No haversine computation. No new dependency. `isInManhattanCoverage` is a four-comparison bounding-box check. The `launchAutoCenterMaxDistanceKm` constant and the `haversine(from:to:)` call are both removed from this spec.
 
 ### Integration with W5.1 `LocationService`
 
@@ -214,9 +237,9 @@ If a user is in Hoboken (within 25 km), auto-center zooms to Hoboken at street l
 
 The auto-center hook reads `locationService.isAuthorized` synchronously (available at init time from `manager.authorizationStatus`) to decide whether to attempt auto-center. It does NOT call `requestWhenInUseAuthorization()` — that would show a permission dialog at launch, violating the "Find me tap triggers the prompt" design. If `isAuthorized == false`, the entire Part B is skipped.
 
-The hook reads `locationService.userLocation` to check for a cached fix from a previous session. If non-nil and within 25 km, it recenters immediately (no `requestAndFetchLocation()` call needed for the immediate recenter, though a background refresh is optional for next use).
+The hook reads `locationService.userLocation` to check for a cached fix from a previous session. If non-nil and `isInManhattanCoverage` returns true, it recenters immediately and sets `recenterOnUserAtLaunch = true` so the camera can re-snap if a fresher fix arrives within the system-managed timeout (~3s). If non-nil but outside coverage, the hook falls through to Priority 3 — camera stays on `manhattanCenter`.
 
-If `userLocation == nil` (first launch with permission already granted but no cached fix), the hook calls `requestAndFetchLocation()` and sets `recenterOnUserAtLaunch = true`. The existing `.onChange(of: locationService.locationUpdateCount)` at `ContentView.swift:349` is extended to handle this flag.
+If `userLocation == nil` (first launch with permission already granted but no cached fix), the hook calls `requestAndFetchLocation()` and sets `recenterOnUserAtLaunch = true`. The existing `.onChange(of: locationService.locationUpdateCount)` at `ContentView.swift:349` is extended to handle this flag: when the fix arrives, the observer runs `isInManhattanCoverage` on the new coordinate and recenters only if it passes, then clears the flag.
 
 **The hook does NOT subscribe to `locationUpdateCount` inside `.task { }`** using an `await` loop or `AsyncStream`. That approach would require restructuring the task's concurrency model. Instead, it follows the same pattern as the existing "Find me" button: set a flag, call `requestAndFetchLocation()`, let `.onChange(of: locationUpdateCount)` close the loop.
 
@@ -228,7 +251,7 @@ If the app is opened by a notification tap, `AppDelegate` sets `pendingDeepLinkC
 
 **Corrected behavior:** When `pendingDeepLinkCarID != nil` and `parkPinService.parkedCar` resolves to the same car, auto-center fires on `parkedCar.coordinate` at the normal `~400m` span. The `ParkedCarDetailView` sheet then presents on top via the existing `.onChange(of: pendingDeepLinkCarID)` path (or the `.onChange(of: scenePhase)` cold-kill path at `ContentView.swift:314` and `ContentView.swift:394`). The result: both the sheet text and the map below confirm where the car is parked.
 
-The 25 km Manhattan-coverage guardrail is **not applied** to this path. The user explicitly parked at that coordinate; that is their truth regardless of whether WePark has tile data at that location.
+The `isInManhattanCoverage` tile-bounds check is **not applied** to this path. The user explicitly parked at that coordinate; that is their truth regardless of whether WePark has tile data at that location.
 
 If `pendingDeepLinkCarID != nil` but `parkPinService.parkedCar` is nil (pin cleared between notification scheduling and launch), the code falls through to the normal Priority 2 / Priority 3 paths. The W6.1 sheet-routing guard already prevents the sheet from presenting in this case, so there is no camera conflict.
 
@@ -256,21 +279,22 @@ There is no parallelization opportunity here. Both parts are single-file changes
 - [ ] **AC-A3.** Pinch-zoom out to `latitudeDelta ≈ 0.07` (the default launch region). All 5 state-group `MKMultiPolyline` overlays are removed — the map shows the clean Apple Maps basemap with no parking coloring. No patchwork — either all or nothing.
 - [ ] **AC-A4.** Pinch-zoom back in to `latitudeDelta ≈ 0.03`. Colored polylines re-render correctly (driven by the existing `rebuildOverlays` on region change path).
 - [ ] **AC-A5.** At zoom level exactly straddling the threshold (`latitudeDelta` incrementally crossing `0.04`), the transition between overlays-visible and overlays-hidden is clean (no flicker beyond the normal 60s tick cadence). "Clean" means: zooming out through `0.04` causes overlays to vanish at the next `rebuildOverlays` call, which fires on region change via `.onChange(of: tileLoader.segments.count)` and the timer — not instantly per-frame, which is acceptable.
-- [ ] **AC-A6.** The existing 43 + 15 + 12 = 72 unit tests pass: `xcodebuild test` reports 72 passed, 0 failed. Part A does not touch any tested logic.
+- [ ] **AC-A6.** The existing 43 + 15 + 12 = 72 unit tests pass: `xcodebuild test` reports 72 passed, 0 failed. Part A and the new `isInManhattanCoverage` function do not touch any currently-tested logic.
 
 ### Part B — Auto-center on launch
 
 - [ ] **AC-B1 (permission denied / not determined).** Fresh install, location permission not yet granted. App launches → map centers on `manhattanCenter` at default span (`latitudeDelta: 0.07`). No location permission dialog appears at launch. QA method: reset simulator location permission, cold launch.
-- [ ] **AC-B2 (authorized, cached fix available).** Permission previously granted, `userLocation` is non-nil at `.task` execution time (previous session provided a fix). App launches → map animates to user's location at the `recenterMap` span (~400m). If the user's location is within 25 km of `manhattanCenter`, overlays load for that area. QA method: grant permission in a prior session, cold launch.
-- [ ] **AC-B3 (authorized, no cached fix).** Permission granted but no prior fix (e.g., first launch in airplane-mode-then-restored). App launches → stays on `manhattanCenter` initially → when fix arrives (seconds later), map re-centers to user's location. QA method: grant permission but simulate slow location (simulator location set to "None" initially, then switched to a preset).
+- [ ] **AC-B2 (authorized, cached fix in coverage).** Permission previously granted, `userLocation` is non-nil at `.task` execution time (previous session provided a fix within the Manhattan tile bounding box). App launches → map snaps to user's location at the `recenterMap` span (~400m) in <200ms, before any fresh GPS fix arrives. `recenterOnUserAtLaunch` is set to true. If a fresher fix then arrives from the system, the camera re-snaps (animated). Overlays load for the visible area. QA method: grant permission in a prior session with simulator set to a Manhattan coordinate, cold launch.
+- [ ] **AC-B3 (authorized, no cached fix).** Permission granted but no prior fix (e.g., first launch in airplane-mode-then-restored). App launches → stays on `manhattanCenter` initially → when fix arrives (seconds later), map re-centers to user's location only if `isInManhattanCoverage` returns true; otherwise stays on `manhattanCenter`. QA method: grant permission but simulate slow location (simulator location set to "None" initially, then switched to a preset).
 - [ ] **AC-B4 (deep-link: sheet presents AND map centers on parked car).** Simulate a notification-tap cold-kill launch: force-quit app, tap a delivered parking notification, app launches cold. The `ParkedCarDetailView` sheet presents correctly. The map camera centers on the parked car's coordinate at the normal `~400m` span — NOT on `manhattanCenter` and NOT on user location. Parking overlays (if any exist for that block) are visible behind the sheet. QA method: follow the W6.1 notification-tap smoke scenario from `docs/qa/w6-pass-1-2026-05-13.md`; add a visual check that the map behind the sheet shows the correct block, not a wide Manhattan overview.
-- [ ] **AC-B-DL1 (deep-link: parked car coordinate is outside coverage area).** Park pin is at a location outside the 25 km Manhattan coverage radius (e.g., Yonkers or Newark). Notification-tap cold-kill launch. Map still centers on `parkedCar.coordinate` at `~400m` span — the 25 km guardrail does NOT block this path. Sheet presents on top showing car details. Clean basemap with no overlays behind the sheet (no tile data at that location — honest and correct). QA method: set a pin manually at an out-of-coverage coordinate in the simulator, deliver a test notification, cold-kill launch.
+- [ ] **AC-B-DL1 (deep-link: parked car coordinate is outside tile coverage bounds).** Park pin is at a location outside the Manhattan tile bounding box (e.g., Hoboken at 40.7440, -74.0324, or Yonkers at 40.9312, -73.8988). Notification-tap cold-kill launch. Map still centers on `parkedCar.coordinate` at `~400m` span — `isInManhattanCoverage` is NOT called on this path. Sheet presents on top showing car details. Clean basemap with no overlays behind the sheet (no tile data at that location — honest and correct). QA method: set a pin manually at an out-of-coverage coordinate in the simulator, deliver a test notification, cold-kill launch.
 - [ ] **AC-B-DL2 (deep-link: pin cleared before launch).** `pendingDeepLinkCarID != nil` but `parkPinService.parkedCar == nil` (pin was removed between notification scheduling and launch). App falls through to normal Priority 2 / Priority 3 auto-center logic (user location if authorized, else `manhattanCenter`). No sheet presents (W6.1 guard prevents it). No crash. QA method: schedule a notification, manually clear the pin via the UI, then cold-launch from the notification.
 - [ ] **AC-B-DL3 (deep-link: camera does not jump after sheet dismiss).** After the `ParkedCarDetailView` sheet is dismissed (swipe down), the map remains centered on the parked car's block. The camera does not snap back to `manhattanCenter` or fire a second auto-center. QA method: dismiss the sheet after AC-B4 scenario, observe camera position holds.
-- [ ] **AC-B5 (user outside 25 km).** Set simulator location to Newark Airport (40.6895, -74.1745, ~21 km from `manhattanCenter`) or Yonkers (40.9312, -73.8988, ~26 km). Newark: auto-center should fire (within bound), map zooms to Newark, basemap shows with no overlays (no tile data — correct and honest). Yonkers: auto-center should NOT fire, map stays at `manhattanCenter`. QA method: simulator location preset.
-- [ ] **AC-B6 (recenter button unaffected).** After auto-center completes, the "Find me" button (`location.fill`) still works correctly: tapping it recenters to current location. The `recenterOnUserRequested` flag behavior from W5.1 is not regressed. QA method: tap "Find me" after launch auto-center and verify camera moves.
-- [ ] **AC-B7 (notification permission not regressed).** First pin drop still shows the `NotificationRationaleView` sheet (W6 behavior). The W6 `firstPinDropped` → rationale sheet flow is not affected. QA method: drop a pin on a fresh install, verify rationale sheet appears.
-- [ ] **AC-B8 (unit tests).** 72 unit tests pass. Part B logic is launch-sequencing only (no new business logic), so no new unit tests are required. QA may choose to add a test for the `launchAutoCenterMaxDistanceKm` haversine guard if time allows, but it is not blocking.
+- [ ] **AC-B5 (user outside tile bounds — stays on Manhattan).** Set simulator location to Hoboken, NJ (40.7440, -74.0324 — lon -74.032 is west of tile grid edge -74.020, so `isInManhattanCoverage` returns false). App launches → camera stays on `manhattanCenter`. No auto-center fires. Confirm by also testing Yonkers (40.9312, -73.8988 — lat 40.931 is above tile grid edge 40.882). QA method: simulator location preset to each coordinate before cold launch.
+- [ ] **AC-B6 (cached-fix-then-fresh-fix refresh).** Simulate a stale cached fix: inject a far-but-in-coverage coordinate (e.g., 40.870, -73.910, near Inwood) into `locationService.userLocation` via a UserDefaults-backed mock or simulator preset from a prior session. Cold launch: verify camera snaps to that coordinate immediately (<200ms). Then switch simulator location to a different in-coverage coordinate (e.g., 40.750, -73.980, Midtown). Verify camera re-snaps to the fresher fix via the `.onChange` observer. Flag clears after the second snap. QA method: simulator preset swap mid-session.
+- [ ] **AC-B7 (recenter button unaffected).** After auto-center completes, the "Find me" button (`location.fill`) still works correctly: tapping it recenters to current location. The `recenterOnUserRequested` flag behavior from W5.1 is not regressed. QA method: tap "Find me" after launch auto-center and verify camera moves.
+- [ ] **AC-B8 (notification permission not regressed).** First pin drop still shows the `NotificationRationaleView` sheet (W6 behavior). The W6 `firstPinDropped` → rationale sheet flow is not affected. QA method: drop a pin on a fresh install, verify rationale sheet appears.
+- [ ] **AC-B9 (unit tests).** 72 unit tests pass. Part B logic is launch-sequencing only; the `isInManhattanCoverage` function is trivially testable but not blocking. QA may add a unit test for it in `AppConstantsTests.swift` if time allows.
 
 ### Combined smoke scenario (the bug being fixed)
 
@@ -282,13 +306,13 @@ There is no parallelization opportunity here. Both parts are single-file changes
 
 | Scenario | Behavior | Notes |
 |---|---|---|
-| User is in Hoboken (within 25 km, no tile data) | Auto-center fires, camera moves to Hoboken at ~400m span. No overlays render — clean basemap, honest about no data. | Expected. No special handling needed. If Kevin wants to tighten the fallback to Manhattan-only, answer OD-2 with a tighter bound (e.g., 15 km). |
-| User's location is in Brooklyn (has tile data in some areas) | Auto-center fires if within 25 km. Overlays render for any loaded Brooklyn tiles. | Manhattan tiles only currently. Brooklyn users see basemap. No regression. |
+| User is in Hoboken (lon -74.032, outside tile grid west edge -74.020) | `isInManhattanCoverage` returns false. Camera stays on `manhattanCenter`. User sees Manhattan (where the data is) at launch. | Correct behavior per OD-2 resolution. No special handling needed. |
+| User's location is in northwest Brooklyn (e.g., DUMBO at ~40.703, -73.990) | Inside tile bounding box. `isInManhattanCoverage` returns true. Auto-center fires to that coordinate. Basemap with no overlays (no Brooklyn tile data currently). Honest and not confusing. | Expected. Acceptable for v1. |
 | Authorization status changes mid-session (user goes to Settings, revokes) | `isAuthorized` is updated by `locationManagerDidChangeAuthorization` delegate. Auto-center already ran at launch; no re-launch behavior needed. Find-me button becomes a no-op (existing W5.1 behavior). | No change needed. |
 | App is backgrounded during the GPS fix wait | `locationUpdateCount` increments when the fix eventually arrives, `recenterOnUserAtLaunch` fires, map recenters. If the sheet is showing (the user backgrounded then foregrounded on a sheet), recenter still fires but is off-screen and harmless — the camera is updated when the sheet dismisses. | Acceptable edge case. No special handling. |
-| Cold-kill notification tap + parked car resolvable | Auto-center fires on `parkedCar.coordinate` at `~400m` span. Sheet presents on top via W6.1 routing. Map shows the actual block behind the sheet. 25 km coverage guardrail does NOT apply. | Covered by AC-B4, AC-B-DL1. |
+| Cold-kill notification tap + parked car resolvable | Auto-center fires on `parkedCar.coordinate` at `~400m` span. Sheet presents on top via W6.1 routing. Map shows the actual block behind the sheet. `isInManhattanCoverage` check does NOT apply on this path. | Covered by AC-B4, AC-B-DL1. |
 | Cold-kill notification tap + pin cleared between scheduling and launch | `pendingDeepLinkCarID != nil` but `parkPinService.parkedCar == nil`. Falls through to Priority 2 / Priority 3 (user location or `manhattanCenter`). No sheet presents (W6.1 guard prevents it). | Covered by AC-B-DL2. |
-| "Find me" button tapped while `recenterOnUserAtLaunch == true` and still waiting for launch fix | Both `recenterOnUserRequested` and `recenterOnUserAtLaunch` are true. The fix arrives, `.onChange(of: locationUpdateCount)` fires, recenters once, clears both flags. No double recenter. | The `.onChange` observer already clears `recenterOnUserRequested` after acting; extend the same clear to `recenterOnUserAtLaunch`. |
+| "Find me" button tapped while `recenterOnUserAtLaunch == true` and still waiting for launch fix | Both `recenterOnUserRequested` and `recenterOnUserAtLaunch` are true. The fix arrives, `.onChange(of: locationUpdateCount)` fires, runs `isInManhattanCoverage`, recenters once if in coverage, clears both flags. No double recenter. | The `.onChange` observer already clears `recenterOnUserRequested` after acting; extend the same clear to `recenterOnUserAtLaunch`. |
 
 ---
 
@@ -312,12 +336,12 @@ There is no parallelization opportunity here. Both parts are single-file changes
 - `ContentView.swift:349` — `.onChange(of: locationService.locationUpdateCount)` (extend for `recenterOnUserAtLaunch`)
 - `ContentView.swift:527` — `rebuildOverlays` zoom-threshold guard (reads `polylineHideSpanThreshold`)
 - `ContentView.swift:644` — `recenterMap(on:)` helper (Part B calls this)
-- `ContentView.swift:889` — `haversine(from:to:)` (used by Part B coverage fallback)
+- `Services/Constants.swift:11` — `AppConstants.manhattanCenter` (existing); `manhattanCoverageBounds` and `isInManhattanCoverage(coordinate:)` added here by this PR
+- `tiles/index.json` — source of `latMin 40.700 / latMax 40.882 / lngMin -74.020 / lngMax -73.907` bounding box constants
 - `LocationService.swift:37` — `isAuthorized` property
 - `LocationService.swift:29` — `userLocation` property
 - `LocationService.swift:34` — `locationUpdateCount` property
 - `LocationService.swift:59` — `requestAndFetchLocation()` API
 - `TileLoader.swift:96` — `maxCachedTiles = 200`
-- `Constants.swift:11` — `AppConstants.manhattanCenter`
 - `docs/ios-rendering-architecture-decision.md` — LRU rationale, MKMultiPolyline architecture
 - `docs/qa/w6-pass-1-2026-05-13.md` — W6.1 notification-tap smoke scenario (AC-B4 reference)
