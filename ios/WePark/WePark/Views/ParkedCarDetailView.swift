@@ -9,12 +9,16 @@
 //    2. Header row — "My Car" + block label (or "Location saved (no parking data)") + ✕ button.
 //    3. Safety label — first focusable a11y element. Omitted if no segment.
 //    4. Parked-at relative timestamp — "Parked 3h ago".
-//    5. Rules list — same RuleRow component as BlockDetailView.
-//    6. "I left — clear pin" button (red tint).
+//    5. [W7] Reminder toggle — "Remind me before parking changes".
+//    6. Rules list — same RuleRow component as BlockDetailView.
+//    7. "I left — clear pin" button (red tint).
 //
 //  Segment re-lookup: detectedSegmentID is resolved at sheet-open time by searching
 //  the TileLoader segments array. If the tile has been evicted from the LRU cache,
 //  lookup may return nil — the view shows "No parking data at this location" (AC-W5.9).
+//
+//  W7: Added per-pin reminder toggle (§3.C / §4.A). Flipping the toggle calls
+//  ParkPinService.updateNotifyOnRestriction and re-evaluates notification scheduling.
 //
 //  No Calendar.current use. No import SwiftUI in Models/ or Services/.
 //
@@ -33,6 +37,40 @@ struct ParkedCarDetailView: View {
     let loadedSegments: [Segment]
     let onDismiss: () -> Void
     let onClearPin: () -> Void
+
+    // MARK: - W7: Services for toggle actions
+
+    /// W7: Reference to ParkPinService for updating notifyOnRestriction.
+    /// Passed in from ContentView (same instance that owns parkedCar).
+    let parkPinService: ParkPinService
+
+    /// W7: Scheduler reference — needed to cancel/reschedule when toggle is flipped.
+    let scheduler: NotificationScheduler
+
+    // MARK: - W7: Toggle state — initialized from the current car's persisted value.
+
+    @State private var remindMe: Bool
+
+    // MARK: - Init
+
+    init(
+        parkedCar: ParkedCar,
+        engine: ParkingRulesEngine,
+        loadedSegments: [Segment],
+        parkPinService: ParkPinService,
+        scheduler: NotificationScheduler = .shared,
+        onDismiss: @escaping () -> Void,
+        onClearPin: @escaping () -> Void
+    ) {
+        self.parkedCar = parkedCar
+        self.engine = engine
+        self.loadedSegments = loadedSegments
+        self.parkPinService = parkPinService
+        self.scheduler = scheduler
+        self.onDismiss = onDismiss
+        self.onClearPin = onClearPin
+        _remindMe = State(initialValue: parkedCar.notifyOnRestriction)
+    }
 
     // MARK: - Private
 
@@ -65,12 +103,15 @@ struct ParkedCarDetailView: View {
                     // 4. Parked-at relative timestamp.
                     parkedAtRow
 
-                    // 5. Rules list (only if we have a segment with rules).
+                    // 5. W7: Reminder toggle.
+                    reminderToggle
+
+                    // 6. Rules list (only if we have a segment with rules).
                     if let seg = resolvedSegment, !seg.rules.isEmpty {
                         rulesSection(for: seg)
                     }
 
-                    // 6. "I left" button.
+                    // 7. "I left" button.
                     iLeftButton
                 }
                 .padding(.horizontal, 20)
@@ -187,6 +228,32 @@ struct ParkedCarDetailView: View {
         }
     }
 
+    // MARK: - W7: Reminder toggle
+
+    private var reminderToggle: some View {
+        Toggle(isOn: $remindMe) {
+            Text("Remind me before parking changes")
+                .font(.body)
+        }
+        .accessibilityLabel("Remind me before parking changes")
+        .accessibilityHint("When on, you'll get a notification before your parking window ends.")
+        .onChange(of: remindMe) { _, newValue in
+            // Persist the updated preference.
+            parkPinService.updateNotifyOnRestriction(newValue)
+            if newValue {
+                // Re-schedule notification (subject to global mute check inside scheduler).
+                scheduler.schedule(
+                    for: parkPinService.parkedCar ?? parkedCar,
+                    loadedSegments: loadedSegments,
+                    engine: engine
+                )
+            } else {
+                // Cancel any pending notification for this pin.
+                scheduler.cancelAll(for: parkedCar)
+            }
+        }
+    }
+
     // MARK: - Rules list
 
     private func rulesSection(for seg: Segment) -> some View {
@@ -263,13 +330,15 @@ struct ParkedCarDetailView: View {
         street: "BOWERY",
         fromStreet: "HESTER STREET",
         toStreet: "GRAND STREET",
-        parkedAt: Date().addingTimeInterval(-3 * 3600)
+        parkedAt: Date().addingTimeInterval(-3 * 3600),
+        notifyOnRestriction: true
     )
 
     return ParkedCarDetailView(
         parkedCar: car,
         engine: ParkingRulesEngine(),
         loadedSegments: [segment],
+        parkPinService: ParkPinService(),
         onDismiss: {},
         onClearPin: {}
     )

@@ -99,6 +99,9 @@ final class NotificationScheduler {
         // W6 stubs this as always false; W7 fills it in.
         guard !UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey) else { return }
 
+        // W7: Per-pin opt-in check.
+        guard car.notifyOnRestriction else { return }
+
         // Step 1: Resolve segment. Nil detectedSegmentID → no notification.
         guard let segmentID = car.detectedSegmentID,
               let segment = loadedSegments.first(where: { $0.id == segmentID }) else {
@@ -146,6 +149,9 @@ final class NotificationScheduler {
     ) {
         // W7 mute check (tests can verify this too).
         guard !UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey) else { return }
+
+        // W7: Per-pin opt-in check.
+        guard car.notifyOnRestriction else { return }
 
         guard let segmentID = car.detectedSegmentID,
               let segment = loadedSegments.first(where: { $0.id == segmentID }) else {

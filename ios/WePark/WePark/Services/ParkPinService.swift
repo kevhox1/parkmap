@@ -89,4 +89,33 @@ final class ParkPinService {
         // Explicitly NOT clearing hasEverParkedKey — W6 must fire only once ever.
         parkedCar = nil
     }
+
+    // MARK: - W7: Per-pin notification opt-in
+
+    /// Updates the `notifyOnRestriction` field on the current parked car.
+    /// Constructs a new ParkedCar value (struct copy) with the updated field and re-persists.
+    /// No-op if no car is currently parked.
+    /// Must be called from the main thread.
+    func updateNotifyOnRestriction(_ enabled: Bool) {
+        guard let car = parkedCar else { return }
+        let updated = ParkedCar(
+            id: car.id,
+            latitude: car.latitude,
+            longitude: car.longitude,
+            detectedSegmentID: car.detectedSegmentID,
+            detectedSide: car.detectedSide,
+            street: car.street,
+            fromStreet: car.fromStreet,
+            toStreet: car.toStreet,
+            parkedAt: car.parkedAt,
+            notifyOnRestriction: enabled
+        )
+        do {
+            let data = try JSONEncoder().encode(updated)
+            defaults.set(data, forKey: storageKey)
+            parkedCar = updated
+        } catch {
+            assertionFailure("ParkPinService.updateNotifyOnRestriction: encoding failed: \(error)")
+        }
+    }
 }

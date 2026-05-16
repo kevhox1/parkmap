@@ -198,33 +198,73 @@ struct BlockDetailView: View {
 
 /// Shared rule-row component used by BlockDetailView and ParkedCarDetailView.
 /// Internal (not private) so both views in the same module can access it.
+///
+/// W7 (§3.D): Tap-to-expand. `isExpanded` starts false. Tapping the row toggles
+/// `.lineLimit(1)` ↔ `.lineLimit(nil)`. Badge moves below the text when expanded.
+/// Animation: `.easeInOut(duration: 0.18)`.
 struct RuleRow: View {
 
     let rule: ParkingRule
 
+    /// W7: Expansion state — starts collapsed.
+    @State private var isExpanded: Bool = false
+
     var body: some View {
-        HStack(alignment: .center, spacing: 8) {
-            Text(rowText)
-                .font(.body)
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .foregroundStyle(.primary)
-
-            Spacer()
-
-            // Category badge
-            Text(rule.category.label)
-                .font(.caption.bold())
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background(
-                    Capsule()
-                        .fill(categoryBadgeColor.opacity(0.18))
-                )
-                .foregroundStyle(categoryBadgeColor)
+        Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                isExpanded.toggle()
+            }
+        } label: {
+            ruleRowContent
         }
+        .buttonStyle(.plain)
         // Each rule row is one accessibility announcement.
         .accessibilityElement(children: .combine)
+        .accessibilityHint(isExpanded ? "Tap to collapse." : "Tap to expand full sign text.")
+    }
+
+    @ViewBuilder
+    private var ruleRowContent: some View {
+        if isExpanded {
+            // Expanded: text flows freely; badge below the text for long content.
+            VStack(alignment: .leading, spacing: 6) {
+                Text(rowText)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+
+                HStack {
+                    Spacer()
+                    badgeView
+                }
+            }
+        } else {
+            // Collapsed: single truncated line with badge trailing.
+            HStack(alignment: .center, spacing: 8) {
+                Text(rowText)
+                    .font(.body)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .foregroundStyle(.primary)
+
+                Spacer()
+
+                badgeView
+            }
+        }
+    }
+
+    private var badgeView: some View {
+        Text(rule.category.label)
+            .font(.caption.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(categoryBadgeColor.opacity(0.18))
+            )
+            .foregroundStyle(categoryBadgeColor)
     }
 
     // MARK: - Row text

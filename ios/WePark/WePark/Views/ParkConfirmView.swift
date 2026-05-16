@@ -13,13 +13,28 @@
 //    2. Detected block (or "No parking data" fallback)
 //    3. "Wrong street?" alternatives (up to 3, from findCandidateSegments result)
 //    4. Safety label for the detected segment
-//    5. Action row — "Cancel" + "Park here" buttons
+//    5. [W7] Reminder toggle — "Remind me before parking changes" (defaults ON)
+//    6. Action row — "Cancel" + "Park here" buttons
 //
 //  AC-W5.5: Tapping an alternative candidate re-assigns detectedSegment and
 //  re-renders the block display and safety label. Pin lat/lng does not change.
 //
+//  W7: Added PinConfirmResult wrapping PinDropIntent + notifyOnRestriction.
+//  onConfirm signature changed from (PinDropIntent) → (PinConfirmResult).
+//
 
 import SwiftUI
+
+// MARK: - PinConfirmResult
+
+/// W7: Wraps the intent with the per-pin notification opt-in decision.
+/// Keeps PinDropIntent unchanged and avoids leaking notification intent into the model layer.
+struct PinConfirmResult {
+    let intent: PinDropIntent
+    let notifyOnRestriction: Bool
+}
+
+// MARK: - ParkConfirmView
 
 struct ParkConfirmView: View {
 
@@ -30,15 +45,21 @@ struct ParkConfirmView: View {
     @State private var intent: PinDropIntent
 
     let engine: ParkingRulesEngine
-    let onConfirm: (PinDropIntent) -> Void
+    let onConfirm: (PinConfirmResult) -> Void
     let onCancel: () -> Void
+
+    // MARK: - W7: Per-pin reminder toggle state
+
+    /// Defaults ON — the majority of park sessions are longer than 30 minutes.
+    /// Starts fresh at ON for every pin-confirm session (no memory of previous toggle position).
+    @State private var remindMe: Bool = true
 
     // MARK: - Init
 
     init(
         intent: PinDropIntent,
         engine: ParkingRulesEngine,
-        onConfirm: @escaping (PinDropIntent) -> Void,
+        onConfirm: @escaping (PinConfirmResult) -> Void,
         onCancel: @escaping () -> Void
     ) {
         _intent = State(initialValue: intent)
@@ -83,6 +104,9 @@ struct ParkConfirmView: View {
                             .accessibilityAddTraits(.isHeader)
                     }
 
+                    // W7: Reminder toggle
+                    reminderToggle
+
                     // Action row
                     actionRow
                 }
@@ -91,6 +115,17 @@ struct ParkConfirmView: View {
             }
         }
         .interactiveDismissDisabled(true)
+    }
+
+    // MARK: - W7: Reminder toggle
+
+    private var reminderToggle: some View {
+        Toggle(isOn: $remindMe) {
+            Text("Remind me before parking changes")
+                .font(.body)
+        }
+        .accessibilityLabel("Remind me before parking changes")
+        .accessibilityHint("When on, you'll get a notification before your parking window ends.")
     }
 
     // MARK: - Detected block
@@ -177,7 +212,7 @@ struct ParkConfirmView: View {
             .accessibilityLabel("Cancel parking here")
 
             Button {
-                onConfirm(intent)
+                onConfirm(PinConfirmResult(intent: intent, notifyOnRestriction: remindMe))
             } label: {
                 Text("Park here")
                     .font(.headline)
