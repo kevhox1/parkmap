@@ -75,6 +75,22 @@
 //    - @State aspService: ASPSuspensionService instance.
 //    - @Environment(\.scenePhase) for foreground-event banner refresh.
 //
+//  W7.5 additions (pass-1):
+//    - ActiveSheet.parkUntil (originally parkUntil(ParkedCar)) — Park Until sheet.
+//    - @State parkUntilTarget: Date? and parkUntilMode: Bool — filter state.
+//    - ParkUntilPill via .safeAreaInset(edge: .bottom) — filter-active indicator.
+//    - rebuildOverlays: binary green/red branch when parkUntilMode is true.
+//    - Stale-target guard in .onChange(of: scenePhase) — clears expired filter on foreground.
+//    - isFree(segment:from:until:) engine method + ParkUntilTests (20 tests).
+//
+//  W7.5 pass-2 pivot (filter-first UX):
+//    - ActiveSheet.parkUntil changed to no-payload case (car-agnostic).
+//    - Standalone clock.fill toolbar button in recenterButtonStack as Park Until trigger.
+//    - .onReceive(pinDropped) no longer presents the sheet or clears the filter.
+//    - Filter persists across pin drops; cleared only via X-on-pill, stale-target, or "I left".
+//    - ParkUntilSheet: `car: ParkedCar` parameter removed.
+//    - Skip handler: dismisses sheet only (no filter clear — filter was not set by this sheet).
+//
 
 import SwiftUI
 import MapKit
@@ -93,8 +109,9 @@ enum ActiveSheet: Identifiable {
     case notificationRationale
     /// W7: global settings sheet.
     case settings
-    /// W7.5: "Parking until when?" prompt after pin drop.
-    case parkUntil(ParkedCar)
+    /// W7.5: "Parking until when?" sheet — triggered via standalone toolbar button.
+    /// Pass-2 pivot: car-agnostic; no ParkedCar payload. Filter is independent of pin lifecycle.
+    case parkUntil
 
     var id: String {
         switch self {
@@ -103,7 +120,7 @@ enum ActiveSheet: Identifiable {
         case .parkedCarDetail(let car):   return "parkedCarDetail-\(car.id)"
         case .notificationRationale:      return "notificationRationale"
         case .settings:                   return "settings"
-        case .parkUntil(let car):         return "parkUntil-\(car.id)"
+        case .parkUntil:                  return "parkUntil"
         }
     }
 }
@@ -457,18 +474,17 @@ struct ContentView: View {
                 activeSheet = .notificationRationale
             }
         }
-        // W6 + W7.5: Every pin drop (including replacements).
+        // W6: Every pin drop (including replacements).
         //
-        // W6 behavior: cancel old notifications, schedule new ones.
+        // Cancels old notifications, schedules new ones.
         // `previousCarID` is set by confirmPinDrop() BEFORE save() is called, so it holds
         // the old car's UUID at this point. After scheduling, we don't need to update it here —
         // the next confirmPinDrop() call will set it before the next save().
         //
-        // W7.5 behavior: clear any stale Park Until filter from a prior session, then
-        // present the "Parking until when?" sheet. Per spec §4.D, this subscriber consolidates
-        // both W6 and W7.5 pinDropped logic into a single onReceive block to avoid a race.
-        // SwiftUI's single sheet(item:) binding transitions sheets automatically when we
-        // replace activeSheet from .parkConfirm to .parkUntil.
+        // W7.5 pass-2: No longer presents the ParkUntil sheet or clears the filter here.
+        // The Park Until filter is now filter-first (toolbar button → see all matching blocks →
+        // choose where to park). The filter is independent of pin lifecycle — it persists across
+        // pin drops and is cleared only via X-on-pill, stale-target auto-clear, or "I left".
         .onReceive(parkPinService.pinDropped) { newCar in
             let oldID = previousCarID
             Task { @MainActor in
@@ -480,13 +496,6 @@ struct ContentView: View {
                     engine: engine
                 )
             }
-            // W7.5: Clear any existing filter (new pin → new session).
-            parkUntilMode = false
-            parkUntilTarget = nil
-            // W7.5: Present "Parking until when?" sheet.
-            // Replaces .parkConfirm (which set activeSheet = nil in its onConfirm closure
-            // before save() fired pinDropped). SwiftUI handles the sheet transition automatically.
-            activeSheet = .parkUntil(newCar)
         }
         // W6.1 fix: Notification tap deep-link → open ParkedCarDetailView (AC-W6.11, OQ-W6-3).
         //
@@ -626,10 +635,10 @@ struct ContentView: View {
                 .presentationBackground(.regularMaterial)
                 .presentationCornerRadius(20)
 
-            case .parkUntil(let car):
-                // W7.5: "Parking until when?" sheet — presented after every pin drop.
+            case .parkUntil:
+                // W7.5 pass-2: "Parking until when?" sheet — presented via standalone toolbar
+                // button (filter-first UX). Car-agnostic; filter persists across pin drops.
                 ParkUntilSheet(
-                    car: car,
                     onConfirm: { targetDate in
                         activeSheet = nil
                         parkUntilTarget = targetDate
@@ -639,11 +648,7 @@ struct ContentView: View {
                         ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
                     },
                     onSkip: {
-                        // Clear the filter on skip — new pin always resets to normal mode.
                         activeSheet = nil
-                        parkUntilMode = false
-                        parkUntilTarget = nil
-                        rebuildOverlays(at: .nowET)
                     }
                 )
                 .presentationDetents([.medium])
@@ -807,6 +812,20 @@ struct ContentView: View {
                 .accessibilityLabel("Recenter on my parked car")
                 .accessibilityHint("Moves the map to show where you parked.")
             }
+
+            // W7.5 pass-2: Park Until filter — standalone trigger (filter-first UX).
+            // Always visible. Tapping while filter is active re-opens the sheet to change the time.
+            Button {
+                activeSheet = .parkUntil
+            } label: {
+                Image(systemName: "clock.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(parkUntilMode ? Color.green : Color.accentColor)
+            }
+            .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
+            .accessibilityHint("Shows only blocks where you can park until a chosen time.")
         }
     }
 

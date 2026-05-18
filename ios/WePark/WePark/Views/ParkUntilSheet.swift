@@ -2,7 +2,9 @@
 //  ParkUntilSheet.swift
 //  WePark
 //
-//  W7.5: "Parking until when?" sheet — presented after every pin drop via ActiveSheet.parkUntil.
+//  W7.5: "Parking until when?" sheet — presented via standalone toolbar button (clock.fill).
+//  Pass-2 pivot: filter-first UX — user enters Park Until mode, sees matching blocks,
+//  then chooses where to park. Sheet is car-agnostic; no ParkedCar dependency.
 //
 //  Design spec: docs/w7.5-park-until-x-spec.md §3.C
 //
@@ -21,9 +23,6 @@ import SwiftUI
 struct ParkUntilSheet: View {
 
     // MARK: - Inputs
-
-    /// The car that was just pinned — available for context but not rendered in v1.
-    let car: ParkedCar
 
     /// Called when user confirms a target. ContentView wires this to set parkUntilTarget.
     let onConfirm: (Date) -> Void
@@ -250,19 +249,7 @@ struct ParkUntilPill: View {
 // MARK: - Preview (Sheet)
 
 #Preview("ParkUntilSheet") {
-    let car = ParkedCar(
-        id: UUID(),
-        latitude: 40.7183,
-        longitude: -73.9942,
-        detectedSegmentID: nil,
-        detectedSide: nil,
-        street: "MOTT STREET",
-        fromStreet: "GRAND STREET",
-        toStreet: "HESTER STREET",
-        parkedAt: .nowET,
-        notifyOnRestriction: true
-    )
-    ParkUntilSheet(car: car, onConfirm: { _ in }, onSkip: {})
+    ParkUntilSheet(onConfirm: { _ in }, onSkip: {})
         .presentationDetents([.medium])
         .presentationDragIndicator(.visible)
         .presentationBackground(.regularMaterial)
