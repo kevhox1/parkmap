@@ -200,13 +200,51 @@ struct ParkUntilSheet: View {
     }
 
     /// Formats a Date as "h:mm a" in Eastern Time (e.g., "5:00 PM").
-    /// Matches the format used in nextRestrictionTimeLabel (ParkingRulesEngine.swift:570).
+    /// Relative-date-aware time formatter. Used by the confirm button, the
+    /// ParkUntilPill at the bottom of the map, and the success toast.
+    ///
+    /// Output shape:
+    ///   - Today                    → "9:00 AM"
+    ///   - Tomorrow                 → "Tomorrow 9:00 AM"
+    ///   - 2-6 days from now        → "Mon 9:00 AM"
+    ///   - 7+ days from now         → "May 25, 9:00 AM"
+    ///
+    /// The bare-time fallback (today-only) matches Apple's standard pattern
+    /// in Maps and Reminders: omit the date when it's redundant with "today,"
+    /// add it explicitly otherwise so the user is never guessing which day.
+    /// Pass-3 fix from Kevin's smoke on 2026-05-18 — the original "h:mm a"
+    /// format was ambiguous when the target wasn't today.
     static func formatTime(_ date: Date) -> String {
-        let fmt = DateFormatter()
-        fmt.timeZone = .easternTime
-        fmt.locale = Locale(identifier: "en_US")
-        fmt.dateFormat = "h:mm a"
-        return fmt.string(from: date)
+        let cal = Calendar.easternTime
+        let now = Date.nowET
+        let todayMidnight = cal.startOfDay(for: now)
+        let targetMidnight = cal.startOfDay(for: date)
+        let dayDiff = cal.dateComponents([.day], from: todayMidnight, to: targetMidnight).day ?? 0
+
+        let timeFmt = DateFormatter()
+        timeFmt.timeZone = .easternTime
+        timeFmt.locale = Locale(identifier: "en_US")
+        timeFmt.dateFormat = "h:mm a"
+        let timeStr = timeFmt.string(from: date)
+
+        switch dayDiff {
+        case ...0:
+            return timeStr
+        case 1:
+            return "Tomorrow \(timeStr)"
+        case 2...6:
+            let weekdayFmt = DateFormatter()
+            weekdayFmt.timeZone = .easternTime
+            weekdayFmt.locale = Locale(identifier: "en_US")
+            weekdayFmt.dateFormat = "EEE"
+            return "\(weekdayFmt.string(from: date)) \(timeStr)"
+        default:
+            let monthDayFmt = DateFormatter()
+            monthDayFmt.timeZone = .easternTime
+            monthDayFmt.locale = Locale(identifier: "en_US")
+            monthDayFmt.dateFormat = "MMM d"
+            return "\(monthDayFmt.string(from: date)) \(timeStr)"
+        }
     }
 }
 
