@@ -79,8 +79,12 @@ struct ParkUntilSheet: View {
         return Self.formatTime(target)
     }
 
-    /// Max selectable date: 24h from now (spec §4.A 24h cap).
-    private var maxDate: Date { .nowET.addingTimeInterval(24 * 3600) }
+    /// Max selectable date: 7 days from now. Raised from 24h after pass-2 smoke —
+    /// real use cases want 48-72h (weekend parking, Fri→Mon overnight). The engine's
+    /// per-day walk in isFree() handles longer windows correctly (it's already
+    /// tested at multi-day in ParkUntilTests). 7 days is a soft cap; the engine
+    /// itself has no upper bound but DatePickers feel awkward past a week.
+    private var maxDate: Date { .nowET.addingTimeInterval(7 * 24 * 3600) }
 
     // MARK: - Body
 
