@@ -75,6 +75,22 @@
 //    - @State aspService: ASPSuspensionService instance.
 //    - @Environment(\.scenePhase) for foreground-event banner refresh.
 //
+//  W7.5 additions (pass-1):
+//    - ActiveSheet.parkUntil (originally parkUntil(ParkedCar)) — Park Until sheet.
+//    - @State parkUntilTarget: Date? and parkUntilMode: Bool — filter state.
+//    - ParkUntilPill via .safeAreaInset(edge: .bottom) — filter-active indicator.
+//    - rebuildOverlays: binary green/red branch when parkUntilMode is true.
+//    - Stale-target guard in .onChange(of: scenePhase) — clears expired filter on foreground.
+//    - isFree(segment:from:until:) engine method + ParkUntilTests (20 tests).
+//
+//  W7.5 pass-2 pivot (filter-first UX):
+//    - ActiveSheet.parkUntil changed to no-payload case (car-agnostic).
+//    - Standalone clock.fill toolbar button in recenterButtonStack as Park Until trigger.
+//    - .onReceive(pinDropped) no longer presents the sheet or clears the filter.
+//    - Filter persists across pin drops; cleared only via X-on-pill, stale-target, or "I left".
+//    - ParkUntilSheet: `car: ParkedCar` parameter removed.
+//    - Skip handler: dismisses sheet only (no filter clear — filter was not set by this sheet).
+//
 
 import SwiftUI
 import MapKit
@@ -93,6 +109,9 @@ enum ActiveSheet: Identifiable {
     case notificationRationale
     /// W7: global settings sheet.
     case settings
+    /// W7.5: "Parking until when?" sheet — triggered via standalone toolbar button.
+    /// Pass-2 pivot: car-agnostic; no ParkedCar payload. Filter is independent of pin lifecycle.
+    case parkUntil
 
     var id: String {
         switch self {
@@ -101,6 +120,7 @@ enum ActiveSheet: Identifiable {
         case .parkedCarDetail(let car):   return "parkedCarDetail-\(car.id)"
         case .notificationRationale:      return "notificationRationale"
         case .settings:                   return "settings"
+        case .parkUntil:                  return "parkUntil"
         }
     }
 }
@@ -192,6 +212,17 @@ struct ContentView: View {
     /// and the negated binding) so ContentView stays decoupled from the key name.
     @State private var notificationsMuted: Bool = false
 
+    // MARK: - W7.5: Park Until filter state
+
+    /// The target departure time the user selected in ParkUntilSheet.
+    /// Non-nil only while the Park Until filter is active.
+    /// In-session only — cleared on app kill and on foreground re-entry if past.
+    @State private var parkUntilTarget: Date? = nil
+
+    /// True while the Park Until filter is active.
+    /// Drives the binary green/red map rendering branch in rebuildOverlays.
+    @State private var parkUntilMode: Bool = false
+
     // MARK: - Bundle version strings (passed into SettingsView)
 
     private let appVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -248,6 +279,14 @@ struct ContentView: View {
                 // W7: ASP banner pushed above the map content, not overlapping it.
                 .safeAreaInset(edge: .top) {
                     ASPBanner(state: bannerState)
+                }
+                // W7.5: Filter-active pill pushed below the map content when Park Until is active.
+                .safeAreaInset(edge: .bottom) {
+                    if parkUntilMode, let target = parkUntilTarget {
+                        ParkUntilPill(targetDate: target) {
+                            clearParkUntilFilter()
+                        }
+                    }
                 }
 
                 // W5.1: Recenter buttons — top-right, below status bar and compass rose.
@@ -366,6 +405,14 @@ struct ContentView: View {
                 bannerState = aspService.suspensionState(at: .nowET)
                 // Re-sync mute state in case it changed while backgrounded (edge case).
                 notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
+                // W7.5: Stale-target guard — clear the Park Until filter if the target has passed.
+                // This covers the case where the user backgrounded the app past their departure time.
+                if let target = parkUntilTarget, target < .nowET {
+                    parkUntilMode = false
+                    parkUntilTarget = nil
+                    // Rebuild overlays to restore normal 5-state coloring.
+                    rebuildOverlays(at: .nowET)
+                }
                 // W6.1: Replay any buffered deep-link that arrived during the foreground transition.
                 routePendingDeepLink(appDelegate.pendingDeepLinkCarID)
             }
@@ -427,13 +474,21 @@ struct ContentView: View {
                 activeSheet = .notificationRationale
             }
         }
-        // W6: Every pin drop (including replacements) → cancel old notifications, schedule new.
+        // W6: Every pin drop (including replacements).
+        //
+        // Cancels old notifications, schedules new ones.
         // `previousCarID` is set by confirmPinDrop() BEFORE save() is called, so it holds
         // the old car's UUID at this point. After scheduling, we don't need to update it here —
         // the next confirmPinDrop() call will set it before the next save().
+        //
+        // W7.5 pass-2: No longer presents the ParkUntil sheet or clears the filter here.
+        // The Park Until filter is now filter-first (toolbar button → see all matching blocks →
+        // choose where to park). The filter is independent of pin lifecycle — it persists across
+        // pin drops and is cleared only via X-on-pill, stale-target auto-clear, or "I left".
         .onReceive(parkPinService.pinDropped) { newCar in
             let oldID = previousCarID
             Task { @MainActor in
+                // W6: Cancel old + schedule new notifications.
                 NotificationScheduler.shared.cancelAllThenSchedule(
                     for: newCar,
                     oldCarID: oldID,
@@ -521,6 +576,10 @@ struct ContentView: View {
                         // W6: Cancel notifications before clearing the pin.
                         NotificationScheduler.shared.cancelAll(for: car)
                         parkPinService.clearPin()
+                        // W7.5: Clear Park Until filter — no orphan filter for a non-existent car.
+                        parkUntilMode = false
+                        parkUntilTarget = nil
+                        rebuildOverlays(at: .nowET)
                     }
                 )
                 .presentationDetents([.medium, .large])
@@ -575,6 +634,27 @@ struct ContentView: View {
                 .presentationDragIndicator(.visible)
                 .presentationBackground(.regularMaterial)
                 .presentationCornerRadius(20)
+
+            case .parkUntil:
+                // W7.5 pass-2: "Parking until when?" sheet — presented via standalone toolbar
+                // button (filter-first UX). Car-agnostic; filter persists across pin drops.
+                ParkUntilSheet(
+                    onConfirm: { targetDate in
+                        activeSheet = nil
+                        parkUntilTarget = targetDate
+                        parkUntilMode = true
+                        rebuildOverlays(at: .nowET)
+                        let timeStr = ParkUntilSheet.formatTime(targetDate)
+                        ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
+                    },
+                    onSkip: {
+                        activeSheet = nil
+                    }
+                )
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(20)
             }
         }
     }
@@ -595,6 +675,60 @@ struct ContentView: View {
         guard region.span.latitudeDelta <= polylineHideSpanThreshold else {
             overlayGeneration += 1
             overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
+            return
+        }
+
+        // W7.5: Park Until mode — classify segments by interval-free status (binary green/red).
+        if parkUntilMode, let target = parkUntilTarget {
+            // Stale-target guard: if the target has passed, silently clear the filter and
+            // fall through to normal 5-state classification.
+            guard target > now else {
+                parkUntilMode = false
+                parkUntilTarget = nil
+                // Tail-call to the normal path — note: Swift doesn't TCO, but the rebuildOverlays
+                // call below is safe because we cleared the flags before recursing.
+                rebuildOverlays(at: now)
+                return
+            }
+
+            var freeCoords:    [[CLLocationCoordinate2D]] = []
+            var notFreeCoords: [[CLLocationCoordinate2D]] = []
+
+            for segment in tileLoader.segments {
+                let coords = segment.coordinates
+                guard coords.count >= 2 else { continue }
+                if segment.id == selectedSegmentID { continue }
+                if engine.isFree(segment: segment, from: now, until: target) {
+                    freeCoords.append(coords)
+                } else {
+                    notFreeCoords.append(coords)
+                }
+            }
+
+            // Selected-block highlight.
+            var selectedCoords: [CLLocationCoordinate2D]? = nil
+            var selectedState: CurrentState = .unknown
+            if let seg = selectedSegment {
+                let coords = seg.coordinates
+                if coords.count >= 2 {
+                    selectedCoords = coords
+                    // Color selected block by its Park Until result.
+                    selectedState = engine.isFree(segment: seg, from: now, until: target)
+                        ? .freeComfortably : .restrictedNow
+                }
+            }
+
+            overlayGeneration += 1
+            overlayPayload = MapViewRepresentable.OverlayPayload(
+                freeComfortably:        freeCoords,
+                freeButRestrictionSoon: [],
+                meteredActive:          [],
+                restrictedNow:          notFreeCoords,
+                unknown:                [],
+                selectedCoords:         selectedCoords,
+                selectedState:          selectedState,
+                generation:             overlayGeneration
+            )
             return
         }
 
@@ -678,6 +812,20 @@ struct ContentView: View {
                 .accessibilityLabel("Recenter on my parked car")
                 .accessibilityHint("Moves the map to show where you parked.")
             }
+
+            // W7.5 pass-2: Park Until filter — standalone trigger (filter-first UX).
+            // Always visible. Tapping while filter is active re-opens the sheet to change the time.
+            Button {
+                activeSheet = .parkUntil
+            } label: {
+                Image(systemName: "clock.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(parkUntilMode ? Color.green : Color.accentColor)
+            }
+            .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
+            .accessibilityHint("Shows only blocks where you can park until a chosen time.")
         }
     }
 
@@ -840,6 +988,17 @@ struct ContentView: View {
     private func openParkedCarDetail() {
         guard let car = parkPinService.parkedCar else { return }
         activeSheet = .parkedCarDetail(car)
+    }
+
+    // MARK: - W7.5: Park Until filter helpers
+
+    /// Clears the Park Until filter, rebuilds overlays in normal 5-state mode, and shows a toast.
+    /// Called from the filter-active pill's "x" button and from the skip handler.
+    private func clearParkUntilFilter() {
+        parkUntilMode = false
+        parkUntilTarget = nil
+        rebuildOverlays(at: .nowET)
+        ToastService.shared.show(message: "Park Until filter cleared")
     }
 
     // MARK: - W6.1: Route buffered notification deep-link
