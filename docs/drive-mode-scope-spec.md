@@ -1,24 +1,43 @@
 # Drive Mode — iOS v1.0 Scope Decision
 
-**Status:** Decisions locked 2026-05-12 — see §11.
+**Status:** Spec amended 2026-05-18 for W8.5 implementation (5 OQs + 3 NQs resolved + patrol mode added).
 **Author:** @tech-lead
 **Date:** 2026-05-12
+**Amended:** 2026-05-18
 **Supersedes:** Nothing — `docs/drive-mode-routing.md` is the PWA v3 reference and stays as historical context. This spec governs the iOS v1.0 question only.
 **Related:** `docs/ios-mvp-spec.md` §2.2 (Drive Mode explicitly out of scope — this spec may change that); `docs/w5-pin-drop-spec.md` §6 (arrival → pin-drop hook intersection).
 
 ---
 
-## §0 — Open Questions for Kevin (answer these before code starts)
+## §0 — Resolved Decisions + Open Questions for Kevin
 
-These are binary. A one-line answer to each is enough.
+### Resolved decisions (2026-05-17 — Kevin's answers, all 5 OQs closed)
 
-| # | Question | Options |
-|---|---|---|
-| OQ-1 | **Which option do you choose?** | A (full PWA port), B (vision-focused), C (Apple Maps backend), D (defer to v1.1) |
-| OQ-2 | **Drive-test the PWA before iOS build starts?** | Yes — complete the Manhattan drive test first (1-2 weeks); OR No — build iOS in parallel with drive-test, accept that the design may need revision mid-build |
-| OQ-3 | **Routing provider if Option B or C is chosen.** | Mapbox HTTP-only (no iOS SDK, ~$0 at TestFlight scale); OR Apple MKDirections (free, no guaranteed alternatives); OR Hybrid (MKDirections for route, Mapbox HTTP for alternatives scoring only) |
-| OQ-4 | **Is parking-aware route selection (scoring routes by parking exposure) required in v1.0?** | Yes — the scoring is the differentiator; OR No — a single best-effort route is fine, parking commentary on top is enough |
-| OQ-5 | **TestFlight timeline.** Does Drive Mode ship in TF1 (same build as pin drop / notifications / ASP banner), or TF2 (a follow-up build 3-6 weeks after TF1)? | TF1 (block pin drop from going to TestFlight until Drive Mode is ready); OR TF2 (ship pin-drop MVP to TestFlight now, drive mode follows) |
+**OQ-1: Option B — Vision-focused port. Confirmed.**
+No full turn-by-turn ribbon, no re-routing, no Mapbox Navigation SDK. The destination input, parking commentary engine, final-approach escalation, and voice are the build targets. The §2 Options table below is preserved for history; it is not live scope.
+
+**OQ-2: No drive-test gate before iOS build. Drive test already happened.**
+Findings from Kevin's 2026-05-11 PWA drive captured in §11 are sufficient. iOS build starts now. Each sub-PR gets incremental drive-testing as it lands, rather than a single pre-build gate.
+
+**OQ-3: Mapbox HTTP API. Hybrid option rejected.**
+The "only valuable logic is parking score/free and distance to next block that has free parking" (Kevin's framing). That scoring requires guaranteed route alternatives, which MKDirections cannot provide deterministically in Manhattan. Mapbox HTTP (`MAPBOX_DIRECTIONS_URL` at `index.html:5987`) with `alternatives=true` is the single routing provider. No MKDirections fallback, no Navigation SDK. A new Mapbox token scoped to the iOS bundle ID is required (5-minute dashboard task — must complete before W8.5b starts).
+
+**OQ-4: Yes — parking-aware route scoring required in v1.0.**
+Kevin: "some version of parking-aware route scoring is going to be important." Direct port of `pickBestParkingAwareRoute` (`index.html:6298`, ~40 lines) to Swift. This was previously tagged as 0.5-session add (W8.5e) — it is now a mandatory work stream, not optional.
+
+**OQ-5: TF1 — Drive Mode ships in TF1. No W9.**
+2026-05-17 roadmap pivot: Drive Mode is bundled into the single complete-vision TF1 launch. The Option E (phased TF1-without-Drive-Mode, TF2-with-Drive-Mode) sequencing in §3/§7 is superseded. New order: W8.5 completes → W8 builds → TF1 ships.
+
+### Resolved decisions (2026-05-18 — Kevin's answers, all 3 NQs closed)
+
+**NQ-1: Dual-mode — commentary-only (default) + active turn-by-turn (opt-in). Confirmed.**
+This is not a binary choice. Patrol mode ships with commentary-only as the default: the app speaks opportunities ("Free parking on your right") but issues no directional instructions. An in-session "Voice mode" toggle on the patrol bottom card switches to active turn-by-turn, where `PatrolModeService` feeds each next sweep waypoint into `RouteService` for a short route segment and W8.5d approach-escalation re-applies per segment. The toggle is session-scoped — patrol mode always starts in commentary mode; the user opt-in does not persist across sessions. Kevin's framing: "active turn-by-turn should be a feature but shouldn't be the primary feature." See §12 "Voice mode toggle" for UX detail.
+
+**NQ-2: Voice + haptic pulse. Confirmed.**
+`UIImpactFeedbackGenerator.medium` fires when a free block enters the 200m radius. No banner card. The haptic fires immediately after the voice cue completes — not during speech — to prevent overlapping sensory cues.
+
+**NQ-3: Both explicit button + auto-detect (Option C). Confirmed.**
+The patrol bottom card shows a persistent "I found a spot" button at all times. Auto-detect (speed < 2 mph for 10+ seconds) independently surfaces "Did you find a spot?" — both paths ship in W8.5. No conditional language; Option C is locked.
 
 ---
 
@@ -44,7 +63,30 @@ The PWA built a navigation-first experience: full Mapbox turn-by-turn (Apple Map
 
 ---
 
-## §2 — Options Evaluated
+## §2 — Options Evaluated + W8.5 Scope
+
+### W8.5 scope (post-OQ resolution, 2026-05-18)
+
+Two co-equal flows ship in W8.5. They share infrastructure (LocationService, Mapbox HTTP routing, AVSpeechSynthesizer, map overlay logic) but differ in trigger UI, routing strategy, and voice cue style.
+
+**Destination mode** (original Option B scope — unchanged):
+User enters an address. App routes them there via Mapbox HTTP with parking-aware alternative scoring. Commentary fires on every block change; voice and visual card escalate in the final 500m approach. Arrival prompt hooks into W5 pin-drop flow.
+
+**Patrol mode** (new, 2026-05-18):
+User has no fixed destination. User centers on current location or drops a "target area" pin. App identifies free blocks within a configurable radius using `ParkingRulesEngine.isFree(segment:from:until:)` (W7.5 engine), scores candidate streets via a direct Swift port of `pickBestParkingAwareRoute`, and generates a coverage-sweep route through the highest-scoring unvisited streets — direct port of the greedy graph traversal in `generateParkingRoute` (`index.html:7038`). Voice cues focus on opportunities, not turns. No "you have arrived" prompt; end-of-patrol has its own trigger (see §12 and NQ-3 above).
+
+**Shared infrastructure:**
+- `LocationService` (W5.1) — GPS stream, heading, speed
+- Mapbox HTTP Directions API — destination mode uses it for route-to-destination; patrol mode uses it to fetch drivable sub-routes between sweep waypoints
+- `AVSpeechSynthesizer` + `AVAudioSession` — both modes use the same voice engine (§5)
+- `ParkingRulesEngine.isFree` (W7.5) — both modes query block status through the same interval-walker
+- `MKMapView` overlay layer — both modes render on the same existing overlay architecture (W4 `MKMultiPolyline` groups)
+- `ActiveSheet: Identifiable` enum (W5.1) — both modes add cases for their respective entry UIs
+
+**File estimate uplift:**
+Original Option B: ~4-7 sessions. Patrol mode adds: `PatrolModeService.swift` (~2 sessions), `PatrolView.swift` (~1 session), voice cue extension (~1 session), tests (~1 session). Revised total: see §7.
+
+The options analysis below (A through E) is preserved as historical decision record. §3 recommendation is superseded by OQ-5 (TF1, not TF2).
 
 ### Option A — Full PWA Drive Mode v3 Port
 
@@ -143,9 +185,11 @@ Benefit over "wait for Drive Mode to do TF1": TestFlight feedback on the non-dri
 
 ---
 
-## §3 — Recommendation
+## §3 — Recommendation (superseded by OQ-1 / OQ-5 resolution)
 
-**Recommended option: Option E — ship TF1 without Drive Mode, ship Option B Drive Mode in TF2.**
+**This section reflects the original 2026-05-12 recommendation. It is superseded: OQ-1 = Option B, OQ-5 = TF1 (not TF2). W8.5 builds both destination mode and patrol mode for TF1. The rationale for Option B (below) remains valid and is not removed — it explains why the scope is what it is.**
+
+**Original recommendation: Option E — ship TF1 without Drive Mode, ship Option B Drive Mode in TF2.**
 
 Binding rationale:
 
@@ -270,45 +314,74 @@ Drive Mode is not a success if users activate it once and never return. The fear
 
 ## §7 — Work-Stream Plan
 
-### Sequencing (Option E recommendation)
+### Sequencing (updated for TF1, 2026-05-18)
+
+OQ-5 resolution: no W9, no pre-Drive-Mode TF1. The new order is:
 
 ```
-[NOW]      W5 (pin drop)      → W6 (notifications)    → W7 (ASP banner)  → W7.5 (Park Until X)
-                                                                            ↓
-                                                               TF1 BUILD (W8) — TestFlight ships
-                                                                            ↓
-                                                               Kevin drive-tests PWA (parallel)
-                                                                            ↓
-                                                               Drive-test findings reviewed
-                                                                            ↓
-[TF2]      W8.5 (Drive Mode Option B — see streams below)
-                                                                            ↓
-                                                               W9 (TF2 build)
+[SHIPPED]  W5 → W6 → W6.1 → W7 → viewport-polish → W7.5   (all merged to main)
+                                                                 ↓
+                                                        W8.5 (Drive Mode — both modes)
+                                                        Two sub-PRs recommended:
+                                                          W8.5-dest (destination mode)
+                                                          W8.5-patrol (patrol mode)
+                                                                 ↓
+                                                        W8 — TF1 build (Apple Dev approved 2026-05-17)
 ```
 
-### Drive Mode work streams (Option B, labeled W8.5)
+**Recommended sub-PR split:** destination mode and patrol mode can ship as two sequential sub-PRs within W8.5. Kevin can drive-test destination mode while patrol mode is still in development, which surfaces real-car feedback earlier. Patrol mode serializes after destination mode only for the shared foundation streams (W8.5a, W8.5c); its own service + UI streams can overlap partially.
 
-**All streams below depend on W7.5 being merged and the drive-test findings being reviewed.**
+### Destination mode work streams (W8.5-dest)
+
+**All streams depend on W7.5 being merged (done as of 2026-05-16).**
 
 | Stream | Owner | Parallelizable? | Est. sessions | Notes |
 |---|---|---|---|---|
-| **W8.5a** — CoreLocation drive session: `CLLocationManager` heading updates, `startUpdatingLocation` in drive mode, heading-up `MKMapView` rotation, follow-mode with recenter button, wake lock | @ios-engineer | Yes — no UI dependency | 1.5 | Port of PWA `stabilizedHeading`, `setDrivingMapRotation`, `recenterDriveMode`. `MapViewRepresentable` changes. |
-| **W8.5b** — Destination input + routing: `MKLocalSearchCompleter`-backed search UI, route fetch (MKDirections or Mapbox HTTP per OQ-3), route polyline rendered on map, destination pin, recent destinations in `UserDefaults` | @ios-engineer | Yes — parallel with 8.5a (different files) | 2 | New file `Views/DriveModeDestinationView.swift`. New file `Services/RouteService.swift`. |
-| **W8.5c** — Parking commentary engine: `getCurrentDrivingContext` port, side-of-street labels on bottom card, `AVSpeechSynthesizer` voice, block-change detection, `AVAudioSession` configuration, voice mute toggle | @ios-engineer | Serializes after W8.5a (needs heading data) | 2 | Port of `getCurrentDrivingContext`, `speakDrivingContext`, `renderDrivingContext` from PWA. New file `Services/DrivingContextService.swift`. New file `Views/DriveModeBottomCard.swift`. |
-| **W8.5d** — Final approach escalation + arrival: 500m threshold detection, elevated voice frequency in approach zone, "Approaching destination" visual strip, arrival prompt → W5 pin-drop hook | @ios-engineer | Serializes after W8.5b + W8.5c | 1 | New, not in PWA. Requires destination coordinate from W8.5b and commentary engine from W8.5c. |
-| **W8.5e** — Parking-aware route scoring (ONLY if OQ-4 = yes) | @ios-engineer | Serializes after W8.5b | 0.5–1 | Port of `pickBestParkingAwareRoute` (~40 lines). Skip entirely if OQ-4 = no. |
-| **W8.5 QA** | @qa-verifier | After all streams merge | 1.5 | Simulator + real-device GPS (requires Apple Dev approval already obtained by TF1 milestone). Drive-mode-specific AC verification. |
-| **W8.5 Design** | @designer | Can review W8.5c/d in parallel | 0.5 | Bottom card layout, approach strip, font sizing for in-car readability. |
+| **W8.5a** — CoreLocation drive session: `CLLocationManager` heading updates, `startUpdatingLocation` in drive mode, heading-up `MKMapView` rotation, follow-mode with recenter button, wake lock | @ios-engineer | Yes — no UI dependency | 1.5 | Port of PWA `stabilizedHeading`, `setDrivingMapRotation`, `recenterDriveMode`. `MapViewRepresentable` changes. Shared by both modes. |
+| **W8.5b** — Destination input + routing: `MKLocalSearchCompleter`-backed search UI, Mapbox HTTP route fetch (OQ-3 = Mapbox HTTP, resolved), route polyline rendered on map, destination pin, parking-aware route scoring, recent destinations in `UserDefaults` | @ios-engineer | Yes — parallel with W8.5a | 2.5 | New `Views/DriveModeDestinationView.swift`, `Services/RouteService.swift`. **W8.5e (scoring) is now merged into this stream** — OQ-4 resolved yes, scoring is mandatory. Port `pickBestParkingAwareRoute` (`index.html:6298`, ~40 lines) as part of `RouteService`. |
+| **W8.5c** — Parking commentary engine: `getCurrentDrivingContext` port, side-of-street labels on bottom card, `AVSpeechSynthesizer` voice, block-change detection, `AVAudioSession` configuration, voice mute toggle | @ios-engineer | Serializes after W8.5a | 2 | Port of `getCurrentDrivingContext`, `speakDrivingContext`, `renderDrivingContext` from PWA. New `Services/DrivingContextService.swift`, `Views/DriveModeBottomCard.swift`. Shared by both modes — patrol mode reuses the commentary engine with opportunity-style voice phrasing. |
+| **W8.5d** — Final approach escalation + arrival: 500m threshold, elevated voice frequency, "Approaching destination" visual strip, arrival prompt → W5 pin-drop hook | @ios-engineer | Serializes after W8.5b + W8.5c | 1 | Not in PWA. Destination mode only. |
+| **W8.5-dest Design** | @designer | Review W8.5c/d in parallel | 0.5 | Bottom card layout, approach strip, dashboard-mount font sizing. |
+| **W8.5-dest QA** | @qa-verifier | After W8.5a+b+c+d merge | 1 | Destination-mode AC verification (AC-DM.1 through AC-DM.28 below + new AC-PM.* to be added). |
 
-**Parallel streams:** W8.5a and W8.5b can be dispatched simultaneously (they touch different files: `MapViewRepresentable.swift` for 8.5a vs. new destination UI files for 8.5b). W8.5c serializes after W8.5a (it needs `CLHeading` from the location manager). W8.5d serializes after both W8.5b and W8.5c.
+**Destination mode total: ~7–8 sessions.** Parallel execution of W8.5a + W8.5b saves ~1.5 sessions calendar time vs. serial.
 
-**Total W8.5 estimate:** 7–8 sessions across 2-3 `@ios-engineer` threads (with parallelism). Calendar time: ~2-3 weeks with parallel execution. Add 1 QA session = 3-4 weeks total for TF2.
+### Patrol mode work streams (W8.5-patrol)
+
+**All patrol streams depend on W8.5a (LocationService) and W8.5c (DrivingContextService) from destination mode.**
+
+| Stream | Owner | Parallelizable? | Est. sessions | Notes |
+|---|---|---|---|---|
+| **W8.5f** — `PatrolModeService`: coverage tracking (`visitedBlockKeys: Set<String>`), street-graph rank (`scoreEdgeCoverage` port from `generateParkingRoute` at `index.html:7038`), next-street suggestion, loop-back / radius-expand logic, `ParkingRulesEngine.isFree` integration, Park Until filter integration | @ios-engineer | Can start once W8.5a + W8.5c are merged | 2 | New `Services/PatrolModeService.swift`. Port greedy traversal from `generateParkingRoute` (`index.html:7038–7152`). Key difference from PWA: PWA generates a static route up-front; iOS patrol mode re-ranks dynamically on every GPS update as new blocks are visited. |
+| **W8.5g** — `PatrolView` + entry point: toolbar entry button, target-area pin (current-location default + drop-pin variant), patrol bottom card (free-block count, current suggestion, end-patrol button), `ActiveSheet.patrolMode` case | @ios-engineer | Parallel with W8.5f (different files) | 1.5 | New `Views/PatrolView.swift`. Adds `ActiveSheet.patrolMode` to W5.1 `ActiveSheet` enum. |
+| **W8.5h** — Voice cue extension: opportunity-style phrasing ("Free parking 200 feet on right, free until 8 PM"), near-free cues ("Metered block ahead, free block 1 block further right"), stay-quiet logic for red/no-data blocks, throttling to avoid spam | @ios-engineer | Serializes after W8.5c + W8.5f | 1 | Extends `DrivingContextService`. New phrasing patterns — see §12 §"Voice cue style" for the spec. |
+| **W8.5i** — Patrol mode tests: `PatrolModeService` coverage tracking, street ranking with mock graph, Park Until filter, no-data graceful degradation | @ios-engineer | Parallel with W8.5g | 1 | Target: `PatrolModeServiceTests.swift`. Minimum 10 test cases. |
+| **W8.5-patrol Design** | @designer | Review W8.5g in parallel | 0.5 | Patrol card layout, free-block count chip, target-area pin visual, end-of-patrol prompt styling. |
+| **W8.5-patrol QA** | @qa-verifier | After W8.5f+g+h+i merge | 1 | Patrol-mode AC verification (AC-PM.* below). |
+
+**Patrol mode total: ~7.25–8.25 sessions** (NQ-1 dual-mode resolution adds ~1.25 sessions to this sub-PR: ~0.5 session for the "Voice mode" toggle UI, ~0.5 session for `PatrolModeService` → `RouteService` waypoint wiring, ~0.25 session for mode-switch tests).
+
+### Combined W8.5 estimate
+
+| Mode | Engineer sessions | Design | QA | Total |
+|---|---|---|---|---|
+| Destination mode (W8.5-dest) | 7 | 0.5 | 1 | ~8.5 |
+| Patrol mode (W8.5-patrol) | ~5.75 | 0.5 | 1 | ~7.25 |
+| **Total** | **~12.75** | **1** | **2** | **~15.75** |
+
+With full parallel execution on disjoint streams, calendar time is closer to **9–11 sessions** rather than 15.75 serial. Revised range: **9–13 sessions** is the honest planning estimate (lower bound assumes maximum parallelism; upper bound assumes the usual integration friction).
+
+The recommended staging: merge W8.5-dest sub-PR first (drive-test destination mode), then open W8.5-patrol. This means patrol mode can use destination-mode drive-test findings as real-world calibration.
 
 ### W7.5 / Drive Mode overlap
 
-The "Park Until X" filter (`W7.5`) and Drive Mode share one integration: the arrival flow. When Drive Mode detects arrival and triggers the W5 pin-drop, the W7.5 prompt ("Parking until when?") fires naturally from `ParkPinService.pinDropped`. No additional wiring needed — W5's existing `pinDropped` event covers this.
+The "Park Until X" filter (`W7.5`) and Drive Mode share two integrations:
 
-There is a potential visual conflict: W7.5's Park Until filter colors blocks by the user's departure time, while Drive Mode's bottom card shows real-time status. The simplest resolution: Drive Mode always shows real-time status (ignores the Park Until filter while in Drive Mode). This preserves clarity for the driver. The Park Until filter remains active on the static map view for pre-drive browsing. This decision can be confirmed in the W8.5 spec.
+1. **Arrival flow (destination mode):** When Drive Mode detects arrival and triggers the W5 pin-drop, the W7.5 prompt ("Parking until when?") fires naturally from `ParkPinService.pinDropped`. No additional wiring — W5's existing `pinDropped` event covers this.
+
+2. **Patrol mode routing (new):** If the user has Park Until active when entering patrol mode, `PatrolModeService` passes the `until` time to `ParkingRulesEngine.isFree(segment:from:until:)` when scoring candidate streets. This filters the sweep to only suggest blocks that are free for the full requested window. The `until` time comes from the existing `ContentView` state (the `parkUntilTarget` property set by `ParkUntilSheet`). No new state management needed — patrol mode reads the existing W7.5 target.
+
+**Visual conflict (destination mode):** W7.5's Park Until filter colors blocks by the user's departure time; Drive Mode's bottom card shows real-time status. Resolution: Drive Mode always shows real-time status regardless of Park Until filter state. The Park Until filter remains active on the static map view for pre-drive browsing. Patrol mode is the exception — if Park Until is active, patrol mode uses the window for scoring but the bottom card still shows real-time labels (consistent with destination mode behavior).
 
 ---
 
@@ -464,30 +537,187 @@ Each of the four PWA problems is **expected to improve significantly on iOS nati
 
 **This validates the decision to build iOS native rather than continue investing in the PWA's Drive Mode.** Kevin's drive test was the experience that pushed him toward the iOS rewrite in the first place. The §1 vision (parking commentary as headline, fear reduction as success metric) sits on top of fixing these four foundational problems.
 
-### Required additions to W8.5 / W9 spec when it is written
+### Required additions to W8.5 spec — addressed in this doc
 
-Anyone writing the eventual `docs/w8.5-drive-mode-spec.md` (or `docs/w9-drive-mode-spec.md` depending on stream numbering) must address each of the four PWA problems explicitly:
+This spec (amended 2026-05-18) IS the W8.5 spec. The four PWA problems below are addressed in §7 (work streams) and the ACs in §10. See §10 AC-DM.7/8/9 for GPS accuracy, §9 for one-way visualization deferral, and the @designer stream in §7 for dashboard-mount polish. The items are preserved here as a checklist confirmation that all four were considered.
+
+Anyone making future amendments must address each of the four PWA problems explicitly:
 
 1. **GPS accuracy + update strategy.** Specify `CLLocationManager` configuration: `desiredAccuracy = kCLLocationAccuracyBestForNavigation`, `distanceFilter = kCLDistanceFilterNone` (every update), `activityType = .automotiveNavigation`, `pausesLocationUpdatesAutomatically = false` (driver doesn't want pauses on red lights). AC: user-position marker visibly tracks the car with < 1 second perceived lag.
 2. **One-way street visualization.** Spec the visual treatment — likely a small arrow `MKAnnotation` mid-segment on each one-way street, only rendered at zoom 16+ (denser at higher zoom). Color matches palette doc gray.opacity(0.6). AC: a user can glance at the map and immediately see which streets are one-way and which direction they flow.
 3. **Rendering performance.** No-regress AC: pan + GPS-follow + voice + route overlay at Manhattan zoom 17 stays at 60 fps on iPhone 15 and above; 30+ fps minimum on iPhone 12. Measured via Instruments.
 4. **Dashboard-mount UI polish.** Designer must do a pass on Drive Mode UI specifically for dashboard-mount conditions: font sizes scaled up beyond Dynamic Type defaults, high-contrast color tokens, large tap targets for exit / mute, voice volume normalization. AC: Kevin (or another tester) reports the dashboard experience as "clearly better than the PWA" in a follow-up drive test.
 
-### Re-test gate
+### Re-test gate (updated for TF1)
 
-Before iOS Drive Mode ships in TF2, Kevin (or a designated TestFlight tester) must drive-test the iOS build under the same conditions as the PWA drive test (Manhattan, dashboard mount, daytime) and confirm at least three of the four PWA problems are demonstrably improved. If fewer than three improve, hold the TF2 release and address findings before shipping.
+Before iOS Drive Mode ships in TF1, Kevin (or a designated TestFlight tester) must drive-test the iOS build under the same conditions as the PWA drive test (Manhattan, dashboard mount, daytime) and confirm at least three of the four PWA problems are demonstrably improved. If fewer than three improve, hold the TF1 release and address findings. This gate applies to destination mode (W8.5-dest sub-PR); patrol mode gets a separate drive-test as its sub-PR lands.
 
-### Updated work-stream sequence
+### Updated work-stream sequence (amended 2026-05-18)
 
-Given the locked decisions:
+See §7 for the full updated work-stream table. Summary status as of 2026-05-18:
 
 | Stream | Status | Notes |
 |---|---|---|
-| W5 — Pin drop | 📋 spec ready, OQs answered | Engineer dispatchable. |
-| W6 — Notifications | ⏳ | Spec to be written after W5 lands. |
-| W7 — ASP banner | ⏳ | Spec to be written after W6 lands. |
-| W7.5 — Park Until X | 📋 queued | Builds on W5 pin drop. |
-| W8 — TestFlight 1 | ⏸️ blocked on Apple Dev approval | Ships W5+W6+W7+W7.5 to first beta cohort. |
-| **W8.5 — Drive Mode** | 📋 scope locked (this doc) | Spec to be written by tech-lead after W7.5 ships. Vision-focused port (Option B scope). Mapbox HTTP routing, parking-aware route scoring, fixes for the four PWA problems above. ~4-7 engineer sessions + designer + QA. |
-| W9 — TestFlight 2 | ⏸️ depends on W8.5 | Ships TF1 features + Drive Mode to expanded beta cohort. Re-test gate must pass before W9. |
-| v1.0 App Store launch | ⏸️ depends on W9 feedback | Launch story: "WePark = Apple-Maps-class parking, including the in-car experience." |
+| W5 — Pin drop | ✅ merged (PR #18) | |
+| W6 — Notifications | ✅ merged (PR #20) | |
+| W7 — ASP banner | ✅ merged (PR #24) | |
+| W7.5 — Park Until X | ✅ merged (PR #27) | |
+| W8 — TestFlight 1 | ⏸️ blocked on W8.5 completion | Apple Developer Program approved 2026-05-17. No pre-Drive-Mode TF1 (OQ-5 pivot). |
+| **W8.5-dest — Drive Mode (destination mode)** | 📋 spec ready | Option B scope + parking-aware scoring (OQ-4 = yes). ~8.5 sessions. Sub-PR 1. |
+| **W8.5-patrol — Drive Mode (patrol mode)** | 📋 spec ready (§12) | New — coverage sweep, opportunity voice, Park Until integration. ~6 sessions. Sub-PR 2. |
+| W8 — TF1 build + TestFlight | ⏸️ blocked on W8.5-dest + W8.5-patrol | No W9 needed. Single complete-vision TF1. |
+| v1.0 App Store launch | ⏸️ depends on TF1 feedback | Launch story: "WePark = Apple-Maps-class parking, including the in-car experience." |
+
+---
+
+## §12 — Patrol Mode Design (new, 2026-05-18)
+
+### What patrol mode is and why it matters
+
+Destination mode serves the occasional-driver use case: user is going to a restaurant, needs to park near an address. Patrol mode serves the everyday local use case: user is heading home to their neighborhood, has no fixed destination, and just needs to find the nearest free block. Kevin's framing: "covering ground in the most efficient way (centered around a target destination) until they find the free spot they are looking for." This is the dominant NYC street-parker behavior, and the PWA's `generateParkingRoute` (`index.html:7038`) already proves the concept — patrol mode is a dynamic, during-drive version of that static sweep.
+
+### Entry points
+
+Three options; recommend shipping the first two in W8.5:
+
+**Option 1 — Toolbar button (recommended for W8.5):** A second icon in the bottom-right toolbar stack (next to the W7.5 clock icon) — e.g., a "radar" or "car-scan" SF Symbol such as `car.side.and.exclamationmark` or `scope`. Tapping it presents `PatrolView` as a sheet or enters patrol mode directly if no setup is needed. This is the lowest-friction entry point for the everyday-driver persona.
+
+**Option 2 — Drive Mode entry toggle (recommended for W8.5):** When the user taps the "Drive" button and the destination input sheet opens, a "No destination — just find parking" toggle or button below the search field bypasses address input and enters patrol mode. This serves users who open Drive Mode and then realize they don't need a specific address.
+
+**Option 3 — Long-press recenter button (defer to v1.1):** Gesture-based entry is less discoverable. Defer unless Options 1 and 2 prove insufficient.
+
+Both Option 1 and Option 2 wire into the `ActiveSheet.patrolMode` case added to the W5.1 `ActiveSheet: Identifiable` enum.
+
+### Target area selection
+
+**Default (current location):** Patrol mode starts centered on the user's current `LocationService.userLocation`. The sweep radius is a circle centered on that coordinate. No extra UI required. This is the right default — the user is already driving in the area they want to park.
+
+**Drop-pin variant (target area pin):** For the case where the user wants to park near a specific block but hasn't started driving there yet (e.g., "I want to park near Mott + Houston for dinner"). The `PatrolView` presents a small map with a draggable pin. User positions the pin, confirms. The sweep origin is the pinned coordinate instead of GPS position. The driving route to the sweep origin is fetched via Mapbox HTTP (same `RouteService` as destination mode) as the starting leg before patrol scanning begins.
+
+**Which to ship in W8.5:** Both. The drop-pin variant reuses nearly all of the same infrastructure as current-location default (same `PatrolModeService`, same sweep logic, different origin coordinate). The `PatrolView` UI effort covers both.
+
+### Routing strategy (PatrolModeService)
+
+The iOS patrol mode dynamically ranks unvisited streets rather than generating a static path up-front. This is the key difference from the PWA's `generateParkingRoute`, which computes the full route once and renders it as a polyline.
+
+**Data structures:**
+- `visitedBlockKeys: Set<String>` — set of `"street|from|to"` keys for streets already driven (populated from GPS position updates)
+- `coveredEdgeIDs: Set<String>` — directed edge IDs from the street graph to prevent re-suggesting
+- `sweepOrigin: CLLocationCoordinate2D` — the center of the patrol area (current location or drop-pin)
+- `sweepRadiusMeters: Double` — configurable, defaults 600m (~5 Manhattan blocks in any direction). Expands by 200m increments if no free blocks remain within current radius.
+
+**Next-street ranking algorithm (port from `generateParkingRoute`):**
+1. Get adjacent unvisited directed edges from current street-graph node (respects one-way direction — same `streetGraph.adj` structure as PWA's `generateParkingRoute` at `index.html:7079`).
+2. Ban immediate U-turns (same logic as PWA line 7104).
+3. For each candidate edge, compute `freeBlockScore`: count of `isFree` segments on both faces of that street using `ParkingRulesEngine.isFree(segment:from:until:)`. If Park Until is active, pass the `until` time; otherwise pass a 2-hour default (reasonable for "I need to park soon").
+4. Bonus for edges closer to `sweepOrigin` (keeps the sweep centered).
+5. Large penalty (-100 × visitCount) for revisited edges.
+6. Pick highest-scoring candidate. If all candidates score ≤ 0, expand sweep radius and retry.
+
+**Voice mode: commentary-only (default) + active turn-by-turn (opt-in toggle):**
+Patrol mode always starts in commentary-only mode: the app announces opportunities ("Free parking ahead on right") but does not issue directional instructions. This is the primary behavior.
+
+A "Voice mode" toggle on the patrol bottom card — an icon button in the card's secondary control row (e.g., `waveform` vs. `arrow.turn.up.right` SF Symbol pair) — switches between Commentary and Turn-by-turn for the current session only. The toggle does not persist; every new patrol session starts in Commentary mode.
+
+**Toggle UX:**
+- Location: secondary icon row on the patrol bottom card, to the left of the mute button. @designer to confirm final placement (acceptable fallback: a single icon in a small overflow menu if card real estate is tight).
+- Visual state: the active mode's icon is tinted with the app accent color; inactive is gray. A short text label ("Commentary" / "Turn-by-turn") appears adjacent to the icon for accessibility — hidden at compact width, visible at regular width.
+- Mid-patrol switch feedback: a brief toast ("Switched to turn-by-turn") appears at the top of the patrol card for 2 seconds. `AVSpeechSynthesizer` speaks a single confirmation: "Turn-by-turn on" or "Commentary mode on." This overlaps with no other queued cue — if a parking cue is in-flight, the confirmation is deferred until the queue clears.
+
+**When Turn-by-turn is active:**
+`PatrolModeService` feeds the next highest-scoring sweep waypoint as the destination into `RouteService.fetchRoute(to:)` — the same route fetch used by destination mode. A short route segment (typically 1-3 blocks) is returned. W8.5d's approach-escalation logic re-applies for each segment: when the user is within ~100m of the next waypoint, the voice escalates ("Turn right on Spring Street to reach a free block"). On arrival at the waypoint, `PatrolModeService` selects the next candidate and fetches a new segment. The route polyline updates on the map to reflect the current segment. Commentary cues continue in parallel — turn-by-turn augments but does not replace the "free block ahead" spatial announcements.
+
+**Coverage radius behavior:**
+- Default radius: 600m from sweep origin.
+- When all unvisited edges within the current radius score ≤ 0 (all no-data or no-parking), expand by 200m up to a maximum of 1,500m.
+- If max radius is reached and no free blocks found, surface a "No free parking found in this area" voice cue and an end-of-patrol prompt.
+
+### Voice cue style
+
+Patrol mode voice cues focus on opportunities, not turns. The commentary engine (`DrivingContextService`) already produces left/right labels on every block change — patrol mode extends it with two new cue categories:
+
+**Opportunity announcement (immediate free block):**
+"Free parking on the right, free until Thursday nine thirty AM."
+"Free parking on both sides."
+Fires once per block entry when `isFree` returns true for either face. Respects the 8-second minimum gap (same as destination mode AC-DM.19).
+
+**Near-free announcement (free block within 200m but not current block):**
+"Free block ahead on your right, one block up."
+Fires when the highest-scoring candidate edge within 200m has free parking but the current block does not. This is the "keep going" cue that patrol mode uniquely provides. Fires at most once per 30 seconds to avoid spam.
+
+**Restricted block — stay quiet:**
+When the current block is no-parking / restricted on both sides, the app does NOT announce "No parking on left, no parking on right." Silence = keep driving. Voice is reserved for good news (free or metered) and imminent opportunity (free block ahead). This inversion from destination mode is intentional — in patrol mode, the user wants to be alerted only when action is possible.
+
+**Metered block:**
+"Metered parking on the right." Announced once per entry (not repeated). Lower priority than free announcements — if a free block is within 200m, the near-free cue takes priority over the metered cue.
+
+**Free-but-restricted-soon:**
+"Free on the right, free for thirty more minutes." Fires when `isFree` returns true but restriction starts within 45 minutes. Threshold is 45 minutes (enough lead time to decide whether to commit).
+
+**"Take it?" prompt:**
+When a free block enters the 200m radius, the voice cue fires first ("Free parking 200 feet on right, free until 8 PM"). Immediately after the utterance completes, `UIImpactFeedbackGenerator.medium` fires a single haptic pulse. The haptic does not fire during speech — overlapping cues are noisy. No banner card. The voice + haptic combination gives the user a multi-channel signal without requiring eyes on screen.
+
+### End-of-patrol
+
+Three resolution paths:
+
+**1. User finds a spot (explicit, always present):**
+The patrol bottom card has a persistent "I found a spot" button (large, thumb-reachable at the bottom). Tapping it exits patrol mode and triggers the W5 pin-drop flow at the current GPS coordinate. This always works regardless of NQ-3 resolution.
+
+**2. Auto-detect parking:**
+When `LocationService` reports speed < 2 mph for 10+ consecutive seconds, `PatrolModeService` fires a "Did you find a spot?" prompt — identical mechanic to destination mode's arrival detection (AC-DM.20). "Yes" exits patrol and pins. "No" dismisses the prompt. Auto-detect does not fire if speed drops to 0 for < 8 seconds (red-light filter, same threshold as AC-DM.20). Both paths ship in W8.5.
+
+**3. No free parking found after max radius:**
+As described above — end-of-patrol prompt with reason ("No free parking found in this area").
+
+**Note on "continued indefinitely":** Patrol mode does NOT run indefinitely by default. The sweep-budget concept from the PWA (`MAX_METERS = 2500` at `index.html:7083`) translates to the radius-expand approach above, with a hard outer cap at 1,500m. Beyond that, the user is effectively driving out of their intended neighborhood — explicit intervention is correct.
+
+### Park Until filter integration
+
+When Park Until is active (`ContentView.parkUntilTarget != nil`) and the user enters patrol mode:
+
+1. `PatrolModeService.startPatrol(origin:, until: parkUntilTarget)` receives the target time.
+2. All `isFree` queries use the full `from: .nowET, until: parkUntilTarget` interval-walk (same as W7.5's binary recolor logic).
+3. The patrol bottom card displays a small "Parking until X" pill (same style as W7.5's existing bottom pill) to confirm the filter is active.
+4. Free block voice cues include the time context: "Free on the right — safe until your nine PM target."
+5. If Park Until is cleared mid-patrol (user taps the clock icon to dismiss it), `PatrolModeService` reverts to the 2-hour default immediately on the next GPS update.
+
+### Patrol mode acceptance criteria (AC-PM.*)
+
+**Entry and target area**
+- [ ] **AC-PM.1** A patrol mode entry point is present on the main map screen (toolbar button or Drive Mode sheet toggle per §12 "Entry points"). Tapping enters patrol mode. A visible exit control dismisses it.
+- [ ] **AC-PM.2** Patrol mode defaults to the user's current GPS position as the sweep origin. A drop-pin variant allows the user to set an alternate sweep origin.
+- [ ] **AC-PM.3** Patrol mode adds `ActiveSheet.patrolMode` to the W5.1 `ActiveSheet` enum. No second `.sheet()` modifier introduced — single-sheet invariant preserved.
+
+**Coverage sweep**
+- [ ] **AC-PM.4** `PatrolModeService` ranks candidate streets by `isFree` score (free-block count within candidate edge's block faces) and distance from sweep origin. Higher-scoring streets are suggested first.
+- [ ] **AC-PM.5** One-way streets are respected: the service never suggests a street in the wrong direction of travel. (Uses the same directed `streetGraph.adj` as the PWA's `generateParkingRoute`.)
+- [ ] **AC-PM.6** Already-driven streets receive a large penalty (-100 × visitCount). The user is not routed back onto a street they have already covered within the same patrol session.
+- [ ] **AC-PM.7** When no free blocks remain within the current sweep radius, the radius expands by 200m increments up to 1,500m. If no free blocks are found at 1,500m, a "No free parking found in this area" voice cue fires and an end-of-patrol prompt appears.
+
+**Voice cues**
+- [ ] **AC-PM.8** Free block on current street: voice announces "Free parking on the [left/right/both sides], free until [time]" on block entry. Minimum 8-second gap between consecutive announcements.
+- [ ] **AC-PM.9** Free block within 200m but not current: voice announces "Free block ahead on your [left/right], one block up" at most once per 30 seconds.
+- [ ] **AC-PM.10** No-parking / no-data block: voice stays silent. No "No parking on left" cue in patrol mode.
+- [ ] **AC-PM.11** Metered block: voice announces "Metered parking on the [right/left]" at most once per block entry. If a free block is also within 200m, the near-free cue supersedes the metered cue.
+- [ ] **AC-PM.11a** When a free block enters the 200m radius, `UIImpactFeedbackGenerator.medium` fires a single haptic pulse after the voice cue utterance completes. The haptic does not fire during speech. No banner card is shown.
+
+**Voice mode toggle**
+- [ ] **AC-PM.19** The patrol bottom card has a "Voice mode" toggle icon button. Patrol mode always starts in Commentary mode regardless of prior sessions.
+- [ ] **AC-PM.20** Tapping the toggle switches between Commentary and Turn-by-turn. The active mode's icon is tinted with the app accent color; inactive is gray. A 2-second toast ("Switched to turn-by-turn" / "Switched to commentary") confirms the switch. `AVSpeechSynthesizer` speaks the confirmation after any in-flight cue clears.
+- [ ] **AC-PM.21** In Turn-by-turn mode, `PatrolModeService` feeds the next sweep waypoint into `RouteService`. A route segment polyline appears on the map. W8.5d approach-escalation fires when the user is within ~100m of the waypoint. On arrival at the waypoint, a new segment is fetched automatically.
+- [ ] **AC-PM.22** Switching modes mid-patrol does not reset `visitedBlockKeys` or `coveredEdgeIDs`. Coverage state is preserved across mode switches within a single session.
+- [ ] **AC-PM.23** Switching from Turn-by-turn back to Commentary cancels the active route segment fetch (if in-flight) and clears the segment polyline from the map. No crash on cancellation.
+
+**End-of-patrol**
+- [ ] **AC-PM.12** A persistent "I found a spot" button on the patrol bottom card exits patrol mode and triggers the W5 pin-drop flow at the current GPS coordinate.
+- [ ] **AC-PM.13** Auto-detect: speed < 2 mph for 10+ consecutive seconds surfaces a "Did you find a spot?" prompt. "Yes" exits and pins. "No" dismisses. Prompt does not fire at speed == 0 for < 8 seconds (red-light filter).
+- [ ] **AC-PM.14** End-of-patrol clears `PatrolModeService` state: `visitedBlockKeys` and `coveredEdgeIDs` reset on next session start.
+
+**Park Until integration**
+- [ ] **AC-PM.15** If Park Until is active when patrol mode starts, `PatrolModeService` passes the `until` time to all `isFree` queries. The patrol bottom card shows the "Parking until X" pill.
+- [ ] **AC-PM.16** If Park Until is cleared mid-patrol, the service reverts to 2-hour default on the next GPS update. No crash, no stale target.
+
+**Regression**
+- [ ] **AC-PM.17** All destination-mode ACs (AC-DM.1 through AC-DM.28) still pass when patrol mode code is merged.
+- [ ] **AC-PM.18** `xcodebuild test` reports all prior tests passing (116/0 minimum, as of W7.5 baseline) plus new patrol mode tests (target: 10+ new cases in `PatrolModeServiceTests.swift`).
