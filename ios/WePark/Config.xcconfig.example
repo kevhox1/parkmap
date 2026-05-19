@@ -1,0 +1,19 @@
+// Config.xcconfig.example — WePark iOS Token Configuration
+//
+// SETUP INSTRUCTIONS:
+//   1. Copy this file to Config.xcconfig (same directory: ios/WePark/Config.xcconfig)
+//   2. Replace the placeholder value below with your Mapbox public token (starts with pk.)
+//   3. DO NOT commit Config.xcconfig — it is listed in .gitignore for this reason.
+//
+// Where to get a Mapbox token:
+//   https://account.mapbox.com → Tokens → Create a token (or use an existing public token)
+//   The token is a "pk.*" (public) token — it is safe to share with the app bundle,
+//   but NEVER commit it to version control (even public tokens can be scraped and abused).
+//
+// How this flows into the app:
+//   Config.xcconfig is set as the Base Configuration for Debug + Release in project.pbxproj.
+//   Info.plist contains a key MAPBOX_ACCESS_TOKEN with value $(MAPBOX_ACCESS_TOKEN).
+//   At runtime: Bundle.main.object(forInfoDictionaryKey: "MAPBOX_ACCESS_TOKEN") as? String
+//
+
+MAPBOX_ACCESS_TOKEN = REPLACE_WITH_YOUR_MAPBOX_TOKEN
