@@ -59,7 +59,10 @@ import UIKit
 // MARK: - Overlay identity tags
 // Used in mapView(_:rendererFor:) to distinguish which group an overlay belongs to.
 
-private enum OverlayTag: Int {
+/// Overlay identity tag enum.
+/// Internal (not private) because `TaggedMultiPolyline` is internal (for Z-order testing)
+/// and Swift requires a property's type to be at least as accessible as the property itself.
+enum OverlayTag: Int {
     case freeComfortably         = 0
     case freeButRestrictionSoon  = 1
     case meteredActive           = 2
@@ -74,7 +77,10 @@ private enum OverlayTag: Int {
 
 /// MKMultiPolyline with an associated OverlayTag so the renderer delegate can
 /// distinguish the 5 state groups without a fragile identity comparison.
-private final class TaggedMultiPolyline: MKMultiPolyline {
+///
+/// Internal (not private) so the S-1 Z-order test in W85bTests can type-check
+/// overlays in mapView.overlays. Not part of the public API surface.
+final class TaggedMultiPolyline: MKMultiPolyline {
     var overlayTag: OverlayTag = .unknown
 }
 
@@ -86,7 +92,10 @@ private final class SelectedPolyline: MKPolyline {
 
 /// W8.5b: Drive Mode route polyline overlay.
 /// Rendered in .systemBlue above the parking-state overlays (OQ-8).
-private final class RoutePolyline: MKPolyline {}
+///
+/// Internal (not private) so the S-1 Z-order test in W85bTests can type-check
+/// overlays in mapView.overlays. Not part of the public API surface.
+final class RoutePolyline: MKPolyline {}
 
 // MARK: - CarPinAnnotation
 
@@ -369,6 +378,23 @@ struct MapViewRepresentable: UIViewRepresentable {
                 sel.currentState = payload.selectedState
                 selectedPolyline = sel
                 mapView.addOverlay(sel, level: .aboveRoads)
+            }
+
+            // S-1 fix (PR #29 QA pass-1 S-1): re-insert the RoutePolyline so it sits
+            // above the parking-state overlays after this rebuild.
+            //
+            // applyOverlayPayload removes and re-adds all 5 TaggedMultiPolyline groups
+            // and the SelectedPolyline — but leaves the RoutePolyline in place.
+            // MKMapView renders overlays in insertion order at the same level, so the
+            // parking overlays now sit above the pre-existing RoutePolyline in the stack.
+            //
+            // Fix approach A: if a RoutePolyline is currently rendered, remove it and
+            // re-add it last so it ends up at the top of the .aboveRoads stack.
+            // syncRoutePolyline is NOT called here because the route geometry hasn't
+            // changed — only its position in the overlay stack needs refreshing.
+            if let existing = routePolylineOverlay {
+                mapView.removeOverlay(existing)
+                mapView.addOverlay(existing, level: .aboveRoads)
             }
         }
 
