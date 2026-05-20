@@ -14,5 +14,8 @@ DerivedData/
 Package.resolved
 .build/
 
+# iOS token config — contains real Mapbox token; never commit
+ios/WePark/Config.xcconfig
+
 # OS junk
 .DS_Store
