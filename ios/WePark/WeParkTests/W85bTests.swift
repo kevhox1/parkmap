@@ -206,40 +206,46 @@ final class W85bTests: XCTestCase {
     // MARK: - Scoring: block key dedup
 
     func testScoring_blockKeyDedup_sameBlockNotDoubledCounted() {
-        // Route A: 2 segments with SAME key → score +3 (not +6).
+        // Route A: 2 segments with SAME block key (SAME ST|FIRST|SECOND) → score +3 (not +6).
         // Route B: 2 UNIQUE free segments → score +6.
         // Route B should win.
+        //
+        // Geometry note: segment midpoint = line[count/2] = line[1] for a 2-element line.
+        // Must keep midpoint within 30m of route sample point.
+        // 0.0001 degree lat offset ≈ 11m (well within 30m).
         let routeACoord = anchor
-        let routeBCoord = CLLocationCoordinate2D(latitude: anchor.latitude + 0.01, longitude: anchor.longitude)
+        let routeBCoord = CLLocationCoordinate2D(latitude: anchor.latitude + 0.1, longitude: anchor.longitude)
         let routeA = route(geometry: [routeACoord], duration: 0)
         let routeB = route(geometry: [routeBCoord], duration: 0)
 
         // Two segments with identical street|from|to keys near Route A.
+        // Both have midpoints (line[1]) within 11m of routeACoord.
         let dupSeg1 = seg(street: "SAME ST", from: "FIRST", to: "SECOND",
                           category: .free,
-                          line: [[routeACoord.latitude, routeACoord.longitude],
+                          line: [[routeACoord.latitude - 0.0001, routeACoord.longitude],
                                  [routeACoord.latitude + 0.0001, routeACoord.longitude]])
         let dupSeg2 = seg(street: "SAME ST", from: "FIRST", to: "SECOND",
                           category: .free,
-                          line: [[routeACoord.latitude + 0.0002, routeACoord.longitude],
-                                 [routeACoord.latitude + 0.0003, routeACoord.longitude]])
+                          line: [[routeACoord.latitude - 0.00005, routeACoord.longitude],
+                                 [routeACoord.latitude + 0.00005, routeACoord.longitude]])
 
         // Two unique free segments near Route B.
+        // Both midpoints within 11m of routeBCoord.
         let uniqueSeg1 = seg(street: "UNIQUE A", from: "X", to: "Y",
                              category: .free,
-                             line: [[routeBCoord.latitude, routeBCoord.longitude],
+                             line: [[routeBCoord.latitude - 0.0001, routeBCoord.longitude],
                                     [routeBCoord.latitude + 0.0001, routeBCoord.longitude]])
         let uniqueSeg2 = seg(street: "UNIQUE B", from: "X", to: "Y",
                              category: .free,
-                             line: [[routeBCoord.latitude + 0.0002, routeBCoord.longitude],
-                                    [routeBCoord.latitude + 0.0003, routeBCoord.longitude]])
+                             line: [[routeBCoord.latitude - 0.00005, routeBCoord.longitude],
+                                    [routeBCoord.latitude + 0.00005, routeBCoord.longitude]])
 
         let result = RouteService.pickBestParkingAwareRoute(
             [routeA, routeB],
             segments: [dupSeg1, dupSeg2, uniqueSeg1, uniqueSeg2],
             engine: engine
         )
-        // Route A: +3 (deduped). Route B: +6 (unique). Route B wins.
+        // Route A: +3 (deduped, 1 block). Route B: +6 (2 unique blocks). Route B wins.
         XCTAssertEqual(result?.id, routeB.id, "Route B (2 unique blocks = +6) should beat Route A (1 deduped block = +3)")
     }
 
