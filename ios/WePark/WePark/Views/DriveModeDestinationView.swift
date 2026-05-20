@@ -398,7 +398,15 @@ struct DriveModeDestinationView: View {
     // MARK: - Actions
 
     /// Selects a completer suggestion and resolves it to a coordinate via MKLocalSearch.
-    private func selectCompletion(_ completion: MKLocalSearchCompletion) {
+    ///
+    /// M-1 fix (PR #29 QA pass-1 M-1): uses the async overload of MKLocalSearch.start()
+    /// and races it against a configurable timeout (default 10s, overridable for tests).
+    /// If the search does not respond within the timeout the spinner is cleared and an
+    /// error message is shown — no indefinite "Resolving address..." hang.
+    private func selectCompletion(
+        _ completion: MKLocalSearchCompletion,
+        timeoutSeconds: Double = 10
+    ) {
         // Dismiss keyboard when a suggestion is selected (AC-W85b.6).
         searchFieldFocused = false
         query = completion.title + (completion.subtitle.isEmpty ? "" : ", \(completion.subtitle)")
@@ -408,26 +416,64 @@ struct DriveModeDestinationView: View {
 
         let request = MKLocalSearch.Request(completion: completion)
         let search = MKLocalSearch(request: request)
-        search.start { response, error in
-            DispatchQueue.main.async {
+
+        Task { @MainActor in
+            do {
+                // Race MKLocalSearch.start() against a timeout.
+                // withThrowingTaskGroup cancels the losing child when the first child
+                // finishes (either returns a value or throws).
+                //
+                // Both tasks throw on their failure paths so the group result type is
+                // non-optional `MKMapItem` — no nil-ambiguity between "search returned
+                // no items" and "timeout fired".
+                let item: MKMapItem = try await withThrowingTaskGroup(
+                    of: MKMapItem.self
+                ) { group in
+                    // Search task: throws on network/decode errors, or if no map item.
+                    group.addTask {
+                        let response = try await search.start()
+                        guard let first = response.mapItems.first else {
+                            throw MKError(.placemarkNotFound)
+                        }
+                        return first
+                    }
+                    // Timeout task: sleeps then throws SearchTimeoutError.
+                    group.addTask {
+                        try await Task.sleep(for: .seconds(timeoutSeconds))
+                        throw _SearchTimeoutError()
+                    }
+                    // Await the first child to finish (success or throw).
+                    // group.next() is guaranteed non-nil here because we added 2 tasks
+                    // and haven't consumed any yet, but we guard for safety.
+                    guard let result = try await group.next() else {
+                        group.cancelAll()
+                        throw _SearchTimeoutError()
+                    }
+                    group.cancelAll()
+                    return result
+                }
+
                 self.isResolvingAddress = false
-                if let error {
-                    self.errorMessage = "Couldn't resolve address — check connection. (\(error.localizedDescription))"
-                    self.resolvedCoordinate = nil
-                    self.resolvedName = nil
-                    return
-                }
-                guard let item = response?.mapItems.first else {
-                    self.errorMessage = "Couldn't resolve address — check connection."
-                    self.resolvedCoordinate = nil
-                    self.resolvedName = nil
-                    return
-                }
                 self.resolvedCoordinate = item.placemark.coordinate
                 self.resolvedName = item.name ?? completion.title
+
+            } catch is _SearchTimeoutError {
+                self.isResolvingAddress = false
+                self.errorMessage = "Search timed out. Try again."
+                self.resolvedCoordinate = nil
+                self.resolvedName = nil
+
+            } catch {
+                self.isResolvingAddress = false
+                self.errorMessage = "Couldn't resolve address — check connection. (\(error.localizedDescription))"
+                self.resolvedCoordinate = nil
+                self.resolvedName = nil
             }
         }
     }
+
+    // _SearchTimeoutError is defined at file scope below so it is accessible from
+    // @testable-imported test targets for the M-1 timeout test.
 
     /// Selects a recent destination (coordinate already stored — no network call).
     /// Per AC-W85b.21: tapping a recent destination uses the stored coordinate directly.
@@ -521,6 +567,18 @@ struct DriveModeDestinationView: View {
         }
     }
 }
+
+// MARK: - Sentinel error type for MKLocalSearch timeout (M-1)
+
+/// Sentinel error thrown by the timeout branch inside `selectCompletion`.
+/// Internal visibility (not private) so the M-1 unit test can reference it via
+/// `@testable import WePark`.  Prefixed with underscore to signal it is an
+/// implementation detail, not part of the public API surface.
+struct SearchTimeoutError: Error {}
+
+// Internal alias used inside DriveModeDestinationView — exposed for tests as SearchTimeoutError.
+// (The view uses `_SearchTimeoutError` in its `catch` clause — this is the same type.)
+typealias _SearchTimeoutError = SearchTimeoutError
 
 #Preview {
     DriveModeDestinationView(
