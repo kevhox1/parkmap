@@ -11,6 +11,7 @@
 		A0001000000000000000AA01 /* WeParkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WeParkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B8C5A1010000000000000001 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
 		B8C5A1020000000000000002 /* Config.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig.example; sourceTree = "<group>"; };
+		B8C5A1030000000000000003 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -49,6 +50,7 @@
 			children = (
 				B8C5A1010000000000000001 /* Config.xcconfig */,
 				B8C5A1020000000000000002 /* Config.xcconfig.example */,
+				B8C5A1030000000000000003 /* Info.plist */,
 				38CA21C02FB12B780080B4F5 /* WePark */,
 				A0001000000000000000AA02 /* WeParkTests */,
 				38CA21BF2FB12B780080B4F5 /* Products */,
@@ -326,7 +328,7 @@
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = .gitkeep;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_MAPBOX_ACCESS_TOKEN = "$(MAPBOX_ACCESS_TOKEN)";
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend parking nearby. Your location is never sent off your device.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
@@ -362,7 +364,7 @@
 				ENABLE_PREVIEWS = YES;
 				EXCLUDED_SOURCE_FILE_NAMES = .gitkeep;
 				GENERATE_INFOPLIST_FILE = YES;
-				INFOPLIST_KEY_MAPBOX_ACCESS_TOKEN = "$(MAPBOX_ACCESS_TOKEN)";
+				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend parking nearby. Your location is never sent off your device.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
