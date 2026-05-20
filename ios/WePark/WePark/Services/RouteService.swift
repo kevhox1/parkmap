@@ -162,6 +162,111 @@ final class RouteService {
     }
 }
 
+// MARK: - W8.5b: Parking-aware route scoring
+
+extension RouteService {
+
+    /// Port of `pickBestParkingAwareRoute` from `index.html:6298–6340`.
+    ///
+    /// Scores each candidate route by counting free/metered block faces within ~30m
+    /// of the route geometry, then subtracts a duration penalty. The highest-scoring
+    /// route wins; ties fall back to the primary route (`routes[0]`).
+    ///
+    /// - Parameters:
+    ///   - routes: The ordered `[DriveRoute]` from `fetchRoute(alternatives:true)`.
+    ///     Mapbox returns the primary route first.
+    ///   - segments: The currently-loaded tile segments from `TileLoader`.
+    ///   - engine: The `ParkingRulesEngine` instance for safety-label evaluation.
+    ///   - now: Evaluation timestamp. Defaults to the current Eastern Time.
+    /// - Returns: The best-scoring `DriveRoute`, or `nil` if `routes` is empty.
+    static func pickBestParkingAwareRoute(
+        _ routes: [DriveRoute],
+        segments: [Segment],
+        engine: ParkingRulesEngine,
+        now: Date = .nowET
+    ) -> DriveRoute? {
+        guard !routes.isEmpty else { return nil }
+        guard routes.count > 1 else { return routes[0] }
+
+        // Categories to skip — these are not parkable faces.
+        // PWA skip set: NO_STANDING, NO_PARKING, SPECIAL, TRUCK_LOADING, UNKNOWN.
+        let skipCategories: Set<Category> = [.noStanding, .noParking, .special, .truckLoading, .unknown]
+
+        var best: DriveRoute = routes[0]
+        var bestScore: Double = -.infinity
+
+        for route in routes {
+            var score: Double = 0
+
+            let coords = route.geometry
+            guard !coords.isEmpty else { continue }
+
+            // Sample ~60 points from the route geometry — same stride formula as PWA.
+            // PWA: Math.max(1, Math.floor(coords.length / 60))
+            let sampleStride = max(1, coords.count / 60)
+            let samplePoints: [CLLocationCoordinate2D] = Swift.stride(from: 0, to: coords.count, by: sampleStride).map { coords[$0] }
+
+            // Block deduplication: same logic as PWA blockKey = street|from|to.
+            var counted = Set<String>()
+
+            for seg in segments {
+                guard seg.line.count >= 2 else { continue }
+
+                // Determine dominant category — skip non-parkable faces.
+                let dom = seg.dominantCategory ?? .unknown
+                if skipCategories.contains(dom) { continue }
+
+                // Segment midpoint — line is [lat, lng] per HANDOFF W2.
+                let midIndex = seg.line.count / 2
+                let midPair = seg.line[midIndex]
+                guard midPair.count >= 2 else { continue }
+                let segMidLat = midPair[0]
+                let segMidLng = midPair[1]
+                let segMidLocation = CLLocation(latitude: segMidLat, longitude: segMidLng)
+
+                // Check if any sample point is within 30m of the segment midpoint.
+                var nearAny = false
+                for sp in samplePoints {
+                    let sampleLocation = CLLocation(latitude: sp.latitude, longitude: sp.longitude)
+                    if sampleLocation.distance(from: segMidLocation) <= 30.0 {
+                        nearAny = true
+                        break
+                    }
+                }
+                guard nearAny else { continue }
+
+                // Block dedup — same key as PWA and ContentView.findCandidateSegments.
+                let blockKey = "\(seg.street)|\(seg.fromStreet)|\(seg.to)"
+                guard !counted.contains(blockKey) else { continue }
+                counted.insert(blockKey)
+
+                // Score: free → +3, metered → +1.
+                // Use safetyLabel (which handles ASP suspension) for correctness,
+                // mirroring the PWA's `actionableSafetyLabel(seg).severity` check.
+                let label = engine.safetyLabel(for: seg, at: now)
+                switch label.severity {
+                case .free:
+                    score += 3
+                case .metered:
+                    score += 1
+                case .restricted, .unknown:
+                    break
+                }
+            }
+
+            // Duration penalty: 1 point per 600 seconds (10-minute unit), same as PWA.
+            score -= route.duration / 600.0
+
+            if score > bestScore {
+                bestScore = score
+                best = route
+            }
+        }
+
+        return best
+    }
+}
+
 // MARK: - Wire types (private to the service)
 
 private struct MapboxDirectionsResponse: Decodable {

@@ -66,6 +66,8 @@ private enum OverlayTag: Int {
     case restrictedNow           = 3
     case unknown                 = 4
     case selectedBlock           = 5
+    /// W8.5b: Drive Mode route polyline (blue, above parking state overlays).
+    case routePolyline           = 6
 }
 
 // MARK: - Tagged MKMultiPolyline
@@ -82,11 +84,21 @@ private final class SelectedPolyline: MKPolyline {
     var currentState: CurrentState = .unknown
 }
 
+/// W8.5b: Drive Mode route polyline overlay.
+/// Rendered in .systemBlue above the parking-state overlays (OQ-8).
+private final class RoutePolyline: MKPolyline {}
+
 // MARK: - CarPinAnnotation
 
 /// MKPointAnnotation subclass for the user's parked car.
 /// Identified by type in viewFor(annotation:) to render the custom pin.
 final class CarPinAnnotation: MKPointAnnotation {
+    // No extra state needed — identity is by type.
+}
+
+/// W8.5b: MKPointAnnotation subclass for the Drive Mode destination.
+/// Rendered in red (OQ-6: `mappin.circle.fill` red, distinct from the blue car pin).
+final class DestinationPinAnnotation: MKPointAnnotation {
     // No extra state needed — identity is by type.
 }
 
@@ -126,6 +138,16 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     /// Holds the overlay state to apply in updateUIView.
     var overlayPayload: OverlayPayload
+
+    // MARK: W8.5b: Drive Mode inputs
+
+    /// Active Drive Mode route. Non-nil → blue route polyline rendered above parking overlays.
+    /// Nil → route polyline removed.
+    let activeRoute: DriveRoute?
+
+    /// Drive Mode destination coordinate. Non-nil → red destination pin annotation on map.
+    /// Nil → destination pin removed.
+    let destinationCoordinate: CLLocationCoordinate2D?
 
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
@@ -202,6 +224,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             forAnnotationViewWithReuseIdentifier: Coordinator.carPinReuseID
         )
 
+        // W8.5b: Register the DestinationPinAnnotation view class.
+        mapView.register(
+            MKMarkerAnnotationView.self,
+            forAnnotationViewWithReuseIdentifier: Coordinator.destinationPinReuseID
+        )
+
         // Set initial camera region.
         mapView.setRegion(region, animated: false)
 
@@ -242,6 +270,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         // W5: Sync car pin annotation state.
         context.coordinator.syncCarPin(carPin, on: mapView)
 
+        // W8.5b: Sync route polyline and destination pin.
+        context.coordinator.syncRoutePolyline(activeRoute, on: mapView)
+        context.coordinator.syncDestinationPin(destinationCoordinate, on: mapView)
+
         // Sync camera only if it diverged from the map's current region by more than
         // a threshold — avoids fighting the user's pan/zoom gestures.
         let mapRegion = mapView.region
@@ -272,6 +304,17 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// The UUID of the currently-rendered car pin (nil if none).
         /// Used to detect when the pin changes identity (new pin, clear, or replace).
         private var renderedCarPinID: UUID? = nil
+
+        // W8.5b: Route polyline + destination pin state.
+        static let destinationPinReuseID = "DestinationPinAnnotation"
+        /// The currently-rendered route polyline overlay (nil if no active route).
+        private var routePolylineOverlay: RoutePolyline? = nil
+        /// The UUID of the route whose polyline is currently rendered.
+        private var renderedRouteID: UUID? = nil
+        /// The currently-rendered destination pin annotation.
+        private var destinationPinAnnotation: DestinationPinAnnotation? = nil
+        /// The coordinate of the currently-rendered destination pin (encoded as a tuple for equality).
+        private var renderedDestinationCoord: (Double, Double)? = nil
 
         init(parent: MapViewRepresentable) {
             self.parent = parent
@@ -360,9 +403,86 @@ struct MapViewRepresentable: UIViewRepresentable {
             renderedCarPinID = newID
         }
 
+        // MARK: - W8.5b: Route polyline management
+
+        /// Syncs the route polyline overlay to match the current `DriveRoute`.
+        /// The route polyline renders above all parking-state overlays (OQ-4, OQ-8).
+        func syncRoutePolyline(_ route: DriveRoute?, on mapView: MKMapView) {
+            let newID = route?.id
+
+            // Fast path: same route already rendered.
+            if renderedRouteID == newID { return }
+
+            // Remove old route polyline.
+            if let old = routePolylineOverlay {
+                mapView.removeOverlay(old)
+                routePolylineOverlay = nil
+            }
+
+            // Add new route polyline if a route is present.
+            if let route = route, !route.geometry.isEmpty {
+                var coords = route.geometry
+                let polyline = RoutePolyline(coordinates: &coords, count: coords.count)
+                routePolylineOverlay = polyline
+                // Insert above all parking-state overlays (.aboveRoads level).
+                // MKMapView renders overlays in insertion order at the same level —
+                // adding last ensures it renders on top of the 5 state groups + selected highlight.
+                mapView.addOverlay(polyline, level: .aboveRoads)
+            }
+
+            renderedRouteID = newID
+        }
+
+        // MARK: - W8.5b: Destination pin management
+
+        /// Syncs the destination pin annotation to match the current `destinationCoordinate`.
+        func syncDestinationPin(_ coordinate: CLLocationCoordinate2D?, on mapView: MKMapView) {
+            let newCoord = coordinate.map { ($0.latitude, $0.longitude) }
+
+            // Fast path: same coordinate already rendered.
+            if let existing = renderedDestinationCoord, let new = newCoord,
+               existing.0 == new.0, existing.1 == new.1 { return }
+            if renderedDestinationCoord == nil && newCoord == nil { return }
+
+            // Remove old annotation.
+            if let old = destinationPinAnnotation {
+                mapView.removeAnnotation(old)
+                destinationPinAnnotation = nil
+            }
+
+            // Add new annotation if a destination is set.
+            if let coordinate = coordinate {
+                let annotation = DestinationPinAnnotation()
+                annotation.coordinate = coordinate
+                annotation.accessibilityLabel = "Drive Mode destination"
+                destinationPinAnnotation = annotation
+                mapView.addAnnotation(annotation)
+            }
+
+            renderedDestinationCoord = newCoord
+        }
+
         // MARK: - MKMapViewDelegate: annotation view
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // Handle DestinationPinAnnotation (W8.5b) — red mappin.circle.fill (OQ-6).
+            if annotation is DestinationPinAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: Coordinator.destinationPinReuseID,
+                    for: annotation
+                ) as? MKMarkerAnnotationView ?? MKMarkerAnnotationView(
+                    annotation: annotation,
+                    reuseIdentifier: Coordinator.destinationPinReuseID
+                )
+                view.markerTintColor = .systemRed
+                view.glyphImage = UIImage(systemName: "mappin")
+                view.canShowCallout = false
+                view.isAccessibilityElement = true
+                view.accessibilityLabel = "Drive Mode destination"
+                view.accessibilityTraits = .staticText
+                return view
+            }
+
             // Only handle CarPinAnnotation — let the map handle user location etc.
             guard annotation is CarPinAnnotation else { return nil }
 
@@ -431,6 +551,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                     // Should not be reached (selected overlay uses SelectedPolyline, not TaggedMultiPolyline).
                     renderer.strokeColor = UIColor.systemBlue
                     renderer.lineWidth = 6
+                case .routePolyline:
+                    // Should not be reached (route overlay uses RoutePolyline, not TaggedMultiPolyline).
+                    renderer.strokeColor = UIColor.systemBlue
+                    renderer.lineWidth = 5
                 }
                 return renderer
             }
@@ -440,6 +564,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 renderer.strokeColor = UIColor(sel.currentState.swiftUIColor)
                 renderer.lineWidth = 6
                 renderer.lineCap = .butt   // see TaggedMultiPolyline comment above
+                renderer.lineJoin = .round
+                return renderer
+            }
+
+            // W8.5b: Drive Mode route polyline (OQ-8: .systemBlue, lineWidth 5, round caps).
+            if overlay is RoutePolyline, let polyline = overlay as? MKPolyline {
+                let renderer = MKPolylineRenderer(polyline: polyline)
+                renderer.strokeColor = UIColor.systemBlue
+                renderer.lineWidth = 5
+                renderer.lineCap = .round
                 renderer.lineJoin = .round
                 return renderer
             }
@@ -485,6 +619,17 @@ struct MapViewRepresentable: UIViewRepresentable {
                         self?.parent.onCarPinTapped()
                     }
                     return
+                }
+            }
+
+            // W8.5b: Absorb taps on the destination pin annotation — no action in W8.5b.
+            // W8.5d will add arrival prompt handling here.
+            if let destAnnotation = destinationPinAnnotation {
+                let destCenter = mapView.convert(destAnnotation.coordinate, toPointTo: mapView)
+                let dx = screenPoint.x - destCenter.x
+                let dy = screenPoint.y - destCenter.y
+                if sqrt(dx * dx + dy * dy) <= 30 {
+                    return  // Absorbed — no map-tap fired.
                 }
             }
 
