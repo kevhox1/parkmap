@@ -3,6 +3,7 @@
 //  WePark
 //
 //  W8.5a — Mapbox Directions HTTP API wrapper for Drive Mode foundation.
+//  W8.5c — M-2: Added RouteServicing protocol for dependency injection in tests and views.
 //
 //  Port map (PWA → Swift):
 //    MAPBOX_DIRECTIONS_URL constant         → Self.directionsBaseURL    [index.html:5987]
@@ -43,10 +44,39 @@ enum MapboxRouteError: Error, Equatable {
     case noRoutes
 }
 
+// MARK: - RouteServicing protocol (M-2)
+
+/// Protocol seam for route fetching — enables mock injection in tests and views.
+/// `RouteService` conforms. `DriveModeDestinationView` is typed against this protocol.
+///
+/// M-2 carry-over from W8.5b QA: `pickBestParkingAwareRoute` was originally a `static`
+/// method on the concrete class. Swift protocols don't support static method requirements
+/// cleanly with `@MainActor`. Recommendation from tech-lead (W8.5c spec §4 step 2):
+/// make it an instance method on the protocol; the conforming class can still call the
+/// static implementation internally.
+@MainActor
+protocol RouteServicing: AnyObject {
+    /// Fetch a driving route from the underlying directions service.
+    func fetchRoute(
+        from: CLLocationCoordinate2D,
+        to: CLLocationCoordinate2D,
+        alternatives: Bool
+    ) async throws -> [DriveRoute]
+
+    /// Select the best parking-aware route from a set of alternatives.
+    /// Instance method (vs. static) so it can be a protocol requirement on `@MainActor`.
+    func pickBestParkingAwareRoute(
+        _ routes: [DriveRoute],
+        segments: [Segment],
+        engine: ParkingRulesEngine,
+        now: Date
+    ) -> DriveRoute?
+}
+
 // MARK: - Service
 
 @MainActor
-final class RouteService {
+final class RouteService: RouteServicing {
     /// Process-wide singleton. Construct your own instance with a custom
     /// `URLSession` in tests via the `URLProtocol` mock pattern.
     static let shared = RouteService()
@@ -132,6 +162,16 @@ final class RouteService {
         }
 
         return wire.routes.map { $0.toDomain() }
+    }
+
+    /// Instance method conforming to `RouteServicing`. Delegates to the static implementation.
+    func pickBestParkingAwareRoute(
+        _ routes: [DriveRoute],
+        segments: [Segment],
+        engine: ParkingRulesEngine,
+        now: Date = .nowET
+    ) -> DriveRoute? {
+        RouteService.pickBestParkingAwareRoute(routes, segments: segments, engine: engine, now: now)
     }
 
     // MARK: - URL building

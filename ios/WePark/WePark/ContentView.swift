@@ -226,7 +226,6 @@ struct ContentView: View {
     // MARK: - W8.5b: Drive Mode state
 
     /// True when Drive Mode is active (route + destination pin on map).
-    /// W8.5c hook: set this to true to start continuous location updates, voice, etc.
     @State private var driveModeActive: Bool = false
 
     /// The best-scoring route currently rendered on the map. Nil when Drive Mode inactive.
@@ -237,6 +236,21 @@ struct ContentView: View {
 
     /// Controls presentation of the full-screen destination search cover.
     @State private var showDriveModeDestination: Bool = false
+
+    // MARK: - W8.5c: Drive Mode active layer state
+
+    /// Parking commentary service — instantiated once per app session (R-7).
+    @State private var drivingVoice = DrivingVoice()
+
+    /// Driving context service — owns block-change detection and voice cue orchestration.
+    @State private var drivingContextService: DrivingContextService? = nil
+
+    /// Current driving context (nil when no street data near GPS position).
+    @State private var drivingContext: DrivingContext? = nil
+
+    /// True when the user has manually panned the map away from their GPS position.
+    /// Cleared when the Recenter button is tapped or on each follow-mode location update.
+    @State private var driveFollowEnabled: Bool = true
 
     // MARK: - Bundle version strings (passed into SettingsView)
 
@@ -289,7 +303,14 @@ struct ContentView: View {
                     carPin: parkPinService.parkedCar,
                     overlayPayload: overlayPayload,
                     activeRoute: activeRoute,
-                    destinationCoordinate: driveDestinationCoordinate
+                    destinationCoordinate: driveDestinationCoordinate,
+                    driveHeading: locationService.driveHeading,
+                    onDrivePanDetected: {
+                        // W8.5c: User panned map manually → disable follow mode.
+                        if driveModeActive {
+                            driveFollowEnabled = false
+                        }
+                    }
                 )
                 // Map fills the full screen including safe area.
                 .ignoresSafeArea()
@@ -298,10 +319,21 @@ struct ContentView: View {
                     ASPBanner(state: bannerState)
                 }
                 // W7.5: Filter-active pill pushed below the map content when Park Until is active.
+                // W8.5c: Drive Mode bottom card sits below the Park Until pill when both active.
                 .safeAreaInset(edge: .bottom) {
-                    if parkUntilMode, let target = parkUntilTarget {
-                        ParkUntilPill(targetDate: target) {
-                            clearParkUntilFilter()
+                    VStack(spacing: 0) {
+                        // W8.5c: Drive Mode bottom card (AC-W85c.25).
+                        if driveModeActive {
+                            DriveModeBottomCard(
+                                context: drivingContext,
+                                voiceService: drivingVoice
+                            )
+                        }
+                        // W7.5: Park Until pill.
+                        if parkUntilMode, let target = parkUntilTarget {
+                            ParkUntilPill(targetDate: target) {
+                                clearParkUntilFilter()
+                            }
                         }
                     }
                 }
@@ -330,23 +362,42 @@ struct ContentView: View {
             .padding(.leading, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
 
-            // W8.5b: "End Drive" overlay — shown when Drive Mode is active.
-            // A pill button at the bottom of the safe area (above ParkUntilPill if both active).
+            // W8.5b/c: Drive Mode overlays — shown when Drive Mode is active.
             if driveModeActive {
                 VStack {
-                    Spacer()
-                    Button {
-                        endDriveMode()
-                    } label: {
-                        Label("End Drive", systemImage: "xmark.circle.fill")
-                            .font(.headline)
-                            .padding(.horizontal, 20)
-                            .padding(.vertical, 12)
-                            .background(.regularMaterial, in: Capsule())
-                            .foregroundStyle(.red)
+                    // "End Drive" pill — top-left area, below the gear button.
+                    HStack {
+                        Button {
+                            endDriveMode()
+                        } label: {
+                            Label("End Drive", systemImage: "xmark.circle.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 16)
+                                .padding(.vertical, 10)
+                                .background(.regularMaterial, in: Capsule())
+                                .foregroundStyle(.red)
+                        }
+                        .accessibilityLabel("End Drive Mode")
+                        .padding(.leading, 12)
+                        Spacer()
                     }
-                    .accessibilityLabel("End Drive Mode")
-                    .padding(.bottom, parkUntilMode ? 60 : 20)
+                    Spacer()
+                    // W8.5c: Recenter pill — OQ-2: floating above the bottom card,
+                    // only visible when follow mode is paused (AC-W85c.15).
+                    if !driveFollowEnabled {
+                        Button {
+                            recenterDriveMode()
+                        } label: {
+                            Label("Recenter", systemImage: "location.fill")
+                                .font(.subheadline.weight(.semibold))
+                                .padding(.horizontal, 20)
+                                .padding(.vertical, 12)
+                                .background(.regularMaterial, in: Capsule())
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        .accessibilityLabel("Recenter map on my location")
+                        .padding(.bottom, 8)
+                    }
                 }
             }
 
@@ -464,6 +515,32 @@ struct ContentView: View {
                 }
             }
         }
+        // W8.5c: Drive Mode active layer lifecycle — start/stop continuous location + voice.
+        .onChange(of: driveModeActive) { _, active in
+            if active {
+                // Entering Drive Mode.
+                locationService.startDriveMode()
+                driveFollowEnabled = true
+                // Create DrivingContextService and wire the voice service.
+                let service = DrivingContextService(voice: drivingVoice)
+                drivingContextService = service
+                drivingContext = nil
+                // Show muted toast if voice is muted from a previous session (OQ-3).
+                if drivingVoice.isMuted {
+                    ToastService.shared.show(message: "Voice muted — tap to unmute")
+                }
+                // Activate audio session for the drive session.
+                AudioSessionManager.shared.activateDriveSession()
+            } else {
+                // Exiting Drive Mode.
+                locationService.endDriveMode()
+                drivingContextService = nil
+                drivingContext = nil
+                driveFollowEnabled = true
+                // Deactivate audio session.
+                AudioSessionManager.shared.deactivateDriveSession()
+            }
+        }
         .onReceive(
             Timer.publish(every: 60, on: .main, in: .common).autoconnect()
         ) { _ in
@@ -500,6 +577,25 @@ struct ContentView: View {
                 recenterOnUserAtLaunch = false
                 if AppConstants.isInManhattanCoverage(loc) {
                     recenterMap(on: loc)
+                }
+            }
+
+            // W8.5c: Drive Mode follow-mode + context update.
+            if driveModeActive {
+                // Follow-mode: recenter map on user when follow is enabled.
+                if driveFollowEnabled {
+                    recenterDriveMap(on: loc)
+                }
+
+                // Context update: compute parking commentary for new position.
+                if let service = drivingContextService {
+                    service.update(
+                        coordinate: loc,
+                        heading: locationService.driveHeading,
+                        segments: tileLoader.segments,
+                        engine: engine
+                    )
+                    drivingContext = service.currentContext
                 }
             }
         }
@@ -713,6 +809,7 @@ struct ContentView: View {
             currentRegion: region,
             segments: tileLoader.segments,
             userLocation: locationService.userLocation,
+            locationService: locationService,
             onRouteReady: { route, destination in
                 // W8.5b: Route ready — enter Drive Mode.
                 activeRoute = route
@@ -907,15 +1004,37 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - W8.5b: End Drive Mode
+    // MARK: - W8.5b/c: End Drive Mode
 
     /// Clears all Drive Mode state (route polyline, destination pin, driveModeActive).
     /// MapViewRepresentable reacts to activeRoute=nil and destinationCoordinate=nil by
     /// removing the corresponding overlays and annotations automatically.
+    /// W8.5c: Also stops continuous location + voice (via onChange(of: driveModeActive)).
     private func endDriveMode() {
         driveModeActive = false
         activeRoute = nil
         driveDestinationCoordinate = nil
+        // W8.5c context state cleared via onChange(of: driveModeActive).
+    }
+
+    // MARK: - W8.5c: Recenter in Drive Mode
+
+    /// Snaps the map camera back to the user's current GPS position during Drive Mode.
+    /// Mirrors recenterDriveMode() from index.html:5800–5807.
+    private func recenterDriveMode() {
+        driveFollowEnabled = true
+        if let loc = locationService.userLocation {
+            recenterDriveMap(on: loc)
+        }
+    }
+
+    /// Recenters the map during Drive Mode (drive zoom, no span change).
+    private func recenterDriveMap(on coordinate: CLLocationCoordinate2D) {
+        region = MKCoordinateRegion(
+            center: coordinate,
+            latitudinalMeters: AppConstants.drivingZoomMeters,
+            longitudinalMeters: AppConstants.drivingZoomMeters
+        )
     }
 
     // MARK: - W5.1: Recenter actions
