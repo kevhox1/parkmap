@@ -65,4 +65,11 @@ enum AppConstants {
     /// Bounded to 5 most-recent entries, MRU ordering (newest first).
     /// Each entry is a JSON-encoded `RecentDestination` struct.
     static let recentDestinationsKey = "wepark_recent_destinations"
+
+    // MARK: - W8.5c: Drive Mode constants
+
+    /// Drive Mode follow-mode zoom span in meters (N-S and E-W).
+    /// PWA uses zoom level 18 (≈220m visible radius). We target a similar street-level view.
+    /// Calibration deferred to W8.5c-follow after drive-test.
+    static let drivingZoomMeters: Double = 300
 }
