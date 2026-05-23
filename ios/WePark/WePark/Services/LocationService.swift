@@ -221,6 +221,9 @@ final class LocationService: NSObject {
             while diff < -180 { diff += 360 }
             headingEMA = ((headingEMA! + DRIVING_HEADING_EMA_ALPHA * diff) + 360).truncatingRemainder(dividingBy: 360)
         }
+        // Store as the last good heading so the speed-gate freeze path can return it.
+        // Port of `drivingLastGoodHeading = drivingHeadingEMA` (index.html:6568).
+        driveHeading = headingEMA
         return headingEMA
     }
 

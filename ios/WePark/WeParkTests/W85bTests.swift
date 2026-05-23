@@ -600,6 +600,7 @@ final class W85bTests: XCTestCase {
             currentRegion: region,
             segments: [],
             userLocation: nil,
+            locationService: LocationService(),
             onRouteReady: { _, _ in }
         )
         let host = UIHostingController(rootView: view)
@@ -615,6 +616,7 @@ final class W85bTests: XCTestCase {
             currentRegion: region,
             segments: [],
             userLocation: CLLocationCoordinate2D(latitude: 40.7527, longitude: -73.9772),
+            locationService: LocationService(),
             onRouteReady: { _, _ in }
         )
         let host = UIHostingController(rootView: view)
