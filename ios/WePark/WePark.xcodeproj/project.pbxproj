@@ -6,6 +6,16 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		A0001000000000000000AA09 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 38CA21B62FB12B780080B4F5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 38CA21BD2FB12B780080B4F5;
+			remoteInfo = WePark;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		38CA21BE2FB12B780080B4F5 /* WePark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WePark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0001000000000000000AA01 /* WeParkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WeParkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -186,16 +196,6 @@
 			targetProxy = A0001000000000000000AA09 /* PBXContainerItemProxy */;
 		};
 /* End PBXTargetDependency section */
-
-/* Begin PBXContainerItemProxy section */
-		A0001000000000000000AA09 /* PBXContainerItemProxy */ = {
-			isa = PBXContainerItemProxy;
-			containerPortal = 38CA21B62FB12B780080B4F5 /* Project object */;
-			proxyType = 1;
-			remoteGlobalIDString = 38CA21BD2FB12B780080B4F5;
-			remoteInfo = WePark;
-		};
-/* End PBXContainerItemProxy section */
 
 /* Begin XCBuildConfiguration section */
 		38CA21C72FB12B7B0080B4F5 /* Debug */ = {

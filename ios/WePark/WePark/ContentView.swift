@@ -223,6 +223,21 @@ struct ContentView: View {
     /// Drives the binary green/red map rendering branch in rebuildOverlays.
     @State private var parkUntilMode: Bool = false
 
+    // MARK: - W8.5b: Drive Mode state
+
+    /// True when Drive Mode is active (route + destination pin on map).
+    /// W8.5c hook: set this to true to start continuous location updates, voice, etc.
+    @State private var driveModeActive: Bool = false
+
+    /// The best-scoring route currently rendered on the map. Nil when Drive Mode inactive.
+    @State private var activeRoute: DriveRoute? = nil
+
+    /// Destination coordinate for the route pin. Nil when Drive Mode inactive.
+    @State private var driveDestinationCoordinate: CLLocationCoordinate2D? = nil
+
+    /// Controls presentation of the full-screen destination search cover.
+    @State private var showDriveModeDestination: Bool = false
+
     // MARK: - Bundle version strings (passed into SettingsView)
 
     private let appVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -272,7 +287,9 @@ struct ContentView: View {
                         openParkedCarDetail()
                     },
                     carPin: parkPinService.parkedCar,
-                    overlayPayload: overlayPayload
+                    overlayPayload: overlayPayload,
+                    activeRoute: activeRoute,
+                    destinationCoordinate: driveDestinationCoordinate
                 )
                 // Map fills the full screen including safe area.
                 .ignoresSafeArea()
@@ -312,6 +329,26 @@ struct ContentView: View {
             .padding(.top, 100)
             .padding(.leading, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
+
+            // W8.5b: "End Drive" overlay — shown when Drive Mode is active.
+            // A pill button at the bottom of the safe area (above ParkUntilPill if both active).
+            if driveModeActive {
+                VStack {
+                    Spacer()
+                    Button {
+                        endDriveMode()
+                    } label: {
+                        Label("End Drive", systemImage: "xmark.circle.fill")
+                            .font(.headline)
+                            .padding(.horizontal, 20)
+                            .padding(.vertical, 12)
+                            .background(.regularMaterial, in: Capsule())
+                            .foregroundStyle(.red)
+                    }
+                    .accessibilityLabel("End Drive Mode")
+                    .padding(.bottom, parkUntilMode ? 60 : 20)
+                }
+            }
 
             // W7: Toast host — highest z-order layer. Positioned at the very top via VStack + Spacer.
             // Renders above the ASP banner (spec §3.E: toast overlays banner briefly — acceptable
@@ -657,6 +694,32 @@ struct ContentView: View {
                 .presentationCornerRadius(20)
             }
         }
+        // W8.5b: Full-screen destination search cover (OQ-2: Option C).
+        // Separate from .sheet(item:) — can coexist in SwiftUI but Drive button
+        // guard ensures only one is presented at a time.
+        .fullScreenCover(isPresented: $showDriveModeDestination) {
+            driveModeDestinationCover
+        }
+    }
+
+    // MARK: - W8.5b: Full-screen destination search cover
+
+    /// Presents `DriveModeDestinationView` as a full-screen cover (OQ-2: Option C).
+    /// This modifier is separate from `.sheet(item:)` and can coexist with it,
+    /// but the Drive button guard ensures they are never simultaneously presented.
+    @ViewBuilder
+    private var driveModeDestinationCover: some View {
+        DriveModeDestinationView(
+            currentRegion: region,
+            segments: tileLoader.segments,
+            userLocation: locationService.userLocation,
+            onRouteReady: { route, destination in
+                // W8.5b: Route ready — enter Drive Mode.
+                activeRoute = route
+                driveDestinationCoordinate = destination
+                driveModeActive = true
+            }
+        )
     }
 
     // MARK: - Overlay rebuild
@@ -826,7 +889,33 @@ struct ContentView: View {
             }
             .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
             .accessibilityHint("Shows only blocks where you can park until a chosen time.")
+
+            // W8.5b: Drive Mode entry button (OQ-1: 4th top-right toolbar button).
+            // Guard: only present destination search when no sheet is active (spec §7 Risk 2).
+            Button {
+                guard activeSheet == nil else { return }
+                showDriveModeDestination = true
+            } label: {
+                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(driveModeActive ? Color.blue : Color.accentColor)
+            }
+            .accessibilityLabel(driveModeActive ? "Drive Mode active — tap to change destination" : "Start Drive Mode — search for a destination")
+            .accessibilityHint("Opens the destination search screen.")
         }
+    }
+
+    // MARK: - W8.5b: End Drive Mode
+
+    /// Clears all Drive Mode state (route polyline, destination pin, driveModeActive).
+    /// MapViewRepresentable reacts to activeRoute=nil and destinationCoordinate=nil by
+    /// removing the corresponding overlays and annotations automatically.
+    private func endDriveMode() {
+        driveModeActive = false
+        activeRoute = nil
+        driveDestinationCoordinate = nil
     }
 
     // MARK: - W5.1: Recenter actions

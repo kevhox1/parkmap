@@ -58,4 +58,11 @@ enum AppConstants {
     /// 1 hour — per `docs/ios-mvp-spec.md` §2.1 baseline and OQ-W6-1 answer.
     /// Change only this constant to adjust the lead time globally.
     static let notificationLeadTimeSeconds: TimeInterval = 1 * 3600
+
+    // MARK: - W8.5b: Recent destinations
+
+    /// UserDefaults key for the list of recently driven-to destinations.
+    /// Bounded to 5 most-recent entries, MRU ordering (newest first).
+    /// Each entry is a JSON-encoded `RecentDestination` struct.
+    static let recentDestinationsKey = "wepark_recent_destinations"
 }
