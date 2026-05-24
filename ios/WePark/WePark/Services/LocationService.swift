@@ -46,6 +46,11 @@ final class LocationService: NSObject {
     /// True when the user has granted .whenInUse (or .always) permission.
     private(set) var isAuthorized: Bool = false
 
+    /// Raw CoreLocation authorization status. Exposed for dependency-injection seam
+    /// in auth-gate tests (M-1 fix: replaces transient CLLocationManager() reads in
+    /// DriveModeDestinationView so the injected service is the single source of truth).
+    private(set) var authorizationStatus: CLAuthorizationStatus = .notDetermined
+
     // MARK: - W8.5c: Drive Mode state
 
     /// EMA-stabilized heading for Drive Mode. Nil when Drive Mode is not active.
@@ -80,8 +85,9 @@ final class LocationService: NSObject {
         manager.delegate = self
         manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
         // Reflect initial authorization status.
-        isAuthorized = [.authorizedWhenInUse, .authorizedAlways]
-            .contains(manager.authorizationStatus)
+        let initialStatus = manager.authorizationStatus
+        isAuthorized = [.authorizedWhenInUse, .authorizedAlways].contains(initialStatus)
+        authorizationStatus = initialStatus
     }
 
     // MARK: - Single-shot API (unchanged from W5.1)
@@ -242,6 +248,16 @@ final class LocationService: NSObject {
         return 2 * R * asin(sqrt(h))
     }
 
+#if DEBUG
+    /// Test-only: inject a specific authorization status directly into `locationService`
+    /// so unit tests can simulate .denied / .restricted without a real CLLocationManager.
+    /// Mirrors the `ToastService.resetForTesting()` pattern.
+    internal func setAuthorizationStatusForTesting(_ status: CLAuthorizationStatus) {
+        authorizationStatus = status
+        isAuthorized = [.authorizedWhenInUse, .authorizedAlways].contains(status)
+    }
+#endif
+
     /// Compass bearing from (lat1, lng1) to (lat2, lng2), in [0, 360).
     /// Port of `bearingFromTo` from `index.html:6572–6578`.
     private func bearingFromTo(lat1: Double, lng1: Double, lat2: Double, lng2: Double) -> Double {
@@ -267,6 +283,7 @@ extension LocationService: CLLocationManagerDelegate {
         // "Modifying state during view update" warnings.
         DispatchQueue.main.async { [weak self] in
             self?.isAuthorized = authorized
+            self?.authorizationStatus = status
             if authorized && !(self?.driveModeActiveInternal ?? false) {
                 // Only request single-shot location if NOT in continuous drive mode.
                 manager.requestLocation()

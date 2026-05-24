@@ -199,7 +199,7 @@ struct DriveModeDestinationView: View {
                     Task { await fetchRouteAndReturn() }
                 } else {
                     // Became denied/restricted during the wait.
-                    let status = CLLocationManager().authorizationStatus
+                    let status = locationService.authorizationStatus
                     if status == .denied || status == .restricted {
                         showLocationDeniedAlert = true
                     }
@@ -405,7 +405,7 @@ struct DriveModeDestinationView: View {
 
     /// Handles the "Start Drive" button tap with auth gate (AC-W85c.4).
     private func handleStartDriveTap() {
-        let status = CLLocationManager().authorizationStatus
+        let status = locationService.authorizationStatus
         switch status {
         case .notDetermined:
             // Gate: request permission first, then route fetch fires from .onChange.
