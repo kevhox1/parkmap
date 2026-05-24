@@ -252,6 +252,11 @@ struct ContentView: View {
     /// Cleared when the Recenter button is tapped or on each follow-mode location update.
     @State private var driveFollowEnabled: Bool = true
 
+    /// S-1 fix (spec §7 R-3, AC-DM.23): controls the one-time background-limitation alert.
+    /// Set to true on the first-ever Drive Mode start if the gate key is not yet set.
+    /// The gate itself is evaluated via BackgroundNoteGate; this bool drives the .alert.
+    @State private var showDriveModeBackgroundNote: Bool = false
+
     // MARK: - Bundle version strings (passed into SettingsView)
 
     private let appVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -529,6 +534,16 @@ struct ContentView: View {
                 if drivingVoice.isMuted {
                     ToastService.shared.show(message: "Voice muted — tap to unmute")
                 }
+                // S-1 fix (spec §7 R-3, AC-DM.23): on the very first Drive Mode start,
+                // show a one-time alert explaining that parking commentary pauses when the
+                // app is backgrounded. Alert wins over the muted toast — they cannot both
+                // fire at the same time without confusion, and the background note is the
+                // more important first-time disclosure.
+                let gate = BackgroundNoteGate()
+                if gate.shouldShow() {
+                    gate.markShown()
+                    showDriveModeBackgroundNote = true
+                }
                 // Activate audio session for the drive session.
                 AudioSessionManager.shared.activateDriveSession()
             } else {
@@ -795,6 +810,15 @@ struct ContentView: View {
         // guard ensures only one is presented at a time.
         .fullScreenCover(isPresented: $showDriveModeDestination) {
             driveModeDestinationCover
+        }
+        // S-1 fix (spec §7 R-3, AC-DM.23): one-time background-limitation alert.
+        // Shown on the first-ever Drive Mode start. BackgroundNoteGate (Constants.swift)
+        // gates on UserDefaults key wepark_dm_bg_note_shown and marks it true before this
+        // alert fires, so it shows exactly once across the lifetime of the install.
+        .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
+            Button("Got It", role: .cancel) {}
+        } message: {
+            Text("Parking commentary will pause if you background WePark during your drive. Keep the app in front for continuous guidance.")
         }
     }
 

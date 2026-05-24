@@ -72,4 +72,46 @@ enum AppConstants {
     /// PWA uses zoom level 18 (≈220m visible radius). We target a similar street-level view.
     /// Calibration deferred to W8.5c-follow after drive-test.
     static let drivingZoomMeters: Double = 300
+
+    /// UserDefaults key: set to true after the background-limitation note has been shown once.
+    /// Guards the one-time informational alert on first Drive Mode start explaining that
+    /// parking commentary pauses when the app is backgrounded (spec §7 R-3, AC-DM.23).
+    static let driveModeBackgroundNoteShownKey = "wepark_dm_bg_note_shown"
+}
+
+// MARK: - BackgroundNoteGate
+
+/// One-time gate for the Drive Mode background-limitation alert (spec §7 R-3, AC-DM.23).
+///
+/// Separating the gate logic from ContentView makes it unit-testable with an ephemeral
+/// UserDefaults suite — no UIKit or SwiftUI dependencies required.
+///
+/// Usage:
+///   let gate = BackgroundNoteGate()  // uses UserDefaults.standard
+///   if gate.shouldShow() {
+///       // present the alert
+///       gate.markShown()
+///   }
+struct BackgroundNoteGate {
+    private let defaults: UserDefaults
+    private let key: String
+
+    /// Designated init — accepts any `UserDefaults` instance so tests can inject an
+    /// ephemeral suite instead of polluting `UserDefaults.standard`.
+    init(defaults: UserDefaults = .standard,
+         key: String = AppConstants.driveModeBackgroundNoteShownKey) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    /// Returns `true` if the alert has never been shown on this device.
+    /// Returns `false` after `markShown()` has been called.
+    func shouldShow() -> Bool {
+        !defaults.bool(forKey: key)
+    }
+
+    /// Persists that the alert has been shown. Subsequent `shouldShow()` calls return `false`.
+    func markShown() {
+        defaults.set(true, forKey: key)
+    }
 }

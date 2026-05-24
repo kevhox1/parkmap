@@ -938,3 +938,62 @@ final class HeadingUpRotationTests: XCTestCase {
                        "lastAppliedHeading should remain 90° when change is < 5°")
     }
 }
+
+// MARK: - 10. BackgroundNoteGate Tests (S-1 fix: spec §7 R-3, AC-DM.23)
+
+/// Unit tests for the one-time Drive Mode background-limitation alert gate.
+/// Uses an ephemeral UserDefaults suite so standard UserDefaults is never polluted.
+final class BackgroundNoteGateTests: XCTestCase {
+
+    private let suiteName = "com.wepark.test.backgroundnotegate"
+    private var ephemeralDefaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        // Create an isolated suite for each test run; clear any leftover state.
+        ephemeralDefaults = UserDefaults(suiteName: suiteName)!
+        ephemeralDefaults.removeObject(forKey: AppConstants.driveModeBackgroundNoteShownKey)
+    }
+
+    override func tearDown() {
+        ephemeralDefaults.removePersistentDomain(forName: suiteName)
+        ephemeralDefaults = nil
+        super.tearDown()
+    }
+
+    // Test 1: First Drive Mode start — gate says show, then persists that it was shown.
+    func testDriveModeStart_firstTime_showsBackgroundNote_thenPersists() {
+        let gate = BackgroundNoteGate(defaults: ephemeralDefaults,
+                                     key: AppConstants.driveModeBackgroundNoteShownKey)
+
+        // Before first show: gate should return true (alert not yet shown).
+        XCTAssertTrue(gate.shouldShow(),
+                      "shouldShow() should return true before first Drive Mode start")
+
+        // Simulate first Drive Mode start: mark shown.
+        gate.markShown()
+
+        // After marking shown: UserDefaults key should be true.
+        let stored = ephemeralDefaults.bool(forKey: AppConstants.driveModeBackgroundNoteShownKey)
+        XCTAssertTrue(stored,
+                      "UserDefaults key should be true after markShown()")
+
+        // Subsequent Drive Mode start: gate should return false (idempotent).
+        XCTAssertFalse(gate.shouldShow(),
+                       "shouldShow() should return false on subsequent Drive Mode starts")
+    }
+
+    // Test 2: Second and subsequent starts — gate is idempotent (never shows twice).
+    func testDriveModeStart_subsequentTimes_gateReturnsFalse() {
+        let gate = BackgroundNoteGate(defaults: ephemeralDefaults,
+                                     key: AppConstants.driveModeBackgroundNoteShownKey)
+        // Mark shown immediately (simulates key already set from a prior session).
+        gate.markShown()
+
+        // Simulate 5 Drive Mode starts — gate should never fire again.
+        for i in 0..<5 {
+            XCTAssertFalse(gate.shouldShow(),
+                           "shouldShow() should return false on start #\(i + 1) after markShown")
+        }
+    }
+}
