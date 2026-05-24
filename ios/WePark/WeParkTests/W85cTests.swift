@@ -305,7 +305,7 @@ final class DrivingContextServiceTests: XCTestCase {
         XCTAssertEqual(mockVoice.speakCallCount, 1, "Same block repeated 5 times should speak exactly once")
     }
 
-    // Test 6: Heading east (90°), side E → right.
+    // Test 6: Heading north (0°), side E → right.
     func testDrivingContext_sideRelativeToHeading_east_facingNorth() {
         // Facing north (heading=0), E side should be right.
         let segs = [w85cMakeSeg(street: "5 AVE", from: "34 ST", to: "35 ST",
