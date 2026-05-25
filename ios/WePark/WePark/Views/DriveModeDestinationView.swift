@@ -3,6 +3,9 @@
 //  WePark
 //
 //  W8.5b — Full-screen destination search for Drive Mode.
+//  W8.5c — N-1: RecentDestinationsStore moved to Services/RecentDestinationsStore.swift.
+//           M-2: routeService is now typed against RouteServicing protocol.
+//           Auth gate: "Start Drive" requests location permission when notDetermined.
 //
 //  Architecture:
 //    - Full-screen cover (OQ-2: Option C). Presented over ContentView via .fullScreenCover.
@@ -14,7 +17,7 @@
 //  Flow:
 //    1. User types → completer fires → suggestions shown.
 //    2. User taps suggestion → MKLocalSearch resolves to coordinate → "Start Drive" shown.
-//    3. User taps "Start Drive" → fetchRoute(alternatives:true) → pickBestParkingAwareRoute →
+//    3. User taps "Start Drive" → auth gate → fetchRoute(alternatives:true) → pickBestParkingAwareRoute →
 //       onRouteReady closure fires → dismiss.
 //    4. Recent destinations shown when search field is empty.
 //
@@ -25,69 +28,6 @@
 import SwiftUI
 import MapKit
 import CoreLocation
-
-// MARK: - RecentDestination
-
-/// A recently driven-to destination, persisted in UserDefaults.
-/// `CLLocationCoordinate2D` is not Codable — latitude/longitude are stored separately.
-struct RecentDestination: Codable, Identifiable {
-    let id: UUID
-    let name: String
-    let latitude: Double
-    let longitude: Double
-
-    var coordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-    }
-}
-
-// MARK: - RecentDestinationsStore
-
-/// `UserDefaults`-backed list of recent destinations (max 5, MRU ordering).
-/// Supports add, delete, and swipe-to-delete.
-@Observable
-final class RecentDestinationsStore {
-
-    private(set) var destinations: [RecentDestination] = []
-    private let key = AppConstants.recentDestinationsKey
-    private static let maxCount = 5
-
-    init() {
-        load()
-    }
-
-    func load() {
-        guard let data = UserDefaults.standard.data(forKey: key),
-              let decoded = try? JSONDecoder().decode([RecentDestination].self, from: data) else {
-            destinations = []
-            return
-        }
-        destinations = decoded
-    }
-
-    /// Inserts a new destination at index 0, truncates to max 5, and persists.
-    func add(_ destination: RecentDestination) {
-        // Remove existing entry with same name to deduplicate.
-        var updated = destinations.filter { $0.name != destination.name }
-        updated.insert(destination, at: 0)
-        if updated.count > Self.maxCount {
-            updated = Array(updated.prefix(Self.maxCount))
-        }
-        destinations = updated
-        persist()
-    }
-
-    /// Removes destinations at the given index set and persists.
-    func delete(at offsets: IndexSet) {
-        destinations.remove(atOffsets: offsets)
-        persist()
-    }
-
-    private func persist() {
-        guard let data = try? JSONEncoder().encode(destinations) else { return }
-        UserDefaults.standard.set(data, forKey: key)
-    }
-}
 
 // MARK: - SearchCompleterDelegate
 
@@ -135,6 +75,15 @@ struct DriveModeDestinationView: View {
     /// ContentView uses this to set `activeRoute` and `driveDestinationCoordinate`.
     let onRouteReady: (DriveRoute, CLLocationCoordinate2D) -> Void
 
+    // MARK: - Dependencies (injectable for M-2 protocol seam)
+
+    /// Route service, typed against `RouteServicing` for dependency injection.
+    /// Default: `RouteService.shared` (the production singleton).
+    let routeService: any RouteServicing
+
+    /// Location service, for auth gate check (AC-W85c.4).
+    let locationService: LocationService
+
     // MARK: - Environment
 
     @Environment(\.dismiss) private var dismiss
@@ -163,8 +112,33 @@ struct DriveModeDestinationView: View {
     /// True while MKLocalSearch is resolving a tapped completion.
     @State private var isResolvingAddress: Bool = false
 
-    /// Whether to show a "focus" state in the search field.
+    /// True while waiting for location authorization (auth gate spinner).
+    @State private var isRequestingAuth: Bool = false
+
+    /// Whether to show an alert for denied/restricted location permission.
+    @State private var showLocationDeniedAlert: Bool = false
+
+    /// Whether to focus on the search field.
     @FocusState private var searchFieldFocused: Bool
+
+    // MARK: - Init
+
+    /// Primary initializer — uses production `RouteService.shared` and a provided `LocationService`.
+    init(
+        currentRegion: MKCoordinateRegion,
+        segments: [Segment],
+        userLocation: CLLocationCoordinate2D?,
+        locationService: LocationService,
+        onRouteReady: @escaping (DriveRoute, CLLocationCoordinate2D) -> Void,
+        routeService: (any RouteServicing)? = nil
+    ) {
+        self.currentRegion = currentRegion
+        self.segments = segments
+        self.userLocation = userLocation
+        self.locationService = locationService
+        self.onRouteReady = onRouteReady
+        self.routeService = routeService ?? RouteService.shared
+    }
 
     // MARK: - Body
 
@@ -215,6 +189,27 @@ struct DriveModeDestinationView: View {
                 clearResolved()
             }
             completerDelegate.completer.queryFragment = newValue
+        }
+        // W8.5c auth gate: when authorization resolves while spinner is shown,
+        // clear the spinner and attempt route fetch if now authorized.
+        .onChange(of: locationService.isAuthorized) { _, isAuthorized in
+            if isRequestingAuth {
+                isRequestingAuth = false
+                if isAuthorized {
+                    Task { await fetchRouteAndReturn() }
+                } else {
+                    // Became denied/restricted during the wait.
+                    let status = locationService.authorizationStatus
+                    if status == .denied || status == .restricted {
+                        showLocationDeniedAlert = true
+                    }
+                }
+            }
+        }
+        .alert("Location Required", isPresented: $showLocationDeniedAlert) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text("Location required for Drive Mode — enable it in Settings.")
         }
     }
 
@@ -379,9 +374,18 @@ struct DriveModeDestinationView: View {
                         .font(.subheadline)
                 }
                 .padding(.vertical, 8)
+            } else if isRequestingAuth {
+                // Auth gate spinner (AC-W85c.4)
+                HStack(spacing: 8) {
+                    ProgressView()
+                    Text("Requesting location...")
+                        .foregroundStyle(.secondary)
+                        .font(.subheadline)
+                }
+                .padding(.vertical, 8)
             } else {
                 Button {
-                    Task { await fetchRouteAndReturn() }
+                    handleStartDriveTap()
                 } label: {
                     Label("Start Drive", systemImage: "arrow.triangle.turn.up.right.diamond.fill")
                         .font(.headline)
@@ -390,12 +394,33 @@ struct DriveModeDestinationView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .padding(.horizontal, 16)
+                // Disable while resolving address (belt-and-suspenders — button is hidden then anyway).
+                .disabled(isResolvingAddress)
             }
         }
         .padding(.bottom, 8)
     }
 
     // MARK: - Actions
+
+    /// Handles the "Start Drive" button tap with auth gate (AC-W85c.4).
+    private func handleStartDriveTap() {
+        let status = locationService.authorizationStatus
+        switch status {
+        case .notDetermined:
+            // Gate: request permission first, then route fetch fires from .onChange.
+            isRequestingAuth = true
+            locationService.requestAndFetchLocation()
+        case .authorizedWhenInUse, .authorizedAlways:
+            // Already authorized — proceed directly.
+            Task { await fetchRouteAndReturn() }
+        case .denied, .restricted:
+            // Permission denied — show informational alert (AC-W85c.5).
+            showLocationDeniedAlert = true
+        @unknown default:
+            Task { await fetchRouteAndReturn() }
+        }
+    }
 
     /// Selects a completer suggestion and resolves it to a coordinate via MKLocalSearch.
     ///
@@ -500,7 +525,7 @@ struct DriveModeDestinationView: View {
         isLoadingRoute = true
 
         do {
-            let routes = try await RouteService.shared.fetchRoute(
+            let routes = try await routeService.fetchRoute(
                 from: origin,
                 to: destination,
                 alternatives: true
@@ -508,7 +533,7 @@ struct DriveModeDestinationView: View {
 
             // Pick the best parking-aware route (scoring port from spec §4, Step C).
             let engine = ParkingRulesEngine()
-            let best = RouteService.pickBestParkingAwareRoute(routes, segments: segments, engine: engine)
+            let best = routeService.pickBestParkingAwareRoute(routes, segments: segments, engine: engine, now: .nowET)
                 ?? routes[0]
 
             // Save to recent destinations before dismissing.
@@ -588,6 +613,7 @@ typealias _SearchTimeoutError = SearchTimeoutError
         ),
         segments: [],
         userLocation: CLLocationCoordinate2D(latitude: 40.7831, longitude: -73.9712),
+        locationService: LocationService(),
         onRouteReady: { _, _ in }
     )
 }

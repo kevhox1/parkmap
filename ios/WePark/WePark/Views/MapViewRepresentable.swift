@@ -158,6 +158,19 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Nil → destination pin removed.
     let destinationCoordinate: CLLocationCoordinate2D?
 
+    // MARK: W8.5c: Heading-up rotation
+
+    /// Stabilized Drive Mode heading in degrees [0, 360). Non-nil → camera heading set.
+    /// Nil → reset camera heading to north-up (0).
+    /// Dead-band: only applied when heading changes by > 5 degrees (R-1 anti-loop guard).
+    /// Default: nil (Drive Mode not active).
+    var driveHeading: Double? = nil
+
+    /// Callback when the user manually pans the map during Drive Mode (follow mode disabled).
+    /// ContentView sets `driveFollowEnabled = false` to show the Recenter button.
+    /// Default: nil (not in Drive Mode).
+    var onDrivePanDetected: (() -> Void)? = nil
+
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
     struct OverlayPayload: Equatable {
@@ -216,6 +229,14 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
+    }
+
+    // MARK: - Dead-band heading diff
+
+    /// Circular heading difference in degrees (0–180). Used for dead-band guard.
+    static func headingDiff(_ a: Double, _ b: Double) -> Double {
+        let d = abs(((a - b).truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360))
+        return d > 180 ? 360 - d : d
     }
 
     func makeUIView(context: Context) -> MKMapView {
@@ -283,13 +304,21 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.syncRoutePolyline(activeRoute, on: mapView)
         context.coordinator.syncDestinationPin(destinationCoordinate, on: mapView)
 
+        // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11).
+        // Port of setDrivingMapRotation (index.html:6584–6601) with R-1 dead-band guard.
+        // Only update when heading changes > 5 degrees to prevent tight regionDidChange feedback loop.
+        context.coordinator.syncDriveHeading(driveHeading, on: mapView)
+
         // Sync camera only if it diverged from the map's current region by more than
         // a threshold — avoids fighting the user's pan/zoom gestures.
-        let mapRegion = mapView.region
-        let latDiff = abs(mapRegion.center.latitude  - region.center.latitude)
-        let lngDiff = abs(mapRegion.center.longitude - region.center.longitude)
-        if latDiff > 0.0001 || lngDiff > 0.0001 {
-            mapView.setRegion(region, animated: false)
+        // Skip camera sync entirely during Drive Mode to let follow-mode and heading control own the camera.
+        if driveHeading == nil {
+            let mapRegion = mapView.region
+            let latDiff = abs(mapRegion.center.latitude  - region.center.latitude)
+            let lngDiff = abs(mapRegion.center.longitude - region.center.longitude)
+            if latDiff > 0.0001 || lngDiff > 0.0001 {
+                mapView.setRegion(region, animated: false)
+            }
         }
     }
 
@@ -324,6 +353,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         private var destinationPinAnnotation: DestinationPinAnnotation? = nil
         /// The coordinate of the currently-rendered destination pin (encoded as a tuple for equality).
         private var renderedDestinationCoord: (Double, Double)? = nil
+
+        // W8.5c: Heading-up rotation state.
+        /// Last heading value applied to the camera (R-1 dead-band guard).
+        /// Nil before the first Drive Mode heading update.
+        /// Port of drivingLastAppliedHeading (index.html:6583).
+        var lastAppliedHeading: Double? = nil
 
         init(parent: MapViewRepresentable) {
             self.parent = parent
@@ -488,6 +523,37 @@ struct MapViewRepresentable: UIViewRepresentable {
             renderedDestinationCoord = newCoord
         }
 
+        // MARK: - W8.5c: Heading-up rotation
+
+        /// Applies the stabilized Drive Mode heading to the map camera.
+        ///
+        /// Port of `setDrivingMapRotation` (index.html:6584–6601) with R-1 dead-band guard:
+        ///   - If `heading` is nil (Drive Mode off), reset camera to north-up (heading = 0).
+        ///   - If heading changed by <= 5 degrees, skip (avoids regionDidChangeAnimated feedback loop).
+        ///   - If changed by > 5 degrees, create a new MKMapCamera and call setCamera(_:animated:false).
+        ///
+        /// Called from updateUIView on every SwiftUI render cycle that has a new driveHeading.
+        func syncDriveHeading(_ heading: Double?, on mapView: MKMapView) {
+            if let h = heading {
+                // Check dead-band (R-1 anti-loop). Only update if changed > 5 degrees.
+                if let last = lastAppliedHeading {
+                    let diff = MapViewRepresentable.headingDiff(h, last)
+                    guard diff > 5 else { return }
+                }
+                lastAppliedHeading = h
+                let camera = mapView.camera.copy() as! MKMapCamera
+                camera.heading = h
+                mapView.setCamera(camera, animated: false)
+            } else {
+                // Drive Mode exited — reset to north-up and clear state.
+                guard lastAppliedHeading != nil else { return }
+                lastAppliedHeading = nil
+                let camera = mapView.camera.copy() as! MKMapCamera
+                camera.heading = 0
+                mapView.setCamera(camera, animated: false)
+            }
+        }
+
         // MARK: - MKMapViewDelegate: annotation view
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -609,6 +675,22 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         // MARK: - MKMapViewDelegate: camera
+
+        func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            // W8.5c: Detect user-initiated pans during Drive Mode (follow mode detection).
+            // We distinguish user gestures from programmatic updates by checking if any of
+            // the map's gesture recognizers is in a state that indicates a user interaction.
+            // `animated == false` doesn't reliably distinguish user vs programmatic on MKMapView.
+            guard parent.driveHeading != nil else { return }
+            let isUserGesture = mapView.gestureRecognizers?.contains(where: {
+                $0.state == .began || $0.state == .changed || $0.state == .ended
+            }) ?? false
+            if isUserGesture {
+                DispatchQueue.main.async { [weak self] in
+                    self?.parent.onDrivePanDetected?()
+                }
+            }
+        }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             let region = mapView.region
