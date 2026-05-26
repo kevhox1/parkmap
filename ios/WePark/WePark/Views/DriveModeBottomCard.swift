@@ -7,7 +7,7 @@
 //  Port of `renderDrivingContext` (index.html:5863–5910) adapted to SwiftUI.
 //
 //  Layout (OQ-1: full-width, pinned to bottom safe area via .safeAreaInset(edge: .bottom)):
-//    - Street name (headline) + optional distance indicator (top-right of name row, AC-P.7–P.11)
+//    - Street name (headline)
 //    - Two chips side-by-side: Left / Right, color-coded by severity
 //    - Mute toggle button (speaker.wave.2.fill / speaker.slash.fill)
 //
@@ -36,12 +36,6 @@ struct DriveModeBottomCard: View {
     /// Not wired in W8.5c — always false.
     var showApproachStrip: Bool = false
 
-    /// W8.5c-polish: Distance to destination in meters (AC-P.7–P.11).
-    /// Pre-computed in ContentView via CLLocation.distance(from:) on each GPS fix.
-    /// Nil when Drive Mode has no destination (AC-DM.5 no-destination mode) — distance
-    /// element is hidden when nil. Formatted with one decimal place in the user's locale units.
-    var destinationDistance: Double? = nil
-
     // MARK: - Body
 
     var body: some View {
@@ -62,32 +56,12 @@ struct DriveModeBottomCard: View {
 
     // MARK: - Card content
 
-    /// Two-state layout driven by `context: DrivingContext?`:
-    ///
-    /// **nil context — "Looking for street..." placeholder**
-    /// Shown when `DrivingContextService` has not yet matched the GPS position to a known
-    /// tile segment. This is a transient state, not a rendering bug. It occurs:
-    ///   - At Drive Mode start, before `DrivingContextService.update(coordinate:heading:segments:engine:date:)`
-    ///     has had a chance to run with a fresh GPS fix and matching tile data.
-    ///   - When driving through a gap in tile coverage (no tile loaded for that area).
-    /// The chips will appear as soon as `DrivingContextService.currentContext` becomes non-nil
-    /// and ContentView propagates `drivingContext` to this card.
-    ///
-    /// **non-nil context — street name + left/right severity chips**
-    /// Shown when the GPS position is matched to a known block in the loaded tile segments.
-    /// The street name row also shows a distance-to-destination indicator on the right
-    /// (when `destinationDistance` is non-nil, i.e., a destination was set before starting Drive Mode).
-    /// Chip background and text colors follow the W4.5 severity palette:
-    ///   - `.free` → green (freeComfortably)
-    ///   - `.metered` → amber (meteredActive)
-    ///   - `.restricted` → red (restricted)
-    ///   - `.unknown` → gray (secondarySystemGroupedBackground)
     @ViewBuilder
     private var cardContent: some View {
         if let ctx = context {
             VStack(spacing: 10) {
-                // Street name row — street name + optional distance indicator + mute button.
-                HStack(spacing: 8) {
+                // Street name row
+                HStack {
                     Text(ctx.street.split(separator: " ").map { word in
                         String(word.prefix(1)).uppercased() + String(word.dropFirst()).lowercased()
                     }.joined(separator: " "))
@@ -95,16 +69,6 @@ struct DriveModeBottomCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .frame(maxWidth: .infinity, alignment: .leading)
-
-                    // W8.5c-polish: Distance-to-destination indicator (AC-P.7–P.11, OQ-4 placement).
-                    // Top-right of the street name row, to the left of the mute button.
-                    // Hidden when destinationDistance is nil (no-destination Drive Mode).
-                    if let meters = destinationDistance {
-                        Text(formattedDistance(meters))
-                            .font(.subheadline.weight(.semibold))
-                            .foregroundStyle(.primary)
-                            .lineLimit(1)
-                    }
 
                     muteButton
                 }
@@ -119,8 +83,7 @@ struct DriveModeBottomCard: View {
             }
             .padding(.vertical, 12)
         } else {
-            // Placeholder when no street data (AC-W85c.27).
-            // See the doc-comment above cardContent for the explanation of this transient state.
+            // Placeholder when no street data (AC-W85c.27)
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Looking for street\u{2026}")
@@ -133,26 +96,6 @@ struct DriveModeBottomCard: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 16)
-        }
-    }
-
-    // MARK: - Distance formatting (AC-P.9)
-
-    /// Formats a distance in meters to a localized string with one decimal place.
-    ///
-    /// Uses `Locale.current.usesMetricSystem`:
-    ///   - Metric:   "1.2 km" (kilometers, one decimal)
-    ///   - Imperial: "0.8 mi" (miles, one decimal)
-    ///
-    /// The conversion is done manually (not via `MeasurementFormatter`) to ensure
-    /// consistent one-decimal formatting regardless of the system formatter's rounding.
-    private func formattedDistance(_ meters: Double) -> String {
-        if Locale.current.usesMetricSystem {
-            let km = meters / 1000.0
-            return String(format: "%.1f km", km)
-        } else {
-            let miles = meters / 1609.344
-            return String(format: "%.1f mi", miles)
         }
     }
 

@@ -257,17 +257,6 @@ struct ContentView: View {
     /// The gate itself is evaluated via BackgroundNoteGate; this bool drives the .alert.
     @State private var showDriveModeBackgroundNote: Bool = false
 
-    // MARK: - W8.5c-polish: Drive Mode camera + distance state
-
-    /// The camera region captured immediately before Drive Mode auto-zoom fires.
-    /// Passed to MapViewRepresentable and restored when Drive Mode exits (OQ-2).
-    @State private var preDriveRegion: MKCoordinateRegion? = nil
-
-    /// Distance from current user location to the drive destination, in meters.
-    /// Nil when Drive Mode is inactive or when no destination coordinate is set.
-    /// Computed on each GPS fix; passed to DriveModeBottomCard for display (AC-P.7–P.11).
-    @State private var driveModeDistanceMeters: Double? = nil
-
     // MARK: - Bundle version strings (passed into SettingsView)
 
     private let appVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -326,9 +315,7 @@ struct ContentView: View {
                         if driveModeActive {
                             driveFollowEnabled = false
                         }
-                    },
-                    driveModeActive: driveModeActive,
-                    preDriveRegion: preDriveRegion
+                    }
                 )
                 // Map fills the full screen including safe area.
                 .ignoresSafeArea()
@@ -341,12 +328,10 @@ struct ContentView: View {
                 .safeAreaInset(edge: .bottom) {
                     VStack(spacing: 0) {
                         // W8.5c: Drive Mode bottom card (AC-W85c.25).
-                        // W8.5c-polish: passes destinationDistance for the distance indicator (AC-P.7–P.11).
                         if driveModeActive {
                             DriveModeBottomCard(
                                 context: drivingContext,
-                                voiceService: drivingVoice,
-                                destinationDistance: driveModeDistanceMeters
+                                voiceService: drivingVoice
                             )
                         }
                         // W7.5: Park Until pill.
@@ -383,13 +368,9 @@ struct ContentView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             // W8.5b/c: Drive Mode overlays — shown when Drive Mode is active.
-            // W8.5c-polish (AC-P.15, AC-P.16): End Drive pill is offset by padding(.top, 100)
-            // so it always clears both the status bar (~44pt) and the ASP banner (~40pt).
-            // This matches the gear button's padding and prevents visual overlap.
-            // Approach A from spec §1.1 item C: offset the pill below the ASP banner area.
             if driveModeActive {
                 VStack {
-                    // "End Drive" pill — top-left area, below status bar + ASP banner.
+                    // "End Drive" pill — top-left area, below the gear button.
                     HStack {
                         Button {
                             endDriveMode()
@@ -423,7 +404,6 @@ struct ContentView: View {
                         .padding(.bottom, 8)
                     }
                 }
-                .padding(.top, 100)
             }
 
             // W7: Toast host — highest z-order layer. Positioned at the very top via VStack + Spacer.
@@ -541,13 +521,9 @@ struct ContentView: View {
             }
         }
         // W8.5c: Drive Mode active layer lifecycle — start/stop continuous location + voice.
-        // W8.5c-polish: captures preDriveRegion before auto-zoom fires; clears distance on exit.
         .onChange(of: driveModeActive) { _, active in
             if active {
                 // Entering Drive Mode.
-                // Capture current region BEFORE MapViewRepresentable's syncDriveCamera fires
-                // so the restore-on-exit path (OQ-2) has the true pre-drive span.
-                preDriveRegion = region
                 locationService.startDriveMode()
                 driveFollowEnabled = true
                 // Create DrivingContextService and wire the voice service.
@@ -576,9 +552,6 @@ struct ContentView: View {
                 drivingContextService = nil
                 drivingContext = nil
                 driveFollowEnabled = true
-                // Clear distance indicator and pre-drive region (no longer needed).
-                driveModeDistanceMeters = nil
-                preDriveRegion = nil
                 // Deactivate audio session.
                 AudioSessionManager.shared.deactivateDriveSession()
             }
@@ -638,17 +611,6 @@ struct ContentView: View {
                         engine: engine
                     )
                     drivingContext = service.currentContext
-                }
-
-                // W8.5c-polish: Distance-to-destination indicator (AC-P.7–P.11).
-                // CLLocation.distance(from:) uses the Haversine formula — O(1), correct,
-                // and more accurate than manual equirectangular for large distances.
-                if let dest = driveDestinationCoordinate {
-                    let userCL = CLLocation(latitude: loc.latitude, longitude: loc.longitude)
-                    let destCL = CLLocation(latitude: dest.latitude, longitude: dest.longitude)
-                    driveModeDistanceMeters = userCL.distance(from: destCL)
-                } else {
-                    driveModeDistanceMeters = nil
                 }
             }
         }
