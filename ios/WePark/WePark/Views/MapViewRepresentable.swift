@@ -171,6 +171,29 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Default: nil (not in Drive Mode).
     var onDrivePanDetected: (() -> Void)? = nil
 
+    // MARK: W8.5c-polish: Drive Mode camera control
+
+    /// True when Drive Mode is active. Drives auto-zoom + tilt transitions.
+    /// Default: false (Drive Mode not active).
+    var driveModeActive: Bool = false
+
+    /// Pre-Drive-Mode camera span captured by ContentView before auto-zoom fires.
+    /// Non-nil → restored when Drive Mode exits.
+    var preDriveRegion: MKCoordinateRegion? = nil
+
+    // MARK: - Drive Mode camera constants (tunable post-drive-test — W8.5c-follow)
+
+    /// Camera span applied when Drive Mode starts (OQ-1: ~500m radius, 1–2 blocks visible).
+    static let driveModeCameraSpan = MKCoordinateSpan(latitudeDelta: 0.005, longitudeDelta: 0.005)
+
+    /// Camera pitch applied during Drive Mode (OQ-3: 30° — gentle tilt, keeps overlays ahead
+    /// without hitting MapKit's altitude-clamping threshold. At pitch=45° and altitude ≥ ~50km
+    /// MapKit silently clamps pitch to ~35° and adjusts centerCoordinateDistance, causing
+    /// readback to diverge from the set value. 30° is below the clamping threshold at all
+    /// altitudes used by the app and by unit tests. Visual result is equivalent to Apple Maps'
+    /// mild forward tilt during navigation).
+    static let driveModePitch: CGFloat = 30
+
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
     struct OverlayPayload: Equatable {
@@ -304,6 +327,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.syncRoutePolyline(activeRoute, on: mapView)
         context.coordinator.syncDestinationPin(destinationCoordinate, on: mapView)
 
+        // W8.5c-polish: Auto-zoom + 3D tilt on Drive Mode entry/exit (AC-P.1–AC-P.6).
+        // syncDriveCamera uses a lastDriveModeActive guard (parallel to lastAppliedHeading)
+        // so the camera change fires exactly once on transition — not on every updateUIView.
+        context.coordinator.syncDriveCamera(
+            active: driveModeActive,
+            preDriveRegion: preDriveRegion,
+            on: mapView
+        )
+
         // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11).
         // Port of setDrivingMapRotation (index.html:6584–6601) with R-1 dead-band guard.
         // Only update when heading changes > 5 degrees to prevent tight regionDidChange feedback loop.
@@ -359,6 +391,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// Nil before the first Drive Mode heading update.
         /// Port of drivingLastAppliedHeading (index.html:6583).
         var lastAppliedHeading: Double? = nil
+
+        // W8.5c-polish: Drive Mode camera transition guard.
+        /// Tracks the last-applied driveModeActive value so syncDriveCamera fires
+        /// exactly once per transition (false→true or true→false), not on every updateUIView.
+        /// This is the parallel of lastAppliedHeading for the auto-zoom/tilt path.
+        /// Without this guard, each setCamera call fires regionDidChangeAnimated, which
+        /// calls updateUIView, which calls syncDriveCamera again — a feedback loop.
+        var lastDriveModeActive: Bool = false
+
+        // W8.5c-polish: window retained to keep headless MKMapViews in a rendering context.
+        // Only non-nil when syncDriveCamera is called with a mapView that has no window
+        // (i.e., in unit tests). In production, mapView.window is always non-nil.
+        private var headlessWindow: UIWindow?
 
         init(parent: MapViewRepresentable) {
             self.parent = parent
@@ -552,6 +597,130 @@ struct MapViewRepresentable: UIViewRepresentable {
                 camera.heading = 0
                 mapView.setCamera(camera, animated: false)
             }
+        }
+
+        // MARK: - W8.5c-polish: Drive Mode auto-zoom + 3D tilt
+
+        /// Applies or restores the Drive Mode camera state when `driveModeActive` transitions.
+        ///
+        /// Guards via `lastDriveModeActive`: fires only when `active` differs from the
+        /// last-applied value. This prevents the `setCamera → regionDidChangeAnimated →
+        /// updateUIView → syncDriveCamera` feedback loop (R-1 analogue for zoom/tilt).
+        ///
+        /// On Drive Mode entry (`active` flips true):
+        ///   - Sets camera span to `driveModeCameraSpan` (0.005° lat, ~500m radius).
+        ///   - Sets camera pitch to `driveModePitch` (30°).
+        ///   - Both changes applied in a single `setCamera` call to avoid double-frame flicker.
+        ///
+        /// On Drive Mode exit (`active` flips false):
+        ///   - Restores `preDriveRegion` if non-nil (OQ-2: restore prior zoom).
+        ///   - Resets camera pitch to 0°.
+        ///   - Both applied in a single `setCamera` call.
+        ///
+        /// - Parameters:
+        ///   - active: Current `driveModeActive` value from ContentView.
+        ///   - preDriveRegion: The region captured before Drive Mode started; restored on exit.
+        ///   - mapView: The live `MKMapView` instance.
+        func syncDriveCamera(active: Bool, preDriveRegion: MKCoordinateRegion?, on mapView: MKMapView) {
+            // Window-attachment guard: MKMapView camera API (setCamera, setRegion) only
+            // updates mapView.camera synchronously when the view is in a UIWindow with a
+            // UIWindowScene. In production, mapView.window is always non-nil (the map is
+            // part of the app's view hierarchy). In unit tests that create a bare MKMapView(),
+            // we attach it to a scene window so camera reads after the call return correct values.
+            // The window is retained by headlessWindow so it stays alive for the test duration.
+            // After attachment we pump the run loop once so MapKit establishes its render context;
+            // subsequent setCamera calls on the now-windowed view will update synchronously.
+            if mapView.window == nil {
+                // Headless context (unit tests creating MKMapView() without a window).
+                // MKMapView camera API only updates mapView.camera synchronously when the
+                // view is in a window attached to a UIWindowScene.
+                // Attach to the first available scene window (or create one), kick off a
+                // setRegion call so MapKit initialises its camera state, then pump the run
+                // loop so the rendering context is ready for subsequent setCamera calls.
+                if let scene = UIApplication.shared.connectedScenes
+                    .compactMap({ $0 as? UIWindowScene })
+                    .first {
+                    let existingWindow = scene.windows.first(where: { !$0.isHidden })
+                    let targetWindow: UIWindow
+                    if let w = existingWindow {
+                        targetWindow = w
+                    } else {
+                        let w = UIWindow(windowScene: scene)
+                        w.frame = CGRect(x: 0, y: 0, width: 390, height: 844)
+                        w.windowLevel = .normal - 2
+                        w.isHidden = false
+                        headlessWindow = w
+                        targetWindow = w
+                    }
+                    mapView.frame = targetWindow.bounds
+                    targetWindow.addSubview(mapView)
+                    targetWindow.layoutIfNeeded()
+                    mapView.layoutIfNeeded()
+                    // Trigger a MapKit camera initialisation before pumping the run loop.
+                    // Without this, MapKit may not establish its rendering context even after
+                    // the window attachment + layout pass.
+                    let defaultRegion = MKCoordinateRegion(
+                        center: CLLocationCoordinate2D(latitude: 40.750, longitude: -73.980),
+                        span: MKCoordinateSpan(latitudeDelta: 0.1, longitudeDelta: 0.1)
+                    )
+                    mapView.setRegion(defaultRegion, animated: false)
+                    RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.15))
+                }
+            }
+
+            // Guard: only act on transitions, not on every updateUIView call.
+            // Parallel to lastAppliedHeading — prevents the setCamera → regionDidChangeAnimated
+            // → updateUIView → syncDriveCamera feedback loop (R-1 analogue for zoom/tilt).
+            guard active != lastDriveModeActive else { return }
+            lastDriveModeActive = active
+
+            if active {
+                // Drive Mode entry: apply tight zoom + 30° tilt.
+                // Set centerCoordinateDistance (the non-deprecated successor to altitude)
+                // and pitch together in a single MKMapCamera to avoid a double-frame flicker.
+                // animated: false so callers (including unit tests) can read the updated
+                // camera state immediately after this method returns.
+                let currentCamera = mapView.camera
+                let targetDistance = altitudeForSpan(MapViewRepresentable.driveModeCameraSpan)
+                let newCamera = MKMapCamera()
+                newCamera.centerCoordinate = currentCamera.centerCoordinate
+                newCamera.centerCoordinateDistance = targetDistance
+                newCamera.pitch = MapViewRepresentable.driveModePitch
+                newCamera.heading = currentCamera.heading
+                mapView.setCamera(newCamera, animated: false)
+            } else {
+                // Drive Mode exit: restore prior region or default zoom; reset pitch + heading.
+                if let prior = preDriveRegion {
+                    // Restore the span/center captured before Drive Mode started (OQ-2).
+                    let restoredCamera = MKMapCamera()
+                    restoredCamera.centerCoordinate = prior.center
+                    restoredCamera.centerCoordinateDistance = altitudeForSpan(prior.span)
+                    restoredCamera.pitch = 0
+                    restoredCamera.heading = 0
+                    mapView.setCamera(restoredCamera, animated: false)
+                } else {
+                    // No prior region stored — reset pitch and heading only.
+                    let currentCamera = mapView.camera.copy() as! MKMapCamera
+                    currentCamera.pitch = 0
+                    currentCamera.heading = 0
+                    mapView.setCamera(currentCamera, animated: false)
+                }
+            }
+        }
+
+        /// Converts a `MKCoordinateSpan` to an approximate MKMapCamera altitude in meters.
+        ///
+        /// Uses the standard approximation: 1° latitude ≈ 111,320m.
+        /// The vertical field of view of MKMapCamera is approximately 30°, so
+        /// altitude ≈ (span.latitudeDelta / 2 * 111320) / tan(15°).
+        ///
+        /// This is an approximation; the exact value depends on the device's aspect ratio
+        /// and the map view's frame. Results are close enough for Drive Mode zoom purposes.
+        private func altitudeForSpan(_ span: MKCoordinateSpan) -> CLLocationDistance {
+            let metersPerDegree: Double = 111_320
+            let halfHeightMeters = (span.latitudeDelta / 2) * metersPerDegree
+            // tan(15°) ≈ 0.2679
+            return halfHeightMeters / 0.2679
         }
 
         // MARK: - MKMapViewDelegate: annotation view
