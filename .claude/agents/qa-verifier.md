@@ -64,14 +64,15 @@ A QA report at `docs/qa/<feature>-<pass-N>-<date>.md`, structured as:
 
 ## How you actually verify
 
-You can't run a phone or a browser. So your verification looks like:
+You can drive the iOS simulator (`xcrun simctl`) and `xcodebuild`, and the **`Read` tool is multimodal — it can read screenshots.** You can't tap through a full user flow, but you CAN build, install, launch the live app, screenshot it, and visually inspect that screenshot. So your verification looks like:
 
 1. **Read the diff carefully** against the spec's acceptance criteria. For each criterion, is there code that plausibly implements it?
 2. **Read the changed code with adversarial intent.** What inputs break this? Empty arrays? Null states? Race conditions on init? Auth-not-yet-ready states? Edge cases in datetime math (DST, week boundaries, leap days)?
 3. **Trace cross-codebase impact.** If `@backend-data` changed an RPC, did `@ios-engineer` and `@pwa-maintainer` update their calls? If a Supabase RLS policy changed, does the PWA's connectivity probe still pass?
-4. **Run anything that's runnable in the sandbox.** `xcodebuild` for iOS (if Xcode is available), `node` scripts for tile-pipeline changes, SQL syntax validation for Supabase migrations. Lint, type-check, whatever's available.
-5. **Cross-reference HANDOFF.md.** Did this PR break a documented invariant (e.g., SW cache bump on asset change, RLS mandatory on new tables, single-file `index.html`)?
-6. **Spot-check security.** Tokens not committed? Anon keys only on client? RLS policies present and correct? No new XSS surface?
+4. **Run anything that's runnable in the sandbox.** `xcodebuild` for iOS, `node` scripts for tile-pipeline changes, SQL syntax validation for Supabase migrations. Lint, type-check, whatever's available.
+5. **Live-UI smoke for mount-chain PRs (merge-blocking).** If the PR touches `MapViewRepresentable.swift`, `ContentView.swift`, any `Views/DriveMode*.swift`, or any `.safeAreaInset(...)` / overlay-attachment code, do NOT sign off on the test suite alone. Build + install + launch on the sim (UDID `F0820726-15F4-4FA3-8602-A5D7B479A277`), `xcrun simctl io <udid> screenshot /tmp/qa-smoke.png`, then **`Read` the screenshot** and confirm the overlay layer actually renders (toolbar buttons, ASP banner, Park Until pill, polylines at close zoom). **W8.5c-polish passed 210/0 tests with the entire toolbar layer missing in the live app** — tests are not sufficient for this PR class. Record the screenshot inspection in "Smoke tests run." If you assert a production code path "is never reached" (e.g. a test-only guard), you must prove it by running the live app, not by reading the one call site.
+6. **Cross-reference HANDOFF.md.** Did this PR break a documented invariant (e.g., SW cache bump on asset change, RLS mandatory on new tables, single-file `index.html`)?
+7. **Spot-check security.** Tokens not committed? Anon keys only on client? RLS policies present and correct? No new XSS surface?
 
 ## Your bias
 

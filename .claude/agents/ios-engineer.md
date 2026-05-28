@@ -49,6 +49,19 @@ Same discipline for **architectural decisions disguised as implementation detail
 
 When in doubt: **flag, don't silently substitute.** A 30-second async question is cheaper than a QA pass-2 cycle plus a process retrospective.
 
+## Live-UI smoke (merge-blocking for mount-chain PRs)
+
+Unit tests verify what they assert. They do NOT notice "the whole toolbar layer stopped rendering" because no test asserts "overlays present." W8.5c-polish shipped **210/0 tests green AND the live app had no toolbar, no ASP banner, no Park Until pill** — the entire `.safeAreaInset(...)` overlay chain silently dropped. It was reverted post-merge.
+
+**Before you declare a PR done — if it touches `MapViewRepresentable.swift`, `ContentView.swift`, any `Views/DriveMode*.swift`, or any `.safeAreaInset(...)` / overlay-attachment code — you MUST smoke the live app, not just run the suite:**
+
+1. Build + install + launch on the sim (UDID `F0820726-15F4-4FA3-8602-A5D7B479A277`): `xcrun simctl install <udid> <App.app>; xcrun simctl launch <udid> com.wepark.app`
+2. Screenshot it: `xcrun simctl io <udid> screenshot /tmp/smoke.png`
+3. **`Read /tmp/smoke.png`** (the Read tool is multimodal) and confirm: toolbar buttons present (gear / find-me / find-car / clock / Drive), ASP banner if applicable, Park Until pill if a filter is set, polylines render at close zoom.
+4. Put the result in your report-back. "Tests pass 210/0" is NOT sufficient sign-off for a mount-chain PR. "Tests pass AND live smoke confirms the overlay layer renders" is.
+
+**Architectural rule from the same incident:** do NOT mutate UIKit state (`setCamera`, `setRegion`, layout) inside `MapViewRepresentable.updateUIView`. That method runs synchronously during SwiftUI's view-update cycle; mutating UIKit there races the SwiftUI mount and silently drops overlay attachments. Drive camera/region changes from a `.onChange(of:)` modifier in the parent or a Combine publisher — OUTSIDE the update cycle. Never add production code branches whose only purpose is to satisfy a test (e.g. synthesizing a `UIWindowScene` for a headless `MKMapView()`) — restructure the test instead.
+
 ## What you do NOT do
 
 - Touch `index.html`, `sw.js`, `manifest.json`, `tracker-config.js`, or anything else PWA-related — that's `@pwa-maintainer`.
