@@ -134,29 +134,52 @@ final class DistanceFormattingTests: XCTestCase {
 
 final class EndDrivePillZOrderTests: XCTestCase {
 
-    // MARK: - Test 7: bannerState determines aspBannerOffset
+    // MARK: - Test 7: .aspInEffect — pill must clear the green ASP banner (non-zero padding)
 
-    /// Verifies the ASP offset logic that drives the End Drive pill placement.
-    /// When .aspInEffect, offset is 0. When .todaySuspended or .tomorrowSuspended, offset is 44.
+    /// Verifies that `paddingForBannerState` returns non-zero clearance for `.aspInEffect`.
     ///
-    /// This is a pure logic test — the actual view layout is verified by live-UI smoke
-    /// (documented in the PR description). Live-UI smoke is mandatory per the new merge gate
-    /// established after the W8.5c-polish revert.
-    func testEndDrivePillOffset_aspInEffect_isZero() {
-        let bannerState: SuspensionBannerState = .aspInEffect
-        let offset: CGFloat = bannerState == .aspInEffect ? 0 : 44
-        XCTAssertEqual(offset, 0, "End Drive pill should have no extra offset when ASP is in effect")
+    /// Regression guard for the PR-1 bug where the property returned 0 for `.aspInEffect`,
+    /// placing the End Drive pill flush against the top of the screen with no clearance for
+    /// the status bar or the green "ASP in Effect Today" banner.
+    ///
+    /// This is a pure logic test against `paddingForBannerState(_:)` — the actual view
+    /// layout is verified by live-UI smoke (documented in the PR description). Live-UI smoke
+    /// is mandatory per the merge gate established after the W8.5c-polish revert.
+    func testEndDrivePillOffset_aspInEffect_clearsBanner() {
+        let padding = paddingForBannerState(.aspInEffect)
+        XCTAssertGreaterThan(padding, 0, "End Drive pill must have non-zero top padding when ASP is in effect — the green banner is visible and the pill must clear it")
+        XCTAssertEqual(padding, 44, "End Drive pill should have 44pt top padding for .aspInEffect")
     }
 
     func testEndDrivePillOffset_todaySuspended_is44() {
-        let bannerState: SuspensionBannerState = .todaySuspended(reason: "Memorial Day")
-        let offset: CGFloat = bannerState == .aspInEffect ? 0 : 44
-        XCTAssertEqual(offset, 44, "End Drive pill should have 44pt extra offset when ASP is suspended today")
+        let padding = paddingForBannerState(.todaySuspended(reason: "Memorial Day"))
+        XCTAssertEqual(padding, 44, "End Drive pill should have 44pt top padding when ASP is suspended today")
     }
 
     func testEndDrivePillOffset_tomorrowSuspended_is44() {
-        let bannerState: SuspensionBannerState = .tomorrowSuspended(reason: "Independence Day")
-        let offset: CGFloat = bannerState == .aspInEffect ? 0 : 44
-        XCTAssertEqual(offset, 44, "End Drive pill should have 44pt extra offset when ASP is suspended tomorrow")
+        let padding = paddingForBannerState(.tomorrowSuspended(reason: "Independence Day"))
+        XCTAssertEqual(padding, 44, "End Drive pill should have 44pt top padding when ASP is suspended tomorrow")
+    }
+
+    // MARK: - Test 10: All visible-banner states return non-zero clearance
+
+    /// Parametrized invariant: for every SuspensionBannerState that shows a banner,
+    /// `paddingForBannerState` must return a value that clears the status bar + banner.
+    ///
+    /// All three cases are banner-visible states — there is no hidden/none case in
+    /// SuspensionBannerState. This test documents and guards that invariant.
+    func testEndDrivePillOffset_allBannerVisibleStates_returnNonZero() {
+        let visibleStates: [SuspensionBannerState] = [
+            .aspInEffect,
+            .todaySuspended(reason: "Test Holiday"),
+            .tomorrowSuspended(reason: "Test Holiday Eve")
+        ]
+        for state in visibleStates {
+            let padding = paddingForBannerState(state)
+            XCTAssertGreaterThan(
+                padding, 0,
+                "paddingForBannerState(\(state)) must return non-zero clearance — banner is visible in this state"
+            )
+        }
     }
 }

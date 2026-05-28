@@ -288,9 +288,9 @@ struct ContentView: View {
     /// W8.5c-polish PR-1 (Feature B): Extra top padding for the End Drive pill when the ASP
     /// banner is visible, so the pill clears the banner and doesn't obscure its text.
     /// The ASP banner is approximately 44pt tall (subheadline font + 12pt vertical padding × 2).
-    /// Zero when the banner is not showing (.aspInEffect).
+    /// Always non-zero: all three SuspensionBannerState cases render a visible banner.
     private var endDrivePillTopPadding: CGFloat {
-        bannerState == .aspInEffect ? 0 : 44
+        paddingForBannerState(bannerState)
     }
 
     private var selectedSegment: Segment? {
@@ -1478,6 +1478,25 @@ struct ContentView: View {
         return 2 * R * asin(sqrt(h))
     }
 
+}
+
+// MARK: - Banner Padding
+
+/// Returns the top padding (in points) that the End Drive pill needs to clear the ASP banner.
+///
+/// All three `SuspensionBannerState` cases render a visible banner (~44pt tall), so this
+/// function always returns a non-zero value. The invariant: **if a banner is visible, the
+/// pill must clear it.**
+///
+/// Extracted as an `internal` pure function so tests can assert the invariant directly
+/// without instantiating a full `ContentView`.
+func paddingForBannerState(_ state: SuspensionBannerState) -> CGFloat {
+    // The ASP banner is approximately 44pt tall (subheadline font + 12pt vertical padding × 2).
+    // All three states (.aspInEffect, .todaySuspended, .tomorrowSuspended) show a visible banner.
+    switch state {
+    case .aspInEffect, .todaySuspended, .tomorrowSuspended:
+        return 44
+    }
 }
 
 #Preview {
