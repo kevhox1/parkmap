@@ -461,7 +461,8 @@ final class W85bTests: XCTestCase {
             carPin: nil,
             overlayPayload: MapViewRepresentable.OverlayPayload(generation: 0),
             activeRoute: nil,
-            destinationCoordinate: nil
+            destinationCoordinate: nil,
+            coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
         let coordinator = repr.makeCoordinator()

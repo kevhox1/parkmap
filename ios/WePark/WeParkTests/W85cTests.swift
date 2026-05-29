@@ -708,7 +708,8 @@ final class DriveModeBottomCardTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: nil,
-            onDrivePanDetected: nil
+            onDrivePanDetected: nil,
+            coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
         let coordinator = repr.makeCoordinator()
@@ -851,7 +852,8 @@ final class HeadingUpRotationTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: nil,
-            onDrivePanDetected: nil
+            onDrivePanDetected: nil,
+            coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
         let coordinator = repr.makeCoordinator()
@@ -889,7 +891,8 @@ final class HeadingUpRotationTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: 90.0,
-            onDrivePanDetected: nil
+            onDrivePanDetected: nil,
+            coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
         let coordinator = repr.makeCoordinator()
@@ -921,7 +924,8 @@ final class HeadingUpRotationTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: 92.0,
-            onDrivePanDetected: nil
+            onDrivePanDetected: nil,
+            coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
         let coordinator = repr.makeCoordinator()
