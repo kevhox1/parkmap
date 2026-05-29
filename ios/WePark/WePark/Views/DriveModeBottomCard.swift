@@ -3,11 +3,12 @@
 //  WePark
 //
 //  W8.5c: Drive Mode bottom card UI.
+//  W8.5c-polish PR-1: Distance-to-destination indicator added (Feature A).
 //
 //  Port of `renderDrivingContext` (index.html:5863–5910) adapted to SwiftUI.
 //
 //  Layout (OQ-1: full-width, pinned to bottom safe area via .safeAreaInset(edge: .bottom)):
-//    - Street name (headline)
+//    - Street name row (headline) with optional distance-to-destination indicator (top-right)
 //    - Two chips side-by-side: Left / Right, color-coded by severity
 //    - Mute toggle button (speaker.wave.2.fill / speaker.slash.fill)
 //
@@ -16,6 +17,13 @@
 //
 //  No import MapKit (pure SwiftUI view).
 //  No Calendar.current.
+//
+//  Two-state layout:
+//    - context == nil: GPS not matched to a tile segment → "Looking for street…" placeholder.
+//      Shown at Drive Mode start before DrivingContextService has a fix, or when driving
+//      in a gap between tile coverage areas.
+//    - context != nil: GPS matched to a block → street name + left/right severity chips.
+//      Chips color-code parking severity per the W4.5 palette.
 //
 
 import SwiftUI
@@ -31,6 +39,16 @@ struct DriveModeBottomCard: View {
 
     /// Voice service for mute toggle binding.
     let voiceService: DrivingVoice
+
+    /// W8.5c-polish PR-1: Distance to the active destination in meters.
+    /// Pre-computed by ContentView via CLLocation.distance(from:) on every location fix.
+    /// Nil when no destination is set — the indicator is hidden in that case (not "0 mi" / "—").
+    var destinationDistance: Double? = nil
+
+    /// W8.5c-polish PR-1: Whether to format the distance in metric (km) or imperial (mi).
+    /// Defaults to checking Locale.current.measurementSystem so callers don't need to pass it
+    /// explicitly in most cases. Exposed as a parameter to allow test injection without Locale mocking.
+    var usesMetricSystem: Bool = (Locale.current.measurementSystem == .metric)
 
     /// W8.5d placeholder: when true, show the final-approach escalation strip.
     /// Not wired in W8.5c — always false.
@@ -61,6 +79,7 @@ struct DriveModeBottomCard: View {
         if let ctx = context {
             VStack(spacing: 10) {
                 // Street name row
+                // W8.5c-polish PR-1: distance indicator is inlined top-right of the street name.
                 HStack {
                     Text(ctx.street.split(separator: " ").map { word in
                         String(word.prefix(1)).uppercased() + String(word.dropFirst()).lowercased()
@@ -69,6 +88,15 @@ struct DriveModeBottomCard: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                    // W8.5c-polish PR-1: distance-to-destination indicator.
+                    // Hidden (conditional rendering) when destinationDistance is nil.
+                    if let distMeters = destinationDistance {
+                        Text(formattedDistance(meters: distMeters))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .accessibilityLabel("Distance to destination: \(formattedDistance(meters: distMeters))")
+                    }
 
                     muteButton
                 }
@@ -144,6 +172,34 @@ struct DriveModeBottomCard: View {
         case .restricted: return ParkingColors.restricted
         case .unknown:    return Color.secondary
         }
+    }
+
+    // MARK: - Distance formatting (W8.5c-polish PR-1)
+
+    /// Formats a distance in meters to a localized string respecting `usesMetricSystem`.
+    ///
+    /// Uses `MeasurementFormatter` + `Measurement<UnitLength>` — the same underlying
+    /// mechanism recommended by Apple for localized unit presentation.
+    /// Precision: one decimal place (e.g., "0.8 mi", "1.2 km").
+    ///
+    /// `usesMetricSystem` is injected as a stored property (not calling `Locale.current`
+    /// directly inside this method) so unit tests can control the output locale without
+    /// swizzling or subclassing.
+    func formattedDistance(meters: Double) -> String {
+        let measurement: Measurement<UnitLength>
+        if usesMetricSystem {
+            let km = meters / 1000.0
+            measurement = Measurement(value: km, unit: UnitLength.kilometers)
+        } else {
+            let miles = meters / 1609.344
+            measurement = Measurement(value: miles, unit: UnitLength.miles)
+        }
+        let formatter = MeasurementFormatter()
+        formatter.unitOptions = .providedUnit
+        formatter.unitStyle = .medium          // "km" / "mi" abbreviated form
+        formatter.numberFormatter.minimumFractionDigits = 1
+        formatter.numberFormatter.maximumFractionDigits = 1
+        return formatter.string(from: measurement)
     }
 
     // MARK: - Mute button (AC-W85c.23, AC-W85c.28)

@@ -223,6 +223,13 @@ struct ContentView: View {
     /// Drives the binary green/red map rendering branch in rebuildOverlays.
     @State private var parkUntilMode: Bool = false
 
+    // MARK: - W8.5c-polish PR-1: Distance-to-destination state
+
+    /// Distance from the user's current location to driveDestinationCoordinate, in meters.
+    /// Recomputed on every location fix while Drive Mode is active.
+    /// Nil when Drive Mode is inactive or no destination is set.
+    @State private var driveModeDistanceMeters: Double? = nil
+
     // MARK: - W8.5b: Drive Mode state
 
     /// True when Drive Mode is active (route + destination pin on map).
@@ -278,6 +285,14 @@ struct ContentView: View {
 
     // MARK: - Derived
 
+    /// W8.5c-polish PR-1 (Feature B): Extra top padding for the End Drive pill when the ASP
+    /// banner is visible, so the pill clears the banner and doesn't obscure its text.
+    /// The ASP banner is approximately 44pt tall (subheadline font + 12pt vertical padding × 2).
+    /// Always non-zero: all three SuspensionBannerState cases render a visible banner.
+    private var endDrivePillTopPadding: CGFloat {
+        paddingForBannerState(bannerState)
+    }
+
     private var selectedSegment: Segment? {
         guard let id = selectedSegmentID else { return nil }
         return tileLoader.segments.first { $0.id == id }
@@ -326,21 +341,7 @@ struct ContentView: View {
                 // W7.5: Filter-active pill pushed below the map content when Park Until is active.
                 // W8.5c: Drive Mode bottom card sits below the Park Until pill when both active.
                 .safeAreaInset(edge: .bottom) {
-                    VStack(spacing: 0) {
-                        // W8.5c: Drive Mode bottom card (AC-W85c.25).
-                        if driveModeActive {
-                            DriveModeBottomCard(
-                                context: drivingContext,
-                                voiceService: drivingVoice
-                            )
-                        }
-                        // W7.5: Park Until pill.
-                        if parkUntilMode, let target = parkUntilTarget {
-                            ParkUntilPill(targetDate: target) {
-                                clearParkUntilFilter()
-                            }
-                        }
-                    }
+                    bottomSafeAreaContent
                 }
 
                 // W5.1: Recenter buttons — top-right, below status bar and compass rose.
@@ -369,41 +370,7 @@ struct ContentView: View {
 
             // W8.5b/c: Drive Mode overlays — shown when Drive Mode is active.
             if driveModeActive {
-                VStack {
-                    // "End Drive" pill — top-left area, below the gear button.
-                    HStack {
-                        Button {
-                            endDriveMode()
-                        } label: {
-                            Label("End Drive", systemImage: "xmark.circle.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(.regularMaterial, in: Capsule())
-                                .foregroundStyle(.red)
-                        }
-                        .accessibilityLabel("End Drive Mode")
-                        .padding(.leading, 12)
-                        Spacer()
-                    }
-                    Spacer()
-                    // W8.5c: Recenter pill — OQ-2: floating above the bottom card,
-                    // only visible when follow mode is paused (AC-W85c.15).
-                    if !driveFollowEnabled {
-                        Button {
-                            recenterDriveMode()
-                        } label: {
-                            Label("Recenter", systemImage: "location.fill")
-                                .font(.subheadline.weight(.semibold))
-                                .padding(.horizontal, 20)
-                                .padding(.vertical, 12)
-                                .background(.regularMaterial, in: Capsule())
-                                .foregroundStyle(Color.accentColor)
-                        }
-                        .accessibilityLabel("Recenter map on my location")
-                        .padding(.bottom, 8)
-                    }
-                }
+                driveModeOverlayLayer
             }
 
             // W7: Toast host — highest z-order layer. Positioned at the very top via VStack + Spacer.
@@ -422,62 +389,7 @@ struct ContentView: View {
             }
         }
         .task {
-            // W5: Load persisted car pin on app launch.
-            parkPinService.load()
-
-            // W6: Initialize previousCarID from the persisted car so that the first
-            // pin replace correctly cancels the pre-existing pin's notifications.
-            previousCarID = parkPinService.parkedCar?.id
-
-            // W7: Initialize mute state from UserDefaults.
-            notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
-
-            // W7: Initialize banner state.
-            bannerState = aspService.suspensionState(at: .nowET)
-
-            tileLoader.loadTiles(forRegion: region)
-            lastEvaluatedAt = .now
-            rebuildOverlays(at: lastEvaluatedAt)
-
-            // Viewport-polish: Auto-center camera at launch.
-            // Three-priority decision (see viewport-polish-spec.md §5):
-            //
-            // Priority 1 — deep-link: notification tap has a resolved parked car.
-            //   Coverage check does NOT apply — user explicitly parked at that coordinate.
-            // Priority 2a — authorized + cached fix in coverage: snap immediately.
-            //   Set recenterOnUserAtLaunch = true so a fresher fix re-snaps via .onChange.
-            // Priority 2b — authorized + no cached fix: defer via flag + requestLocation().
-            //   .onChange fires when the fix arrives; recenters only if in coverage.
-            // Priority 3 — fallback: stay on manhattanCenter. No-op.
-            //
-            // This block does NOT call requestWhenInUseAuthorization() — that is gated behind
-            // the "Find me" button tap (W5.1 design). If isAuthorized == false, we skip entirely.
-            let pendingID = appDelegate.pendingDeepLinkCarID
-            if let carID = pendingID,
-               let car = parkPinService.parkedCar,
-               car.id == carID {
-                // Priority 1: deep-link — center on parked car, no coverage check.
-                let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
-                recenterMap(on: coord)
-            } else if locationService.isAuthorized {
-                if let cachedLoc = locationService.userLocation {
-                    if AppConstants.isInManhattanCoverage(cachedLoc) {
-                        // Priority 2a: cached fix in coverage — snap immediately.
-                        recenterMap(on: cachedLoc)
-                        // Allow re-snap if a fresher fix arrives within ~3s.
-                        recenterOnUserAtLaunch = true
-                    }
-                    // else: cached fix outside coverage → Priority 3 (manhattanCenter stays).
-                } else if pendingID == nil {
-                    // Priority 2b: authorized, no cached fix, no pending deep-link.
-                    // Defer until fix arrives. requestLocation() has a built-in timeout (~10-15s).
-                    recenterOnUserAtLaunch = true
-                    locationService.requestAndFetchLocation()
-                }
-                // else: pendingID != nil but parkedCar didn't resolve → fall through to Priority 3.
-            }
-            // Priority 3: permission denied / not determined, or unresolvable deep-link.
-            // Camera stays on the manhattanCenter default. No action.
+            await performLaunchSetup()
         }
         .onAppear {
             lastEvaluatedAt = .now
@@ -494,21 +406,7 @@ struct ContentView: View {
         //       "change" — it was set before onChange was registered). Clearing after routing
         //       ensures this path is idempotent across foreground cycles.
         .onChange(of: scenePhase) { _, newPhase in
-            if newPhase == .active {
-                bannerState = aspService.suspensionState(at: .nowET)
-                // Re-sync mute state in case it changed while backgrounded (edge case).
-                notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
-                // W7.5: Stale-target guard — clear the Park Until filter if the target has passed.
-                // This covers the case where the user backgrounded the app past their departure time.
-                if let target = parkUntilTarget, target < .nowET {
-                    parkUntilMode = false
-                    parkUntilTarget = nil
-                    // Rebuild overlays to restore normal 5-state coloring.
-                    rebuildOverlays(at: .nowET)
-                }
-                // W6.1: Replay any buffered deep-link that arrived during the foreground transition.
-                routePendingDeepLink(appDelegate.pendingDeepLinkCarID)
-            }
+            handleScenePhaseChange(newPhase)
         }
         // W7: Keep UserDefaults in sync with @State notificationsMuted whenever it changes.
         .onChange(of: notificationsMuted) { _, newValue in
@@ -522,39 +420,7 @@ struct ContentView: View {
         }
         // W8.5c: Drive Mode active layer lifecycle — start/stop continuous location + voice.
         .onChange(of: driveModeActive) { _, active in
-            if active {
-                // Entering Drive Mode.
-                locationService.startDriveMode()
-                driveFollowEnabled = true
-                // Create DrivingContextService and wire the voice service.
-                let service = DrivingContextService(voice: drivingVoice)
-                drivingContextService = service
-                drivingContext = nil
-                // Show muted toast if voice is muted from a previous session (OQ-3).
-                if drivingVoice.isMuted {
-                    ToastService.shared.show(message: "Voice muted — tap to unmute")
-                }
-                // S-1 fix (spec §7 R-3, AC-DM.23): on the very first Drive Mode start,
-                // show a one-time alert explaining that parking commentary pauses when the
-                // app is backgrounded. Alert wins over the muted toast — they cannot both
-                // fire at the same time without confusion, and the background note is the
-                // more important first-time disclosure.
-                let gate = BackgroundNoteGate()
-                if gate.shouldShow() {
-                    gate.markShown()
-                    showDriveModeBackgroundNote = true
-                }
-                // Activate audio session for the drive session.
-                AudioSessionManager.shared.activateDriveSession()
-            } else {
-                // Exiting Drive Mode.
-                locationService.endDriveMode()
-                drivingContextService = nil
-                drivingContext = nil
-                driveFollowEnabled = true
-                // Deactivate audio session.
-                AudioSessionManager.shared.deactivateDriveSession()
-            }
+            handleDriveModeChange(active)
         }
         .onReceive(
             Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -570,49 +436,9 @@ struct ContentView: View {
         .onChange(of: selectedSegmentID) { _, _ in
             rebuildOverlays(at: lastEvaluatedAt)
         }
-        // W5.1: Recenter on user when a new location fix arrives after a recenter request.
-        // CLLocationCoordinate2D is not Equatable, so we observe a counter instead.
-        //
-        // Viewport-polish: Extended to handle recenterOnUserAtLaunch (Priority 2b).
-        //   - recenterOnUserRequested (W5.1 "Find me" button): recenters unconditionally.
-        //     The user explicitly tapped the button — no coverage check applies.
-        //   - recenterOnUserAtLaunch (launch auto-center): recenters only if
-        //     AppConstants.isInManhattanCoverage returns true for the new fix.
-        //     Prevents snapping to a user outside the tile grid (e.g., Hoboken, Yonkers).
-        //
-        // Both flags are cleared after acting to prevent re-snap on subsequent fixes
-        // (e.g., the next "Find me" tap or background location event).
+        // W5.1/W8.5c: Recenter + Drive Mode update on every location fix.
         .onChange(of: locationService.locationUpdateCount) { _, _ in
-            guard let loc = locationService.userLocation else { return }
-            if recenterOnUserRequested {
-                recenterOnUserRequested = false
-                recenterMap(on: loc)
-            }
-            if recenterOnUserAtLaunch {
-                recenterOnUserAtLaunch = false
-                if AppConstants.isInManhattanCoverage(loc) {
-                    recenterMap(on: loc)
-                }
-            }
-
-            // W8.5c: Drive Mode follow-mode + context update.
-            if driveModeActive {
-                // Follow-mode: recenter map on user when follow is enabled.
-                if driveFollowEnabled {
-                    recenterDriveMap(on: loc)
-                }
-
-                // Context update: compute parking commentary for new position.
-                if let service = drivingContextService {
-                    service.update(
-                        coordinate: loc,
-                        heading: locationService.driveHeading,
-                        segments: tileLoader.segments,
-                        engine: engine
-                    )
-                    drivingContext = service.currentContext
-                }
-            }
+            handleLocationUpdate()
         }
         // W6: First pin ever → show rationale sheet (once per install).
         // Guard: belt-and-suspenders check on the UserDefaults flag in case
@@ -670,6 +496,8 @@ struct ContentView: View {
         // SwiftUI presents/dismisses based on activeSheet becoming non-nil / nil.
         // onDismiss clears selectedSegmentID when the block detail was showing,
         // so the overlay highlight is removed after the sheet animates away.
+        // Sheet content extracted into sheetContent(_:) to reduce type-checker
+        // complexity in body (W8.5c-polish PR-1 fix).
         .sheet(item: $activeSheet, onDismiss: {
             // If the block-detail sheet was dismissed (by swipe-down), clear the selection.
             // For parkConfirm / parkedCarDetail dismissal the selection is already nil.
@@ -677,133 +505,7 @@ struct ContentView: View {
                 selectedSegmentID = nil
             }
         }) { sheet in
-            switch sheet {
-            case .blockDetail(let segment):
-                BlockDetailView(
-                    segment: segment,
-                    engine: engine,
-                    onDismiss: { dismissBlockDetail() },
-                    onParkHere: {
-                        // W5: Path B — segment already known; use midpoint as coordinate.
-                        initiatePathBPinDrop(from: segment)
-                    }
-                )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
-
-            case .parkConfirm(let intent):
-                ParkConfirmView(
-                    intent: intent,
-                    engine: engine,
-                    onConfirm: { result in
-                        activeSheet = nil
-                        confirmPinDrop(result: result)
-                    },
-                    onCancel: {
-                        activeSheet = nil
-                    }
-                )
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
-
-            case .parkedCarDetail(let car):
-                ParkedCarDetailView(
-                    parkedCar: car,
-                    engine: engine,
-                    loadedSegments: tileLoader.segments,
-                    parkPinService: parkPinService,
-                    onDismiss: {
-                        activeSheet = nil
-                    },
-                    onClearPin: {
-                        activeSheet = nil
-                        // W6: Cancel notifications before clearing the pin.
-                        NotificationScheduler.shared.cancelAll(for: car)
-                        parkPinService.clearPin()
-                        // W7.5: Clear Park Until filter — no orphan filter for a non-existent car.
-                        parkUntilMode = false
-                        parkUntilTarget = nil
-                        rebuildOverlays(at: .nowET)
-                    }
-                )
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
-
-            case .notificationRationale:
-                // W6: One-time rationale sheet. interactiveDismissDisabled(true) prevents
-                // accidental swipe-away which would skip the permission request entirely.
-                NotificationRationaleView(
-                    onDismiss: {
-                        activeSheet = nil
-                    },
-                    onPermissionGranted: {
-                        // Schedule notifications for the current pin after permission is granted.
-                        guard let car = parkPinService.parkedCar else { return }
-                        Task { @MainActor in
-                            NotificationScheduler.shared.schedule(
-                                for: car,
-                                loadedSegments: tileLoader.segments,
-                                engine: engine
-                            )
-                        }
-                    }
-                )
-                .presentationDetents([.medium])
-                .interactiveDismissDisabled(true)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
-
-            case .settings:
-                // W7: Global settings sheet.
-                SettingsView(
-                    notificationsMuted: $notificationsMuted,
-                    onUnmute: {
-                        // Reschedule notification for the current pin if it opted in.
-                        if let car = parkPinService.parkedCar, car.notifyOnRestriction {
-                            NotificationScheduler.shared.schedule(
-                                for: car,
-                                loadedSegments: tileLoader.segments,
-                                engine: engine
-                            )
-                        }
-                        // Show "Reminders re-enabled" toast regardless of whether a pin exists.
-                        ToastService.shared.show(message: "Reminders re-enabled")
-                    },
-                    appVersion: appVersion,
-                    buildNumber: buildNumber
-                )
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
-
-            case .parkUntil:
-                // W7.5 pass-2: "Parking until when?" sheet — presented via standalone toolbar
-                // button (filter-first UX). Car-agnostic; filter persists across pin drops.
-                ParkUntilSheet(
-                    onConfirm: { targetDate in
-                        activeSheet = nil
-                        parkUntilTarget = targetDate
-                        parkUntilMode = true
-                        rebuildOverlays(at: .nowET)
-                        let timeStr = ParkUntilSheet.formatTime(targetDate)
-                        ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
-                    },
-                    onSkip: {
-                        activeSheet = nil
-                    }
-                )
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
-            }
+            sheetContent(sheet)
         }
         // W8.5b: Full-screen destination search cover (OQ-2: Option C).
         // Separate from .sheet(item:) — can coexist in SwiftUI but Drive button
@@ -841,6 +543,145 @@ struct ContentView: View {
                 driveModeActive = true
             }
         )
+    }
+
+    // MARK: - Sheet content builder
+
+    /// Builds the sheet content for a given `ActiveSheet` case.
+    ///
+    /// Extracted from the `.sheet(item:)` modifier closure to reduce type-checker
+    /// expression complexity in `ContentView.body` (W8.5c-polish PR-1 fix).
+    /// The original inline switch statement was at the edge of the type-checker's
+    /// complexity budget; adding new @ViewBuilder properties pushed it over the limit.
+    @ViewBuilder
+    private func sheetContent(_ sheet: ActiveSheet) -> some View {
+        switch sheet {
+        case .blockDetail(let segment):
+            BlockDetailView(
+                segment: segment,
+                engine: engine,
+                onDismiss: { dismissBlockDetail() },
+                onParkHere: {
+                    // W5: Path B — segment already known; use midpoint as coordinate.
+                    initiatePathBPinDrop(from: segment)
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+
+        case .parkConfirm(let intent):
+            ParkConfirmView(
+                intent: intent,
+                engine: engine,
+                onConfirm: { result in
+                    activeSheet = nil
+                    confirmPinDrop(result: result)
+                },
+                onCancel: {
+                    activeSheet = nil
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+
+        case .parkedCarDetail(let car):
+            ParkedCarDetailView(
+                parkedCar: car,
+                engine: engine,
+                loadedSegments: tileLoader.segments,
+                parkPinService: parkPinService,
+                onDismiss: {
+                    activeSheet = nil
+                },
+                onClearPin: {
+                    activeSheet = nil
+                    // W6: Cancel notifications before clearing the pin.
+                    NotificationScheduler.shared.cancelAll(for: car)
+                    parkPinService.clearPin()
+                    // W7.5: Clear Park Until filter — no orphan filter for a non-existent car.
+                    parkUntilMode = false
+                    parkUntilTarget = nil
+                    rebuildOverlays(at: .nowET)
+                }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+
+        case .notificationRationale:
+            // W6: One-time rationale sheet. interactiveDismissDisabled(true) prevents
+            // accidental swipe-away which would skip the permission request entirely.
+            NotificationRationaleView(
+                onDismiss: {
+                    activeSheet = nil
+                },
+                onPermissionGranted: {
+                    // Schedule notifications for the current pin after permission is granted.
+                    guard let car = parkPinService.parkedCar else { return }
+                    Task { @MainActor in
+                        NotificationScheduler.shared.schedule(
+                            for: car,
+                            loadedSegments: tileLoader.segments,
+                            engine: engine
+                        )
+                    }
+                }
+            )
+            .presentationDetents([.medium])
+            .interactiveDismissDisabled(true)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+
+        case .settings:
+            // W7: Global settings sheet.
+            SettingsView(
+                notificationsMuted: $notificationsMuted,
+                onUnmute: {
+                    // Reschedule notification for the current pin if it opted in.
+                    if let car = parkPinService.parkedCar, car.notifyOnRestriction {
+                        NotificationScheduler.shared.schedule(
+                            for: car,
+                            loadedSegments: tileLoader.segments,
+                            engine: engine
+                        )
+                    }
+                    // Show "Reminders re-enabled" toast regardless of whether a pin exists.
+                    ToastService.shared.show(message: "Reminders re-enabled")
+                },
+                appVersion: appVersion,
+                buildNumber: buildNumber
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+
+        case .parkUntil:
+            // W7.5 pass-2: "Parking until when?" sheet — presented via standalone toolbar
+            // button (filter-first UX). Car-agnostic; filter persists across pin drops.
+            ParkUntilSheet(
+                onConfirm: { targetDate in
+                    activeSheet = nil
+                    parkUntilTarget = targetDate
+                    parkUntilMode = true
+                    rebuildOverlays(at: .nowET)
+                    let timeStr = ParkUntilSheet.formatTime(targetDate)
+                    ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
+                },
+                onSkip: {
+                    activeSheet = nil
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+        }
     }
 
     // MARK: - Overlay rebuild
@@ -962,6 +803,33 @@ struct ContentView: View {
         )
     }
 
+    // MARK: - W7.5 / W8.5c: Bottom safe-area content
+
+    /// Content pushed into the bottom safe area via .safeAreaInset(edge: .bottom).
+    /// Contains the Drive Mode bottom card and the Park Until filter pill.
+    ///
+    /// Extracted into its own @ViewBuilder property to reduce type-checker complexity
+    /// in ContentView.body (W8.5c-polish PR-1 fix for "unable to type-check" error).
+    @ViewBuilder
+    private var bottomSafeAreaContent: some View {
+        VStack(spacing: 0) {
+            // W8.5c: Drive Mode bottom card (AC-W85c.25).
+            if driveModeActive {
+                DriveModeBottomCard(
+                    context: drivingContext,
+                    voiceService: drivingVoice,
+                    destinationDistance: driveModeDistanceMeters
+                )
+            }
+            // W7.5: Park Until pill.
+            if parkUntilMode, let target = parkUntilTarget {
+                ParkUntilPill(targetDate: target) {
+                    clearParkUntilFilter()
+                }
+            }
+        }
+    }
+
     // MARK: - W5.1: Recenter button stack
 
     /// Two vertically-stacked recenter buttons, shown in the top-right of the map.
@@ -1028,6 +896,57 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - W8.5b/c: Drive Mode overlay layer
+
+    /// Full-screen overlay layer visible during Drive Mode.
+    /// Contains the "End Drive" pill (top-left) and the floating Recenter pill (bottom-center).
+    ///
+    /// Extracted into its own @ViewBuilder property to avoid hitting the Swift compiler's
+    /// type-check complexity limit for large SwiftUI view bodies (W8.5c-polish PR-1 lesson:
+    /// the inline version with .padding(.top, endDrivePillTopPadding) triggered
+    /// "unable to type-check expression in reasonable time" at the ContentView body level).
+    @ViewBuilder
+    private var driveModeOverlayLayer: some View {
+        VStack {
+            // "End Drive" pill — top-left area, below the gear button.
+            // W8.5c-polish PR-1 (Feature B): extra top padding clears the ASP banner
+            // when the banner is visible (see endDrivePillTopPadding computed property).
+            HStack {
+                Button {
+                    endDriveMode()
+                } label: {
+                    Label("End Drive", systemImage: "xmark.circle.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .foregroundStyle(.red)
+                }
+                .accessibilityLabel("End Drive Mode")
+                .padding(.leading, 12)
+                Spacer()
+            }
+            .padding(.top, endDrivePillTopPadding)
+            Spacer()
+            // W8.5c: Recenter pill — OQ-2: floating above the bottom card,
+            // only visible when follow mode is paused (AC-W85c.15).
+            if !driveFollowEnabled {
+                Button {
+                    recenterDriveMode()
+                } label: {
+                    Label("Recenter", systemImage: "location.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 20)
+                        .padding(.vertical, 12)
+                        .background(.regularMaterial, in: Capsule())
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityLabel("Recenter map on my location")
+                .padding(.bottom, 8)
+            }
+        }
+    }
+
     // MARK: - W8.5b/c: End Drive Mode
 
     /// Clears all Drive Mode state (route polyline, destination pin, driveModeActive).
@@ -1038,7 +957,25 @@ struct ContentView: View {
         driveModeActive = false
         activeRoute = nil
         driveDestinationCoordinate = nil
+        driveModeDistanceMeters = nil  // W8.5c-polish PR-1: clear distance indicator.
         // W8.5c context state cleared via onChange(of: driveModeActive).
+    }
+
+    // MARK: - W8.5c-polish PR-1: Distance-to-destination computation
+
+    /// Recomputes `driveModeDistanceMeters` from the user's current location to the active
+    /// destination. Uses `CLLocation.distance(from:)` — NOT a manual haversine approximation
+    /// (per spec Feature A requirement). Called on every location fix while Drive Mode is active.
+    ///
+    /// Extracted from the `.onChange(of: locationService.locationUpdateCount)` closure to
+    /// reduce the type-checker complexity budget in ContentView.body.
+    private func updateDriveModeDistance(from userLocation: CLLocation) {
+        guard let dest = driveDestinationCoordinate else {
+            driveModeDistanceMeters = nil
+            return
+        }
+        let destLocation = CLLocation(latitude: dest.latitude, longitude: dest.longitude)
+        driveModeDistanceMeters = userLocation.distance(from: destLocation)
     }
 
     // MARK: - W8.5c: Recenter in Drive Mode
@@ -1095,6 +1032,181 @@ struct ContentView: View {
             latitudinalMeters: 400,
             longitudinalMeters: 400
         )
+    }
+
+    // MARK: - Drive Mode lifecycle handler
+
+    /// Handles Drive Mode entry and exit lifecycle.
+    ///
+    /// Extracted from `.onChange(of: driveModeActive)` to reduce type-checker complexity
+    /// in ContentView.body (W8.5c-polish PR-1 fix).
+    private func handleDriveModeChange(_ active: Bool) {
+        if active {
+            // Entering Drive Mode.
+            locationService.startDriveMode()
+            driveFollowEnabled = true
+            // Create DrivingContextService and wire the voice service.
+            let service = DrivingContextService(voice: drivingVoice)
+            drivingContextService = service
+            drivingContext = nil
+            // Show muted toast if voice is muted from a previous session (OQ-3).
+            if drivingVoice.isMuted {
+                ToastService.shared.show(message: "Voice muted \u{2014} tap to unmute")
+            }
+            // S-1 fix (spec §7 R-3, AC-DM.23): on the very first Drive Mode start,
+            // show a one-time alert explaining that parking commentary pauses when the
+            // app is backgrounded. Alert wins over the muted toast — they cannot both
+            // fire at the same time without confusion, and the background note is the
+            // more important first-time disclosure.
+            let gate = BackgroundNoteGate()
+            if gate.shouldShow() {
+                gate.markShown()
+                showDriveModeBackgroundNote = true
+            }
+            // Activate audio session for the drive session.
+            AudioSessionManager.shared.activateDriveSession()
+        } else {
+            // Exiting Drive Mode.
+            locationService.endDriveMode()
+            drivingContextService = nil
+            drivingContext = nil
+            driveFollowEnabled = true
+            // Deactivate audio session.
+            AudioSessionManager.shared.deactivateDriveSession()
+        }
+    }
+
+    // MARK: - Location update handler
+
+    /// Handles a new location fix: recenter (if requested), Drive Mode follow, context update,
+    /// and distance-to-destination update.
+    ///
+    /// Extracted from `.onChange(of: locationService.locationUpdateCount)` to reduce
+    /// type-checker complexity in ContentView.body (W8.5c-polish PR-1 fix).
+    private func handleLocationUpdate() {
+        guard let coord = locationService.userLocation else { return }
+        // W5.1: Recenter on user location if requested.
+        if recenterOnUserRequested {
+            recenterOnUserRequested = false
+            recenterMap(on: coord)
+        }
+        // Viewport-polish Priority 2b: auto-center at launch if in coverage.
+        if recenterOnUserAtLaunch {
+            recenterOnUserAtLaunch = false
+            if AppConstants.isInManhattanCoverage(coord) {
+                recenterMap(on: coord)
+            }
+        }
+        // W8.5c: Drive Mode follow-mode + context update.
+        if driveModeActive {
+            // Follow-mode: recenter map on user when follow is enabled.
+            if driveFollowEnabled {
+                recenterDriveMap(on: coord)
+            }
+            // Context update: compute parking commentary for new position.
+            if let service = drivingContextService {
+                service.update(
+                    coordinate: coord,
+                    heading: locationService.driveHeading,
+                    segments: tileLoader.segments,
+                    engine: engine
+                )
+                drivingContext = service.currentContext
+            }
+            // W8.5c-polish PR-1 (Feature A): update distance to destination.
+            let clLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
+            updateDriveModeDistance(from: clLocation)
+        }
+    }
+
+    // MARK: - Launch setup
+
+    /// Performs one-time initialization when ContentView appears.
+    ///
+    /// Called from the `.task {}` modifier in `body`. Extracted into its own method to
+    /// reduce the expression complexity of ContentView.body (W8.5c-polish PR-1 fix).
+    @MainActor
+    private func performLaunchSetup() async {
+        // W5: Load persisted car pin on app launch.
+        parkPinService.load()
+
+        // W6: Initialize previousCarID from the persisted car so that the first
+        // pin replace correctly cancels the pre-existing pin's notifications.
+        previousCarID = parkPinService.parkedCar?.id
+
+        // W7: Initialize mute state from UserDefaults.
+        notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
+
+        // W7: Initialize banner state.
+        bannerState = aspService.suspensionState(at: .nowET)
+
+        tileLoader.loadTiles(forRegion: region)
+        lastEvaluatedAt = .now
+        rebuildOverlays(at: lastEvaluatedAt)
+
+        // Viewport-polish: Auto-center camera at launch.
+        // Three-priority decision (see viewport-polish-spec.md §5):
+        //
+        // Priority 1 — deep-link: notification tap has a resolved parked car.
+        //   Coverage check does NOT apply — user explicitly parked at that coordinate.
+        // Priority 2a — authorized + cached fix in coverage: snap immediately.
+        //   Set recenterOnUserAtLaunch = true so a fresher fix re-snaps via .onChange.
+        // Priority 2b — authorized + no cached fix: defer via flag + requestLocation().
+        //   .onChange fires when the fix arrives; recenters only if in coverage.
+        // Priority 3 — fallback: stay on manhattanCenter. No-op.
+        //
+        // This block does NOT call requestWhenInUseAuthorization() — that is gated behind
+        // the "Find me" button tap (W5.1 design). If isAuthorized == false, we skip entirely.
+        let pendingID = appDelegate.pendingDeepLinkCarID
+        if let carID = pendingID,
+           let car = parkPinService.parkedCar,
+           car.id == carID {
+            // Priority 1: deep-link — center on parked car, no coverage check.
+            let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
+            recenterMap(on: coord)
+        } else if locationService.isAuthorized {
+            if let cachedLoc = locationService.userLocation {
+                if AppConstants.isInManhattanCoverage(cachedLoc) {
+                    // Priority 2a: cached fix in coverage — snap immediately.
+                    recenterMap(on: cachedLoc)
+                    // Allow re-snap if a fresher fix arrives within ~3s.
+                    recenterOnUserAtLaunch = true
+                }
+                // else: cached fix outside coverage → Priority 3 (manhattanCenter stays).
+            } else if pendingID == nil {
+                // Priority 2b: authorized, no cached fix, no pending deep-link.
+                // Defer until fix arrives. requestLocation() has a built-in timeout (~10-15s).
+                recenterOnUserAtLaunch = true
+                locationService.requestAndFetchLocation()
+            }
+            // else: pendingID != nil but parkedCar didn't resolve → fall through to Priority 3.
+        }
+        // Priority 3: permission denied / not determined, or unresolvable deep-link.
+        // Camera stays on the manhattanCenter default. No action.
+    }
+
+    // MARK: - Scene phase handler
+
+    /// Handles app foreground transitions for banner refresh, mute re-sync, stale-target guard,
+    /// and deep-link replay.
+    ///
+    /// Extracted from the `.onChange(of: scenePhase)` closure to reduce type-checker
+    /// expression complexity in ContentView.body (W8.5c-polish PR-1 fix).
+    private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        guard newPhase == .active else { return }
+        bannerState = aspService.suspensionState(at: .nowET)
+        // Re-sync mute state in case it changed while backgrounded (edge case).
+        notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
+        // W7.5: Stale-target guard — clear the Park Until filter if the target has passed.
+        // This covers the case where the user backgrounded the app past their departure time.
+        if let target = parkUntilTarget, target < .nowET {
+            parkUntilMode = false
+            parkUntilTarget = nil
+            // Rebuild overlays to restore normal 5-state coloring.
+            rebuildOverlays(at: .nowET)
+        }
+        // W6.1: Replay any buffered deep-link that arrived during the foreground transition.
+        routePendingDeepLink(appDelegate.pendingDeepLinkCarID)
     }
 
     // MARK: - Dismiss helpers
@@ -1366,6 +1478,25 @@ struct ContentView: View {
         return 2 * R * asin(sqrt(h))
     }
 
+}
+
+// MARK: - Banner Padding
+
+/// Returns the top padding (in points) that the End Drive pill needs to clear the ASP banner.
+///
+/// All three `SuspensionBannerState` cases render a visible banner (~44pt tall), so this
+/// function always returns a non-zero value. The invariant: **if a banner is visible, the
+/// pill must clear it.**
+///
+/// Extracted as an `internal` pure function so tests can assert the invariant directly
+/// without instantiating a full `ContentView`.
+func paddingForBannerState(_ state: SuspensionBannerState) -> CGFloat {
+    // The ASP banner is approximately 44pt tall (subheadline font + 12pt vertical padding × 2).
+    // All three states (.aspInEffect, .todaySuspended, .tomorrowSuspended) show a visible banner.
+    switch state {
+    case .aspInEffect, .todaySuspended, .tomorrowSuspended:
+        return 44
+    }
 }
 
 #Preview {
