@@ -171,6 +171,58 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Default: nil (not in Drive Mode).
     var onDrivePanDetected: (() -> Void)? = nil
 
+    // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch constants + pure-function decision
+
+    /// Camera pitch applied during Drive Mode (30° — below MapKit's clamping threshold at the
+    /// Drive Mode zoom/altitude; renders faithfully without silent truncation to ~35°).
+    ///
+    /// W8.5d note: `applyDriveCameraPitch` is reusable/overridable for final-approach
+    /// pitch escalation without structural change — call it with a different `active` pitch value.
+    static let driveModePitch: CGFloat = 30
+
+    /// Pure pitch-decision function: no MKMapView dependency, directly unit-testable.
+    ///
+    /// Returns the target camera pitch given the Drive Mode state and the pitch that was
+    /// in effect before Drive Mode started.
+    ///
+    /// - Parameters:
+    ///   - active: Whether Drive Mode is being entered (true) or exited (false).
+    ///   - priorPitch: The camera pitch captured at Drive Mode entry; restored on exit (OQ-3).
+    /// - Returns: 30° when entering Drive Mode; `priorPitch` when exiting.
+    static func targetPitch(forDriveModeActive active: Bool, priorPitch: CGFloat) -> CGFloat {
+        active ? driveModePitch : priorPitch
+    }
+
+    // MARK: - W8.5c-polish PR-3: CoordinatorActions reference-type bridge
+
+    /// Reference-type action box populated by `makeUIView` and held by ContentView.
+    ///
+    /// Mechanism: `makeUIView` creates the Coordinator, then wires the coordinator's
+    /// `applyDriveCameraPitch` method into this box. ContentView holds a reference to the
+    /// same box instance (passed as a property on the representable) and calls
+    /// `applyDrivePitch` from its `.onChange(of: driveModeActive)` modifier — OUTSIDE
+    /// `updateUIView` — so camera mutation never runs during SwiftUI's view-update cycle.
+    ///
+    /// This is the architectural fix for the #31 regression: the reverted code called
+    /// `setCamera` synchronously inside `updateUIView`, racing SwiftUI's in-progress mount
+    /// and silently dropping the entire `.safeAreaInset(...)` overlay chain (toolbar, ASP
+    /// banner, Park Until pill). By moving the mutation to `.onChange`, we fire after
+    /// SwiftUI's mount completes, eliminating the race.
+    final class CoordinatorActions {
+        /// Captures the current map camera pitch. Called by ContentView before Drive Mode entry
+        /// to record `preDrivePitch`.
+        var captureCurrentPitch: (() -> CGFloat)?
+
+        /// Applies the Drive Mode camera pitch transition.
+        /// `active` = true → animate to 30°. `active` = false → animate back to `priorPitch`.
+        var applyDrivePitch: ((Bool, CGFloat) -> Void)?
+    }
+
+    /// Shared action box. Created by ContentView and passed in; populated by `makeUIView`.
+    /// ContentView calls `coordinatorActions.applyDrivePitch(active, priorPitch)` from its
+    /// `.onChange(of: driveModeActive)` handler (not from updateUIView).
+    var coordinatorActions: CoordinatorActions
+
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
     struct OverlayPayload: Equatable {
@@ -285,6 +337,20 @@ struct MapViewRepresentable: UIViewRepresentable {
         mapView.addGestureRecognizer(longPress)
 
         context.coordinator.mapView = mapView
+
+        // W8.5c-polish PR-3: Wire coordinator actions into the shared action box.
+        // ContentView holds this same box instance and calls it from .onChange(of: driveModeActive),
+        // OUTSIDE updateUIView, so setCamera never fires during SwiftUI's view-update cycle.
+        // This is the architectural guard against the #31 regression.
+        let coordinator = context.coordinator
+        coordinatorActions.captureCurrentPitch = { [weak coordinator] in
+            coordinator?.mapView?.camera.pitch ?? 0
+        }
+        coordinatorActions.applyDrivePitch = { [weak coordinator] active, priorPitch in
+            guard let c = coordinator, let mapView = c.mapView else { return }
+            c.applyDriveCameraPitch(active: active, priorPitch: priorPitch, on: mapView)
+        }
+
         return mapView
     }
 
@@ -552,6 +618,51 @@ struct MapViewRepresentable: UIViewRepresentable {
                 camera.heading = 0
                 mapView.setCamera(camera, animated: false)
             }
+        }
+
+        // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch
+
+        /// Applies or restores the Drive Mode camera pitch.
+        ///
+        /// Called from ContentView's `.onChange(of: driveModeActive)` handler via
+        /// `CoordinatorActions.applyDrivePitch` — OUTSIDE `updateUIView`. This is the
+        /// architectural fix for the #31 regression: the reverted W8.5c-polish called
+        /// `setCamera` synchronously inside `updateUIView`, racing SwiftUI's in-progress
+        /// view-update cycle and dropping the entire `.safeAreaInset(...)` overlay chain.
+        ///
+        /// On Drive Mode entry (`active` = true):
+        ///   - Animates camera pitch to `MapViewRepresentable.driveModePitch` (30°).
+        ///   - Does NOT change `centerCoordinateDistance` (altitude/zoom).
+        ///     `// [deferred to PR-2]: set centerCoordinateDistance to altitudeForSpan(driveModeCameraSpan)`
+        ///   - Single `setCamera(animated: true)` call — smooth ~0.3s ease (OQ-2 resolved).
+        ///
+        /// On Drive Mode exit (`active` = false):
+        ///   - Animates camera pitch back to `priorPitch` (OQ-3 resolved: restore prior, not hardcoded 0).
+        ///   - Single `setCamera(animated: true)` call.
+        ///
+        /// R-1 coexistence: this method is called exactly once per false→true or true→false
+        /// transition (driven by `.onChange`, not by every `updateUIView`). The subsequent
+        /// `regionDidChangeAnimated` callback from the pitch `setCamera` fires `updateUIView`,
+        /// which calls `syncDriveHeading`. At that point `lastAppliedHeading` equals the current
+        /// heading (or nil), so the dead-band gate returns early — no heading camera mutation
+        /// occurs and no feedback loop is possible.
+        ///
+        /// W8.5d note: this method is intentionally reusable for final-approach pitch
+        /// escalation (e.g., increase pitch to 45° in the final 500m) without structural change.
+        ///
+        /// - Parameters:
+        ///   - active: Drive Mode entering (true) or exiting (false).
+        ///   - priorPitch: Pitch captured at Drive Mode entry; restored on exit.
+        ///   - mapView: The live `MKMapView` instance.
+        func applyDriveCameraPitch(active: Bool, priorPitch: CGFloat, on mapView: MKMapView) {
+            let targetPitch = MapViewRepresentable.targetPitch(
+                forDriveModeActive: active,
+                priorPitch: priorPitch
+            )
+            let camera = mapView.camera.copy() as! MKMapCamera
+            camera.pitch = targetPitch
+            // [deferred to PR-2]: set centerCoordinateDistance to altitudeForSpan(driveModeCameraSpan)
+            mapView.setCamera(camera, animated: true)
         }
 
         // MARK: - MKMapViewDelegate: annotation view
