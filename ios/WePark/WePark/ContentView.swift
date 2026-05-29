@@ -344,6 +344,7 @@ struct ContentView: View {
                     activeRoute: activeRoute,
                     destinationCoordinate: driveDestinationCoordinate,
                     driveHeading: locationService.driveHeading,
+                    driveModeActive: driveModeActive,
                     onDrivePanDetected: {
                         // W8.5c: User panned map manually → disable follow mode.
                         if driveModeActive {

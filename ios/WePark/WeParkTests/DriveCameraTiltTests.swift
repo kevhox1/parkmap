@@ -155,3 +155,40 @@ final class DriveCameraTiltTests: XCTestCase {
             "targetPitch(false, \(arbitraryPrior)) should return exactly \(arbitraryPrior)°")
     }
 }
+
+// MARK: - Region-sync guard tests
+
+/// Tests for `MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive:)`.
+///
+/// This pure function documents the invariant that `setRegion` is suppressed during Drive Mode
+/// to protect the 30° camera pitch applied by `applyDriveCameraPitch`. The previous guard
+/// used `driveHeading == nil`, which failed in the simulator (no magnetometer → heading always
+/// nil → `setRegion` always fired → pitch clobbered on every location update).
+///
+/// See W8.5c-polish PR-3 bug fix notes in MapViewRepresentable.swift for full diagnosis.
+final class RegionSyncGuardTests: XCTestCase {
+
+    // MARK: Test 7: Drive Mode active → region sync suppressed
+
+    /// Verifies that `shouldSyncRegionToBinding` returns `false` when Drive Mode is active,
+    /// preventing `setRegion` from clobbering the 30° camera pitch.
+    ///
+    /// This is the invariant broken by the original `driveHeading == nil` guard on the
+    /// simulator: heading was always nil → sync always ran → pitch always reset to 0.
+    func testRegionSync_driveModeActive_returnsFalse() {
+        let result = MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive: true)
+        XCTAssertFalse(result,
+            "Region sync must be suppressed during Drive Mode to protect camera pitch; " +
+            "setRegion resets pitch to 0 and would clobber the 30° tilt")
+    }
+
+    // MARK: Test 8: Drive Mode inactive → region sync allowed
+
+    /// Verifies that `shouldSyncRegionToBinding` returns `true` when Drive Mode is inactive,
+    /// allowing normal `setRegion` camera sync for user pan/zoom binding updates.
+    func testRegionSync_driveModeInactive_returnsTrue() {
+        let result = MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive: false)
+        XCTAssertTrue(result,
+            "Region sync must be allowed when Drive Mode is inactive (normal pan/zoom binding)")
+    }
+}
