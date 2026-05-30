@@ -166,10 +166,74 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Default: nil (Drive Mode not active).
     var driveHeading: Double? = nil
 
+    /// Whether Drive Mode is currently active.
+    ///
+    /// Used to gate the region-sync path in `updateUIView`: when Drive Mode is active,
+    /// `setRegion(_:animated:)` is suppressed because it resets camera pitch to 0, clobbering
+    /// the 30° tilt set by `applyDriveCameraPitch`. Follow-mode recentering during Drive Mode
+    /// uses a pitch-preserving `setCamera` path instead (`syncDriveRegion`).
+    ///
+    /// On the simulator there is no magnetometer, so `driveHeading` is always nil during
+    /// Drive Mode — the original guard `if driveHeading == nil` failed to suppress `setRegion`
+    /// in the sim, flattening pitch on every location update. This property fixes that.
+    var driveModeActive: Bool = false
+
     /// Callback when the user manually pans the map during Drive Mode (follow mode disabled).
     /// ContentView sets `driveFollowEnabled = false` to show the Recenter button.
     /// Default: nil (not in Drive Mode).
     var onDrivePanDetected: (() -> Void)? = nil
+
+    // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch constants + pure-function decision
+
+    /// Camera pitch applied during Drive Mode (30° — below MapKit's clamping threshold at the
+    /// Drive Mode zoom/altitude; renders faithfully without silent truncation to ~35°).
+    ///
+    /// W8.5d note: `applyDriveCameraPitch` is reusable/overridable for final-approach
+    /// pitch escalation without structural change — call it with a different `active` pitch value.
+    static let driveModePitch: CGFloat = 30
+
+    /// Pure pitch-decision function: no MKMapView dependency, directly unit-testable.
+    ///
+    /// Returns the target camera pitch given the Drive Mode state and the pitch that was
+    /// in effect before Drive Mode started.
+    ///
+    /// - Parameters:
+    ///   - active: Whether Drive Mode is being entered (true) or exited (false).
+    ///   - priorPitch: The camera pitch captured at Drive Mode entry; restored on exit (OQ-3).
+    /// - Returns: 30° when entering Drive Mode; `priorPitch` when exiting.
+    static func targetPitch(forDriveModeActive active: Bool, priorPitch: CGFloat) -> CGFloat {
+        active ? driveModePitch : priorPitch
+    }
+
+    // MARK: - W8.5c-polish PR-3: CoordinatorActions reference-type bridge
+
+    /// Reference-type action box populated by `makeUIView` and held by ContentView.
+    ///
+    /// Mechanism: `makeUIView` creates the Coordinator, then wires the coordinator's
+    /// `applyDriveCameraPitch` method into this box. ContentView holds a reference to the
+    /// same box instance (passed as a property on the representable) and calls
+    /// `applyDrivePitch` from its `.onChange(of: driveModeActive)` modifier — OUTSIDE
+    /// `updateUIView` — so camera mutation never runs during SwiftUI's view-update cycle.
+    ///
+    /// This is the architectural fix for the #31 regression: the reverted code called
+    /// `setCamera` synchronously inside `updateUIView`, racing SwiftUI's in-progress mount
+    /// and silently dropping the entire `.safeAreaInset(...)` overlay chain (toolbar, ASP
+    /// banner, Park Until pill). By moving the mutation to `.onChange`, we fire after
+    /// SwiftUI's mount completes, eliminating the race.
+    final class CoordinatorActions {
+        /// Captures the current map camera pitch. Called by ContentView before Drive Mode entry
+        /// to record `preDrivePitch`.
+        var captureCurrentPitch: (() -> CGFloat)?
+
+        /// Applies the Drive Mode camera pitch transition.
+        /// `active` = true → animate to 30°. `active` = false → animate back to `priorPitch`.
+        var applyDrivePitch: ((Bool, CGFloat) -> Void)?
+    }
+
+    /// Shared action box. Created by ContentView and passed in; populated by `makeUIView`.
+    /// ContentView calls `coordinatorActions.applyDrivePitch(active, priorPitch)` from its
+    /// `.onChange(of: driveModeActive)` handler (not from updateUIView).
+    var coordinatorActions: CoordinatorActions
 
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
@@ -239,6 +303,27 @@ struct MapViewRepresentable: UIViewRepresentable {
         return d > 180 ? 360 - d : d
     }
 
+    // MARK: - W8.5c-polish PR-3: Region-sync guard pure function
+
+    /// Returns whether `updateUIView` should sync the SwiftUI `region` binding to the map
+    /// view via `setRegion(_:animated:)`.
+    ///
+    /// `setRegion` resets the camera to top-down (pitch = 0, heading = 0). During Drive Mode
+    /// that would clobber the 30° tilt applied by `applyDriveCameraPitch`. Region sync is
+    /// therefore suppressed while Drive Mode is active; follow-mode recentering uses
+    /// `syncDriveRegion` (a pitch-preserving `setCamera` path) instead.
+    ///
+    /// On the simulator, `driveHeading` is always nil (no magnetometer), so the previous
+    /// guard `if driveHeading == nil` never suppressed the sync during Drive Mode in the sim,
+    /// flattening pitch back to 0 on every location update. This function fixes that by
+    /// gating on the authoritative Drive Mode flag, not the derived heading value.
+    ///
+    /// - Parameter driveModeActive: Whether Drive Mode is currently active.
+    /// - Returns: `true` when region sync should run; `false` to suppress it.
+    static func shouldSyncRegionToBinding(driveModeActive: Bool) -> Bool {
+        !driveModeActive
+    }
+
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
@@ -285,6 +370,20 @@ struct MapViewRepresentable: UIViewRepresentable {
         mapView.addGestureRecognizer(longPress)
 
         context.coordinator.mapView = mapView
+
+        // W8.5c-polish PR-3: Wire coordinator actions into the shared action box.
+        // ContentView holds this same box instance and calls it from .onChange(of: driveModeActive),
+        // OUTSIDE updateUIView, so setCamera never fires during SwiftUI's view-update cycle.
+        // This is the architectural guard against the #31 regression.
+        let coordinator = context.coordinator
+        coordinatorActions.captureCurrentPitch = { [weak coordinator] in
+            coordinator?.mapView?.camera.pitch ?? 0
+        }
+        coordinatorActions.applyDrivePitch = { [weak coordinator] active, priorPitch in
+            guard let c = coordinator, let mapView = c.mapView else { return }
+            c.applyDriveCameraPitch(active: active, priorPitch: priorPitch, on: mapView)
+        }
+
         return mapView
     }
 
@@ -309,16 +408,29 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Only update when heading changes > 5 degrees to prevent tight regionDidChange feedback loop.
         context.coordinator.syncDriveHeading(driveHeading, on: mapView)
 
-        // Sync camera only if it diverged from the map's current region by more than
-        // a threshold — avoids fighting the user's pan/zoom gestures.
-        // Skip camera sync entirely during Drive Mode to let follow-mode and heading control own the camera.
-        if driveHeading == nil {
+        // Sync camera to the SwiftUI `region` binding when not in Drive Mode.
+        //
+        // `setRegion` resets the camera to top-down (pitch = 0, heading = 0), which would
+        // clobber the 30° tilt applied by `applyDriveCameraPitch`. Guard uses
+        // `shouldSyncRegionToBinding(driveModeActive:)` rather than `driveHeading == nil`
+        // because the simulator has no magnetometer — driveHeading is always nil in the sim
+        // even during Drive Mode, so the old guard never suppressed `setRegion` there,
+        // flattening pitch back to 0 on every location update (W8.5c-polish PR-3 bug fix).
+        //
+        // During Drive Mode, follow-mode recentering is handled by `syncDriveRegion` below,
+        // which copies the current camera (preserving pitch + heading) and updates only the
+        // center coordinate — so pitch survives every location update.
+        if MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive: driveModeActive) {
             let mapRegion = mapView.region
             let latDiff = abs(mapRegion.center.latitude  - region.center.latitude)
             let lngDiff = abs(mapRegion.center.longitude - region.center.longitude)
             if latDiff > 0.0001 || lngDiff > 0.0001 {
                 mapView.setRegion(region, animated: false)
             }
+        } else {
+            // Drive Mode: use pitch-preserving camera update so the 30° tilt survives
+            // every follow-mode recenter. `setRegion` is banned here — it resets pitch.
+            context.coordinator.syncDriveRegion(region, on: mapView)
         }
     }
 
@@ -552,6 +664,81 @@ struct MapViewRepresentable: UIViewRepresentable {
                 camera.heading = 0
                 mapView.setCamera(camera, animated: false)
             }
+        }
+
+        // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch
+
+        /// Applies or restores the Drive Mode camera pitch.
+        ///
+        /// Called from ContentView's `.onChange(of: driveModeActive)` handler via
+        /// `CoordinatorActions.applyDrivePitch` — OUTSIDE `updateUIView`. This is the
+        /// architectural fix for the #31 regression: the reverted W8.5c-polish called
+        /// `setCamera` synchronously inside `updateUIView`, racing SwiftUI's in-progress
+        /// view-update cycle and dropping the entire `.safeAreaInset(...)` overlay chain.
+        ///
+        /// On Drive Mode entry (`active` = true):
+        ///   - Animates camera pitch to `MapViewRepresentable.driveModePitch` (30°).
+        ///   - Does NOT change `centerCoordinateDistance` (altitude/zoom).
+        ///     `// [deferred to PR-2]: set centerCoordinateDistance to altitudeForSpan(driveModeCameraSpan)`
+        ///   - Single `setCamera(animated: true)` call — smooth ~0.3s ease (OQ-2 resolved).
+        ///
+        /// On Drive Mode exit (`active` = false):
+        ///   - Animates camera pitch back to `priorPitch` (OQ-3 resolved: restore prior, not hardcoded 0).
+        ///   - Single `setCamera(animated: true)` call.
+        ///
+        /// R-1 coexistence: this method is called exactly once per false→true or true→false
+        /// transition (driven by `.onChange`, not by every `updateUIView`). The subsequent
+        /// `regionDidChangeAnimated` callback from the pitch `setCamera` fires `updateUIView`,
+        /// which calls `syncDriveHeading`. At that point `lastAppliedHeading` equals the current
+        /// heading (or nil), so the dead-band gate returns early — no heading camera mutation
+        /// occurs and no feedback loop is possible.
+        ///
+        /// W8.5d note: this method is intentionally reusable for final-approach pitch
+        /// escalation (e.g., increase pitch to 45° in the final 500m) without structural change.
+        ///
+        /// - Parameters:
+        ///   - active: Drive Mode entering (true) or exiting (false).
+        ///   - priorPitch: Pitch captured at Drive Mode entry; restored on exit.
+        ///   - mapView: The live `MKMapView` instance.
+        func applyDriveCameraPitch(active: Bool, priorPitch: CGFloat, on mapView: MKMapView) {
+            let targetPitch = MapViewRepresentable.targetPitch(
+                forDriveModeActive: active,
+                priorPitch: priorPitch
+            )
+            let camera = mapView.camera.copy() as! MKMapCamera
+            camera.pitch = targetPitch
+            // [deferred to PR-2]: set centerCoordinateDistance to altitudeForSpan(driveModeCameraSpan)
+            mapView.setCamera(camera, animated: true)
+        }
+
+        // MARK: - W8.5c-polish PR-3: Pitch-preserving Drive Mode region sync
+
+        /// Recenters the map on the given region's center coordinate during Drive Mode,
+        /// preserving the current camera pitch and heading.
+        ///
+        /// Called from `updateUIView` when `driveModeActive` is true and the map center has
+        /// diverged from the SwiftUI `region` binding — i.e., a follow-mode recenter was
+        /// requested by `recenterDriveMap` in ContentView. `setRegion(_:animated:)` is banned
+        /// here because it resets camera pitch to 0, clobbering the 30° Drive Mode tilt.
+        ///
+        /// Implementation: copies the current `MKMapCamera` (preserving `pitch`, `heading`,
+        /// and `centerCoordinateDistance`) and sets only `centerCoordinate` to the new center.
+        /// Uses `animated: false` to match the non-Drive-Mode `setRegion(animated: false)` path
+        /// and avoid fighting `syncDriveHeading`'s own `setCamera` calls.
+        ///
+        /// - Parameters:
+        ///   - region: The SwiftUI `region` binding value — only `center` is used.
+        ///   - mapView: The live `MKMapView` instance.
+        func syncDriveRegion(_ region: MKCoordinateRegion, on mapView: MKMapView) {
+            let mapRegion = mapView.region
+            let latDiff = abs(mapRegion.center.latitude  - region.center.latitude)
+            let lngDiff = abs(mapRegion.center.longitude - region.center.longitude)
+            guard latDiff > 0.0001 || lngDiff > 0.0001 else { return }
+
+            let camera = mapView.camera.copy() as! MKMapCamera
+            camera.centerCoordinate = region.center
+            // pitch and heading are preserved from the copied camera — no pitch reset.
+            mapView.setCamera(camera, animated: false)
         }
 
         // MARK: - MKMapViewDelegate: annotation view

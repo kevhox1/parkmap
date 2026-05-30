@@ -230,6 +230,25 @@ struct ContentView: View {
     /// Nil when Drive Mode is inactive or no destination is set.
     @State private var driveModeDistanceMeters: Double? = nil
 
+    // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch state
+
+    /// Camera pitch captured at Drive Mode entry. Restored on exit (OQ-3).
+    /// Almost always 0 (users don't manually tilt MKMapView), but stored precisely for correctness.
+    @State private var preDrivePitch: CGFloat = 0
+
+    /// Reference-type action box shared with MapViewRepresentable's Coordinator.
+    /// Created here, passed to MapViewRepresentable as a stored property. `makeUIView` populates
+    /// the closures inside. ContentView calls `coordinatorActions.applyDrivePitch` from the
+    /// `.onChange(of: driveModeActive)` camera-pitch handler — OUTSIDE updateUIView.
+    ///
+    /// Architecture note (AC-10): camera mutation is placed in .onChange rather than in
+    /// updateUIView because updateUIView runs synchronously inside SwiftUI's view-update cycle.
+    /// Calling setCamera from updateUIView races SwiftUI's still-in-progress mount and silently
+    /// dropped the entire .safeAreaInset(...) overlay chain (toolbar, ASP banner, Park Until pill)
+    /// in the reverted W8.5c-polish PR #31. .onChange fires after the current view-update cycle
+    /// completes, eliminating that race. This is the core architectural fix for #31.
+    @State private var coordinatorActions = MapViewRepresentable.CoordinatorActions()
+
     // MARK: - W8.5b: Drive Mode state
 
     /// True when Drive Mode is active (route + destination pin on map).
@@ -325,12 +344,14 @@ struct ContentView: View {
                     activeRoute: activeRoute,
                     destinationCoordinate: driveDestinationCoordinate,
                     driveHeading: locationService.driveHeading,
+                    driveModeActive: driveModeActive,
                     onDrivePanDetected: {
                         // W8.5c: User panned map manually → disable follow mode.
                         if driveModeActive {
                             driveFollowEnabled = false
                         }
-                    }
+                    },
+                    coordinatorActions: coordinatorActions
                 )
                 // Map fills the full screen including safe area.
                 .ignoresSafeArea()
@@ -421,6 +442,21 @@ struct ContentView: View {
         // W8.5c: Drive Mode active layer lifecycle — start/stop continuous location + voice.
         .onChange(of: driveModeActive) { _, active in
             handleDriveModeChange(active)
+        }
+        // W8.5c-polish PR-3: Drive Mode camera pitch transition.
+        //
+        // Architecture note (AC-10): camera mutation is placed HERE rather than in
+        // MapViewRepresentable.updateUIView because updateUIView runs synchronously inside
+        // SwiftUI's view-update cycle. Calling setCamera from updateUIView raced SwiftUI's
+        // still-in-progress mount and silently dropped the entire .safeAreaInset(...) overlay
+        // chain (toolbar, ASP banner, Park Until pill) in the reverted PR #31. .onChange fires
+        // AFTER the current view-update cycle completes, eliminating that race.
+        //
+        // On entry: capture preDrivePitch from the current camera (almost always 0), then apply 30°.
+        // On exit: restore preDrivePitch (OQ-3: restore prior, not a hardcoded reset to 0).
+        // [deferred to PR-2]: also set centerCoordinateDistance for auto-zoom here on entry.
+        .onChange(of: driveModeActive) { _, active in
+            handleDriveCameraChange(active)
         }
         .onReceive(
             Timer.publish(every: 60, on: .main, in: .common).autoconnect()
@@ -1074,6 +1110,31 @@ struct ContentView: View {
             // Deactivate audio session.
             AudioSessionManager.shared.deactivateDriveSession()
         }
+    }
+
+    // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch handler
+
+    /// Applies or restores the Drive Mode camera pitch via the coordinator action box.
+    ///
+    /// Called from `.onChange(of: driveModeActive)` in ContentView.body — NOT from updateUIView.
+    /// The `.onChange` fires after SwiftUI's current view-update cycle completes, so `setCamera`
+    /// inside the coordinator runs with a fully-mounted view hierarchy. This avoids the #31
+    /// regression where setCamera inside updateUIView raced SwiftUI's in-progress mount.
+    ///
+    /// On entry (`active` = true):
+    ///   - Captures `preDrivePitch` from the live camera (via `coordinatorActions.captureCurrentPitch`).
+    ///   - Calls `coordinatorActions.applyDrivePitch(true, preDrivePitch)` → 30° animated pitch.
+    ///
+    /// On exit (`active` = false):
+    ///   - Calls `coordinatorActions.applyDrivePitch(false, preDrivePitch)` → restores prior pitch.
+    private func handleDriveCameraChange(_ active: Bool) {
+        if active {
+            // Capture current pitch before Drive Mode entry (almost always 0, but store precisely).
+            preDrivePitch = coordinatorActions.captureCurrentPitch?() ?? 0
+        }
+        // Apply or restore pitch. Fires exactly once per false→true or true→false transition
+        // because .onChange(of:) only fires when the value actually changes.
+        coordinatorActions.applyDrivePitch?(active, preDrivePitch)
     }
 
     // MARK: - Location update handler
