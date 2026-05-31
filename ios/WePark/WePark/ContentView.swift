@@ -91,6 +91,18 @@
 //    - ParkUntilSheet: `car: ParkedCar` parameter removed.
 //    - Skip handler: dismisses sheet only (no filter clear — filter was not set by this sheet).
 //
+//  W8.5d additions (final approach escalation + arrival prompt):
+//    - ActiveSheet.arrivalPrompt(coord: CLLocationCoordinate2D) — new case.
+//    - @State finalApproachState: FinalApproachState — tracks .outside/.approaching/.arrived.
+//    - @State arrivalPromptFired: Bool — one-shot hysteresis gate (R-3).
+//    - .onChange(of: driveModeDistanceMeters) → handleFinalApproachUpdate(_:):
+//        computes FinalApproachState, updates DrivingContextService voice gap,
+//        fires arrival prompt once per session at <= 50m.
+//    - DriveModeBottomCard gains showApproachStrip: finalApproachState == .approaching.
+//    - ArrivalPromptSheet: "Park Here" drops W5 pin at user's GPS coordinate (NOT destination).
+//    - Drive Mode ends on "Park Here" confirm; "Not Yet" dismisses sheet only (OQ-6).
+//    - Reset finalApproachState + arrivalPromptFired on Drive Mode exit.
+//
 
 import SwiftUI
 import MapKit
@@ -749,6 +761,55 @@ struct ContentView: View {
                     ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
                 },
                 onSkip: {
+                    activeSheet = nil
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+
+        case .arrivalPrompt(let coord):
+            // W8.5d: Arrival prompt — fires once per Drive Mode session when driver reaches
+            // within FinalApproachService.arrivalThresholdMeters of the destination.
+            //
+            // "Park Here" confirm path (spec §3.5):
+            //   1. Dismiss sheet.
+            //   2. Construct ParkedCar at the ARRIVAL coordinate (user's GPS position, NOT destination).
+            //   3. parkPinService.save(car) → pinDropped fires → W7.5 Park Until sheet fires naturally.
+            //   4. Drive Mode ends (driveModeActive = false → handleDriveModeChange(false)).
+            //
+            // "Not Yet" dismiss path:
+            //   1. Dismiss sheet only. Drive Mode stays active. arrivalPromptFired stays true.
+            ArrivalPromptSheet(
+                arrivalCoordinate: coord,
+                nearestStreet: drivingContext?.street,
+                onParkHere: { arrivalCoord in
+                    activeSheet = nil
+                    // Capture the old car ID BEFORE save() overwrites parkedCar.
+                    // onReceive(pinDropped) reads previousCarID to cancel old notifications.
+                    previousCarID = parkPinService.parkedCar?.id
+                    // Build ParkedCar at the arrival coordinate.
+                    // Use drivingContext segment info if available for street/from/to metadata.
+                    let car = ParkedCar(
+                        id: UUID(),
+                        latitude: arrivalCoord.latitude,
+                        longitude: arrivalCoord.longitude,
+                        detectedSegmentID: nil,  // arrival-path: no tap-segment detection
+                        detectedSide: nil,
+                        street: drivingContext?.street,
+                        fromStreet: drivingContext?.from,
+                        toStreet: drivingContext?.to,
+                        parkedAt: .nowET,
+                        notifyOnRestriction: true  // default on, user can toggle in ParkedCarDetailView
+                    )
+                    parkPinService.save(car)
+                    // End Drive Mode — triggers handleDriveModeChange(false) which resets
+                    // finalApproachState + arrivalPromptFired + stops location/voice services.
+                    endDriveMode()
+                },
+                onNotYet: {
+                    // OQ-6: Drive Mode stays active. arrivalPromptFired stays true (no re-fire).
                     activeSheet = nil
                 }
             )
