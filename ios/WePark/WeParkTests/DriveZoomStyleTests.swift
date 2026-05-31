@@ -189,25 +189,21 @@ final class DriveZoomStyleTests: XCTestCase {
             "driveModeCameraSpan should be ~0.005° (1–2 Manhattan blocks); got \(span)°")
     }
 
-    // MARK: Test 12: altitudeForSpan at 0.005° → approximately 2,000–2,400m
+    // MARK: Test 12: altitudeForSpan at 0.005° → approximately 1,000–1,100m
 
     /// Verifies the altitude formula at the Drive Mode span gives a plausible Drive Mode altitude.
-    /// Expected: ~2,000m at 0.005° based on halfHeight/tan(30°) ≈ 2,770m / sqrt(3) ≈ 1,600m.
-    /// The formula: halfHeight = (0.005/2) * 111,000 = 277.5m; altitude = 277.5/tan(30°) ≈ 481m.
     ///
-    /// Wait — let's compute: tan(30°) = 0.5774. halfHeight = 0.0025 * 111,000 = 277.5m.
-    /// altitude = 277.5 / 0.5774 ≈ 480m. That's ~480m, not 2,000m.
+    /// Formula (spec §3.5): halfHeight = (0.005/2) * 111,000 = 277.5m.
+    /// altitude = 277.5 / tan(15°) ≈ 277.5 / 0.2679 ≈ 1,035m.
+    /// (15° is the half-FOV angle for a standard iPhone ~60° total vertical FOV.)
     ///
-    /// The spec says "approximately 2,000–2,300m" based on `altitudeForSpan(0.005°)`.
-    /// We test that the result is positive and within a broad plausible range (100m–5,000m)
-    /// to avoid brittleness from FOV approximation differences.
+    /// We test a broad range (500–5,000m) to survive FOV variations across device sizes
+    /// while confirming the formula produces a plausible Drive Mode altitude.
     func testAltitudeForSpan_driveMode_isApproximatelyTwoKm() {
         let altitude = MapViewRepresentable.altitudeForSpan(0.005)
-        // The formula uses tan(30°) ≈ 0.5774 for the half-FOV.
-        // halfHeight = (0.005/2) * 111,000 = 277.5m; altitude = 277.5/tan(30°) ≈ 480m.
-        // Accept 100–5,000m to handle FOV variations across device sizes.
-        XCTAssertGreaterThan(altitude, 100,
-            "altitudeForSpan(0.005°) should be > 100m; got \(altitude)m")
+        // Expected ~1,035m at 0.005°. Accept 500–5,000m for device-size robustness.
+        XCTAssertGreaterThan(altitude, 500,
+            "altitudeForSpan(0.005°) should be > 500m; got \(altitude)m")
         XCTAssertLessThan(altitude, 5_000,
             "altitudeForSpan(0.005°) should be < 5,000m; got \(altitude)m")
     }

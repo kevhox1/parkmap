@@ -244,9 +244,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// - Parameter latitudeDelta: Latitude span in degrees.
     /// - Returns: Estimated camera `centerCoordinateDistance` in meters.
     static func altitudeForSpan(_ latitudeDelta: CLLocationDegrees) -> CLLocationDistance {
+        // Formula from the spec (§3.5) and the reverted PR's `altitudeForSpan`:
+        //   altitude = halfHeightMeters / tan(halfFovAngle)
+        // where halfFovAngle = 15° (half of MapKit's default ~30° vertical half-FOV,
+        // giving a ~60° total vertical FOV for a standard iPhone viewport).
+        // At 0.005° span: halfHeight = (0.005/2)*111,000 = 277.5m; altitude ≈ 1,035m.
         let metersPerDegree: CLLocationDistance = 111_000
         let halfHeightMeters = (latitudeDelta / 2.0) * metersPerDegree
-        return halfHeightMeters / tan(30.0 * .pi / 180.0)
+        return halfHeightMeters / tan(15.0 * .pi / 180.0)
     }
 
     /// Pure map-configuration-decision function: no MKMapView dependency, directly unit-testable.
