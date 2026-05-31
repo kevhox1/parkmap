@@ -112,6 +112,11 @@ enum ActiveSheet: Identifiable {
     /// W7.5: "Parking until when?" sheet — triggered via standalone toolbar button.
     /// Pass-2 pivot: car-agnostic; no ParkedCar payload. Filter is independent of pin lifecycle.
     case parkUntil
+    /// W8.5d: Arrival prompt sheet — fires once per Drive Mode session when the driver
+    /// reaches within `FinalApproachService.arrivalThresholdMeters` of the destination.
+    /// Payload: user's GPS coordinate at the moment of arrival detection (NOT the destination).
+    /// On "Park Here" confirm → drops W5 pin at this coordinate → W7.5 Park Until fires naturally.
+    case arrivalPrompt(coord: CLLocationCoordinate2D)
 
     var id: String {
         switch self {
@@ -121,6 +126,7 @@ enum ActiveSheet: Identifiable {
         case .notificationRationale:      return "notificationRationale"
         case .settings:                   return "settings"
         case .parkUntil:                  return "parkUntil"
+        case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
         }
     }
 }
@@ -291,6 +297,21 @@ struct ContentView: View {
     /// Set to true on the first-ever Drive Mode start if the gate key is not yet set.
     /// The gate itself is evaluated via BackgroundNoteGate; this bool drives the .alert.
     @State private var showDriveModeBackgroundNote: Bool = false
+
+    // MARK: - W8.5d: Final approach state
+
+    /// Current proximity state relative to the Drive Mode destination.
+    /// Recomputed by `handleFinalApproachUpdate` on every `driveModeDistanceMeters` change.
+    /// Drives: approaching-strip visibility, voice gap, arrival prompt.
+    /// Reset to .outside when Drive Mode exits (in `handleDriveModeChange(false)`).
+    @State private var finalApproachState: FinalApproachState = .outside
+
+    /// One-shot gate: true after the arrival prompt has fired in this Drive Mode session.
+    /// Prevents re-firing if GPS jitters around the 50m boundary (R-3 hysteresis guard).
+    /// Reset to false when Drive Mode exits (in `handleDriveModeChange(false)`).
+    /// Per R-4: if `arrivalCoord == nil` at the moment of `.arrived`, this stays false
+    /// so a subsequent `.onChange` can retry when GPS recovers.
+    @State private var arrivalPromptFired: Bool = false
 
     // MARK: - Bundle version strings (passed into SettingsView)
 
@@ -486,6 +507,13 @@ struct ContentView: View {
         // W5.1/W8.5c: Recenter + Drive Mode update on every location fix.
         .onChange(of: locationService.locationUpdateCount) { _, _ in
             handleLocationUpdate()
+        }
+        // W8.5d: Final approach state transitions — driven by distance changes.
+        // Architecture note: driven by .onChange (same pattern as PR-3/PR-2), NOT by updateUIView.
+        // Computes FinalApproachState, updates voice gap, shows/hides approach strip,
+        // and fires the one-shot arrival prompt.
+        .onChange(of: driveModeDistanceMeters) { _, distance in
+            handleFinalApproachUpdate(distance)
         }
         // W6: First pin ever → show rationale sheet (once per install).
         // Guard: belt-and-suspenders check on the UserDefaults flag in case
@@ -861,11 +889,14 @@ struct ContentView: View {
     private var bottomSafeAreaContent: some View {
         VStack(spacing: 0) {
             // W8.5c: Drive Mode bottom card (AC-W85c.25).
+            // W8.5d: showApproachStrip wired — true when state is .approaching.
+            // The strip lives INSIDE the card (OQ-1: option (b), no new .safeAreaInset layer).
             if driveModeActive {
                 DriveModeBottomCard(
                     context: drivingContext,
                     voiceService: drivingVoice,
-                    destinationDistance: driveModeDistanceMeters
+                    destinationDistance: driveModeDistanceMeters,
+                    showApproachStrip: finalApproachState == .approaching
                 )
             }
             // W7.5: Park Until pill.
@@ -1025,6 +1056,64 @@ struct ContentView: View {
         driveModeDistanceMeters = userLocation.distance(from: destLocation)
     }
 
+    // MARK: - W8.5d: Final approach update handler
+
+    /// Handles `driveModeDistanceMeters` changes to drive approach-state transitions.
+    ///
+    /// Called from `.onChange(of: driveModeDistanceMeters)` — fires on the main thread,
+    /// after SwiftUI's view-update cycle, consistent with the PR-3/PR-2 architectural pattern.
+    ///
+    /// Responsibilities:
+    ///   1. Guard: if Drive Mode inactive or no destination, reset state and return.
+    ///   2. Compute new `FinalApproachState` from distance.
+    ///   3. On state change: update `finalApproachState` + update `DrivingContextService` voice gap.
+    ///   4. On `.arrived` transition (first time): fire arrival prompt (one-shot, R-3 hysteresis gate).
+    ///
+    /// Per R-4 (§6): if GPS fix is nil at moment of `.arrived`, `arrivalPromptFired` stays
+    /// false so a subsequent `.onChange` can retry when GPS recovers.
+    ///
+    /// - Parameter distanceOrNil: The updated distance, or nil when Drive Mode is inactive.
+    private func handleFinalApproachUpdate(_ distanceOrNil: Double?) {
+        // Guard 1: must be in active Drive Mode with a destination set.
+        guard driveModeActive, driveDestinationCoordinate != nil else {
+            if finalApproachState != .outside {
+                finalApproachState = .outside
+            }
+            return
+        }
+
+        // Guard 2: distance must be available.
+        guard let distance = distanceOrNil else {
+            if finalApproachState != .outside {
+                finalApproachState = .outside
+            }
+            return
+        }
+
+        // Step 1: Compute new state.
+        let newState = FinalApproachService.finalApproachState(forDistanceMeters: distance)
+
+        // Step 2: On state change, update state + voice gap.
+        if newState != finalApproachState {
+            finalApproachState = newState
+            // Update DrivingContextService voice gap immediately on transition.
+            // Service is nil when Drive Mode is inactive (guard above ensures active state).
+            drivingContextService?.setVoiceGap(FinalApproachService.voiceGap(for: newState))
+        }
+
+        // Step 3: Arrival prompt — one-shot per Drive Mode session (OQ-6, R-3 hysteresis).
+        if newState == .arrived && !arrivalPromptFired {
+            guard let arrivalCoord = locationService.userLocation else {
+                // R-4: GPS loss at arrival — don't fire prompt, don't mark fired.
+                // Next .onChange will retry if GPS recovers and distance is still <= 50m.
+                return
+            }
+            // Mark fired before presenting sheet (prevents race if .onChange fires again).
+            arrivalPromptFired = true
+            activeSheet = .arrivalPrompt(coord: arrivalCoord)
+        }
+    }
+
     // MARK: - W8.5c: Recenter in Drive Mode
 
     /// Snaps the map camera back to the user's current GPS position during Drive Mode.
@@ -1120,6 +1209,9 @@ struct ContentView: View {
             driveFollowEnabled = true
             // Deactivate audio session.
             AudioSessionManager.shared.deactivateDriveSession()
+            // W8.5d: Reset final-approach state for the next session.
+            finalApproachState = .outside
+            arrivalPromptFired = false
         }
     }
 

@@ -4,16 +4,19 @@
 //
 //  W8.5c: Drive Mode bottom card UI.
 //  W8.5c-polish PR-1: Distance-to-destination indicator added (Feature A).
+//  W8.5d: Final-approach escalation strip wired (showApproachStrip parameter).
 //
 //  Port of `renderDrivingContext` (index.html:5863–5910) adapted to SwiftUI.
 //
 //  Layout (OQ-1: full-width, pinned to bottom safe area via .safeAreaInset(edge: .bottom)):
+//    - (W8.5d) Final-approach strip at top of card when showApproachStrip == true
 //    - Street name row (headline) with optional distance-to-destination indicator (top-right)
 //    - Two chips side-by-side: Left / Right, color-coded by severity
 //    - Mute toggle button (speaker.wave.2.fill / speaker.slash.fill)
 //
 //  Font sizes use system defaults. Calibration deferred to W8.5c-follow post-drive-test.
-//  No final-approach strip (deferred to W8.5d — showApproachStrip placeholder provided).
+//  The approaching strip lives INSIDE the existing .safeAreaInset(edge: .bottom) card —
+//  no new .safeAreaInset layer added (OQ-1 resolution: option (b), lowest regression risk).
 //
 //  No import MapKit (pure SwiftUI view).
 //  No Calendar.current.
@@ -58,8 +61,25 @@ struct DriveModeBottomCard: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // W8.5d placeholder: final-approach strip goes here.
-            // showApproachStrip && context != nil → escalation UI (W8.5d).
+            // W8.5d: Final-approach escalation strip.
+            // Visible when showApproachStrip == true (state == .approaching).
+            // Lives INSIDE the existing .safeAreaInset(edge: .bottom) card — no new overlay layer.
+            // Strip is above cardContent so it appears at the top of the bottom card.
+            if showApproachStrip {
+                HStack(spacing: 6) {
+                    Image(systemName: "location.fill")
+                        .font(.caption2)
+                        .foregroundStyle(Color.accentColor)
+                    Text("Approaching destination")
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .foregroundStyle(Color.accentColor)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Color.accentColor.opacity(0.10))
+            }
 
             cardContent
         }
