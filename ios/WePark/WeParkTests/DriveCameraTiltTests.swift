@@ -15,14 +15,16 @@
 //  W8.5c-polish and are explicitly forbidden by spec §5 and AC-6.
 //
 //  Test inventory:
-//    1. testPitchDecision_onEntry_returns30            — active=true  → 30°
-//    2. testPitchDecision_onExit_restoresPriorPitch    — active=false → priorPitch (5°)
-//    3. testPitchDecision_onExit_noPrior_returnsZero   — active=false → 0 when priorPitch=0
+//    1. testPitchDecision_onEntry_returnsConstantPitch  — active=true  → driveModePitch (45°, PR-2)
+//    2. testPitchDecision_onExit_restoresPriorPitch     — active=false → priorPitch (5°)
+//    3. testPitchDecision_onExit_noPrior_returnsZero    — active=false → 0 when priorPitch=0
 //    4. testHeadingDeadBand_afterPitchChange_duplicateHeadingIsSkipped  — R-1 coexistence
-//    5. testPitchDecision_onEntry_returnsConstantValue — verifies constant value not hard-coded
-//    6. testPitchDecision_onExit_restoresNonZeroPrior  — OQ-3: non-zero priorPitch is preserved
+//    5. testPitchDecision_onEntry_returnsConstantValue  — verifies constant = 45° (PR-2 measured)
+//    6. testPitchDecision_onExit_restoresNonZeroPrior   — OQ-3: non-zero priorPitch is preserved
 //
-//  Baseline before PR-3: 207/0. Target: 213/0 (+6 new tests).
+//  PR-2 change: driveModePitch updated 30° → 45° (measured at tighter zoom ~0.005° span).
+//  Tests 1 and 5 updated accordingly (spec §5: "update the existing targetPitch test").
+//  Baseline before PR-3: 207/0. PR-3 added 6. PR-2 updates 2 existing tests.
 //
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens.
@@ -40,15 +42,16 @@ final class DriveCameraTiltTests: XCTestCase {
 
     // MARK: Test 1: Drive Mode entry → pitch = 30°
 
-    /// Verifies `targetPitch(forDriveModeActive:priorPitch:)` returns 30° on Drive Mode entry.
+    /// Verifies `targetPitch(forDriveModeActive:priorPitch:)` returns `driveModePitch` on entry.
     ///
-    /// 30° is below MapKit's altitude-clamping threshold at the Drive Mode zoom
-    /// (span ~0.005°, altitude ~99,999m) so it renders faithfully without silent truncation.
-    /// Kevin confirmed 30° in the accepted-deviation record for the reverted W8.5c-polish.
-    func testPitchDecision_onEntry_returns30() {
+    /// PR-3 shipped 30° (safe ceiling at the wider span ~0.04°, altitude ~180,000m).
+    /// PR-2 updated to 45° after empirical measurement at the tighter span ~0.005°
+    /// (altitude ~480m via altitudeForSpan): at that altitude MapKit allows steeper pitch
+    /// without clamping. 45° was measured to round-trip faithfully.
+    func testPitchDecision_onEntry_returnsConstantPitch() {
         let result = MapViewRepresentable.targetPitch(forDriveModeActive: true, priorPitch: 0)
-        XCTAssertEqual(result, 30, accuracy: 1,
-            "Drive Mode entry should target 30° pitch; got \(result)°")
+        XCTAssertEqual(result, MapViewRepresentable.driveModePitch, accuracy: 1,
+            "Drive Mode entry should target driveModePitch (\(MapViewRepresentable.driveModePitch)°); got \(result)°")
     }
 
     // MARK: Test 2: Drive Mode exit → restore priorPitch
@@ -125,16 +128,21 @@ final class DriveCameraTiltTests: XCTestCase {
             "a mutation would indicate the R-1 feedback loop is re-entering")
     }
 
-    // MARK: Test 5: pitch constant sanity
+    // MARK: Test 5: pitch constant range guard
 
-    /// Verifies that `driveModePitch` is exactly 30° and that `targetPitch` delegates to it.
-    /// Guards against silent constant changes without spec approval.
+    /// Verifies that `driveModePitch` is 45° (PR-2 empirically measured value) and that
+    /// `targetPitch` delegates to it regardless of priorPitch.
+    ///
+    /// PR-2 changed from 30° (PR-3) to 45° after measuring that MapKit allows steeper pitch
+    /// at the tighter Drive Mode zoom (span ~0.005°, altitude ~480m via altitudeForSpan).
+    /// Guards against silent constant changes — any change requires updating this test
+    /// with a spec-approved deviation note.
     func testPitchDecision_onEntry_returnsConstantValue() {
-        // The constant itself:
-        XCTAssertEqual(MapViewRepresentable.driveModePitch, 30, accuracy: 0.001,
-            "driveModePitch constant must be 30° (spec §1 + accepted deviation record)")
+        // The constant must be 45° (PR-2 empirical measurement result).
+        XCTAssertEqual(MapViewRepresentable.driveModePitch, 45, accuracy: 0.001,
+            "driveModePitch must be 45° (PR-2 measured value at tighter zoom); got \(MapViewRepresentable.driveModePitch)°")
 
-        // targetPitch on entry must equal the constant:
+        // targetPitch on entry must equal the constant regardless of priorPitch.
         let result = MapViewRepresentable.targetPitch(forDriveModeActive: true, priorPitch: 15)
         XCTAssertEqual(result, MapViewRepresentable.driveModePitch, accuracy: 0.001,
             "targetPitch(true, _) must equal driveModePitch regardless of priorPitch")

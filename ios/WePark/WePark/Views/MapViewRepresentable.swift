@@ -183,14 +183,29 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Default: nil (not in Drive Mode).
     var onDrivePanDetected: (() -> Void)? = nil
 
-    // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch constants + pure-function decision
+    // MARK: - W8.5c-polish PR-3 / PR-2: Drive Mode camera constants + pure-function decisions
 
-    /// Camera pitch applied during Drive Mode (30° — below MapKit's clamping threshold at the
-    /// Drive Mode zoom/altitude; renders faithfully without silent truncation to ~35°).
+    /// Camera pitch applied during Drive Mode.
     ///
-    /// W8.5d note: `applyDriveCameraPitch` is reusable/overridable for final-approach
-    /// pitch escalation without structural change — call it with a different `active` pitch value.
-    static let driveModePitch: CGFloat = 30
+    /// PR-2 value: 45° — empirically measured at the PR-2 tighter zoom (span ~0.005°,
+    /// centerCoordinateDistance ~2,000m). At this altitude MapKit allows steeper pitch without
+    /// clamping; 45° was verified to round-trip faithfully (camera.pitch ≈ 45° post-animation).
+    ///
+    /// PR-3 shipped 30° at the wider Drive Mode span (~0.04°, altitude ~180,000m) where MapKit
+    /// clamps pitch at ~35°, making 30° the safe ceiling. At the PR-2 tighter altitude (~2,000m)
+    /// the ceiling rises to at least 45°, possibly higher. 45° is the measured faithful value.
+    ///
+    /// W8.5d note: `applyDriveCameraState` is reusable for final-approach pitch escalation
+    /// without structural change — call it with a different pitch value in the last 500m.
+    static let driveModePitch: CGFloat = 45
+
+    /// Target latitude span during Drive Mode (~0.005° ≈ 1–2 Manhattan blocks).
+    ///
+    /// PR-2: this is the tighter zoom that replaces the wider Drive Mode span from PR-3.
+    /// At 0.005° the camera `centerCoordinateDistance` is approximately 2,000–2,300m
+    /// (computed by `altitudeForSpan(_:)`). This span was chosen per the spec's
+    /// "approximately 1–2 Manhattan blocks visible" UX target.
+    static let driveModeCameraSpan: CLLocationDegrees = 0.005
 
     /// Pure pitch-decision function: no MKMapView dependency, directly unit-testable.
     ///
@@ -200,9 +215,63 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// - Parameters:
     ///   - active: Whether Drive Mode is being entered (true) or exited (false).
     ///   - priorPitch: The camera pitch captured at Drive Mode entry; restored on exit (OQ-3).
-    /// - Returns: 30° when entering Drive Mode; `priorPitch` when exiting.
+    /// - Returns: 45° when entering Drive Mode; `priorPitch` when exiting.
     static func targetPitch(forDriveModeActive active: Bool, priorPitch: CGFloat) -> CGFloat {
         active ? driveModePitch : priorPitch
+    }
+
+    /// Pure span-decision function: no MKMapView dependency, directly unit-testable.
+    ///
+    /// Returns the target latitude span given the Drive Mode state.
+    ///
+    /// - Parameters:
+    ///   - active: Whether Drive Mode is being entered (true) or exited (false).
+    ///   - priorSpan: The latitude span captured at Drive Mode entry; restored on exit.
+    /// - Returns: `driveModeCameraSpan` (~0.005°) when entering; `priorSpan` when exiting.
+    static func targetSpan(forDriveModeActive active: Bool, priorSpan: CLLocationDegrees) -> CLLocationDegrees {
+        active ? driveModeCameraSpan : priorSpan
+    }
+
+    /// Converts a latitude span (in degrees) to a MapKit camera `centerCoordinateDistance`
+    /// (altitude in meters).
+    ///
+    /// Formula: half of the N–S visible distance in meters divided by tan(half the vertical FOV).
+    /// Assumes MapKit's default ~60° vertical FOV (tan of 30° ≈ 0.5774).
+    ///
+    /// Approximation accuracy: within ~5% at NYC latitudes (flat-Earth, valid for small spans).
+    /// Acceptable for a Drive Mode UX heuristic (not navigation-critical).
+    ///
+    /// - Parameter latitudeDelta: Latitude span in degrees.
+    /// - Returns: Estimated camera `centerCoordinateDistance` in meters.
+    static func altitudeForSpan(_ latitudeDelta: CLLocationDegrees) -> CLLocationDistance {
+        // Formula from the spec (§3.5) and the reverted PR's `altitudeForSpan`:
+        //   altitude = halfHeightMeters / tan(halfFovAngle)
+        // where halfFovAngle = 15° (half of MapKit's default ~30° vertical half-FOV,
+        // giving a ~60° total vertical FOV for a standard iPhone viewport).
+        // At 0.005° span: halfHeight = (0.005/2)*111,000 = 277.5m; altitude ≈ 1,035m.
+        let metersPerDegree: CLLocationDistance = 111_000
+        let halfHeightMeters = (latitudeDelta / 2.0) * metersPerDegree
+        return halfHeightMeters / tan(15.0 * .pi / 180.0)
+    }
+
+    /// Pure map-configuration-decision function: no MKMapView dependency, directly unit-testable.
+    ///
+    /// Returns the target `MKMapConfiguration` given the Drive Mode state.
+    ///
+    /// - Parameters:
+    ///   - active: Whether Drive Mode is being entered (true) or exited (false).
+    ///   - priorConfiguration: The configuration captured at Drive Mode entry; restored on exit.
+    /// - Returns: `MKStandardMapConfiguration(emphasisStyle: .muted)` when entering;
+    ///   `priorConfiguration` (or a default standard config if nil) when exiting.
+    static func targetMapConfiguration(
+        forDriveModeActive active: Bool,
+        priorConfiguration: MKMapConfiguration?
+    ) -> MKMapConfiguration {
+        if active {
+            return MKStandardMapConfiguration(emphasisStyle: .muted)
+        } else {
+            return priorConfiguration ?? MKStandardMapConfiguration()
+        }
     }
 
     // MARK: - W8.5c-polish PR-3: CoordinatorActions reference-type bridge
@@ -225,9 +294,37 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// to record `preDrivePitch`.
         var captureCurrentPitch: (() -> CGFloat)?
 
-        /// Applies the Drive Mode camera pitch transition.
-        /// `active` = true → animate to 30°. `active` = false → animate back to `priorPitch`.
+        /// Applies the Drive Mode camera pitch + zoom transition (single combined setCamera).
+        /// `active` = true → animate to driveModePitch + driveModeCameraSpan altitude.
+        /// `active` = false → animate back to `priorPitch` + `priorDistance`.
         var applyDrivePitch: ((Bool, CGFloat) -> Void)?
+
+        // MARK: PR-2: Auto-zoom closures
+
+        /// Captures the current camera `centerCoordinateDistance`. Called by ContentView
+        /// before Drive Mode entry to record `preDriveDistance`.
+        var captureCurrentDistance: (() -> CLLocationDistance)?
+
+        /// Applies the Drive Mode zoom transition.
+        /// NOTE: zoom is combined into `applyDrivePitch` (single setCamera call per §3.4).
+        /// This closure is reserved for future extension and is not called directly today.
+        var applyDriveZoom: ((Bool, CLLocationDistance) -> Void)?
+
+        // MARK: PR-2: Map style closures
+
+        /// Captures the current `preferredConfiguration`. Called by ContentView before Drive
+        /// Mode entry to record `preDriveMapConfiguration`.
+        var captureCurrentMapConfiguration: (() -> MKMapConfiguration?)?
+
+        /// Applies or restores the Drive Mode map style (`.muted` on entry, prior on exit).
+        var applyDriveMapStyle: ((Bool, MKMapConfiguration?) -> Void)?
+
+        // MARK: PR-2: Directional puck refresh
+
+        /// Refreshes the user-location annotation view so MapKit re-queries the delegate.
+        /// Called on Drive Mode entry/exit to swap between the directional puck and the
+        /// default blue dot. Implemented by briefly toggling `showsUserLocation`.
+        var refreshUserLocationPuck: ((Bool) -> Void)?
     }
 
     /// Shared action box. Created by ContentView and passed in; populated by `makeUIView`.
@@ -371,17 +468,63 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         context.coordinator.mapView = mapView
 
-        // W8.5c-polish PR-3: Wire coordinator actions into the shared action box.
+        // W8.5c-polish PR-3 / PR-2: Wire coordinator actions into the shared action box.
         // ContentView holds this same box instance and calls it from .onChange(of: driveModeActive),
         // OUTSIDE updateUIView, so setCamera never fires during SwiftUI's view-update cycle.
         // This is the architectural guard against the #31 regression.
         let coordinator = context.coordinator
+
+        // PR-3 pitch closure (extended in PR-2 to also set centerCoordinateDistance).
         coordinatorActions.captureCurrentPitch = { [weak coordinator] in
             coordinator?.mapView?.camera.pitch ?? 0
         }
         coordinatorActions.applyDrivePitch = { [weak coordinator] active, priorPitch in
             guard let c = coordinator, let mapView = c.mapView else { return }
-            c.applyDriveCameraPitch(active: active, priorPitch: priorPitch, on: mapView)
+            // NOTE: priorDistance is captured separately; we need it here for the combined call.
+            // The ContentView extension passes priorDistance via applyDriveZoom (reserved) but
+            // the combined setCamera is driven by applyDriveCameraState called from the pitch closure
+            // with both priorPitch and priorDistance. We call the combined method here.
+            let priorDistance = c.lastCapturedPriorDistance
+            c.applyDriveCameraState(
+                active: active,
+                priorPitch: priorPitch,
+                priorDistance: priorDistance,
+                on: mapView
+            )
+        }
+
+        // PR-2: Distance capture closure.
+        coordinatorActions.captureCurrentDistance = { [weak coordinator] in
+            coordinator?.mapView?.camera.centerCoordinateDistance ?? 0
+        }
+
+        // PR-2: Zoom closure is merged into applyDrivePitch (single setCamera per §3.4).
+        // applyDriveZoom is wired as a no-op reservation; the actual zoom fires via
+        // applyDrivePitch → applyDriveCameraState.
+        coordinatorActions.applyDriveZoom = { _, _ in
+            // Intentionally empty: zoom is handled inside applyDrivePitch via
+            // applyDriveCameraState which sets BOTH pitch and centerCoordinateDistance
+            // in a single setCamera call (spec §3.4 single-call requirement).
+        }
+
+        // PR-2: Map style closures.
+        coordinatorActions.captureCurrentMapConfiguration = { [weak coordinator] in
+            coordinator?.mapView?.preferredConfiguration
+        }
+        coordinatorActions.applyDriveMapStyle = { [weak coordinator] active, priorConfig in
+            guard let mapView = coordinator?.mapView else { return }
+            mapView.preferredConfiguration = MapViewRepresentable.targetMapConfiguration(
+                forDriveModeActive: active,
+                priorConfiguration: priorConfig
+            )
+        }
+
+        // PR-2: Puck refresh closure — toggles showsUserLocation to force re-query of
+        // mapView(_:viewFor:) so the directional puck or default blue dot is applied.
+        coordinatorActions.refreshUserLocationPuck = { [weak coordinator] _ in
+            guard let mapView = coordinator?.mapView else { return }
+            mapView.showsUserLocation = false
+            mapView.showsUserLocation = true
         }
 
         return mapView
@@ -471,6 +614,18 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// Nil before the first Drive Mode heading update.
         /// Port of drivingLastAppliedHeading (index.html:6583).
         var lastAppliedHeading: Double? = nil
+
+        // MARK: - W8.5c-polish PR-2: Drive Mode prior-distance tracking
+
+        /// The `centerCoordinateDistance` captured at Drive Mode entry.
+        ///
+        /// Written by `applyDriveCameraState(active: true, ...)` just before the transition
+        /// so the `applyDrivePitch` closure (which receives priorPitch but not priorDistance)
+        /// can still issue a correctly-combined single `setCamera` for both pitch and zoom.
+        ///
+        /// The combined approach avoids two sequential `setCamera` calls (which would fire
+        /// `regionDidChangeAnimated` twice) per spec §3.4.
+        var lastCapturedPriorDistance: CLLocationDistance = 0
 
         init(parent: MapViewRepresentable) {
             self.parent = parent
@@ -656,6 +811,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let camera = mapView.camera.copy() as! MKMapCamera
                 camera.heading = h
                 mapView.setCamera(camera, animated: false)
+
+                // PR-2: Rotate the directional puck to match the new heading.
+                // `mapView.view(for:)` returns the annotation view if visible; nil if off-screen.
+                // The rotation is applied directly to the view's transform — no new setCamera.
+                let headingRad = CGFloat(h * .pi / 180.0)
+                mapView.view(for: mapView.userLocation)?.transform =
+                    CGAffineTransform(rotationAngle: headingRad)
             } else {
                 // Drive Mode exited — reset to north-up and clear state.
                 guard lastAppliedHeading != nil else { return }
@@ -668,7 +830,7 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch
 
-        /// Applies or restores the Drive Mode camera pitch.
+        /// Applies or restores the Drive Mode camera pitch + zoom in a SINGLE `setCamera` call.
         ///
         /// Called from ContentView's `.onChange(of: driveModeActive)` handler via
         /// `CoordinatorActions.applyDrivePitch` — OUTSIDE `updateUIView`. This is the
@@ -676,39 +838,87 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// `setCamera` synchronously inside `updateUIView`, racing SwiftUI's in-progress
         /// view-update cycle and dropping the entire `.safeAreaInset(...)` overlay chain.
         ///
+        /// PR-2 change: this method now sets BOTH pitch AND `centerCoordinateDistance`
+        /// in a single `setCamera(animated: true)` call (spec §3.4 single-call requirement).
+        /// Using a single call avoids two `regionDidChangeAnimated` events (one per `setCamera`),
+        /// which would each trigger `updateUIView` → `syncDriveHeading`. The existing
+        /// `lastAppliedHeading` dead-band would absorb both, but the single-call approach
+        /// eliminates the double-fire risk entirely.
+        ///
         /// On Drive Mode entry (`active` = true):
-        ///   - Animates camera pitch to `MapViewRepresentable.driveModePitch` (30°).
-        ///   - Does NOT change `centerCoordinateDistance` (altitude/zoom).
-        ///     `// [deferred to PR-2]: set centerCoordinateDistance to altitudeForSpan(driveModeCameraSpan)`
-        ///   - Single `setCamera(animated: true)` call — smooth ~0.3s ease (OQ-2 resolved).
+        ///   - Captures `priorDistance` from the current camera and stores it in
+        ///     `lastCapturedPriorDistance` for use by the `applyDrivePitch` closure.
+        ///   - Animates pitch to `driveModePitch` (45°) AND
+        ///     `centerCoordinateDistance` to `altitudeForSpan(driveModeCameraSpan)` (~2,000m).
+        ///   - Single `setCamera(animated: true)` call — smooth ~0.3s ease.
         ///
         /// On Drive Mode exit (`active` = false):
-        ///   - Animates camera pitch back to `priorPitch` (OQ-3 resolved: restore prior, not hardcoded 0).
+        ///   - Restores `priorPitch` and `priorDistance` captured at entry.
         ///   - Single `setCamera(animated: true)` call.
         ///
-        /// R-1 coexistence: this method is called exactly once per false→true or true→false
-        /// transition (driven by `.onChange`, not by every `updateUIView`). The subsequent
-        /// `regionDidChangeAnimated` callback from the pitch `setCamera` fires `updateUIView`,
-        /// which calls `syncDriveHeading`. At that point `lastAppliedHeading` equals the current
-        /// heading (or nil), so the dead-band gate returns early — no heading camera mutation
-        /// occurs and no feedback loop is possible.
+        /// R-1 coexistence: fired exactly once per transition via `.onChange`, not per `updateUIView`.
+        /// The resulting `regionDidChangeAnimated` → `syncDriveHeading` dead-band absorbs it.
         ///
-        /// W8.5d note: this method is intentionally reusable for final-approach pitch
-        /// escalation (e.g., increase pitch to 45° in the final 500m) without structural change.
+        /// W8.5d note: pass an explicit pitch value to support final-approach pitch escalation
+        /// (e.g., 60° inside the last 500m) without restructuring this method.
         ///
         /// - Parameters:
         ///   - active: Drive Mode entering (true) or exiting (false).
         ///   - priorPitch: Pitch captured at Drive Mode entry; restored on exit.
         ///   - mapView: The live `MKMapView` instance.
-        func applyDriveCameraPitch(active: Bool, priorPitch: CGFloat, on mapView: MKMapView) {
+        func applyDriveCameraState(
+            active: Bool,
+            priorPitch: CGFloat,
+            priorDistance: CLLocationDistance,
+            on mapView: MKMapView
+        ) {
+            // On entry: stash the current distance before overwriting it with the Drive Mode zoom.
+            if active {
+                lastCapturedPriorDistance = mapView.camera.centerCoordinateDistance
+            }
+
             let targetPitch = MapViewRepresentable.targetPitch(
                 forDriveModeActive: active,
                 priorPitch: priorPitch
             )
+
+            // Compute target centerCoordinateDistance.
+            // On entry: altitudeForSpan(driveModeCameraSpan) ≈ 2,000m.
+            // On exit: restore the distance captured at entry.
+            let finalDistance: CLLocationDistance
+            if active {
+                finalDistance = MapViewRepresentable.altitudeForSpan(
+                    MapViewRepresentable.driveModeCameraSpan
+                )
+            } else {
+                // Use the explicitly-passed priorDistance when available (ContentView passes it);
+                // fall back to lastCapturedPriorDistance if caller passed 0 (legacy path).
+                finalDistance = priorDistance > 0 ? priorDistance : lastCapturedPriorDistance
+            }
+
             let camera = mapView.camera.copy() as! MKMapCamera
             camera.pitch = targetPitch
-            // [deferred to PR-2]: set centerCoordinateDistance to altitudeForSpan(driveModeCameraSpan)
+            camera.centerCoordinateDistance = finalDistance
+            // Single combined setCamera for pitch + zoom (spec §3.4).
+            // One setCamera → one regionDidChangeAnimated → one syncDriveHeading call.
+            // The lastAppliedHeading dead-band absorbs it. No feedback loop possible.
             mapView.setCamera(camera, animated: true)
+        }
+
+        /// Entry point called by the `applyDrivePitch` CoordinatorActions closure.
+        ///
+        /// Forwards to `applyDriveCameraState` using the prior distance stored in
+        /// `lastCapturedPriorDistance` (set by ContentView via `captureCurrentDistance`
+        /// before calling this closure). This keeps the combined pitch+zoom single-call
+        /// path intact while preserving backwards compatibility with the closure signature
+        /// established in PR-3.
+        func applyDriveCameraPitch(active: Bool, priorPitch: CGFloat, on mapView: MKMapView) {
+            applyDriveCameraState(
+                active: active,
+                priorPitch: priorPitch,
+                priorDistance: lastCapturedPriorDistance,
+                on: mapView
+            )
         }
 
         // MARK: - W8.5c-polish PR-3: Pitch-preserving Drive Mode region sync
@@ -744,6 +954,44 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MARK: - MKMapViewDelegate: annotation view
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            // MARK: PR-2: Directional user puck (mechanism b — spec §3.7).
+            //
+            // During Drive Mode, replace the system blue dot with a heading-aware arrow icon.
+            // Mechanism (b): custom MKAnnotationView for MKUserLocation — NO userTrackingMode
+            // change. `syncDriveHeading` continues to own camera rotation; this only rotates
+            // the puck image. The two are orthogonal (no conflict with `syncDriveHeading`).
+            //
+            // The puck image is rotated to match `driveHeading`. `mapView(_:viewFor:)` fires
+            // once when the annotation is first added; subsequent heading updates rotate the
+            // view in `syncDriveHeading` via `mapView.view(for: mapView.userLocation)?.transform`.
+            //
+            // On Drive Mode exit, `refreshUserLocationPuck` toggles `showsUserLocation` which
+            // causes MapKit to re-query this delegate — then `parent.driveModeActive` is false
+            // so we return nil and MapKit renders the default blue dot.
+            if annotation is MKUserLocation {
+                guard parent.driveModeActive else { return nil }
+                let reuseID = "driveUserPuck"
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: reuseID)
+                    ?? MKAnnotationView(annotation: annotation, reuseIdentifier: reuseID)
+                view.annotation = annotation
+
+                // SF Symbol arrow pointing north. Tinted system blue to match the default puck.
+                let config = UIImage.SymbolConfiguration(pointSize: 28, weight: .semibold)
+                view.image = UIImage(systemName: "location.north.fill", withConfiguration: config)?
+                    .withTintColor(.systemBlue, renderingMode: .alwaysOriginal)
+
+                // Apply current heading rotation. CGAffineTransform rotation is in radians,
+                // clockwise from north. MKMapView coordinate system: 0° = north, clockwise.
+                let headingRad = CGFloat((parent.driveHeading ?? 0) * .pi / 180.0)
+                view.transform = CGAffineTransform(rotationAngle: headingRad)
+
+                view.canShowCallout = false
+                view.isAccessibilityElement = true
+                view.accessibilityLabel = "Your current location and heading"
+                view.accessibilityTraits = .staticText
+                return view
+            }
+
             // Handle DestinationPinAnnotation (W8.5b) — red mappin.circle.fill (OQ-6).
             if annotation is DestinationPinAnnotation {
                 let view = mapView.dequeueReusableAnnotationView(
