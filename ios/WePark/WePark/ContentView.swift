@@ -230,11 +230,20 @@ struct ContentView: View {
     /// Nil when Drive Mode is inactive or no destination is set.
     @State private var driveModeDistanceMeters: Double? = nil
 
-    // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch state
+    // MARK: - W8.5c-polish PR-3 / PR-2: Drive Mode camera + style state
 
     /// Camera pitch captured at Drive Mode entry. Restored on exit (OQ-3).
     /// Almost always 0 (users don't manually tilt MKMapView), but stored precisely for correctness.
     @State private var preDrivePitch: CGFloat = 0
+
+    /// Camera `centerCoordinateDistance` captured at Drive Mode entry. Restored on exit.
+    /// Typically the user's normal browsing zoom level (~100,000–300,000m for Manhattan).
+    @State private var preDriveDistance: CLLocationDistance = 0
+
+    /// Map configuration captured at Drive Mode entry. Restored on exit (OQ-3 / §3.6).
+    /// On entry, the map switches to `.muted` for better polyline legibility during driving.
+    /// On exit, this restores whatever configuration was active before Drive Mode started.
+    @State private var preDriveMapConfiguration: MKMapConfiguration? = nil
 
     /// Reference-type action box shared with MapViewRepresentable's Coordinator.
     /// Created here, passed to MapViewRepresentable as a stored property. `makeUIView` populates
@@ -443,18 +452,20 @@ struct ContentView: View {
         .onChange(of: driveModeActive) { _, active in
             handleDriveModeChange(active)
         }
-        // W8.5c-polish PR-3: Drive Mode camera pitch transition.
+        // W8.5c-polish PR-3 / PR-2: Drive Mode camera + style transition.
         //
-        // Architecture note (AC-10): camera mutation is placed HERE rather than in
-        // MapViewRepresentable.updateUIView because updateUIView runs synchronously inside
-        // SwiftUI's view-update cycle. Calling setCamera from updateUIView raced SwiftUI's
-        // still-in-progress mount and silently dropped the entire .safeAreaInset(...) overlay
-        // chain (toolbar, ASP banner, Park Until pill) in the reverted PR #31. .onChange fires
-        // AFTER the current view-update cycle completes, eliminating that race.
+        // Architecture note (AC-10, AC-12): ALL camera mutation and map-style mutation is
+        // placed HERE rather than in MapViewRepresentable.updateUIView because updateUIView
+        // runs synchronously inside SwiftUI's view-update cycle. Calling setCamera from
+        // updateUIView raced SwiftUI's still-in-progress mount and silently dropped the entire
+        // .safeAreaInset(...) overlay chain (toolbar, ASP banner, Park Until pill) in the
+        // reverted PR #31. .onChange fires AFTER the current view-update cycle completes,
+        // eliminating that race.
         //
-        // On entry: capture preDrivePitch from the current camera (almost always 0), then apply 30°.
-        // On exit: restore preDrivePitch (OQ-3: restore prior, not a hardcoded reset to 0).
-        // [deferred to PR-2]: also set centerCoordinateDistance for auto-zoom here on entry.
+        // PR-2 fires 4 things from this SINGLE .onChange handler (spec §3.1):
+        //   1. Combined pitch + zoom setCamera (single call, not two — spec §3.4).
+        //   2. Map style swap to .muted on entry / restore on exit.
+        //   3. Directional puck refresh (showsUserLocation toggle → re-query delegate).
         .onChange(of: driveModeActive) { _, active in
             handleDriveCameraChange(active)
         }
@@ -1112,9 +1123,12 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - W8.5c-polish PR-3: Drive Mode camera pitch handler
+    // MARK: - W8.5c-polish PR-3 / PR-2: Drive Mode camera + style handler
 
-    /// Applies or restores the Drive Mode camera pitch via the coordinator action box.
+    /// Applies or restores the Drive Mode camera pitch + zoom + map style via the coordinator
+    /// action box. All four features (pitch, zoom, style, puck) fire from this single function,
+    /// which is called from the SINGLE `.onChange(of: driveModeActive)` handler — NOT from
+    /// updateUIView. See §3.1 of the PR-2 spec.
     ///
     /// Called from `.onChange(of: driveModeActive)` in ContentView.body — NOT from updateUIView.
     /// The `.onChange` fires after SwiftUI's current view-update cycle completes, so `setCamera`
@@ -1122,19 +1136,43 @@ struct ContentView: View {
     /// regression where setCamera inside updateUIView raced SwiftUI's in-progress mount.
     ///
     /// On entry (`active` = true):
-    ///   - Captures `preDrivePitch` from the live camera (via `coordinatorActions.captureCurrentPitch`).
-    ///   - Calls `coordinatorActions.applyDrivePitch(true, preDrivePitch)` → 30° animated pitch.
+    ///   - Captures `preDrivePitch`, `preDriveDistance`, `preDriveMapConfiguration`.
+    ///   - Calls `applyDrivePitch(true, preDrivePitch)` → combined pitch+zoom animated setCamera.
+    ///   - Calls `applyDriveMapStyle(true, nil)` → `.muted` map configuration.
+    ///   - Calls `refreshUserLocationPuck(true)` → directional puck rendered.
     ///
     /// On exit (`active` = false):
-    ///   - Calls `coordinatorActions.applyDrivePitch(false, preDrivePitch)` → restores prior pitch.
+    ///   - Calls `applyDrivePitch(false, preDrivePitch)` → restores prior pitch + distance.
+    ///   - Calls `applyDriveMapStyle(false, preDriveMapConfiguration)` → restores prior config.
+    ///   - Calls `refreshUserLocationPuck(false)` → default blue dot restored.
     private func handleDriveCameraChange(_ active: Bool) {
         if active {
-            // Capture current pitch before Drive Mode entry (almost always 0, but store precisely).
+            // Capture current camera state and map style before Drive Mode overwrites them.
+            // These values are restored on exit.
             preDrivePitch = coordinatorActions.captureCurrentPitch?() ?? 0
+            preDriveDistance = coordinatorActions.captureCurrentDistance?() ?? 0
+            preDriveMapConfiguration = coordinatorActions.captureCurrentMapConfiguration?()
         }
-        // Apply or restore pitch. Fires exactly once per false→true or true→false transition
-        // because .onChange(of:) only fires when the value actually changes.
+
+        // Apply or restore camera pitch + zoom in a SINGLE setCamera call (spec §3.4).
+        //
+        // The coordinator's `applyDriveCameraState` method handles both pitch and
+        // centerCoordinateDistance in one call. On entry, it also stashes the prior distance
+        // in `lastCapturedPriorDistance` for use during the exit path.
+        //
+        // `preDriveDistance` is stored in ContentView for observability (debugging, future
+        // W8.5d use), but the coordinator owns the authoritative restore value.
         coordinatorActions.applyDrivePitch?(active, preDrivePitch)
+
+        // Apply or restore map style (`.muted` on entry, prior config on exit).
+        // `preferredConfiguration` does NOT fire `regionDidChangeAnimated` — no feedback risk.
+        // (spec §3.6 R-3: preferredConfiguration is a separate MapKit path from setCamera.)
+        coordinatorActions.applyDriveMapStyle?(active, preDriveMapConfiguration)
+
+        // Refresh the user-location annotation view so MapKit re-queries `mapView(_:viewFor:)`,
+        // which returns the directional puck when `driveModeActive` is true, or nil (restoring
+        // the default blue dot) when false. Implemented by briefly toggling `showsUserLocation`.
+        coordinatorActions.refreshUserLocationPuck?(active)
     }
 
     // MARK: - Location update handler
