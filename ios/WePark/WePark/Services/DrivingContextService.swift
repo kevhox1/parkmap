@@ -67,9 +67,20 @@ final class DrivingContextService {
 
     // MARK: - Constants
 
-    /// Minimum gap between voice cues (seconds). Calibration deferred to W8.5c-follow.
-    /// Port of DRIVING_VOICE_MIN_GAP_MS = 12000 (index.html constant).
-    private let voiceMinGapSeconds: TimeInterval = 12
+    /// Minimum gap between voice cues (seconds).
+    ///
+    /// W8.5d: Changed from `private let` (immutable) to `private var` (settable) so
+    /// `ContentView`'s `.onChange(of: driveModeDistanceMeters)` can update the gap when
+    /// `FinalApproachState` changes:
+    ///   - `.outside`    → 12s (baseline, port of DRIVING_VOICE_MIN_GAP_MS = 12000)
+    ///   - `.approaching` → 4s  (elevated cadence during final approach, OQ-2)
+    ///   - `.arrived`    → .infinity (suppresses voice; arrival prompt is the cue)
+    ///
+    /// Updated via `setVoiceGap(_:)` called from `ContentView` on the main thread.
+    /// Reset to baseline when `DrivingContextService` is re-instantiated at the start
+    /// of each Drive Mode session (see `handleDriveModeChange` in `ContentView`).
+    /// Calibration deferred to W8.5c-follow after drive-test.
+    private var voiceMinGapSeconds: TimeInterval = FinalApproachService.baselineVoiceGapSeconds
 
     // MARK: - Dependencies
 
@@ -79,6 +90,28 @@ final class DrivingContextService {
 
     init(voice: DrivingVoice) {
         self.voice = voice
+    }
+
+    // MARK: - W8.5d: Voice gap update
+
+    /// Sets the minimum gap between voice cues for the current Drive Mode session.
+    ///
+    /// Called from `ContentView`'s `.onChange(of: driveModeDistanceMeters)` handler
+    /// (`handleFinalApproachUpdate`) on the main thread when `FinalApproachState` changes.
+    ///
+    /// Use `FinalApproachService.voiceGap(for:)` to derive the value:
+    /// - `.outside`    → 12s (baseline, matches pre-W8.5d constant)
+    /// - `.approaching` → 4s  (elevated cadence during final approach)
+    /// - `.arrived`    → .infinity (suppresses voice; arrival prompt is the user cue)
+    ///
+    /// When `gap == .infinity`, the `speakContext` guard
+    /// (`now.timeIntervalSince(lastSpokenAt) >= voiceMinGapSeconds`) always returns early,
+    /// effectively suppressing voice with no new code path needed.
+    ///
+    /// Thread safety: must be called from the main thread (same thread as the
+    /// `.onChange` modifier — `@Observable` property mutations are safe on main).
+    func setVoiceGap(_ gap: TimeInterval) {
+        voiceMinGapSeconds = gap
     }
 
     // MARK: - Main update method
