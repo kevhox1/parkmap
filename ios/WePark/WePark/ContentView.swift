@@ -806,7 +806,15 @@ struct ContentView: View {
                     parkPinService.save(car)
                     // End Drive Mode — triggers handleDriveModeChange(false) which resets
                     // finalApproachState + arrivalPromptFired + stops location/voice services.
+                    // endDriveMode() does NOT touch activeSheet, so the assignment below is safe.
                     endDriveMode()
+                    // W8.5d pass-2 (QA Finding #1, Option B): auto-fire Park Until sheet
+                    // immediately after the arrival-confirm commit moment. The user has just
+                    // tapped "Park Here" — this is the natural follow-up question.
+                    // The W7.5 pivot to standalone-toolbar still stands for the set-destination
+                    // anxiety path; the arrival-confirm path explicitly opts back into auto-fire
+                    // because the user has already committed to parking.
+                    activeSheet = .parkUntil
                 },
                 onNotYet: {
                     // OQ-6: Drive Mode stays active. arrivalPromptFired stays true (no re-fire).

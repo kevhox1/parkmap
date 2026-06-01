@@ -5,10 +5,11 @@
 //  W8.5d unit tests: FinalApproachService pure functions.
 //
 //  Strategy: pure-function decision layer only (per spec §5 and PR-3/PR-2 precedent).
-//  No MKMapView, no AVSpeechSynthesizer, no CoreLocation, no live GPS.
+//  No MKMapView, no AVSpeechSynthesizer, no live GPS.
 //  All state-machine and voice-gap logic is in FinalApproachService — static, no instance.
+//  Pass-2 tests use CLLocationCoordinate2D (CoreLocation) for ActiveSheet invariant tests only.
 //
-//  Test inventory (12 tests, target: 8–12 per spec §5):
+//  Test inventory (14 tests, target: 8–12 per spec §5 + 2 pass-2 additions):
 //
 //  State machine — boundary coverage:
 //    1. testFinalApproachState_farOutside_isOutside         — distance = 1000 → .outside
@@ -28,13 +29,18 @@
 //  Threshold constants:
 //   12. testThresholds_approachIsGreaterThanArrival — approachThreshold > arrivalThreshold
 //
-//  Baseline before W8.5d: 228/0. After W8.5d: 240/0 (228 + 12 new).
+//  Pass-2 (QA Finding #1 — arrival-confirm auto-fire):
+//   13. testActiveSheet_parkUntilCaseExists — ActiveSheet.parkUntil is accessible
+//   14. testArrivalConfirmAutoFireInvariant — .parkUntil is a distinct case from .arrivalPrompt
+//
+//  Baseline before W8.5d: 228/0. After W8.5d: 241/0 (228 + 13). After pass-2: 242/0 (228 + 14).
 //
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens.
 //
 
 import XCTest
+import CoreLocation
 @testable import WePark
 
 final class W85dTests: XCTestCase {
@@ -142,5 +148,33 @@ final class W85dTests: XCTestCase {
             "(\(FinalApproachService.arrivalThresholdMeters)m) — " +
             "if not, the .approaching state is unreachable"
         )
+    }
+
+    // MARK: - Pass-2: Arrival-confirm auto-fire invariant (QA Finding #1, Option B)
+
+    /// Documents that ActiveSheet.parkUntil exists and is a distinct case accessible from
+    /// ContentView state. The arrival-confirm closure sets activeSheet = .parkUntil after
+    /// endDriveMode() — this test verifies the case is available and constructible.
+    ///
+    /// This is a documenting test: the Swift compiler would catch a missing case at build time,
+    /// but having an explicit test records the design intent and flags any future rename.
+    func testActiveSheet_parkUntilCaseExists() {
+        // If ActiveSheet.parkUntil were removed or renamed, this line would not compile.
+        let sheet: ActiveSheet = .parkUntil
+        // The case must have a stable, non-empty id (used by .sheet(item:) for presentation).
+        XCTAssertFalse(sheet.id.isEmpty, "ActiveSheet.parkUntil must have a non-empty id")
+        XCTAssertEqual(sheet.id, "parkUntil",
+            "ActiveSheet.parkUntil.id must be 'parkUntil' — change here if id changes upstream")
+    }
+
+    /// Documents the invariant that .parkUntil and .arrivalPrompt are distinct cases.
+    /// The arrival-confirm flow sets activeSheet = .parkUntil *after* dismissing .arrivalPrompt,
+    /// so these must be different identities (SwiftUI uses .id for sheet identity).
+    func testArrivalConfirmAutoFireInvariant_parkUntilDistinctFromArrivalPrompt() {
+        let parkUntilSheet: ActiveSheet = .parkUntil
+        let arrivalSheet: ActiveSheet = .arrivalPrompt(coord: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99))
+        XCTAssertNotEqual(parkUntilSheet.id, arrivalSheet.id,
+            ".parkUntil and .arrivalPrompt must have distinct ids — " +
+            "the arrival-confirm auto-fire sequence presents .parkUntil after dismissing .arrivalPrompt")
     }
 }
