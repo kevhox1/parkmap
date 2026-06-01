@@ -9,13 +9,15 @@
 //  All state-machine and voice-gap logic is in FinalApproachService — static, no instance.
 //  Pass-2 tests use CLLocationCoordinate2D (CoreLocation) for ActiveSheet invariant tests only.
 //
-//  Test inventory (14 tests, target: 8–12 per spec §5 + 2 pass-2 additions):
+//  Test inventory (15 tests, target: 8–12 per spec §5 + 2 pass-2 additions; one
+//  extra 499m boundary case added beyond the spec list — see #4a below):
 //
 //  State machine — boundary coverage:
 //    1. testFinalApproachState_farOutside_isOutside         — distance = 1000 → .outside
 //    2. testFinalApproachState_exactApproachThreshold_isApproaching — distance = 500 → .approaching
 //    3. testFinalApproachState_insideApproachZone_isApproaching     — distance = 250 → .approaching
 //    4. testFinalApproachState_justAboveArrivalThreshold_isApproaching — distance = 51 → .approaching
+//   4a. testFinalApproachState_justInsideApproachThreshold_isApproaching — distance = 499 → .approaching
 //    5. testFinalApproachState_exactArrivalThreshold_isArrived    — distance = 50 → .arrived
 //    6. testFinalApproachState_nearZero_isArrived                 — distance = 1  → .arrived
 //    7. testFinalApproachState_zero_isArrived                     — distance = 0  → .arrived
@@ -33,7 +35,7 @@
 //   13. testActiveSheet_parkUntilCaseExists — ActiveSheet.parkUntil is accessible
 //   14. testArrivalConfirmAutoFireInvariant — .parkUntil is a distinct case from .arrivalPrompt
 //
-//  Baseline before W8.5d: 228/0. After W8.5d: 241/0 (228 + 13). After pass-2: 242/0 (228 + 14).
+//  Baseline before W8.5d: 228/0. After W8.5d: 241/0 (228 + 13). After pass-2: 243/0 (228 + 15).
 //
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens.
