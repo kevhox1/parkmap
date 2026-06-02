@@ -123,6 +123,9 @@ create index if not exists pins_active_spatial_idx
 -- ============================================================
 -- RLS for pins
 -- ============================================================
+-- ENABLE ROW LEVEL SECURITY is inherently idempotent in Postgres 15 (Supabase's engine):
+-- running it on a table that already has RLS enabled is a no-op, not an error.
+-- No explicit IF NOT EXISTS guard exists for this statement — none is needed.
 alter table public.pins enable row level security;
 
 -- Anonymous + authenticated can read all non-parked-car pins.
@@ -147,7 +150,8 @@ create policy pins_insert_crowd on public.pins
 -- Authors can update their own pins (add notes, correct sub_tag, etc.)
 drop policy if exists pins_update_own on public.pins;
 create policy pins_update_own on public.pins
-  for update using (auth.uid() = author_id);
+  for update using (auth.uid() = author_id)
+  with check (auth.uid() = author_id);
 
 -- Authors can delete their own pins
 drop policy if exists pins_delete_own on public.pins;
@@ -178,6 +182,7 @@ create index if not exists votes_pin_id_idx
 -- ============================================================
 -- RLS for votes
 -- ============================================================
+-- ENABLE ROW LEVEL SECURITY is inherently idempotent in Postgres 15 — see note above.
 alter table public.votes enable row level security;
 
 -- Any user (anon included) can read the vote tally.
@@ -193,7 +198,8 @@ create policy votes_insert_own on public.votes
 -- Users can change their vote (confirm <-> dispute) via upsert.
 drop policy if exists votes_update_own on public.votes;
 create policy votes_update_own on public.votes
-  for update using (auth.uid() = user_id);
+  for update using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 
 -- Users can retract their vote.
 drop policy if exists votes_delete_own on public.votes;

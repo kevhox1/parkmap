@@ -116,7 +116,7 @@ Insert strategy: `INSERT ... ON CONFLICT DO NOTHING` is insufficient because `me
 insert into public.pins (pin_type, source, lifespan, lat, lng, zone_id, author_id,
                           expires_at, meta, notes)
 values (...)
-on conflict (pin_type, (meta->>'permit_id'))
+on conflict ((meta->>'permit_id')) where pin_type = 'filming'
 do update set
   lat         = excluded.lat,
   lng         = excluded.lng,
@@ -126,7 +126,9 @@ do update set
   updated_at  = now();
 ```
 
-This requires a unique index on `(pin_type, (meta->>'permit_id'))` for the `ON CONFLICT` target to work. Add this index in the migration or as a follow-on:
+The `ON CONFLICT` target must exactly match the partial unique index defined in `supabase/02b-pins-ingest-indexes.sql` and §5 below: a single-expression index on `(meta->>'permit_id')` with a `WHERE pin_type = 'filming'` predicate. Using `ON CONFLICT (pin_type, (meta->>'permit_id'))` would require a two-column unique index (which does not exist) and will throw at runtime.
+
+The partial unique index:
 
 ```sql
 create unique index if not exists pins_filming_permit_id_uidx

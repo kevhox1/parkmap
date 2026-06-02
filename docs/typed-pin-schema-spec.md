@@ -223,9 +223,13 @@ create index if not exists pins_segment_id_idx on public.pins(segment_id)
 -- Type: server-side filtering by tier
 create index if not exists pins_type_idx on public.pins(pin_type);
 
--- Active-only partial index (most map reads filter to non-resolved, non-expired)
-create index if not exists pins_active_idx on public.pins(lat, lng, pin_type)
-  where resolved_at is null and (expires_at is null or expires_at > now());
+-- Active-only partial index (most map reads filter to non-resolved rows).
+-- NOTE: the predicate is intentionally scoped to resolved_at only. Using
+-- `expires_at > now()` here would freeze now() at DDL-run time, making the
+-- predicate useless for future rows. Clients filter expires_at > <current
+-- timestamp> at query time via pins_expires_at_idx instead.
+create index if not exists pins_active_spatial_idx on public.pins(lat, lng, pin_type)
+  where resolved_at is null;
 ```
 
 ---
