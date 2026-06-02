@@ -54,7 +54,17 @@ final class CommunityPinService {
 
     /// Pins currently visible in the fetched bounding box, after client-side expiry filter.
     /// ContentView observes this to push markers to the map and feed the ASP banner supplement.
-    private(set) var visiblePins: [CommunityPin] = []
+    private(set) var visiblePins: [CommunityPin] = [] {
+        didSet { visiblePinsGeneration += 1 }
+    }
+
+    /// Incremented every time `visiblePins` changes.
+    ///
+    /// ContentView observes this `Int` via `.onChange(of: pinService.visiblePinsGeneration)`
+    /// rather than `.onChange(of: pinService.visiblePins)` because `CommunityPin` is not
+    /// `Equatable` (AC-D20 freezes `CommunityPin.swift`). `Int` is always `Equatable`,
+    /// so this pattern sidesteps the conformance requirement without modifying the model.
+    private(set) var visiblePinsGeneration: Int = 0
 
     /// True while a network fetch is in progress.
     private(set) var isLoading: Bool = false
@@ -108,6 +118,23 @@ final class CommunityPinService {
         self.supabaseAnonKey = supabaseAnonKey
         self.nowProvider = nowProvider
         self.urlSession = urlSession
+    }
+
+    /// Convenience initializer that reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` from
+    /// `Bundle.main` (bridged from `Config.xcconfig` via `Info.plist`).
+    ///
+    /// Used by `ContentView` as its `@State` stored-property initializer so that the
+    /// `@State` declaration stays simple (no closure needed, avoids Swift type-checker
+    /// complexity budget pressure on the body expression).
+    ///
+    /// If either key is missing (pre-prod-apply builds, missing Config.xcconfig),
+    /// the service starts with placeholder values — no network calls are made, and
+    /// the fixture injection path is available for testing/smoke.
+    convenience init() {
+        let urlString = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String ?? ""
+        let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String ?? ""
+        let resolvedURL = URL(string: urlString) ?? URL(string: "https://placeholder.supabase.co")!
+        self.init(supabaseURL: resolvedURL, supabaseAnonKey: key)
     }
 
     // MARK: - Region change entry point

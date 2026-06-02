@@ -59,10 +59,15 @@ import MapKit
 private let kServiceURL = URL(string: "https://test.supabase.co")!
 private let kAnonKey = "test-anon-key-not-real"
 
-/// ISO 8601 fixture dates (no Calendar.current).
-private let kNow       = ISO8601DateFormatter().date(from: "2026-06-01T12:00:00+00:00")!
-private let kPast      = ISO8601DateFormatter().date(from: "2026-06-01T11:59:59+00:00")!  // 1s in past
-private let kFuture    = ISO8601DateFormatter().date(from: "2026-06-01T13:00:00+00:00")!  // 1h in future
+/// Fixed reference point for service filter tests (AC-D1 through AC-D4).
+///
+/// Using a fixed future epoch avoids lazy-init ordering issues and ensures
+/// kPast < kNow < kFuture regardless of when tests run.
+/// Chosen far in the future (~2027) so kFuture is always a future date in production.
+private let kBase:   TimeInterval = 1_800_000_000   // 2027-01-15T00:40:00Z
+private let kNow:    Date = Date(timeIntervalSince1970: kBase)
+private let kPast:   Date = Date(timeIntervalSince1970: kBase - 1)      // 1 second before kNow
+private let kFuture: Date = Date(timeIntervalSince1970: kBase + 3600)   // 1 hour after kNow
 
 /// Builds a fixture `CommunityPin` with the given parameters.
 private func makeFixturePin(
@@ -450,11 +455,11 @@ final class ResolvedBannerStateTests: XCTestCase {
 
     /// AC-D9a: bundle says .aspInEffect + live pin for today → returns .todaySuspended(reason:).
     func testResolvedBannerState_aspPinToday_bundleInEffect_returnsSuspended() {
-        // Inject a frozen "now" provider so toETDateString() returns a predictable date.
-        // Use kNow = 2026-06-01T12:00:00+00:00 → ET date "2026-06-01".
-        // We can't easily inject "now" into the free function, so we build the pin with
-        // the matching date string and verify the function's logic instead.
-        let today = kNow.toETDateString()  // "2026-06-01" in ET (UTC = ET for this test)
+        // resolvedBannerState uses Date.nowET.toETDateString() (actual current date).
+        // Build the fixture pin with the actual today's ET date so the date strings match.
+        // This avoids the need to inject a nowProvider into resolvedBannerState (which is a
+        // free function in ContentView.swift, not a class).
+        let today = Date().toETDateString()  // actual current ET date
         let pin = aspPin(suspensionDate: today)
 
         // resolvedBannerState is a free function (internal) in ContentView.swift.
@@ -470,7 +475,7 @@ final class ResolvedBannerStateTests: XCTestCase {
 
     /// AC-D9b: bundle says .todaySuspended → bundle wins; pin does not change the state.
     func testResolvedBannerState_bundleAlreadySuspended_noOverride() {
-        let today = kNow.toETDateString()
+        let today = Date().toETDateString()  // actual current ET date
         let pin = aspPin(suspensionDate: today)
 
         let result = resolvedBannerState(

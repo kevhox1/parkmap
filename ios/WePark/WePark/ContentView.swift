@@ -332,24 +332,20 @@ struct ContentView: View {
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
     /// Read-only community pin service. Fetches filming / asp_suspended_today / special_event
-    /// pins from Supabase. Initialised with Config.xcconfig values at runtime.
+    /// pins from Supabase.
     ///
-    /// When `SUPABASE_URL` or `SUPABASE_ANON_KEY` are missing from Info.plist
-    /// (pre-prod-apply builds), the service starts with empty state and no network calls
-    /// are attempted — the fixture injection path (`pinService.inject(fixtures:)`) is
-    /// used for the sim smoke gate instead.
-    @State private var pinService: CommunityPinService = {
-        let url = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String ?? ""
-        let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String ?? ""
-        let resolvedURL = URL(string: url) ?? URL(string: "https://placeholder.supabase.co")!
-        return CommunityPinService(supabaseURL: resolvedURL, supabaseAnonKey: key)
-    }()
+    /// Uses the convenience `init()` that reads SUPABASE_URL + SUPABASE_ANON_KEY from
+    /// Bundle.main (bridged from Config.xcconfig via Info.plist) — keeping the @State
+    /// declaration simple to avoid Swift type-checker complexity pressure on the body.
+    @State private var pinService = CommunityPinService()
 
     /// Map-marker-only subset of visible community pins (filming + special_event).
     /// `asp_suspended_today` is NOT included here — it drives the ASP banner supplement (spec §4).
     ///
-    /// Updated via `.onChange(of: pinService.visiblePins)` — NEVER inside `updateUIView`
+    /// Updated via `.onChange(of: pinService.visiblePinsGeneration)` — NEVER inside `updateUIView`
     /// (invariant I-1 from HANDOFF.md Changelog 2026-05-26 / spec §5.2).
+    /// Uses visiblePinsGeneration (Int, Equatable) rather than visiblePins ([CommunityPin])
+    /// because CommunityPin is not Equatable — AC-D20 freezes CommunityPin.swift.
     @State private var communityPins: [CommunityPin] = []
 
     // MARK: - Bundle version strings (passed into SettingsView)
@@ -389,289 +385,18 @@ struct ContentView: View {
     // MARK: - Body
 
     var body: some View {
-        ZStack(alignment: .top) {
-            // Bottom layer: map + safe-area-inset banner.
-            ZStack(alignment: .topTrailing) {
-                MapViewRepresentable(
-                    region: $region,
-                    selectedSegmentID: $selectedSegmentID,
-                    onTap: { coordinate in
-                        handleMapTap(at: coordinate)
-                    },
-                    onLongPress: { coordinate in
-                        handleLongPress(at: coordinate)
-                    },
-                    onRegionChanged: { newRegion in
-                        region = newRegion
-                        tileLoader.loadTiles(forRegion: newRegion)
-                        // Community 1.0 / Tier 1: debounced bounding-box fetch for community pins.
-                        // The debounce (800ms) lives inside CommunityPinService.onRegionChanged.
-                        pinService.onRegionChanged(newRegion)
-                    },
-                    onCarPinTapped: {
-                        openParkedCarDetail()
-                    },
-                    carPin: parkPinService.parkedCar,
-                    overlayPayload: overlayPayload,
-                    activeRoute: activeRoute,
-                    destinationCoordinate: driveDestinationCoordinate,
-                    driveHeading: locationService.driveHeading,
-                    driveModeActive: driveModeActive,
-                    onDrivePanDetected: {
-                        // W8.5c: User panned map manually → disable follow mode.
-                        if driveModeActive {
-                            driveFollowEnabled = false
-                        }
-                    },
-                    coordinatorActions: coordinatorActions,
-                    communityPins: communityPins,
-                    onCommunityPinTapped: { pin in
-                        activeSheet = .pinDetail(pin)
-                    }
-                )
-                // Map fills the full screen including safe area.
-                .ignoresSafeArea()
-                // W7: ASP banner pushed above the map content, not overlapping it.
-                .safeAreaInset(edge: .top) {
-                    ASPBanner(state: bannerState)
-                }
-                // W7.5: Filter-active pill pushed below the map content when Park Until is active.
-                // W8.5c: Drive Mode bottom card sits below the Park Until pill when both active.
-                .safeAreaInset(edge: .bottom) {
-                    bottomSafeAreaContent
-                }
-
-                // W5.1: Recenter buttons — top-right, below status bar and compass rose.
-                // padding(.top, 100) gives clearance for both the ~44pt status bar and
-                // the ~40pt ASP banner added in W7.
-                recenterButtonStack
-                    .padding(.top, 100)
-                    .padding(.trailing, 12)
+        mapLayerWithEvents
+            .onReceive(parkPinService.pinDropped) { newCar in handlePinDropped(newCar) }
+            .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in routePendingDeepLink(carID) }
+            .sheet(item: $activeSheet, onDismiss: {
+                if selectedSegmentID != nil { selectedSegmentID = nil }
+            }) { sheet in sheetContent(sheet) }
+            .fullScreenCover(isPresented: $showDriveModeDestination) { driveModeDestinationCover }
+            .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
+                Button("Got It", role: .cancel) {}
+            } message: {
+                Text("Parking commentary will pause if you background WePark during your drive. Keep the app in front for continuous guidance.")
             }
-
-            // W7: Gear button — top-left, at the same vertical offset as the recenter buttons.
-            VStack {
-                Button { activeSheet = .settings } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(.secondary)
-                }
-                .accessibilityLabel("Open settings")
-                Spacer()
-            }
-            .padding(.top, 100)
-            .padding(.leading, 12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            // W8.5b/c: Drive Mode overlays — shown when Drive Mode is active.
-            if driveModeActive {
-                driveModeOverlayLayer
-            }
-
-            // W7: Toast host — highest z-order layer. Positioned at the very top via VStack + Spacer.
-            // Renders above the ASP banner (spec §3.E: toast overlays banner briefly — acceptable
-            // because toast is transient 3s, banner is persistent).
-            // Top padding reads `proxy.safeAreaInsets.top` so the toast clears the status bar /
-            // dynamic island on notched devices (QA pass-1 #2). GeometryReader is scoped to just
-            // this slot so it does not affect any other layer.
-            GeometryReader { proxy in
-                VStack(spacing: 0) {
-                    ToastHostView()
-                        .padding(.top, proxy.safeAreaInsets.top)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .task {
-            await performLaunchSetup()
-        }
-        .onAppear {
-            lastEvaluatedAt = .now
-            bannerState = aspService.suspensionState(at: .nowET)
-        }
-        // W7: Refresh banner state when app returns to foreground (handles midnight rollover).
-        // W6.1: Also replay any buffered notification deep-link on foreground transition.
-        //       This covers the cold-kill scenario: the delegate may have fired and set
-        //       pendingDeepLinkCarID while the view hierarchy was still settling. By the
-        //       time scenePhase reaches .active, .onChange(of: pendingDeepLinkCarID) will
-        //       have already fired if the value changed after the modifier was attached.
-        //       The second call here is a belt-and-suspenders guard for the case where the
-        //       value was already non-nil when the modifier first attached (value didn't
-        //       "change" — it was set before onChange was registered). Clearing after routing
-        //       ensures this path is idempotent across foreground cycles.
-        .onChange(of: scenePhase) { _, newPhase in
-            handleScenePhaseChange(newPhase)
-        }
-        // W7: Keep UserDefaults in sync with @State notificationsMuted whenever it changes.
-        .onChange(of: notificationsMuted) { _, newValue in
-            UserDefaults.standard.set(newValue, forKey: AppConstants.notificationsMutedKey)
-            if newValue {
-                // Muted: cancel any pending notification for the current pin.
-                if let car = parkPinService.parkedCar {
-                    NotificationScheduler.shared.cancelAll(for: car)
-                }
-            }
-        }
-        // W8.5c: Drive Mode active layer lifecycle — start/stop continuous location + voice.
-        .onChange(of: driveModeActive) { _, active in
-            handleDriveModeChange(active)
-        }
-        // W8.5c-polish PR-3 / PR-2: Drive Mode camera + style transition.
-        //
-        // Architecture note (AC-10, AC-12): ALL camera mutation and map-style mutation is
-        // placed HERE rather than in MapViewRepresentable.updateUIView because updateUIView
-        // runs synchronously inside SwiftUI's view-update cycle. Calling setCamera from
-        // updateUIView raced SwiftUI's still-in-progress mount and silently dropped the entire
-        // .safeAreaInset(...) overlay chain (toolbar, ASP banner, Park Until pill) in the
-        // reverted PR #31. .onChange fires AFTER the current view-update cycle completes,
-        // eliminating that race.
-        //
-        // PR-2 fires 4 things from this SINGLE .onChange handler (spec §3.1):
-        //   1. Combined pitch + zoom setCamera (single call, not two — spec §3.4).
-        //   2. Map style swap to .muted on entry / restore on exit.
-        //   3. Directional puck refresh (showsUserLocation toggle → re-query delegate).
-        .onChange(of: driveModeActive) { _, active in
-            handleDriveCameraChange(active)
-        }
-        .onReceive(
-            Timer.publish(every: 60, on: .main, in: .common).autoconnect()
-        ) { _ in
-            lastEvaluatedAt = .now
-            rebuildOverlays(at: lastEvaluatedAt)
-        }
-        // Rebuild overlays when segments change (tile load completes).
-        .onChange(of: tileLoader.segments.count) { _, _ in
-            rebuildOverlays(at: lastEvaluatedAt)
-        }
-        // Rebuild selected-block highlight when selection changes.
-        .onChange(of: selectedSegmentID) { _, _ in
-            rebuildOverlays(at: lastEvaluatedAt)
-        }
-        // W5.1/W8.5c: Recenter + Drive Mode update on every location fix.
-        .onChange(of: locationService.locationUpdateCount) { _, _ in
-            handleLocationUpdate()
-        }
-        // W8.5d: Final approach state transitions — driven by distance changes.
-        // Architecture note: driven by .onChange (same pattern as PR-3/PR-2), NOT by updateUIView.
-        // Computes FinalApproachState, updates voice gap, shows/hides approach strip,
-        // and fires the one-shot arrival prompt.
-        .onChange(of: driveModeDistanceMeters) { _, distance in
-            handleFinalApproachUpdate(distance)
-        }
-        // Community 1.0 / Tier 1: update map markers when visible pins change.
-        //
-        // Architecture invariant I-1 (spec §5.1 / HANDOFF.md): ALL annotation mutations
-        // live here in .onChange, NEVER inside updateUIView. updateUIView runs synchronously
-        // during SwiftUI's view-update cycle; mutating UIKit state there races the SwiftUI
-        // mount and can drop the entire .safeAreaInset overlay chain (the #31 regression).
-        //
-        // This handler:
-        //   1. Filters to map-marker types (filming + special_event only — AC-D8).
-        //      asp_suspended_today is NOT a map marker (spec §3 + §4.3).
-        //   2. Updates communityPins @State → triggers MapViewRepresentable.updateUIView
-        //      → syncCommunityPinAnnotations, which diffs add/remove against current MKMapView state.
-        //   3. Re-evaluates bannerState with the ASP supplement helper (spec §4.2).
-        .onChange(of: pinService.visiblePins) { _, newPins in
-            // Map markers: filming + special_event only (AC-D8).
-            communityPins = newPins.filter { [.filming, .specialEvent].contains($0.pinType) }
-
-            // ASP banner supplement (spec §4.2 / AC-D9a through AC-D9d).
-            // resolvedBannerState() returns .todaySuspended if a live Supabase pin
-            // overrides the bundle state, otherwise returns the bundle state unchanged.
-            let bundleState = aspService.suspensionState(at: .nowET)
-            bannerState = resolvedBannerState(bundleState: bundleState, aspPins: newPins)
-        }
-        // Community 1.0 / Tier 1: inform pinService when Drive Mode changes.
-        // The service uses this to apply the re-fetch guard (spec §6.3):
-        // skip re-fetch if Drive Mode active AND map center moved < 200m.
-        .onChange(of: driveModeActive) { _, active in
-            pinService.setDriveModeActive(active)
-        }
-        // W6: First pin ever → show rationale sheet (once per install).
-        // Guard: belt-and-suspenders check on the UserDefaults flag in case
-        // `firstPinDropped` semantics ever drift from `hasEverParkedKey`.
-        .onReceive(parkPinService.firstPinDropped) {
-            if !UserDefaults.standard.bool(forKey: AppConstants.notificationRationaleShownKey) {
-                activeSheet = .notificationRationale
-            }
-        }
-        // W6: Every pin drop (including replacements).
-        //
-        // Cancels old notifications, schedules new ones.
-        // `previousCarID` is set by confirmPinDrop() BEFORE save() is called, so it holds
-        // the old car's UUID at this point. After scheduling, we don't need to update it here —
-        // the next confirmPinDrop() call will set it before the next save().
-        //
-        // W7.5 pass-2: No longer presents the ParkUntil sheet or clears the filter here.
-        // The Park Until filter is now filter-first (toolbar button → see all matching blocks →
-        // choose where to park). The filter is independent of pin lifecycle — it persists across
-        // pin drops and is cleared only via X-on-pill, stale-target auto-clear, or "I left".
-        .onReceive(parkPinService.pinDropped) { newCar in
-            let oldID = previousCarID
-            Task { @MainActor in
-                // W6: Cancel old + schedule new notifications.
-                NotificationScheduler.shared.cancelAllThenSchedule(
-                    for: newCar,
-                    oldCarID: oldID,
-                    loadedSegments: tileLoader.segments,
-                    engine: engine
-                )
-            }
-        }
-        // W6.1 fix: Notification tap deep-link → open ParkedCarDetailView (AC-W6.11, OQ-W6-3).
-        //
-        // Previously used .onReceive(appDelegate.notificationDeepLinkSubject) with a
-        // PassthroughSubject. That dropped events when the subscriber hadn't attached yet
-        // (cold-kill / background-wake race: the delegate fires before SwiftUI finishes
-        // mounting the view hierarchy).
-        //
-        // Fix: AppDelegate buffers the carID in @Published pendingDeepLinkCarID. Two paths
-        // route a buffered carID to routePendingDeepLink:
-        //   (a) .onChange(of: pendingDeepLinkCarID) — covers foreground and background-wake:
-        //       fires when the delegate writes the property after this modifier is attached.
-        //   (b) .onChange(of: scenePhase) { .active } (above) — covers cold-kill: catches a
-        //       buffered value that was set BEFORE this view's .onChange modifier attached.
-        //       iOS 17's .onChange(of:) does NOT fire on initial value, so the scenePhase
-        //       handler is the only mechanism for that case.
-        // After routing, the buffered ID is cleared to nil so the sheet does not re-present
-        // on subsequent foreground transitions (idempotency, AC criterion 4).
-        .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in
-            routePendingDeepLink(carID)
-        }
-        // W5.1 fix-pass Bug 2: Single enum-driven sheet.
-        // All sheet cases are handled here; only one can be active at a time.
-        // SwiftUI presents/dismisses based on activeSheet becoming non-nil / nil.
-        // onDismiss clears selectedSegmentID when the block detail was showing,
-        // so the overlay highlight is removed after the sheet animates away.
-        // Sheet content extracted into sheetContent(_:) to reduce type-checker
-        // complexity in body (W8.5c-polish PR-1 fix).
-        .sheet(item: $activeSheet, onDismiss: {
-            // If the block-detail sheet was dismissed (by swipe-down), clear the selection.
-            // For parkConfirm / parkedCarDetail dismissal the selection is already nil.
-            if selectedSegmentID != nil {
-                selectedSegmentID = nil
-            }
-        }) { sheet in
-            sheetContent(sheet)
-        }
-        // W8.5b: Full-screen destination search cover (OQ-2: Option C).
-        // Separate from .sheet(item:) — can coexist in SwiftUI but Drive button
-        // guard ensures only one is presented at a time.
-        .fullScreenCover(isPresented: $showDriveModeDestination) {
-            driveModeDestinationCover
-        }
-        // S-1 fix (spec §7 R-3, AC-DM.23): one-time background-limitation alert.
-        // Shown on the first-ever Drive Mode start. BackgroundNoteGate (Constants.swift)
-        // gates on UserDefaults key wepark_dm_bg_note_shown and marks it true before this
-        // alert fires, so it shows exactly once across the lifetime of the install.
-        .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
-            Button("Got It", role: .cancel) {}
-        } message: {
-            Text("Parking commentary will pause if you background WePark during your drive. Keep the app in front for continuous guidance.")
-        }
     }
 
     // MARK: - W8.5b: Full-screen destination search cover
@@ -1032,6 +757,146 @@ struct ContentView: View {
         )
     }
 
+    // MARK: - Map layer stack
+
+    /// The full view hierarchy (ZStack with map + overlays).
+    ///
+    /// Extracted from `body` so the Swift type-checker treats it as a separate expression
+    /// from the modifier chain. The body is simply `mapLayerStack` with all the .task /
+    /// .onChange / .sheet modifiers chained on top — two manageable expressions instead of one
+    /// giant one that exhausts the compiler's complexity budget.
+    /// ZStack of all visual layers (map, gear button, Drive Mode overlays, toast).
+    /// Separated from modifier chain for type-checker budget.
+    @ViewBuilder
+    private var mapZStack: some View {
+        ZStack(alignment: .top) {
+            ZStack(alignment: .topTrailing) {
+                mapRepresentable
+                    .ignoresSafeArea()
+                    .safeAreaInset(edge: .top) { ASPBanner(state: bannerState) }
+                    .safeAreaInset(edge: .bottom) { bottomSafeAreaContent }
+                recenterButtonStack
+                    .padding(.top, 100)
+                    .padding(.trailing, 12)
+            }
+            gearButtonOverlay
+            if driveModeActive { driveModeOverlayLayer }
+            GeometryReader { proxy in
+                VStack(spacing: 0) {
+                    ToastHostView().padding(.top, proxy.safeAreaInsets.top)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+            }
+        }
+    }
+
+    /// ZStack + launch/scene modifiers (first 6).
+    @ViewBuilder
+    private var mapLayerStack: some View {
+        mapZStack
+            .task { await performLaunchSetup() }
+            .onAppear { handleOnAppear() }
+            .onChange(of: scenePhase) { _, newPhase in handleScenePhaseChange(newPhase) }
+            .onChange(of: notificationsMuted) { _, newValue in handleNotificationsMutedChange(newValue) }
+            .onChange(of: driveModeActive) { _, active in handleDriveModeAndCamera(active) }
+            .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in handleTimerTick() }
+    }
+
+    /// mapLayerStack + overlay/event modifiers (second 6).
+    @ViewBuilder
+    private var mapLayerWithEvents: some View {
+        mapLayerStack
+            .onChange(of: tileLoader.segments.count) { _, _ in handleSegmentsChanged() }
+            .onChange(of: selectedSegmentID) { _, _ in handleSelectionChanged() }
+            .onChange(of: locationService.locationUpdateCount) { _, _ in handleLocationUpdate() }
+            .onChange(of: driveModeDistanceMeters) { _, distance in handleFinalApproachUpdate(distance) }
+            // Observe visiblePinsGeneration (Int) rather than visiblePins ([CommunityPin])
+            // because CommunityPin is not Equatable — AC-D20 freezes CommunityPin.swift.
+            // visiblePinsGeneration increments on every visiblePins assignment.
+            .onChange(of: pinService.visiblePinsGeneration) { _, _ in handleVisiblePinsChange(pinService.visiblePins) }
+            .onReceive(parkPinService.firstPinDropped) { handleFirstPinDropped() }
+    }
+
+    // MARK: - W7: Gear button overlay
+
+    /// Gear button (top-left, same vertical offset as recenter buttons).
+    /// Extracted from `body` ZStack to reduce type-checker expression complexity.
+    @ViewBuilder
+    private var gearButtonOverlay: some View {
+        VStack {
+            Button { activeSheet = .settings } label: {
+                Image(systemName: "gearshape.fill")
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(width: 44, height: 44)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityLabel("Open settings")
+            Spacer()
+        }
+        .padding(.top, 100)
+        .padding(.leading, 12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Map representable callbacks (extracted for type-checker budget)
+
+    /// Forwards region changes to TileLoader and CommunityPinService.
+    private func handleRegionChanged(_ newRegion: MKCoordinateRegion) {
+        region = newRegion
+        tileLoader.loadTiles(forRegion: newRegion)
+        // Community 1.0 / Tier 1: debounced fetch for community pins (800ms debounce).
+        pinService.onRegionChanged(newRegion)
+    }
+
+    /// Forwards Drive Mode pan detection to the follow-mode toggle.
+    private func handleDrivePanDetected() {
+        if driveModeActive {
+            driveFollowEnabled = false
+        }
+    }
+
+    /// Forwards community pin taps to the sheet presentation.
+    private func handleCommunityPinTapped(_ pin: CommunityPin) {
+        activeSheet = .pinDetail(pin)
+    }
+
+    // MARK: - Map representable construction
+
+    /// The MapViewRepresentable with all bindings wired.
+    ///
+    /// Extracted from `body` to reduce type-checker expression complexity — the 16-parameter
+    /// initializer call with inline closures exceeded the Swift compiler's type-check budget.
+    /// Same `@ViewBuilder` extraction pattern as `driveModeOverlayLayer` and `bottomSafeAreaContent`
+    /// (W8.5c-polish PR-1 lesson).
+    ///
+    /// Architecture invariant I-1 (HANDOFF.md / spec §5): `communityPins` and
+    /// `onCommunityPinTapped` are passed here; their values are driven from
+    /// `.onChange(of: pinService.visiblePins)` → `handleVisiblePinsChange` in body.
+    /// No annotation mutation happens inside `MapViewRepresentable.updateUIView`.
+    @ViewBuilder
+    private var mapRepresentable: some View {
+        MapViewRepresentable(
+            region: $region,
+            selectedSegmentID: $selectedSegmentID,
+            onTap: handleMapTap(at:),
+            onLongPress: handleLongPress(at:),
+            onRegionChanged: handleRegionChanged(_:),
+            onCarPinTapped: openParkedCarDetail,
+            carPin: parkPinService.parkedCar,
+            overlayPayload: overlayPayload,
+            activeRoute: activeRoute,
+            destinationCoordinate: driveDestinationCoordinate,
+            communityPins: communityPins,
+            onCommunityPinTapped: handleCommunityPinTapped(_:),
+            driveHeading: locationService.driveHeading,
+            driveModeActive: driveModeActive,
+            onDrivePanDetected: handleDrivePanDetected,
+            coordinatorActions: coordinatorActions
+        )
+    }
+
     // MARK: - W7.5 / W8.5c: Bottom safe-area content
 
     /// Content pushed into the bottom safe area via .safeAreaInset(edge: .bottom).
@@ -1324,6 +1189,33 @@ struct ContentView: View {
         )
     }
 
+    // MARK: - Community 1.0 / Tier 1: visible pins change handler
+
+    /// Handles updates to `pinService.visiblePins`.
+    ///
+    /// Called from `.onChange(of: pinService.visiblePins)` — fires on the main thread,
+    /// after SwiftUI's view-update cycle (invariant I-1 compliance).
+    ///
+    /// Responsibilities:
+    ///   1. Filter to map-marker types (filming + special_event; NOT asp_suspended_today — AC-D8).
+    ///      asp_suspended_today is handled via the ASP banner, not a map marker (spec §3 + §4.3).
+    ///   2. Update `communityPins` @State → triggers MapViewRepresentable.updateUIView →
+    ///      syncCommunityPinAnnotations, which diffs add/remove against the current MKMapView state.
+    ///   3. Re-evaluate `bannerState` with the ASP supplement helper (spec §4.2 / AC-D9a–D9d).
+    ///
+    /// Extracted from `.onChange` closure to reduce type-checker expression complexity in
+    /// `ContentView.body` — same pattern as the other `handle*` methods (PR-1 lesson).
+    private func handleVisiblePinsChange(_ newPins: [CommunityPin]) {
+        // Map markers: filming + special_event only (AC-D8).
+        communityPins = newPins.filter { [.filming, .specialEvent].contains($0.pinType) }
+
+        // ASP banner supplement (spec §4.2 / AC-D9a through AC-D9d).
+        // resolvedBannerState() returns .todaySuspended if a live Supabase pin
+        // overrides the bundle state, otherwise returns bundle state unchanged.
+        let bundleState = aspService.suspensionState(at: .nowET)
+        bannerState = resolvedBannerState(bundleState: bundleState, aspPins: newPins)
+    }
+
     // MARK: - Drive Mode lifecycle handler
 
     /// Handles Drive Mode entry and exit lifecycle.
@@ -1331,6 +1223,10 @@ struct ContentView: View {
     /// Extracted from `.onChange(of: driveModeActive)` to reduce type-checker complexity
     /// in ContentView.body (W8.5c-polish PR-1 fix).
     private func handleDriveModeChange(_ active: Bool) {
+        // Community 1.0 / Tier 1: inform pinService of Drive Mode state change.
+        // The service applies the re-fetch guard (spec §6.3): skip if center moved < 200m.
+        pinService.setDriveModeActive(active)
+
         if active {
             // Entering Drive Mode.
             locationService.startDriveMode()
@@ -1646,6 +1542,82 @@ struct ContentView: View {
             alternativeCandidates: []
         )
         activeSheet = .parkConfirm(intent)
+    }
+
+    // MARK: - Drive Mode combined handler (extracted for type-checker budget)
+
+    /// Handles Drive Mode entry/exit: lifecycle + camera/style in one call.
+    /// Merged from two separate .onChange handlers to reduce the modifier chain.
+    private func handleDriveModeAndCamera(_ active: Bool) {
+        handleDriveModeChange(active)
+        handleDriveCameraChange(active)
+    }
+
+    // MARK: - onAppear handler (extracted for type-checker budget)
+
+    private func handleOnAppear() {
+        lastEvaluatedAt = .now
+        bannerState = aspService.suspensionState(at: .nowET)
+    }
+
+    // MARK: - Timer / overlay rebuild handlers (extracted for type-checker budget)
+
+    private func handleTimerTick() {
+        lastEvaluatedAt = .now
+        rebuildOverlays(at: lastEvaluatedAt)
+    }
+
+    private func handleSegmentsChanged() {
+        rebuildOverlays(at: lastEvaluatedAt)
+    }
+
+    private func handleSelectionChanged() {
+        rebuildOverlays(at: lastEvaluatedAt)
+    }
+
+    // MARK: - W7: Notifications muted change handler
+
+    /// Handles changes to the global notifications mute toggle.
+    /// Extracted from `.onChange(of: notificationsMuted)` to reduce type-checker complexity.
+    private func handleNotificationsMutedChange(_ muted: Bool) {
+        UserDefaults.standard.set(muted, forKey: AppConstants.notificationsMutedKey)
+        if muted {
+            // Muted: cancel any pending notification for the current pin.
+            if let car = parkPinService.parkedCar {
+                NotificationScheduler.shared.cancelAll(for: car)
+            }
+        }
+    }
+
+    // MARK: - W6: First pin dropped handler
+
+    /// Handles the `parkPinService.firstPinDropped` Combine event.
+    /// Shows the notification rationale sheet on the first-ever pin drop.
+    /// Extracted from `.onReceive(firstPinDropped)` to reduce type-checker complexity.
+    private func handleFirstPinDropped() {
+        if !UserDefaults.standard.bool(forKey: AppConstants.notificationRationaleShownKey) {
+            activeSheet = .notificationRationale
+        }
+    }
+
+    // MARK: - W6: Pin-dropped event handler
+
+    /// Handles the `parkPinService.pinDropped` Combine event.
+    ///
+    /// Cancels old notifications and schedules new ones for the dropped car.
+    /// Extracted from `.onReceive(parkPinService.pinDropped)` to reduce type-checker
+    /// expression complexity in `ContentView.body` (same PR-1 extraction pattern).
+    private func handlePinDropped(_ newCar: ParkedCar) {
+        let oldID = previousCarID
+        Task { @MainActor in
+            // W6: Cancel old + schedule new notifications.
+            NotificationScheduler.shared.cancelAllThenSchedule(
+                for: newCar,
+                oldCarID: oldID,
+                loadedSegments: tileLoader.segments,
+                engine: engine
+            )
+        }
     }
 
     // MARK: - W5: Confirm pin drop (from ParkConfirmView)
