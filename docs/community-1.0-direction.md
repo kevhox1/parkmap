@@ -144,6 +144,19 @@ Through-line: the **marker is always-on (cheap); alerts fire only when personall
 
 ---
 
+## 6.3 Identity & accounts — no signup wall (decided 2026-06-02)
+
+Supabase is the backend (community data must sync across phones — inherently server-side), but it does **not** imply an account screen. Account friction is a *separate* choice, and we remove it:
+
+- **Reading = zero account, forever.** RLS already allows anonymous SELECT — the novice "I can park free here" experience never hits a login. (Tier 1 display is read-only → needs no auth at all; the anon key suffices.)
+- **Reacting/contributing = Supabase Anonymous Auth** (`signInAnonymously()` on first launch): a silent device identity (UUID + JWT), **no screen, no email, no friction**. The user just uses the app. This is what makes the trust engine possible — it satisfies the `votes` table's `unique(pin_id, user_id)` (no vote-stuffing), and enables reputation, rate-limiting, "your pins," and bans. An anonymous-auth user *is* the `authenticated` role with a non-null `auth.uid()`, so the existing RLS works unchanged.
+- **Optional upgrade, deferred to the moment of value.** Anonymous identity can later be linked to a real account (**Sign in with Apple** — Face ID, one tap) *without losing history*, prompted only when there's a payoff ("keep your contributions across devices"). Progressive/lazy registration, never a cold wall.
+- **Reputation is keyed on the anonymous UUID.**
+
+Resolves §9 OQ-2 (identity model). Auth wiring is a **Tier 2/3** task (reactions/reporting) — Tier 1 read-only display does not need it.
+
+---
+
 ## 7. Connection to existing assets
 
 - **PWA already has** a Threat Tracker UI (mock + Supabase-ready provider), zone chat (SOHO/LES Realtime), and a reputation-scoring concept — partial proof, to be brought into the iOS 1.0 framing under this taxonomy.
