@@ -115,7 +115,11 @@ struct CommunityPin: Identifiable {
 
 extension CommunityPin: Codable {
 
-    private enum CodingKeys: String, CodingKey {
+    // Internal visibility so PinMeta.decode(pinType:from:) can reference this type.
+    // The alternative — inlining all meta-decode logic inside init(from:) — is
+    // equally valid but less readable given 10 cases. See also: W7 ParkedCar
+    // precedent of using CodingKeys for forward-compatibility.
+    enum CodingKeys: String, CodingKey {
         case id
         case pinType        = "pin_type"
         case source

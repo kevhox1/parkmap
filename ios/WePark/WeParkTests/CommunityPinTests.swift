@@ -144,6 +144,10 @@ private func pinFixture(
 
 // MARK: - CommunityPinDecodeTests
 
+/// @MainActor required: the project uses -default-isolation MainActor, so CommunityPin's
+/// Codable conformance is main actor-isolated. Tests that call JSONDecoder.decode(_:from:)
+/// with CommunityPin must run on the main actor to satisfy the isolation requirement.
+@MainActor
 final class CommunityPinDecodeTests: XCTestCase {
 
     private let decoder = makeDecoder()
@@ -327,6 +331,8 @@ final class CommunityPinDecodeTests: XCTestCase {
 
 // MARK: - EnforcementActive sub_tag variant tests (AC-I2, AC-I3)
 
+/// @MainActor required: same isolation reason as CommunityPinDecodeTests above.
+@MainActor
 final class EnforcementSubTagTests: XCTestCase {
 
     private let decoder = makeDecoder()
@@ -396,6 +402,8 @@ final class EnforcementSubTagTests: XCTestCase {
 
 // MARK: - expiresAt / resolvedAt tests (AC-I4, AC-I5)
 
+/// @MainActor required: same isolation reason as CommunityPinDecodeTests above.
+@MainActor
 final class CommunityPinTemporalTests: XCTestCase {
 
     private let decoder = makeDecoder()
@@ -484,6 +492,8 @@ final class PinTypeRawValueTests: XCTestCase {
 
 // MARK: - Graceful fallback tests
 
+/// @MainActor required: same isolation reason as CommunityPinDecodeTests above.
+@MainActor
 final class CommunityPinGracefulFallbackTests: XCTestCase {
 
     private let decoder = makeDecoder()
@@ -541,6 +551,8 @@ final class CommunityPinGracefulFallbackTests: XCTestCase {
 
 // MARK: - Meta null handling
 
+/// @MainActor required: same isolation reason as CommunityPinDecodeTests above.
+@MainActor
 final class PinMetaNullTests: XCTestCase {
 
     private let decoder = makeDecoder()
