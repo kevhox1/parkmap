@@ -228,7 +228,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
     /// Access: `buildRequest` is private; tested indirectly by calling
     /// `onRegionChanged` on a service with a mock URLSession that captures the request.
     ///
-    /// Strategy: inject a custom URLSession (via `MockURLProtocol`) and observe the
+    /// Strategy: inject a custom URLSession (via PinMockURLProtocol) and observe the
     /// URLRequest captured during the debounced fetch. Verify that the URL includes
     /// `source=eq.open_data` in its query string.
     func testFetchRequest_includesOpenDataSourceFilter() async throws {
@@ -236,7 +236,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         var capturedURL: URL? = nil
         let expectation = expectation(description: "fetch fires")
 
-        MockURLProtocol.requestHandler = { request in
+        PinMockURLProtocol.requestHandler = { request in
             capturedURL = request.url
             expectation.fulfill()
             // Return an empty JSON array so the decoder doesn't throw.
@@ -249,7 +249,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         }
 
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [PinMockURLProtocol.self]
         let session = URLSession(configuration: config)
 
         let service = CommunityPinService(
@@ -282,7 +282,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         var capturedRequest: URLRequest? = nil
         let expectation = expectation(description: "fetch fires")
 
-        MockURLProtocol.requestHandler = { request in
+        PinMockURLProtocol.requestHandler = { request in
             capturedRequest = request
             expectation.fulfill()
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
@@ -290,7 +290,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         }
 
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [PinMockURLProtocol.self]
         let session = URLSession(configuration: config)
 
         let service = CommunityPinService(
@@ -318,7 +318,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         var capturedRequest: URLRequest? = nil
         let expectation = expectation(description: "fetch fires")
 
-        MockURLProtocol.requestHandler = { request in
+        PinMockURLProtocol.requestHandler = { request in
             capturedRequest = request
             expectation.fulfill()
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
@@ -326,7 +326,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         }
 
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [PinMockURLProtocol.self]
         let session = URLSession(configuration: config)
 
         let service = CommunityPinService(
@@ -356,18 +356,18 @@ final class CommunityPinServiceDebounceTests: XCTestCase {
 
     /// AC-D7: Two calls to onRegionChanged 200ms apart fire only ONE network fetch.
     ///
-    /// Strategy: inject a MockURLProtocol that counts requests. Send two region changes
+    /// Strategy: inject a PinMockURLProtocol that counts requests. Send two region changes
     /// 200ms apart (within the 800ms debounce window). Wait 1.2s total. Assert count == 1.
     func testDebounce_twoRapidCalls_firesOneFetch() async {
         var fetchCount = 0
-        MockURLProtocol.requestHandler = { request in
+        PinMockURLProtocol.requestHandler = { request in
             fetchCount += 1
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                     "[]".data(using: .utf8)!)
         }
 
         let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [MockURLProtocol.self]
+        config.protocolClasses = [PinMockURLProtocol.self]
         let session = URLSession(configuration: config)
 
         let service = CommunityPinService(
@@ -636,11 +636,13 @@ final class CommunityPinServiceInjectionTests: XCTestCase {
     }
 }
 
-// MARK: - MockURLProtocol (URLProtocol for request interception)
+// MARK: - PinMockURLProtocol (URLProtocol for request interception)
 
 /// Thread-safe mock URLProtocol for testing CommunityPinService network requests.
+/// Named PinMockURLProtocol (not MockURLProtocol) to avoid clash with
+/// RouteServiceTests.MockURLProtocol in the same test target.
 /// Pattern matches W8.5a RouteServiceTests (URLProtocol mock).
-final class MockURLProtocol: URLProtocol {
+final class PinMockURLProtocol: URLProtocol {
 
     /// The handler to call when a request arrives. Set before creating the URLSession.
     nonisolated(unsafe) static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
@@ -649,7 +651,7 @@ final class MockURLProtocol: URLProtocol {
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
     override func startLoading() {
-        guard let handler = MockURLProtocol.requestHandler else {
+        guard let handler = PinMockURLProtocol.requestHandler else {
             client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
             return
         }

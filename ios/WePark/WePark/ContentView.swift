@@ -834,13 +834,9 @@ struct ContentView: View {
 
         case .pinDetail(let pin):
             // Community 1.0 / Tier 1: read-only community pin detail sheet.
-            // Shown when user taps a filming or special_event map marker.
-            // No auth required, no reporting UI (TF1 read-only, spec §8).
-            PinDetailSheet(pin: pin, onDismiss: { activeSheet = nil })
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
+            // Extracted into pinDetailSheetContent(_:) to reduce type-checker expression
+            // complexity in sheetContent(_:) — same pattern as PR-1 @ViewBuilder extractions.
+            pinDetailSheetContent(pin)
 
         case .arrivalPrompt(let coord):
             // W8.5d: Arrival prompt — fires once per Drive Mode session when driver reaches
@@ -899,6 +895,22 @@ struct ContentView: View {
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
         }
+    }
+
+    // MARK: - Community 1.0 / Tier 1: Pin detail sheet content
+
+    /// Builds the content for `ActiveSheet.pinDetail`.
+    ///
+    /// Extracted from `sheetContent(_:)` to reduce type-checker expression complexity in
+    /// the switch statement — same `@ViewBuilder` extraction pattern used in W8.5c-polish
+    /// PR-1 for `driveModeOverlayLayer`, `bottomSafeAreaContent`, and `sheetContent` itself.
+    @ViewBuilder
+    private func pinDetailSheetContent(_ pin: CommunityPin) -> some View {
+        PinDetailSheet(pin: pin, onDismiss: { activeSheet = nil })
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
     }
 
     // MARK: - Overlay rebuild
