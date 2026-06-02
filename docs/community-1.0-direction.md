@@ -58,8 +58,11 @@ So cold-start is solved in two layers: the map carries the novice; open-data del
 | **Enforcement active** | Agent on the block now (neutral framing) | 🔴 Crowd-only | Minutes | Decay + "still there?" |
 | **Sweeper passed / coming** | Cleaning truck already came (block's clear) | 🔴 Crowd-only | Mins–hours | Decay + confirm |
 | **Broken meter** | Muni-meter down | 🔴 Crowd-only | Until fixed | Confirm |
+| **Open spot** | A passerby spotted an empty legal spot | 🔴 Crowd-only | **~2–3 min (shortest of all)** | Claim + "still open / taken" |
 
-**Deferred (not in scope):** spot-handoff / "I'm leaving this spot." High legal + abuse risk (cf. MonkeyParking/Sweetch SF cease-and-desist over monetizing public spots; free coordination is safer but heavily gamed). Deliberate later bet, not core.
+**Deferred (not in scope):** spot-**handoff** / "I'm leaving this spot" — an *occupant* transferring the spot they're vacating. High legal + abuse risk (cf. MonkeyParking/Sweetch SF cease-and-desist over monetizing public spots; free coordination is safer but heavily gamed). Deliberate later bet, not core.
+
+> **`open_spot` is distinct from handoff and IS in scope** (Tier 3 experiment — see §5). A *passerby* reporting an empty spot is not an occupant transferring ownership, so it sidesteps the MonkeyParking problem entirely — cleaner legal footing **and** the bigger "WE" play (non-parkers — pedestrians, residents, cyclists — contribute without ever parking, expanding the supply side beyond drivers). It shares handoff's *brutal-staleness* challenge, which makes it the **highest-risk / highest-reward** crowd type.
 
 ### Structural pattern
 
@@ -88,10 +91,11 @@ Each tier introduces **exactly one new hard primitive**, so we never build three
 - New primitive: **reputation + upvote** (needed here, not in Tier 1).
 
 ### Tier 3 — Crowd, ephemeral, high density bar
-*Enforcement active · sweeper passed · broken meter*
+*Enforcement active · sweeper passed · broken meter · open-spot (beachhead experiment)*
 - Only lights up with enough **simultaneous active reporters** → comes alive in the **beachhead neighborhood first**, not citywide.
 - New primitive: **decay + "still there?" confirm.**
 - This is where **patrol mode (W8.5e–i)** lands as the reporting UI.
+- **`open_spot`** is the most density-dependent of all (useful-life ~2–3 min) → **beachhead-only experiment** (SOHO/LES), not citywide. Mandatory mitigations: **brutal decay** + honest *"spotted ~2 min ago"* framing (never "open spot") + a **"heading there" claim** that dims the pin to reduce races + a **reputation reward** for the non-parker contributor (the motivation engine). Requires a new `open_spot` pin type — a Tier-3 schema enum addition + iOS `CommunityPin` enum migration (the merged enum has the other 10 types; this one's deferred until we build Tier 3).
 
 ---
 
@@ -108,6 +112,35 @@ Reporting a uniformed enforcement agent on a public street is **legally protecte
 - **Cleaning-truck use leads** in screenshots + App Store copy — it's the civically-clean half (the city *wants* people to move cars before sweeping) and it launders the whole feature.
 
 Same data, different story. The icon + copy + category design is the lever; pull all three.
+
+---
+
+## 6.1 Reactions — the trust engine, not social flavor
+
+The `votes` table + "Still there?" decay in `supabase/02-pins-schema.sql` **is** the Waze interaction layer. Reframe it: reactions are the **trust / verification engine**, not engagement decoration — crowd pins are only as reliable as the confirm loop behind them.
+
+| Pin kind | Reaction (one tap) | Effect |
+|---|---|---|
+| **Ephemeral** (enforcement, sweeper, broken meter, open-spot) | "Still here" / "Gone" | **Extends or kills the pin's TTL** — the core Waze loop |
+| **Durable** (sign correction, block note) | Upvote / downvote | Feeds **reputation**; surfaces good info, buries bad |
+| **Any** | Comment (`comment_anchor` type) | Threaded discussion on the pin/block |
+
+**Design rule:** one tap, especially in-car — Waze's genius is the single-thumb "still there" at speed. No emoji palette; a **binary confirm + a reputation reward for confirming** is what keeps the loop alive.
+
+---
+
+## 6.2 Display surfaces — where pins appear
+
+Not everything is a top banner. The top banner (the W7 ASP pattern) is for **zone/citywide states** (ASP-today, snow emergency) where *everyone* is affected. **Block-local pins use a layered, relevance-gated model** instead:
+
+| Surface | When | What the user sees |
+|---|---|---|
+| **Map marker** (base layer) | Always, while live | Pin on the block; `sub_tag` icon; **opacity fades as it decays**; confirm-count badge; tap → confirm/clear |
+| **Push** (W6 infra) | Pin near *your parked car* | "Enforcement near your car on [block] — consider moving it" — the killer reminder for the experienced parker |
+| **Drive Mode callout** (bottom-card chip / voice) | Pin on *your route* | "Enforcement active 2 blocks ahead" — the in-car fear→relief moment for the novice |
+| **Top banner** | ❌ reserved | Zone-wide deltas only (ASP-today, snow emergency) — enforcement is too local |
+
+Through-line: the **marker is always-on (cheap); alerts fire only when personally relevant** — near your car (push) or on your route (drive callout). That relevance-gating is what stops it being spammy, and it mirrors the two-segment split (parked-car reminder = experienced user; on-route callout = driver/novice). Formal HIG pass on the decay visual + push copy is a `@designer` task in the Tier 3 cycle.
 
 ---
 
