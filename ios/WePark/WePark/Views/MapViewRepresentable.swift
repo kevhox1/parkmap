@@ -158,6 +158,20 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Nil → destination pin removed.
     let destinationCoordinate: CLLocationCoordinate2D?
 
+    // MARK: Community 1.0 / Tier 1: Community pin annotations
+
+    /// Community pins to render as map markers (filming + special_event only).
+    /// Pushed from ContentView via `.onChange(of: pinService.visiblePins)` — NEVER inside
+    /// `updateUIView` (invariant I-1, spec §5.1).
+    ///
+    /// Default: empty (no markers until the first visible-pins update).
+    var communityPins: [CommunityPin] = []
+
+    /// Fired from the Coordinator when the user taps a `CommunityPinAnnotation`.
+    /// ContentView sets `activeSheet = .pinDetail(pin)` in response.
+    /// Default: nil (no-op).
+    var onCommunityPinTapped: ((CommunityPin) -> Void)? = nil
+
     // MARK: W8.5c: Heading-up rotation
 
     /// Stabilized Drive Mode heading in degrees [0, 360). Non-nil → camera heading set.
@@ -442,6 +456,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             forAnnotationViewWithReuseIdentifier: Coordinator.destinationPinReuseID
         )
 
+        // Community 1.0 / Tier 1: Register community pin annotation view class.
+        mapView.register(
+            PinMarkerAnnotation.self,
+            forAnnotationViewWithReuseIdentifier: PinMarkerAnnotation.reuseIdentifier
+        )
+
         // Set initial camera region.
         mapView.setRegion(region, animated: false)
 
@@ -546,6 +566,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.syncRoutePolyline(activeRoute, on: mapView)
         context.coordinator.syncDestinationPin(destinationCoordinate, on: mapView)
 
+        // Community 1.0 / Tier 1: sync community pin annotations.
+        //
+        // Architectural contract (spec §5.2, invariant I-1):
+        //   - The DECISION to push a new pin array is made in ContentView's
+        //     .onChange(of: pinService.visiblePins) — OUTSIDE updateUIView.
+        //   - updateUIView performs only the MECHANICAL SYNC: diff add/remove vs current
+        //     MKMapView annotation state. No camera mutations, no setRegion, no setCamera.
+        //
+        // This call is safe inside updateUIView because it only calls mapView.addAnnotation /
+        // mapView.removeAnnotation based on a diff — not setCamera, setRegion, or any other
+        // UIKit state that races SwiftUI's mount cycle.
+        context.coordinator.syncCommunityPinAnnotations(communityPins, on: mapView)
+
         // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11).
         // Port of setDrivingMapRotation (index.html:6584–6601) with R-1 dead-band guard.
         // Only update when heading changes > 5 degrees to prevent tight regionDidChange feedback loop.
@@ -608,6 +641,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         private var destinationPinAnnotation: DestinationPinAnnotation? = nil
         /// The coordinate of the currently-rendered destination pin (encoded as a tuple for equality).
         private var renderedDestinationCoord: (Double, Double)? = nil
+
+        // Community 1.0 / Tier 1: community pin annotation state.
+        /// Map from pin UUID → CommunityPinAnnotation for currently-rendered community markers.
+        /// Used to diff add/remove in syncCommunityPinAnnotations.
+        private var communityPinAnnotations: [UUID: CommunityPinAnnotation] = [:]
 
         // W8.5c: Heading-up rotation state.
         /// Last heading value applied to the camera (R-1 dead-band guard).
@@ -788,6 +826,46 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
 
             renderedDestinationCoord = newCoord
+        }
+
+        // MARK: - Community 1.0 / Tier 1: Community pin annotation sync
+
+        /// Diffs the desired `pins` array against the currently-rendered `communityPinAnnotations`
+        /// and calls `mapView.addAnnotation` / `mapView.removeAnnotation` as needed.
+        ///
+        /// Architectural contract (spec §5.2, invariant I-1):
+        ///   - This method is called from `updateUIView` — it may ONLY add/remove annotations.
+        ///   - NO setCamera, NO setRegion, NO UIKit state that races SwiftUI's mount cycle.
+        ///   - The DECISION to call with a new pin array was made in ContentView's
+        ///     `.onChange(of: pinService.visiblePins)` — OUTSIDE updateUIView.
+        ///
+        /// Diff algorithm: O(n+m) using UUID sets.
+        ///   - Pins in `desired` but not in `current` → addAnnotation.
+        ///   - Pins in `current` but not in `desired` → removeAnnotation.
+        ///   - Pins in both → no-op (position/title don't change for open-data pins
+        ///     within a single session; a future PATCH-event path can force-update if needed).
+        func syncCommunityPinAnnotations(_ pins: [CommunityPin], on mapView: MKMapView) {
+            let desiredByID = Dictionary(uniqueKeysWithValues: pins.map { ($0.id, $0) })
+            let currentIDs = Set(communityPinAnnotations.keys)
+            let desiredIDs = Set(desiredByID.keys)
+
+            // Remove pins that are no longer in the desired set.
+            let toRemove = currentIDs.subtracting(desiredIDs)
+            for id in toRemove {
+                if let annotation = communityPinAnnotations[id] {
+                    mapView.removeAnnotation(annotation)
+                    communityPinAnnotations.removeValue(forKey: id)
+                }
+            }
+
+            // Add pins that are new to the desired set.
+            let toAdd = desiredIDs.subtracting(currentIDs)
+            for id in toAdd {
+                guard let pin = desiredByID[id] else { continue }
+                let annotation = CommunityPinAnnotation(pin: pin)
+                communityPinAnnotations[id] = annotation
+                mapView.addAnnotation(annotation)
+            }
         }
 
         // MARK: - W8.5c: Heading-up rotation
@@ -1010,6 +1088,21 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return view
             }
 
+            // Community 1.0 / Tier 1: community pin marker (filming + special_event).
+            // Spec §7.2 — PinMarkerAnnotation, circular SF Symbol marker.
+            if let pinAnnotation = annotation as? CommunityPinAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: PinMarkerAnnotation.reuseIdentifier,
+                    for: pinAnnotation
+                ) as? PinMarkerAnnotation ?? PinMarkerAnnotation(
+                    annotation: pinAnnotation,
+                    reuseIdentifier: PinMarkerAnnotation.reuseIdentifier
+                )
+                view.annotation = pinAnnotation
+                view.configure(for: pinAnnotation.pin)
+                return view
+            }
+
             // Only handle CarPinAnnotation — let the map handle user location etc.
             guard annotation is CarPinAnnotation else { return nil }
 
@@ -1044,6 +1137,25 @@ struct MapViewRepresentable: UIViewRepresentable {
             view.canShowCallout = false
 
             return view
+        }
+
+        // MARK: - MKMapViewDelegate: annotation callout tap (Community 1.0 / Tier 1)
+
+        /// Fires when the user taps the right-side disclosure button in a community pin callout.
+        ///
+        /// Spec §7.4: tapping a `CommunityPinAnnotation` sets `activeSheet = .pinDetail(pin)`.
+        /// The `DispatchQueue.main.async` wrapper follows the W5.1 UIKit→SwiftUI callback
+        /// pattern (prevents "Modifying state during view update" warnings when SwiftUI is
+        /// in the middle of a render cycle).
+        func mapView(
+            _ mapView: MKMapView,
+            annotationView view: MKAnnotationView,
+            calloutAccessoryControlTapped control: UIControl
+        ) {
+            guard let pinAnnotation = view.annotation as? CommunityPinAnnotation else { return }
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onCommunityPinTapped?(pinAnnotation.pin)
+            }
         }
 
         // MARK: - MKMapViewDelegate: renderer

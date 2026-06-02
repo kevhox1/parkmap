@@ -18,5 +18,17 @@
 	-->
 	<key>MAPBOX_ACCESS_TOKEN</key>
 	<string>$(MAPBOX_ACCESS_TOKEN)</string>
+	<!--
+	  Community 1.0 / Tier 1 Pin Display — Supabase keys.
+	  Substituted at build time from Config.xcconfig (gitignored).
+	  See Config.xcconfig.example for SUPABASE_URL and SUPABASE_ANON_KEY setup.
+	  Read at runtime via:
+	    Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String
+	    Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String
+	-->
+	<key>SUPABASE_URL</key>
+	<string>$(SUPABASE_URL)</string>
+	<key>SUPABASE_ANON_KEY</key>
+	<string>$(SUPABASE_ANON_KEY)</string>
 </dict>
 </plist>

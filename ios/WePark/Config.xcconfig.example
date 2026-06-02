@@ -17,3 +17,18 @@
 //
 
 MAPBOX_ACCESS_TOKEN = REPLACE_WITH_YOUR_MAPBOX_TOKEN
+
+// Supabase configuration — added in Community 1.0 Tier 1 Pin Display (ios/tier1-pin-display).
+//
+// Where to find these values:
+//   Supabase dashboard → Project Settings → API
+//   - Project URL: https://<your-project-ref>.supabase.co
+//   - anon / public key: a "eyJ..." JWT (public key safe to bundle; never commit it to git).
+//
+// How this flows into the app:
+//   Info.plist contains keys SUPABASE_URL and SUPABASE_ANON_KEY with values
+//   $(SUPABASE_URL) and $(SUPABASE_ANON_KEY).
+//   At runtime: Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String
+//
+SUPABASE_URL = https://REPLACE_WITH_YOUR_SUPABASE_PROJECT.supabase.co
+SUPABASE_ANON_KEY = REPLACE_WITH_YOUR_SUPABASE_ANON_KEY

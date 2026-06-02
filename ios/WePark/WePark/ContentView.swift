@@ -129,6 +129,9 @@ enum ActiveSheet: Identifiable {
     /// Payload: user's GPS coordinate at the moment of arrival detection (NOT the destination).
     /// On "Park Here" confirm → drops W5 pin at this coordinate → W7.5 Park Until fires naturally.
     case arrivalPrompt(coord: CLLocationCoordinate2D)
+    /// Community 1.0 / Tier 1: read-only detail sheet for a community pin (filming / special_event).
+    /// Presented when the user taps a `CommunityPinAnnotation` on the map.
+    case pinDetail(CommunityPin)
 
     var id: String {
         switch self {
@@ -139,6 +142,7 @@ enum ActiveSheet: Identifiable {
         case .settings:                   return "settings"
         case .parkUntil:                  return "parkUntil"
         case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
+        case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
         }
     }
 }
@@ -325,6 +329,29 @@ struct ContentView: View {
     /// so a subsequent `.onChange` can retry when GPS recovers.
     @State private var arrivalPromptFired: Bool = false
 
+    // MARK: - Community 1.0 / Tier 1: Community pin service + map state
+
+    /// Read-only community pin service. Fetches filming / asp_suspended_today / special_event
+    /// pins from Supabase. Initialised with Config.xcconfig values at runtime.
+    ///
+    /// When `SUPABASE_URL` or `SUPABASE_ANON_KEY` are missing from Info.plist
+    /// (pre-prod-apply builds), the service starts with empty state and no network calls
+    /// are attempted — the fixture injection path (`pinService.inject(fixtures:)`) is
+    /// used for the sim smoke gate instead.
+    @State private var pinService: CommunityPinService = {
+        let url = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String ?? ""
+        let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String ?? ""
+        let resolvedURL = URL(string: url) ?? URL(string: "https://placeholder.supabase.co")!
+        return CommunityPinService(supabaseURL: resolvedURL, supabaseAnonKey: key)
+    }()
+
+    /// Map-marker-only subset of visible community pins (filming + special_event).
+    /// `asp_suspended_today` is NOT included here — it drives the ASP banner supplement (spec §4).
+    ///
+    /// Updated via `.onChange(of: pinService.visiblePins)` — NEVER inside `updateUIView`
+    /// (invariant I-1 from HANDOFF.md Changelog 2026-05-26 / spec §5.2).
+    @State private var communityPins: [CommunityPin] = []
+
     // MARK: - Bundle version strings (passed into SettingsView)
 
     private let appVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
@@ -377,6 +404,9 @@ struct ContentView: View {
                     onRegionChanged: { newRegion in
                         region = newRegion
                         tileLoader.loadTiles(forRegion: newRegion)
+                        // Community 1.0 / Tier 1: debounced bounding-box fetch for community pins.
+                        // The debounce (800ms) lives inside CommunityPinService.onRegionChanged.
+                        pinService.onRegionChanged(newRegion)
                     },
                     onCarPinTapped: {
                         openParkedCarDetail()
@@ -393,7 +423,11 @@ struct ContentView: View {
                             driveFollowEnabled = false
                         }
                     },
-                    coordinatorActions: coordinatorActions
+                    coordinatorActions: coordinatorActions,
+                    communityPins: communityPins,
+                    onCommunityPinTapped: { pin in
+                        activeSheet = .pinDetail(pin)
+                    }
                 )
                 // Map fills the full screen including safe area.
                 .ignoresSafeArea()
@@ -526,6 +560,35 @@ struct ContentView: View {
         // and fires the one-shot arrival prompt.
         .onChange(of: driveModeDistanceMeters) { _, distance in
             handleFinalApproachUpdate(distance)
+        }
+        // Community 1.0 / Tier 1: update map markers when visible pins change.
+        //
+        // Architecture invariant I-1 (spec §5.1 / HANDOFF.md): ALL annotation mutations
+        // live here in .onChange, NEVER inside updateUIView. updateUIView runs synchronously
+        // during SwiftUI's view-update cycle; mutating UIKit state there races the SwiftUI
+        // mount and can drop the entire .safeAreaInset overlay chain (the #31 regression).
+        //
+        // This handler:
+        //   1. Filters to map-marker types (filming + special_event only — AC-D8).
+        //      asp_suspended_today is NOT a map marker (spec §3 + §4.3).
+        //   2. Updates communityPins @State → triggers MapViewRepresentable.updateUIView
+        //      → syncCommunityPinAnnotations, which diffs add/remove against current MKMapView state.
+        //   3. Re-evaluates bannerState with the ASP supplement helper (spec §4.2).
+        .onChange(of: pinService.visiblePins) { _, newPins in
+            // Map markers: filming + special_event only (AC-D8).
+            communityPins = newPins.filter { [.filming, .specialEvent].contains($0.pinType) }
+
+            // ASP banner supplement (spec §4.2 / AC-D9a through AC-D9d).
+            // resolvedBannerState() returns .todaySuspended if a live Supabase pin
+            // overrides the bundle state, otherwise returns the bundle state unchanged.
+            let bundleState = aspService.suspensionState(at: .nowET)
+            bannerState = resolvedBannerState(bundleState: bundleState, aspPins: newPins)
+        }
+        // Community 1.0 / Tier 1: inform pinService when Drive Mode changes.
+        // The service uses this to apply the re-fetch guard (spec §6.3):
+        // skip re-fetch if Drive Mode active AND map center moved < 200m.
+        .onChange(of: driveModeActive) { _, active in
+            pinService.setDriveModeActive(active)
         }
         // W6: First pin ever → show rationale sheet (once per install).
         // Guard: belt-and-suspenders check on the UserDefaults flag in case
@@ -768,6 +831,16 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+
+        case .pinDetail(let pin):
+            // Community 1.0 / Tier 1: read-only community pin detail sheet.
+            // Shown when user taps a filming or special_event map marker.
+            // No auth required, no reporting UI (TF1 read-only, spec §8).
+            PinDetailSheet(pin: pin, onDismiss: { activeSheet = nil })
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(20)
 
         case .arrivalPrompt(let coord):
             // W8.5d: Arrival prompt — fires once per Drive Mode session when driver reaches
@@ -1400,6 +1473,9 @@ struct ContentView: View {
         // W7: Initialize banner state.
         bannerState = aspService.suspensionState(at: .nowET)
 
+        // Community 1.0 / Tier 1: wire Realtime subscription stub (no-op until prod schema live).
+        pinService.startRealtime()
+
         tileLoader.loadTiles(forRegion: region)
         lastEvaluatedAt = .now
         rebuildOverlays(at: lastEvaluatedAt)
@@ -1738,6 +1814,67 @@ struct ContentView: View {
         return 2 * R * asin(sqrt(h))
     }
 
+}
+
+// MARK: - Community 1.0 / Tier 1: ASP banner supplement (spec §4.2)
+
+/// Merges the live Supabase `asp_suspended_today` pin signal with the bundle-backed
+/// `SuspensionBannerState` from `ASPSuspensionService`.
+///
+/// Priority rules (spec §4.2, OQ-1 option b):
+///   - Bundle state is primary (offline-capable, already QA'd through W7).
+///   - A live Supabase pin overrides ONLY in the "suspended" direction:
+///       - Pin says suspended + bundle says NOT suspended → trust the pin.
+///       - Pin says suspended + bundle says suspended → bundle wins (same info).
+///       - Pin absent → bundle state unchanged (W7 behavior preserved, AC-D9c).
+///       - Expired pin → does NOT override bundle (AC-D9d).
+///
+/// - Parameter bundleState: The state from `ASPSuspensionService.suspensionState(at:)`.
+/// - Parameter aspPins: All visible community pins (the function filters to aspSuspendedToday type).
+/// - Returns: The resolved banner state for display.
+///
+/// This function does NOT modify `ASPSuspensionService`'s public API (spec §4.3).
+///
+/// Extracted as `internal` so `CommunityPinServiceTests` can unit-test it directly (AC-D9a–D9d).
+func resolvedBannerState(
+    bundleState: SuspensionBannerState,
+    aspPins: [CommunityPin]
+) -> SuspensionBannerState {
+    // Already suspended per bundle — bundle wins (no regression from W7 behavior).
+    if case .todaySuspended = bundleState {
+        return bundleState
+    }
+
+    // Look for a live, non-expired asp_suspended_today pin for today (ET).
+    let todayStr = Date.nowET.toETDateString()
+    let now = Date()
+    let liveSuspension = aspPins.first { pin in
+        guard pin.pinType == .aspSuspendedToday else { return false }
+        // Must not be resolved.
+        guard pin.resolvedAt == nil else { return false }
+        // Must not be expired.
+        if let expiresAt = pin.expiresAt, expiresAt <= now { return false }
+        // Must be for today (ET).
+        if let meta = pin.meta, case .aspSuspendedToday(let m) = meta {
+            return m.suspensionDate == todayStr
+        }
+        // Pin has no meta (unusual) — still treat as a suspension signal.
+        return false
+    }
+
+    // If a live pin exists AND bundle says ASP is in effect → pin overrides to suspended.
+    if let pin = liveSuspension, case .aspInEffect = bundleState {
+        let reason: String
+        if let meta = pin.meta, case .aspSuspendedToday(let m) = meta {
+            reason = m.reason ?? "NYC Emergency Suspension"
+        } else {
+            reason = "NYC Emergency Suspension"
+        }
+        return .todaySuspended(reason: reason)
+    }
+
+    // No live pin or bundle handles it → return bundle state unchanged.
+    return bundleState
 }
 
 // MARK: - Banner Padding
