@@ -61,7 +61,7 @@
 //   29.  testRawValue_source_allCases
 //   30.  testRawValue_lifespan_allCases
 //
-//  Baseline: 243/0. After Community 1.0 model layer: 243 + 30 = 273/0 (target).
+//  Baseline: 243/0. After Community 1.0 model layer: 243 + 37 = 280/0 (total).
 //
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens.
@@ -513,18 +513,25 @@ final class CommunityPinGracefulFallbackTests: XCTestCase {
     }
 
     /// CommunityPin.gracefulDecode returns nil for unknown pin_type (soft-failure path).
+    ///
+    /// Uses a `Decodable` trampoline to obtain a live `Swift.Decoder` instance and pass it
+    /// directly to `CommunityPin.gracefulDecode(from:)`, exercising the actual production
+    /// method rather than reimplementing its try/catch inline.
     func testGracefulDecode_unknownPinType_returnsNil() throws {
         let json = pinFixture(pinType: "unknown_future_type", metaJSON: "null")
-        // Wrap in an array decoder to get a standalone decoder for gracefulDecode.
-        // We use a manual approach: try decoding CommunityPin normally and catch.
-        var decoded: CommunityPin? = nil
-        do {
-            decoded = try decoder.decode(CommunityPin.self, from: Data(json.utf8))
-        } catch {
-            decoded = nil
+
+        // Trampoline: Decodable wrapper whose init receives a Decoder and forwards it
+        // to the real CommunityPin.gracefulDecode(from:) static method.
+        struct GracefulDecodeTrampoline: Decodable {
+            let result: CommunityPin?
+            init(from decoder: Decoder) throws {
+                result = CommunityPin.gracefulDecode(from: decoder)
+            }
         }
-        XCTAssertNil(decoded,
-            "gracefulDecode must return nil for unknown pin_type, not crash")
+
+        let trampoline = try decoder.decode(GracefulDecodeTrampoline.self, from: Data(json.utf8))
+        XCTAssertNil(trampoline.result,
+            "CommunityPin.gracefulDecode(from:) must return nil for unknown pin_type, not crash")
     }
 
     /// Malformed JSON (missing required 'id' field) must throw.
