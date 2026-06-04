@@ -341,14 +341,6 @@ struct ContentView: View {
     /// The gate itself is evaluated via BackgroundNoteGate; this bool drives the .alert.
     @State private var showDriveModeBackgroundNote: Bool = false
 
-    // MARK: - Combined drive-entry menu state (Kevin design decision 2026-06-04)
-
-    /// True when the combined Drive/Cruise entry button has been tapped and the
-    /// in-place picker ("Drive to…" / "Find Parking") is expanded.
-    /// Collapsed by: tapping either option, tapping elsewhere (via background tap gesture),
-    /// or Drive Mode becoming active (menu is consumed on activation).
-    @State private var driveMenuExpanded: Bool = false
-
     // MARK: - CM-3: Drive Mode style (destination / cruise / inactive)
 
     /// Explicit mode discriminant for Drive Mode variants.
@@ -997,10 +989,10 @@ struct ContentView: View {
     /// two-option picker ("Drive to…" / "Find Parking"). Tapping an option collapses the
     /// picker and activates the selected mode. Tapping elsewhere collapses with no action.
     ///
-    /// Invariant compliance: menu state (driveMenuExpanded) is SwiftUI @State; no camera
+    /// Invariant compliance: the drive entry uses a native SwiftUI Menu; no camera
     /// mutation happens here. Both entry paths continue to activate via their existing mechanisms:
-    ///   - "Drive to…"    → showDriveModeDestination = true → DriveModeDestinationView.onRouteReady
-    ///   - "Find Parking" → enterCruiseMode() → driveModeActive = true → handleDriveModeAndCamera
+    ///   - "Drive to a destination" → showDriveModeDestination = true → DriveModeDestinationView.onRouteReady
+    ///   - "Find Parking nearby"    → enterCruiseMode() → driveModeActive = true → handleDriveModeAndCamera
     @ViewBuilder
     private var recenterButtonStack: some View {
         VStack(spacing: 8) {
@@ -1046,13 +1038,13 @@ struct ContentView: View {
             .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
             .accessibilityHint("Shows only blocks where you can park until a chosen time.")
 
-            // Button 4: Combined Drive/Cruise entry (Kevin design decision 2026-06-04).
+            // Button 4: Combined Drive/Cruise entry — native SwiftUI Menu.
             //
-            // Resting state: single icon button (arrow.triangle.turn.up.right.diamond.fill).
-            // On tap: expands in place into a two-option labeled capsule picker.
-            //   - "Drive to…"    → opens DriveModeDestinationView
-            //   - "Find Parking" → enters Cruise Mode via enterCruiseMode()
-            // Tapping elsewhere collapses the picker with no action.
+            // Menu label: single icon button (arrow.triangle.turn.up.right.diamond.fill).
+            // Menu items:
+            //   - "Drive to a destination" → opens DriveModeDestinationView
+            //   - "Find Parking nearby"    → enters Cruise Mode via enterCruiseMode()
+            // The system dropdown dismisses on outside tap automatically.
             //
             // Guard: hidden while Drive Mode is active (both entry paths are unavailable
             // when already driving). Active-state styling preserved from W8.5b.
@@ -1074,84 +1066,38 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Combined drive-entry button (expanded / collapsed)
+    // MARK: - Combined drive-entry button (native Menu)
 
-    /// The combined Drive/Cruise entry button, extracted for type-checker budget.
+    /// The combined Drive/Cruise entry button as a native SwiftUI Menu.
     ///
-    /// Collapsed state: single icon button with resting icon + accessibility label.
-    /// Expanded state: the icon button plus a compact HStack of two labeled capsule options
-    ///   ("Drive to…" / "Find Parking") laid out below the icon — all within the
-    ///   recenterButtonStack VStack so they occupy the right-edge toolbar column.
+    /// Extracted into its own @ViewBuilder property to avoid hitting the Swift compiler's
+    /// type-check complexity limit for large SwiftUI view bodies.
     ///
-    /// Implementation note: the expanded picker is rendered as additional items appended
-    /// BELOW the resting button inside a VStack so it stays in the same toolbar column and
-    /// does not overlap the map content to the left (only pushes down in the right column).
+    /// The Menu label matches the resting toolbar button style (regularMaterial pill,
+    /// accentColor icon). The system presents a native dropdown on tap — labels never
+    /// truncate, dismiss on outside tap is automatic, and accessibility is free.
     @ViewBuilder
     private var driveEntryButton: some View {
-        VStack(spacing: 8) {
-            // Resting / collapsed icon button — tap toggles expansion.
+        Menu {
             Button {
-                guard activeSheet == nil else { return }
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    driveMenuExpanded.toggle()
-                }
+                showDriveModeDestination = true
             } label: {
-                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 44, height: 44)
-                    .background(
-                        driveMenuExpanded
-                            ? AnyShapeStyle(.tint)
-                            : AnyShapeStyle(.regularMaterial),
-                        in: RoundedRectangle(cornerRadius: 10)
-                    )
-                    .foregroundStyle(driveMenuExpanded ? Color.white : Color.accentColor)
+                Label("Drive to a destination", systemImage: "arrow.triangle.turn.up.right.diamond")
             }
-            .accessibilityLabel("Start Drive Mode")
-            .accessibilityHint("Double-tap to choose destination navigation or find parking nearby.")
 
-            // Expanded picker — two labeled capsule options.
-            // Appears/disappears with animation; collapses on option tap or outside tap.
-            if driveMenuExpanded {
-                // "Drive to…" option.
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        driveMenuExpanded = false
-                    }
-                    // Small delay lets the collapse animation start before presenting the cover,
-                    // avoiding a simultaneous layout + presentation transition.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-                        showDriveModeDestination = true
-                    }
-                } label: {
-                    Label("Drive to\u{2026}", systemImage: "arrow.triangle.turn.up.right.diamond")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(.regularMaterial, in: Capsule())
-                        .foregroundStyle(Color.primary)
-                }
-                .accessibilityLabel("Drive to a destination")
-                .accessibilityHint("Opens the destination search to start navigated Drive Mode.")
-
-                // "Find Parking" option.
-                Button {
-                    withAnimation(.easeInOut(duration: 0.18)) {
-                        driveMenuExpanded = false
-                    }
-                    enterCruiseMode()
-                } label: {
-                    Label("Find Parking", systemImage: "car.front.waves.right.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 10)
-                        .background(.regularMaterial, in: Capsule())
-                        .foregroundStyle(Color.primary)
-                }
-                .accessibilityLabel("Find Parking nearby")
-                .accessibilityHint("Activates Drive Mode without a destination. The map follows your heading and announces free parking nearby.")
+            Button {
+                enterCruiseMode()
+            } label: {
+                Label("Find Parking nearby", systemImage: "car.front.waves.right.fill")
             }
+        } label: {
+            Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(Color.accentColor)
         }
+        .accessibilityLabel("Start Drive Mode")
     }
 
     // MARK: - W8.5b/c: Drive Mode overlay layer
@@ -1704,15 +1650,6 @@ struct ContentView: View {
     // MARK: - Tap handling (unchanged from W4 — only gesture source changed)
 
     private func handleMapTap(at coordinate: CLLocationCoordinate2D) {
-        // Collapse the drive-entry picker on any map tap (spec: "tapping elsewhere collapses
-        // with no action"). This fires before segment matching so the tap is still processed
-        // normally — the picker collapse is a side-effect, not a gate.
-        if driveMenuExpanded {
-            withAnimation(.easeInOut(duration: 0.18)) {
-                driveMenuExpanded = false
-            }
-        }
-
         guard !tileLoader.segments.isEmpty else {
             dismissBlockDetail()
             return
@@ -1743,11 +1680,6 @@ struct ContentView: View {
     // MARK: - W5: Long-press handling
 
     private func handleLongPress(at coordinate: CLLocationCoordinate2D) {
-        // Collapse the drive-entry picker on any long-press (same gesture-collapse rule as map taps).
-        if driveMenuExpanded {
-            driveMenuExpanded = false
-        }
-
         // Clear any current selection and dismiss any open sheet before opening ParkConfirmView.
         selectedSegmentID = nil
         activeSheet = nil
