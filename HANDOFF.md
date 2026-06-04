@@ -182,6 +182,21 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-04 — Tier 1 goes LIVE in production + verified end-to-end (markers render from real Supabase data)
+
+**Milestone: the community layer is on the map.** Kevin applied the schema to production Supabase (project `jiispshyqerscdoferaw`) via the SQL editor — `02-pins-schema.sql` + `02b-pins-ingest-indexes.sql`, both "Success." Then 2 test pins (filming @ SoHo, special_event @ LES) were inserted. The orchestrator wired `SUPABASE_URL` + the `sb_publishable_` anon key into `ios/WePark/Config.xcconfig` (gitignored), built the app for the iPhone 17 Pro sim, set sim GPS to each pin, and **screenshotted both markers rendering live** — purple `video.fill` filming marker + orange `star.fill` event marker — with the W7 ASP banner + full toolbar intact (NO #31 regression). **This closes AC-D11**, the end-to-end verification nobody had done: config wiring → anon SELECT → JSON decode → `.onChange` marker mount all confirmed working against production.
+
+**Then ASP seeded:** `supabase/02c-asp-seed.sql` pasted/run in the SQL editor → **42 real 2026 ASP-suspension pins** (Jan 1 → Dec 25), idempotent upsert via the `pins_asp_suspension_date_uidx` dedup index. Validates the real-data upsert path the film ingest reuses.
+
+**`@backend-data` built the automated ingest** (`5dcabea`): `supabase/02c-asp-seed.sql` (the seed above), `supabase/functions/ingest-film-permits/index.ts` (Deno Edge Function — Socrata `tg4x-b46p`, geocode fallback, upsert via dedup index, secrets from `Deno.env`), `supabase/02d-ingest-cron.sql` (pg_cron daily + `upsert_filming_pin` RPC fallback + Vault service-role key), and a 6-step deploy runbook at `docs/tier1-open-data-ingest-spec.md §9`. Meta shapes verified against `CommunityPin.swift` — no decode mismatch.
+
+**xcconfig gotcha recorded:** `Config.xcconfig` reads `//` as a comment, which truncates `https://` URLs. Fixed with the empty-expansion escape: `SUPABASE_URL = https:/$()/jiispshyqerscdoferaw.supabase.co`. (Needed for any future iOS build/CI that wires Supabase.)
+
+**Still open (Kevin's manual steps — no supabase CLI in this env):**
+1. **Deploy the film-permit Edge Function** — needs `supabase` CLI installed (`brew install supabase/tap/supabase`) OR the dashboard Edge Functions UI, then the §9 runbook (deploy, set secrets, invoke once for backfill, apply `02d` cron). This is the only thing between here and *auto-flowing* real filming pins.
+2. **Two test pins** (filming/special_event) left in prod — auto-expire in ~1-2 days; harmless, and currently the only map-visible markers until the film ingest runs.
+3. **Two-tap detail sheet** (PR #37 QA nit #3) → `@designer` call in the pre-TestFlight pass.
+
 ### 2026-06-02 (later) — Community 1.0 Tier 1 display ships + product model locked (reactions, display surfaces, identity, open_spot)
 
 **What landed on `main`:** **PR #37** (`9219c2e`) — Tier 1 read-only pin display. `Services/CommunityPinService.swift` (`@Observable`, 800ms-debounced PostgREST bounding-box fetch + Realtime stub, reads `SUPABASE_URL`/`SUPABASE_ANON_KEY` from config, fixture-driven for now), `Views/PinMarkerAnnotation.swift` (filming = purple `video.fill`, special_event = orange `star.fill`), `Views/PinDetailSheet.swift` (read-only). `asp_suspended_today` does NOT render as a marker — it **supplements the W7 ASP banner additively** (bundle calendar primary; a live pin can flip not-suspended→suspended for snow emergencies, never the reverse; `ASPSuspensionService` API untouched). Touched the two #31-class files (`ContentView.swift` body refactor + merged `.onChange(of: driveModeActive)`; `MapViewRepresentable.swift` annotation sync) — **QA confirmed no #31 regression** (toolbar + banner intact in smoke screenshot) and `RegionSyncGuardTests` still pass. **Tests 280 → 300/0.** QA: PASS-WITH-NITS (`docs/qa/community-1.0-ios-pr37-qa.md`).
