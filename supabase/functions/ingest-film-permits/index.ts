@@ -152,7 +152,11 @@ async function fetchPermitPage(
 ): Promise<SocrataPermit[]> {
   // Filter server-side: only future permits with parking held, ordered by eventid.
   // enddatetime >= now avoids pulling thousands of expired rows on each daily run.
-  const nowIso = now.toISOString();
+  // Socrata `enddatetime` is a floating timestamp (no timezone), formatted like
+  // `2026-03-05T01:00:00.000`. A comparison literal with a trailing `Z` (as
+  // toISOString() produces) triggers a SoQL type-mismatch 400. Strip to seconds:
+  // `YYYY-MM-DDTHH:MM:SS`.
+  const nowIso = now.toISOString().slice(0, 19);
   const params = new URLSearchParams({
     $limit: String(PAGE_SIZE),
     $offset: String(offset),
