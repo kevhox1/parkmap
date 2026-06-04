@@ -17,6 +17,10 @@
 create extension if not exists pg_cron;
 create extension if not exists pg_net;
 
+-- The cron helper lives in a private `internal` schema (not exposed via PostgREST).
+-- Must exist before internal.invoke_film_permit_ingest() is created below.
+create schema if not exists internal;
+
 -- ---------------------------------------------------------------------------
 -- RPC: upsert_filming_pin
 -- Used as a fallback by the Edge Function when PostgREST's index-name upsert
