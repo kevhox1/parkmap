@@ -217,6 +217,16 @@ The existing "End Drive" pill exits Cruise Mode identically to how it exits Dest
 
 The existing destination-mode spec (AC-DM.5) already contemplates no-destination operation: "User can skip destination input. Drive Mode functions (parking commentary, GPS follow, voice) without a destination." This was spec'd as a fallback, not a first-class entry. Cruise Mode promotes it to a first-class button. The distinction matters because AC-DM.5's no-destination path still goes through `DriveModeDestinationView`'s "Start without a destination" affordance (if it exists) or the implicit "just tap Start with nothing typed" behavior. Cruise Mode does not open `DriveModeDestinationView` at all — it is a direct entry. This is a UX improvement, not a spec contradiction.
 
+### 5.4 In-mode audio mute toggle (added per Kevin 2026-06-05)
+
+A driver who just wants the visual should be able to silence the callouts without leaving the mode. Cruise Mode shows a **speaker toggle button** in the active overlay (toolbar cluster, near the End Cruise pill — final placement is the `@designer` note).
+
+- **Icon:** `speaker.wave.2.fill` (audio on) ↔ `speaker.slash.fill` (muted). One tap flips it.
+- **Default: ON (unmuted).** First-time drivers hear the value prop; muting is opt-out.
+- **Persisted** across sessions via a single shared `UserDefaults` key `driveVoiceMuted` (Bool, default `false`) — shared so the mute state carries across BOTH Cruise and Destination Mode sessions, consistent with **AC-CM.11**. The choice is remembered next time they drive.
+- **Gating:** the mute is checked in the voice announcement path before speaking. Cleanest seam: `CruiseVoicePolicy.shouldAnnounce(...)` stays a pure function of parking context ONLY (do NOT thread mute state into it — keep it testable); the *caller* (the `setCruiseMode` announcement path in §4.3, and the equivalent destination-mode announcement path) short-circuits on the `driveVoiceMuted` flag before speaking. Toggling mute also stops any in-flight utterance (`DrivingVoice` cancel). Muting silences voice only — the map, overlays, and visual parking info keep updating.
+- **Toggle button surfaced in Cruise Mode now.** The shared flag also gates destination-mode voice (so AC-CM.11's "persists across both" holds), but the visible toggle button ships in the Cruise overlay this PR; adding the same button to the destination-mode overlay (if wanted) is a trivial fast-follow since the flag + gating already exist. Independent of the W7 global notification mute, which gates ASP push notifications — a different surface.
+
 ---
 
 ## §6 — Architecture and Files
