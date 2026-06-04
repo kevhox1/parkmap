@@ -308,6 +308,78 @@ Realtime: Subscribe to the `pins` table filtered by `zone_id` for zone-specific 
 
 ---
 
+## 9. Deployment (Kevin's Manual Steps)
+
+All SQL and Edge Function code is in the repo. None of these steps run automatically — Kevin applies them in order.
+
+### Step 1 — Apply 02c ASP seed (immediate, no Edge Function needed)
+
+1. Open the Supabase SQL Editor for project `jiispshyqerscdoferaw`.
+2. Paste the entire contents of `supabase/02c-asp-seed.sql` and run.
+3. Verify: `select count(*) from public.pins where pin_type = 'asp_suspended_today';` should return 42.
+4. Spot-check one row: `select meta, expires_at from public.pins where pin_type = 'asp_suspended_today' and meta->>'suspension_date' = '2026-06-19';` — confirm `reason` = "Juneteenth" and `expires_at` is `2026-06-19 23:59:59-04` (EDT offset).
+5. The script is idempotent. Running it again produces no changes (ON CONFLICT DO UPDATE is a no-op when values match).
+
+### Step 2 — Set Edge Function secrets
+
+Before deploying the function, set the secrets it reads from `Deno.env`:
+
+```bash
+# From your local machine with the Supabase CLI installed and logged in:
+supabase secrets set --project-ref jiispshyqerscdoferaw \
+  NYC_APP_TOKEN=<your-nyc-opendata-app-token>
+```
+
+`SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are injected automatically by the Supabase runtime — do NOT set them manually. `NYC_APP_TOKEN` is optional but recommended for higher Socrata rate limits; register for a free token at https://data.cityofnewyork.us/profile/app_tokens.
+
+### Step 3 — Deploy the Edge Function
+
+```bash
+# From the repo root, with Supabase CLI installed and logged in:
+supabase functions deploy ingest-film-permits \
+  --project-ref jiispshyqerscdoferaw
+```
+
+The function source is at `supabase/functions/ingest-film-permits/index.ts`.
+
+### Step 4 — Invoke once for immediate backfill
+
+After deployment, trigger a manual run to ingest all currently active film permits without waiting for the cron:
+
+```bash
+curl -X POST \
+  https://jiispshyqerscdoferaw.functions.supabase.co/ingest-film-permits \
+  -H "Authorization: Bearer <service-role-key>" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+Expected response shape: `{"inserted":<N>,"updated":<M>,"skipped":<K>,"errors":[],"totalFetched":<T>}`. A non-empty `errors` array means some permits had coordinate problems — check the function logs in the Supabase Dashboard for the logged `eventid` values.
+
+### Step 5 — Store service-role key in Vault (required for Step 6)
+
+The pg_cron job reads the service-role key from Vault at runtime. Store it once:
+
+1. Dashboard → Settings → Vault → New Secret.
+2. Name: `service_role_key`
+3. Value: the service-role JWT (starts with `eyJ...`; find it under Dashboard → Settings → API → Service role key).
+
+### Step 6 — Apply 02d cron schedule + upsert RPC
+
+1. Open the Supabase SQL Editor.
+2. Paste the entire contents of `supabase/02d-ingest-cron.sql` and run.
+3. Verify the cron job registered: `select jobname, schedule, active from cron.job where jobname = 'ingest-film-permits';` should return one row with `active = true`.
+4. The `upsert_filming_pin` RPC is also created by this script — verify: `select proname from pg_proc where proname = 'upsert_filming_pin';`.
+
+### Yearly calendar update (2027)
+
+When NYC publishes the 2027 ASP calendar (typically December 2026):
+
+1. `@backend-data` updates `supabase/02c-asp-seed.sql` with the new dates and re-runs it (idempotent ON CONFLICT handles the upsert).
+2. `@pwa-maintainer` renames `ASP_SUSPENSIONS_2026` → `ASP_SUSPENSIONS_2027` in `index.html` and deploys.
+
+---
+
 ## 8. No Secrets in This Diff
 
 Checklist:
