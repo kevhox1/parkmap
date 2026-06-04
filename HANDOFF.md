@@ -182,6 +182,24 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-04 (later) — Film-permit Edge Function deployed + 2 bugs fixed; cron is the one remaining (dormant) setup step
+
+**Edge Function deployed via dashboard.** Supabase CLI couldn't install via brew (Command Line Tools flagged outdated; brew wanted to compile from source) — worked around by downloading the prebuilt `supabase_darwin_arm64` binary to `~/.local/bin/supabase` (v2.104.0; NOTE: it crashes if cwd contains a file named `supabase`, so run it from a neutral dir). But the CLI's auto-login needs a TTY (sandboxed Bash isn't one), so Kevin deployed `ingest-film-permits` via the **dashboard Edge Functions UI** (Deploy → Via Editor → paste `supabase/functions/ingest-film-permits/index.ts` → Deploy). Invocation tested via the dashboard's Test panel (the `sb_publishable_` key 401s a direct curl because the function has Verify-JWT on and that key isn't a JWT).
+
+**Two bugs found + fixed live:**
+1. **Socrata 400** (`edf6f8f`) — `enddatetime` is a floating timestamp; `toISOString()`'s trailing `Z` caused a SoQL type-mismatch. Fixed: `now.toISOString().slice(0,19)`. Verified the corrected query returns HTTP 200 against the live dataset.
+2. **Missing `internal` schema** (`316be8b`) — `02d-ingest-cron.sql` created `internal.invoke_film_permit_ingest()` but never declared the schema; the paste would've failed. Added `create schema if not exists internal;`.
+
+**Data-freshness reality:** the NYC film-permit dataset (`tg4x-b46p`) currently tops out at `enddatetime = 2026-03-20` (17,334 rows, none beyond), which is BEFORE the app's current date (2026-06-04). So a backfill ingests **0** permits right now — not a bug; the upstream data simply hasn't reached the current window. The pipeline is proven (deploy + auth + query all correct); real filming pins will flow once NYC's published permits overlap "now". **Kevin must re-deploy the Z-fixed function** (re-paste the corrected `index.ts`) so the live function + cron are correct — the version first deployed still has the `Z` bug.
+
+**Cron is the ONE remaining setup step — DORMANT, deferred (not blocking anything visible).** To finish it next session (clean ~5 min):
+1. Get the **legacy `service_role` JWT** (`eyJ…`) — Project Settings → **API Keys** page (`/settings/api-keys`), under a **Legacy API keys** section. (The new `sb_secret_` keys are NOT JWTs and won't satisfy the function's Verify-JWT; the cron needs the `eyJ…` one. If legacy keys are disabled, alternative is to turn OFF Verify-JWT on the function.)
+2. Store it in **Vault** (Integrations → Vault → Secrets → Add new secret) as name `service_role_key`. (Vault is BETA in this project; the "add secret" affordance was hard to find — may need the Vault product enabled first.)
+3. Run `supabase/02d-ingest-cron.sql` (already fixed + idempotent) in the SQL editor → creates `pg_cron`/`pg_net`, the `internal` schema + helper, `public.upsert_filming_pin`, and schedules `ingest-film-permits` daily at 09:00 UTC.
+4. Verify: `select jobname, schedule, active from cron.job where jobname='ingest-film-permits';` → 1 row.
+
+**iOS Supabase wiring (for any future sim build):** `ios/WePark/Config.xcconfig` (gitignored) now has `SUPABASE_URL = https:/$()/jiispshyqerscdoferaw.supabase.co` (the `$()` escapes the `//` so xcconfig doesn't treat it as a comment) + `SUPABASE_ANON_KEY = sb_publishable_…`. The smoke build is at `/tmp/wepark-smoke-build`.
+
 ### 2026-06-04 — Tier 1 goes LIVE in production + verified end-to-end (markers render from real Supabase data)
 
 **Milestone: the community layer is on the map.** Kevin applied the schema to production Supabase (project `jiispshyqerscdoferaw`) via the SQL editor — `02-pins-schema.sql` + `02b-pins-ingest-indexes.sql`, both "Success." Then 2 test pins (filming @ SoHo, special_event @ LES) were inserted. The orchestrator wired `SUPABASE_URL` + the `sb_publishable_` anon key into `ios/WePark/Config.xcconfig` (gitignored), built the app for the iPhone 17 Pro sim, set sim GPS to each pin, and **screenshotted both markers rendering live** — purple `video.fill` filming marker + orange `star.fill` event marker — with the W7 ASP banner + full toolbar intact (NO #31 regression). **This closes AC-D11**, the end-to-end verification nobody had done: config wiring → anon SELECT → JSON decode → `.onChange` marker mount all confirmed working against production.
