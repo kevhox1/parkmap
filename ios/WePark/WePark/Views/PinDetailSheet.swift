@@ -3,24 +3,28 @@
 //  WePark
 //
 //  Tier 1 Pin Display — read-only detail sheet for community pins.
-//  Spec: docs/tier1-pin-display-spec.md §8.
+//  Tier 3 Sub-PR #1 additions: reactions row for ephemeral crowd pins.
+//  Spec: docs/tier1-pin-display-spec.md §8, docs/tier3-auth-and-reactions-spec.md §3.10.
 //
 //  Surfaces:
 //   - filming:      type icon + label, open-data badge, production name,
 //                   expiry, NYC Film Office link (if filmOfficeUrl non-nil).
 //   - special_event: type icon + label, open-data badge, event name, event type, expiry.
+//   - enforcement_active / sweeper_passed (Tier 3 ephemeral crowd pins):
+//       reactions row with "Still there?" (confirm + extend) and "Gone" (dispute) buttons.
 //
-//  Read-only TF1 note:
-//   - No "Report an issue" button (TF2).
-//   - confirm_count fetched but NOT displayed. TODO hook left in comments.
-//   - No auth required to view this sheet.
+//  Reactions row (sub-PR #1):
+//   - Shown only when pin.lifespan == .ephemeral && pin.source == .crowd.
+//   - A1 own-pin guard: buttons disabled when pin.authorId == authService.currentUserId.
+//   - "Still there?" disabled when pin is within 5min of the 2h TTL cap.
+//   - Confirm count badge reads from pin.confirmCount (updated in real time via Realtime).
+//   - Loading state: ProgressView while async calls are in-flight.
 //
 //  Invariants:
-//   - No Calendar.current (AC-D19). All time formatting via Calendar.easternTime or
-//     CommunityPin.formatExpiry helper.
+//   - No Calendar.current (AC-D19, AC-I5). All time arithmetic uses Date() + TimeInterval.
 //   - No force-unwraps.
-//   - CommunityPin.swift is NOT modified (AC-D20). Display logic lives here or in
-//     PinMarkerAnnotation.swift extension.
+//   - CommunityPin.swift is NOT modified (AC-D20, AC-I2). Display logic lives here.
+//   - No setRegion, updateUIView mutation, or headlessWindow guard (AC-I3).
 //
 
 import SwiftUI
@@ -32,6 +36,13 @@ struct PinDetailSheet: View {
     let pin: CommunityPin
     let onDismiss: () -> Void
 
+    /// Auth service for the A1 own-pin guard and write-path identity.
+    /// Passed from ContentView (same shared instance as WeParkApp root).
+    var authService: SupabaseAuthService
+
+    /// Pin service for reaction write calls (upsertVote, callExtendPinExpiry).
+    var pinService: CommunityPinService
+
     var body: some View {
         NavigationStack {
             ScrollView {
@@ -39,9 +50,16 @@ struct PinDetailSheet: View {
                     headerSection
                     Divider()
                     detailSection
-                    // TODO: TF2 — display confirm_count badge
-                    // The confirm_count field is already decoded in CommunityPin.confirmCount.
-                    // Add a "N people confirmed this" badge here in TF2.
+                    // Tier 3 sub-PR #1: reactions row for ephemeral crowd pins.
+                    // Condition: only shown when the pin is a Tier 3 ephemeral crowd pin.
+                    if pin.lifespan == .ephemeral && pin.source == .crowd {
+                        Divider()
+                        ReactionsRow(
+                            pin: pin,
+                            authService: authService,
+                            pinService: pinService
+                        )
+                    }
                 }
                 .padding()
             }
@@ -195,17 +213,23 @@ struct PinDetailSheet: View {
 
     private var iconSymbol: String {
         switch pin.pinType {
-        case .filming:      return "video.fill"
-        case .specialEvent: return "star.fill"
-        default:            return "mappin.fill"
+        case .filming:           return "video.fill"
+        case .specialEvent:      return "star.fill"
+        case .enforcementActive: return "exclamationmark.triangle.fill"
+        case .sweeperPassed:     return "truck.box.fill"
+        case .brokenMeter:       return "parkingsign.circle.fill"
+        default:                 return "mappin.fill"
         }
     }
 
     private var iconColor: Color {
         switch pin.pinType {
-        case .filming:      return .purple
-        case .specialEvent: return .orange
-        default:            return .gray
+        case .filming:           return .purple
+        case .specialEvent:      return .orange
+        case .enforcementActive: return .red
+        case .sweeperPassed:     return Color(red: 0.0, green: 0.55, blue: 0.27)
+        case .brokenMeter:       return .gray
+        default:                 return .gray
         }
     }
 
@@ -215,6 +239,151 @@ struct PinDetailSheet: View {
         case .specialEvent: return "Open Data"
         default:            return pin.source == .openData ? "Open Data" : "Community"
         }
+    }
+}
+
+// MARK: - ReactionsRow
+
+/// Reactions row for Tier 3 ephemeral crowd pins.
+///
+/// Shows "Still there?" (confirm + extend TTL) and "Gone" (dispute) buttons.
+/// Displays the live confirm count from `pin.confirmCount`.
+///
+/// Design (community-1.0-direction.md §6.1):
+///   - One-tap, binary, no confirmation sheet.
+///   - Tap targets are 44pt minimum (HIG).
+///   - A1 guard: buttons disabled when pin.authorId == authService.currentUserId.
+private struct ReactionsRow: View {
+
+    let pin: CommunityPin
+    var authService: SupabaseAuthService
+    var pinService: CommunityPinService
+
+    /// True while a reaction call is in-flight. Replaces the confirm count with a spinner.
+    @State private var isLoading: Bool = false
+
+    /// Last error from a reaction call. Cleared on next successful call.
+    @State private var errorMessage: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            // Section header
+            Text("Community Check")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textCase(.uppercase)
+
+            // Confirm count badge or loading spinner
+            HStack {
+                if isLoading {
+                    ProgressView()
+                        .frame(width: 20, height: 20)
+                } else {
+                    Label(
+                        pin.confirmCount == 1
+                            ? "1 confirm"
+                            : "\(pin.confirmCount) confirms",
+                        systemImage: "checkmark.circle.fill"
+                    )
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            // Reaction buttons
+            HStack(spacing: 12) {
+                // "Still there?" button — confirm + extend TTL.
+                Button {
+                    Task { await handleStillHere() }
+                } label: {
+                    Label("Still there?", systemImage: "checkmark.circle")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .tint(.green)
+                .disabled(isStillHereDisabled)
+                .accessibilityLabel("Still there? Confirm this pin and extend its time")
+
+                // "Gone" button — dispute.
+                Button {
+                    Task { await handleGone() }
+                } label: {
+                    Label("Gone", systemImage: "xmark.circle")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
+                .disabled(isGoneDisabled)
+                .accessibilityLabel("Gone — dispute this pin")
+            }
+
+            // Error display (non-blocking — user can retry).
+            if let error = errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    // MARK: - Button enable logic
+
+    /// True when the user's own pin (A1 own-pin guard, iOS-side, decision A1 per spec OQ-1).
+    private var isOwnPin: Bool {
+        guard let authorId = pin.authorId,
+              let currentId = authService.currentUserId else { return false }
+        return authorId == currentId
+    }
+
+    /// "Still there?" is disabled when:
+    ///   1. It is the user's own pin (A1 guard).
+    ///   2. The pin is within 5 minutes of the 2h TTL cap (expires_at > now + 115 min).
+    ///      No point extending — the cap is close. Uses Date() + TimeInterval (no Calendar.current).
+    ///   3. A reaction call is in-flight.
+    private var isStillHereDisabled: Bool {
+        if isOwnPin || isLoading { return true }
+        if let expiresAt = pin.expiresAt {
+            // 115 minutes = 2h cap - 5min buffer.
+            return expiresAt > Date().addingTimeInterval(115 * 60)
+        }
+        return false
+    }
+
+    /// "Gone" is disabled when it is the user's own pin (A1 guard) or a call is in-flight.
+    private var isGoneDisabled: Bool {
+        isOwnPin || isLoading
+    }
+
+    // MARK: - Action handlers
+
+    /// "Still there?" tap: confirm vote + extend TTL.
+    ///
+    /// AC-V2: both `upsertVote(.confirm)` AND `callExtendPinExpiry` are called.
+    private func handleStillHere() async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            try await pinService.upsertVote(pinId: pin.id, vote: .confirm)
+            try await pinService.callExtendPinExpiry(pinId: pin.id)
+        } catch {
+            errorMessage = "Couldn't confirm — please try again."
+        }
+        isLoading = false
+    }
+
+    /// "Gone" tap: dispute vote only (AC-V3: does NOT call callExtendPinExpiry).
+    private func handleGone() async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            try await pinService.upsertVote(pinId: pin.id, vote: .dispute)
+        } catch {
+            errorMessage = "Couldn't report — please try again."
+        }
+        isLoading = false
     }
 }
 
@@ -271,6 +440,11 @@ private extension SpecialEventMeta.EventType {
     }
 
     let pin = try! decoder.decode(CommunityPin.self, from: fixtureJSON)
-    return PinDetailSheet(pin: pin, onDismiss: {})
-        .presentationDetents([.medium, .large])
+    return PinDetailSheet(
+        pin: pin,
+        onDismiss: {},
+        authService: SupabaseAuthService(),
+        pinService: CommunityPinService()
+    )
+    .presentationDetents([.medium, .large])
 }

@@ -183,6 +183,19 @@ struct ContentView: View {
     /// ParkedCarDetailView when the user taps a delivered notification.
     @ObservedObject var appDelegate: AppDelegate
 
+    // MARK: - Tier 3 sub-PR #1: Anonymous auth identity
+
+    /// Injected from WeParkApp (AC-A5: single instance per app lifetime).
+    ///
+    /// Passed into CommunityPinService for authenticated writes (crowd pin insert, votes).
+    /// Also passed into PinDetailSheet so the reactions row can compare pin.authorId
+    /// against authService.currentUserId for the own-pin guard (A1 decision).
+    ///
+    /// The @State declaration here is fine — @State on a View stored property creates
+    /// a reference-stable box around the existing value; since authService is @Observable,
+    /// SwiftUI observes its published properties automatically without @ObservedObject.
+    var authService: SupabaseAuthService
+
     // MARK: - Environment
 
     @Environment(\.scenePhase) private var scenePhase
@@ -374,13 +387,18 @@ struct ContentView: View {
 
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
-    /// Read-only community pin service. Fetches filming / asp_suspended_today / special_event
-    /// pins from Supabase.
+    /// Community pin service. Fetches filming / asp_suspended_today / special_event pins
+    /// from Supabase (Tier 1 read) and provides the authenticated write path for crowd
+    /// pins + votes (Tier 3 sub-PR #1).
     ///
-    /// Uses the convenience `init()` that reads SUPABASE_URL + SUPABASE_ANON_KEY from
-    /// Bundle.main (bridged from Config.xcconfig via Info.plist) — keeping the @State
-    /// declaration simple to avoid Swift type-checker complexity pressure on the body.
-    @State private var pinService = CommunityPinService()
+    /// Initialized with the shared `authService` so all writes use the same anonymous
+    /// identity (AC-A5). The convenience init reads SUPABASE_URL + SUPABASE_ANON_KEY
+    /// from Bundle.main (Config.xcconfig → Info.plist bridge).
+    ///
+    /// Note: `pinService` cannot be a `@State` with an inline initializer that captures
+    /// `authService` because stored properties can't reference other stored properties in
+    /// their default expressions. The service is initialized in the ContentView init (below).
+    @State private var pinService: CommunityPinService
 
     /// Map-marker-only subset of visible community pins (filming + special_event).
     /// `asp_suspended_today` is NOT included here — it drives the ASP banner supplement (spec §4).
@@ -395,6 +413,25 @@ struct ContentView: View {
 
     private let appVersion: String = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
     private let buildNumber: String = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "?"
+
+    // MARK: - Init
+
+    /// Initializes ContentView with the shared AppDelegate and SupabaseAuthService.
+    ///
+    /// The explicit init is required because `pinService` (a `@State` property) depends on
+    /// `authService`, and Swift stored properties cannot reference sibling stored properties
+    /// in their default expressions. Wrapping `State` manually lets us pass `authService`
+    /// into `CommunityPinService.init(authService:)` at init time.
+    ///
+    /// All other `@State` properties retain their inline default-expression initializers;
+    /// those do not depend on injected values.
+    init(appDelegate: AppDelegate, authService: SupabaseAuthService) {
+        self.appDelegate = appDelegate
+        self.authService = authService
+        // CommunityPinService reads SUPABASE_URL + SUPABASE_ANON_KEY from Bundle.main
+        // and attaches the shared authService for authenticated writes.
+        self._pinService = State(initialValue: CommunityPinService(authService: authService))
+    }
 
     // MARK: - Constants
 
@@ -677,8 +714,13 @@ struct ContentView: View {
     /// PR-1 for `driveModeOverlayLayer`, `bottomSafeAreaContent`, and `sheetContent` itself.
     @ViewBuilder
     private func pinDetailSheetContent(_ pin: CommunityPin) -> some View {
-        PinDetailSheet(pin: pin, onDismiss: { activeSheet = nil })
-            .presentationDetents([.medium, .large])
+        PinDetailSheet(
+            pin: pin,
+            onDismiss: { activeSheet = nil },
+            authService: authService,
+            pinService: pinService
+        )
+        .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
@@ -2070,5 +2112,5 @@ func paddingForBannerState(_ state: SuspensionBannerState) -> CGFloat {
 }
 
 #Preview {
-    ContentView(appDelegate: AppDelegate())
+    ContentView(appDelegate: AppDelegate(), authService: SupabaseAuthService())
 }
