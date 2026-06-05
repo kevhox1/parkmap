@@ -182,6 +182,22 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-05 (later) — Tier 3 sub-PR #1 ships: anonymous-auth + crowd write path + reactions
+
+**What landed:** **PR #39** (`d891763`). The first WRITE path + the reactions trust loop. `Services/SupabaseAuthService.swift` (silent `signInAnonymously()` on launch — no signup wall, per direction §6.3), `CommunityPinService` write methods (`insertCrowdPin` source='crowd'+author_id, `upsertVote` confirm/dispute on (pin_id,user_id), `callExtendPinExpiry` RPC), `PinDetailSheet` `ReactionsRow` (one-tap confirm/dispute + "Still there?", shown only for `lifespan==.ephemeral && source==.crowd`, A1 own-pin guard = iOS-only). Plus `supabase/02e-auto-resolve-trigger.sql` (`@backend-data`: auto-set `resolved_at` when `dispute_count>=3` on ephemeral crowd pins; on main, NOT yet applied to prod). **Tests 316 → 331/0**, RegionSyncGuard intact, #31-clean. QA PASS-WITH-NITS at `docs/qa/tier3-pr39-qa.md`.
+
+**A3 SDK DEFERRED → follow-up.** Kevin approved adopting `supabase-swift`, but adding an SPM package WITHOUT opening Xcode (our pbxproj-autoformat rule) requires hand-building `Package.resolved` with exact checksums, which breaks `xcodebuild` on any mismatch. Engineer correctly stopped + fell back to **raw URLSession** (spec-authorized fallback; covers all ACs). **Follow-up PR to adopt the SDK** brings: Keychain session persistence (currently UserDefaults — QA nit #3), Realtime WebSocket (`startRealtime()` is a stub now — polling is the TF1 equivalent), and auto-resign on `.signedOut`. No API changes needed for the swap.
+
+**Merge hiccup resolved:** the iOS engineer ALSO created `supabase/02e-...sql` (out of its lane — that was `@backend-data`'s deliverable, already on main). Add/add conflict at merge; resolved by taking backend's authoritative version, discarding the iOS one. Lesson: scope SQL deliverables to `@backend-data` only; don't let the iOS brief imply it should write the `.sql`.
+
+**⚠️ CONFIG PREREQUISITES for the write path to work LIVE (Kevin's dashboard actions, like the schema apply):**
+1. **Enable Anonymous Sign-ins** — Supabase Dashboard → Authentication → Sign In / Providers → **Anonymous Sign-ins → enable**. Supabase disables it by default; until enabled, `signInAnonymously()` fails and NO writes/reactions work. (QA confirmed this is a config prereq, not a code defect.)
+2. **Apply `supabase/02e-auto-resolve-trigger.sql`** in the SQL editor (for the 3-dispute auto-resolve to fire).
+
+**ReactionsRow not yet live-verifiable:** it only renders on ephemeral crowd pins, which don't exist until **sub-PR #2** (the patrol report UI creates them). PR #39's reactions UI is QA'd by code + tests only; live verification comes with sub-PR #2.
+
+**Next — Tier 3 sub-PR #2 (W8.5f): the patrol report UI.** Long-press map → report `enforcement_active` / `sweeper_passed` (T3-1 first cut; T3-2 long-press entry; T3-3 time-since-badge decay). This creates the ephemeral crowd pins that the write path + reactions attach to — and unblocks live reactions testing.
+
 ### 2026-06-05 — Cruise Mode ("Find Parking") ships — destination-less Drive Mode
 
 **What landed:** **PR #38** (`a4c6953`) — a destination-less Drive Mode for the most common NYC parking moment ("I'm already here, help me find a spot while I circle"). Follow camera + parking overlays + voice, no route/destination. Came in elegantly *subtractive*: the existing code already nil-guards route behavior on `activeRoute`, so it's a `DriveModeStyle` enum (`inactive`/`destination`/`cruise`, `patrol` reserved) + ONE guard on the final-approach handler + a pure-function `CruiseVoicePolicy` (announces only when a side is actually free/metered — silent on all-restricted blocks) + the entry UI. Reuses the existing camera (no fork, no second `.onChange(of: driveModeActive)`). **Tests 300 → 316/0**, RegionSyncGuard intact, #31-clean. New: `Services/CruiseVoicePolicy.swift` + tests; modified `DrivingContextService.swift`, `ContentView.swift`, `DriveModeBottomCard.swift`. Spec: `docs/cruise-mode-spec.md`. QA: PASS-WITH-NITS at `docs/qa/cruise-mode-pr38-qa.md`.
