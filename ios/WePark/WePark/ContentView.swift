@@ -1080,6 +1080,7 @@ struct ContentView: View {
     private var driveEntryButton: some View {
         Menu {
             Button {
+                guard activeSheet == nil else { return }
                 showDriveModeDestination = true
             } label: {
                 Label("Drive to a destination", systemImage: "arrow.triangle.turn.up.right.diamond")
@@ -1098,6 +1099,7 @@ struct ContentView: View {
                 .foregroundStyle(Color.accentColor)
         }
         .accessibilityLabel("Start Drive Mode")
+        .accessibilityHint("Double-tap to choose destination navigation or find parking nearby.")
     }
 
     // MARK: - W8.5b/c: Drive Mode overlay layer
@@ -1194,8 +1196,9 @@ struct ContentView: View {
     ///      (see the `isCruiseMode` guard there).
     ///
     /// Guard: only enters when no sheet is active (same guard as destination mode entry).
-    /// The caller in `recenterButtonStack` already applies this guard.
+    /// Applied inside the function so it holds regardless of call site.
     private func enterCruiseMode() {
+        guard activeSheet == nil else { return }
         driveModeStyle = .cruise
         // activeRoute stays nil — no route polyline in Cruise Mode (AC-CM.14).
         // driveDestinationCoordinate stays nil — no destination pin (AC-CM.14).
