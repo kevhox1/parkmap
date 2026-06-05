@@ -147,6 +147,33 @@ enum ActiveSheet: Identifiable {
     }
 }
 
+// MARK: - DriveModeStyle
+
+/// Distinguishes the active Drive Mode variant from the inactive state.
+///
+/// CM-3: Added to provide an explicit, auditable gate for route-dependent behavior.
+/// The nil-based gate (`activeRoute == nil`) is implicit and has caused guard-inversion
+/// bugs before (W8.5c-polish QA). A named enum makes the routing gate grep-auditable.
+///
+/// ## Patrol mode convergence (spec §8)
+/// `.patrol` is reserved for tier3-patrol-mode-buildplan.md sub-PR #2. Patrol mode sets
+/// `driveModeStyle = .patrol` at entry — same camera/overlay stack as `.cruise`, plus
+/// the community reporting layer in `PatrolView.swift`. Do not duplicate `driveModeActive`
+/// for patrol mode; reuse this enum and `handleDriveModeChange`.
+enum DriveModeStyle {
+    /// Drive Mode is not active. No camera tilt, no voice, no bottom card.
+    case inactive
+    /// Destination Mode: user entered an address, route polyline + pin rendered,
+    /// FinalApproachService active, arrival prompt possible.
+    case destination
+    /// Cruise Mode ("Find Parking"): route-less Drive Mode. No route polyline,
+    /// no destination pin, no FinalApproachService calls. Voice gated by CruiseVoicePolicy.
+    case cruise
+    /// Reserved for patrol mode (tier3 sub-PR #2). Behavior = cruise + community reporting.
+    /// Not yet implemented; declared here per spec §8 convergence contract.
+    case patrol
+}
+
 struct ContentView: View {
 
     // MARK: - W6: AppDelegate reference for notification deep-link routing
@@ -314,6 +341,22 @@ struct ContentView: View {
     /// The gate itself is evaluated via BackgroundNoteGate; this bool drives the .alert.
     @State private var showDriveModeBackgroundNote: Bool = false
 
+    // MARK: - CM-3: Drive Mode style (destination / cruise / inactive)
+
+    /// Explicit mode discriminant for Drive Mode variants.
+    ///
+    /// Set at each Drive Mode entry point:
+    ///   - Destination Mode entry (DriveModeDestinationView.onRouteReady): `.destination`
+    ///   - Cruise Mode entry ("Find Parking" button): `.cruise`
+    ///   - Drive Mode exit (endDriveMode): `.inactive`
+    ///
+    /// Checked in `handleFinalApproachUpdate` to prevent FinalApproachService from
+    /// running during Cruise Mode sessions (AC-CM.12, AC-CM.13).
+    ///
+    /// Also forwarded to `DrivingContextService.setCruiseMode` so the voice policy
+    /// switches to `CruiseVoicePolicy` in Cruise Mode.
+    @State private var driveModeStyle: DriveModeStyle = .inactive
+
     // MARK: - W8.5d: Final approach state
 
     /// Current proximity state relative to the Drive Mode destination.
@@ -412,7 +455,10 @@ struct ContentView: View {
             userLocation: locationService.userLocation,
             locationService: locationService,
             onRouteReady: { route, destination in
-                // W8.5b: Route ready — enter Drive Mode.
+                // W8.5b: Route ready — enter Destination Mode.
+                // CM-3: Set driveModeStyle = .destination BEFORE driveModeActive = true
+                // so handleDriveModeChange reads the correct style when it fires.
+                driveModeStyle = .destination
                 activeRoute = route
                 driveDestinationCoordinate = destination
                 driveModeActive = true
@@ -927,14 +973,30 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - W5.1: Recenter button stack
+    // MARK: - W5.1 / Kevin 2026-06-04: Recenter + drive-entry button stack
 
-    /// Two vertically-stacked recenter buttons, shown in the top-right of the map.
-    /// "Find me" is always shown. "Find my car" is shown only when a pin exists.
+    /// Four permanently-visible vertically-stacked toolbar buttons in the top-right.
+    ///
+    /// Button order (top to bottom):
+    ///   1. "Find me"        — location.fill, always shown
+    ///   2. "Find my car"    — car.fill, only when a pin exists
+    ///   3. Park Until       — clock.fill, always shown
+    ///   4. Combined Drive   — arrow.triangle.turn.up.right.diamond.fill, replaces the former
+    ///                         separate Drive + "Find Parking" buttons (Kevin design decision
+    ///                         2026-06-04: one combined entry scales to patrol-mode addition).
+    ///
+    /// The combined Drive button expands IN PLACE (no full-screen cover) into a compact
+    /// two-option picker ("Drive to…" / "Find Parking"). Tapping an option collapses the
+    /// picker and activates the selected mode. Tapping elsewhere collapses with no action.
+    ///
+    /// Invariant compliance: the drive entry uses a native SwiftUI Menu; no camera
+    /// mutation happens here. Both entry paths continue to activate via their existing mechanisms:
+    ///   - "Drive to a destination" → showDriveModeDestination = true → DriveModeDestinationView.onRouteReady
+    ///   - "Find Parking nearby"    → enterCruiseMode() → driveModeActive = true → handleDriveModeAndCamera
     @ViewBuilder
     private var recenterButtonStack: some View {
         VStack(spacing: 8) {
-            // "Find me" — recenter on user's current GPS location.
+            // Button 1: "Find me" — recenter on user's current GPS location.
             Button {
                 recenterOnUser()
             } label: {
@@ -947,7 +1009,7 @@ struct ContentView: View {
             .accessibilityLabel("Recenter on my location")
             .accessibilityHint("Moves the map to show your current GPS position.")
 
-            // "Find my car" — shown only when a parked-car pin exists.
+            // Button 2: "Find my car" — shown only when a parked-car pin exists.
             if parkPinService.parkedCar != nil {
                 Button {
                     recenterOnCar()
@@ -962,7 +1024,7 @@ struct ContentView: View {
                 .accessibilityHint("Moves the map to show where you parked.")
             }
 
-            // W7.5 pass-2: Park Until filter — standalone trigger (filter-first UX).
+            // Button 3: Park Until filter — standalone trigger (filter-first UX).
             // Always visible. Tapping while filter is active re-opens the sheet to change the time.
             Button {
                 activeSheet = .parkUntil
@@ -976,27 +1038,80 @@ struct ContentView: View {
             .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
             .accessibilityHint("Shows only blocks where you can park until a chosen time.")
 
-            // W8.5b: Drive Mode entry button (OQ-1: 4th top-right toolbar button).
-            // Guard: only present destination search when no sheet is active (spec §7 Risk 2).
+            // Button 4: Combined Drive/Cruise entry — native SwiftUI Menu.
+            //
+            // Menu label: single icon button (arrow.triangle.turn.up.right.diamond.fill).
+            // Menu items:
+            //   - "Drive to a destination" → opens DriveModeDestinationView
+            //   - "Find Parking nearby"    → enters Cruise Mode via enterCruiseMode()
+            // The system dropdown dismisses on outside tap automatically.
+            //
+            // Guard: hidden while Drive Mode is active (both entry paths are unavailable
+            // when already driving). Active-state styling preserved from W8.5b.
+            if !driveModeActive {
+                driveEntryButton
+            } else {
+                // Drive Mode active: show the resting icon tinted blue (same as W8.5b).
+                // No action on tap — the "End Drive" / "End Cruise" pill is the exit control.
+                Button { } label: {
+                    Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(Color.blue)
+                }
+                .accessibilityLabel("Drive Mode active")
+                .accessibilityHint("Use the End Drive button to stop.")
+            }
+        }
+    }
+
+    // MARK: - Combined drive-entry button (native Menu)
+
+    /// The combined Drive/Cruise entry button as a native SwiftUI Menu.
+    ///
+    /// Extracted into its own @ViewBuilder property to avoid hitting the Swift compiler's
+    /// type-check complexity limit for large SwiftUI view bodies.
+    ///
+    /// The Menu label matches the resting toolbar button style (regularMaterial pill,
+    /// accentColor icon). The system presents a native dropdown on tap — labels never
+    /// truncate, dismiss on outside tap is automatic, and accessibility is free.
+    @ViewBuilder
+    private var driveEntryButton: some View {
+        Menu {
             Button {
                 guard activeSheet == nil else { return }
                 showDriveModeDestination = true
             } label: {
-                Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 44, height: 44)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    .foregroundStyle(driveModeActive ? Color.blue : Color.accentColor)
+                Label("Drive to a destination", systemImage: "arrow.triangle.turn.up.right.diamond")
             }
-            .accessibilityLabel(driveModeActive ? "Drive Mode active — tap to change destination" : "Start Drive Mode — search for a destination")
-            .accessibilityHint("Opens the destination search screen.")
+
+            Button {
+                enterCruiseMode()
+            } label: {
+                Label("Find Parking nearby", systemImage: "car.front.waves.right.fill")
+            }
+        } label: {
+            Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
+                .font(.system(size: 17, weight: .medium))
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                .foregroundStyle(Color.accentColor)
         }
+        .accessibilityLabel("Start Drive Mode")
+        .accessibilityHint("Double-tap to choose destination navigation or find parking nearby.")
     }
 
     // MARK: - W8.5b/c: Drive Mode overlay layer
 
     /// Full-screen overlay layer visible during Drive Mode.
-    /// Contains the "End Drive" pill (top-left) and the floating Recenter pill (bottom-center).
+    /// Contains the "End Drive" pill (top-left), optional mute toggle (cruise mode),
+    /// and the floating Recenter pill (bottom-center).
+    ///
+    /// CM-3: In Cruise Mode, a mute toggle button (speaker icon) is shown inline with
+    /// the End Drive pill so the driver can silence callouts without leaving the mode
+    /// (AC-CM.11). The mute state persists across sessions via DrivingVoice.isMuted
+    /// (backed by UserDefaults key `wepark_dm_voice_muted`).
     ///
     /// Extracted into its own @ViewBuilder property to avoid hitting the Swift compiler's
     /// type-check complexity limit for large SwiftUI view bodies (W8.5c-polish PR-1 lesson:
@@ -1006,21 +1121,44 @@ struct ContentView: View {
     private var driveModeOverlayLayer: some View {
         VStack {
             // "End Drive" pill — top-left area, below the gear button.
+            // CM-3: In Cruise Mode, the pill is labeled "End Cruise" and the mute toggle
+            // is shown inline to the right of the pill (AC-CM.11).
             // W8.5c-polish PR-1 (Feature B): extra top padding clears the ASP banner
             // when the banner is visible (see endDrivePillTopPadding computed property).
-            HStack {
+            HStack(spacing: 8) {
                 Button {
                     endDriveMode()
                 } label: {
-                    Label("End Drive", systemImage: "xmark.circle.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(.regularMaterial, in: Capsule())
-                        .foregroundStyle(.red)
+                    Label(
+                        driveModeStyle == .cruise ? "End Cruise" : "End Drive",
+                        systemImage: "xmark.circle.fill"
+                    )
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .background(.regularMaterial, in: Capsule())
+                    .foregroundStyle(.red)
                 }
-                .accessibilityLabel("End Drive Mode")
+                .accessibilityLabel(driveModeStyle == .cruise ? "End Cruise Mode" : "End Drive Mode")
                 .padding(.leading, 12)
+
+                // CM-3: Mute toggle — visible in Cruise Mode (AC-CM.11).
+                // Shared DrivingVoice.isMuted flag (backed by UserDefaults) means toggling
+                // here also gates destination-mode voice in the next session.
+                if driveModeStyle == .cruise {
+                    Button {
+                        drivingVoice.isMuted.toggle()
+                    } label: {
+                        Image(systemName: drivingVoice.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                            .font(.system(size: 17, weight: .medium))
+                            .frame(width: 44, height: 44)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                            .foregroundStyle(drivingVoice.isMuted ? Color.secondary : Color.accentColor)
+                    }
+                    .accessibilityLabel(drivingVoice.isMuted ? "Unmute parking announcements" : "Mute parking announcements")
+                    .accessibilityHint("Toggles voice callouts. Mute state is remembered across sessions.")
+                }
+
                 Spacer()
             }
             .padding(.top, endDrivePillTopPadding)
@@ -1044,18 +1182,48 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - CM-3: Cruise Mode entry
+
+    /// Enters Cruise Mode ("Find Parking") directly — no destination input, no route fetch.
+    ///
+    /// Entry sequence (spec §5.1):
+    ///   1. Set `driveModeStyle = .cruise`.
+    ///   2. `activeRoute` and `driveDestinationCoordinate` remain nil (never set).
+    ///   3. `driveModeActive = true` → triggers `handleDriveModeAndCamera(true)` via `.onChange`.
+    ///      The existing W8.5c–d path fires unchanged: `locationService.startDriveMode()`,
+    ///      heading-up, auto-zoom, `.mutedStandard`, directional puck, wake lock, background note.
+    ///   4. `DrivingContextService.setCruiseMode(true)` is called from `handleDriveModeChange`
+    ///      (see the `isCruiseMode` guard there).
+    ///
+    /// Guard: only enters when no sheet is active (same guard as destination mode entry).
+    /// Applied inside the function so it holds regardless of call site.
+    private func enterCruiseMode() {
+        guard activeSheet == nil else { return }
+        driveModeStyle = .cruise
+        // activeRoute stays nil — no route polyline in Cruise Mode (AC-CM.14).
+        // driveDestinationCoordinate stays nil — no destination pin (AC-CM.14).
+        driveModeDistanceMeters = nil  // clear any stale value from a prior destination session.
+        driveModeActive = true
+        // setCruiseMode(true) is called inside handleDriveModeChange(true) below,
+        // triggered by the .onChange(of: driveModeActive) observer.
+    }
+
     // MARK: - W8.5b/c: End Drive Mode
 
     /// Clears all Drive Mode state (route polyline, destination pin, driveModeActive).
     /// MapViewRepresentable reacts to activeRoute=nil and destinationCoordinate=nil by
     /// removing the corresponding overlays and annotations automatically.
     /// W8.5c: Also stops continuous location + voice (via onChange(of: driveModeActive)).
+    /// CM-3: Also resets driveModeStyle to .inactive.
     private func endDriveMode() {
         driveModeActive = false
+        driveModeStyle = .inactive
         activeRoute = nil
         driveDestinationCoordinate = nil
         driveModeDistanceMeters = nil  // W8.5c-polish PR-1: clear distance indicator.
         // W8.5c context state cleared via onChange(of: driveModeActive).
+        // setCruiseMode(false) is called inside handleDriveModeChange(false) below,
+        // triggered by the .onChange(of: driveModeActive) observer.
     }
 
     // MARK: - W8.5c-polish PR-1: Distance-to-destination computation
@@ -1093,6 +1261,18 @@ struct ContentView: View {
     ///
     /// - Parameter distanceOrNil: The updated distance, or nil when Drive Mode is inactive.
     private func handleFinalApproachUpdate(_ distanceOrNil: Double?) {
+        // CM-3 Guard: FinalApproachService only runs in Destination Mode (AC-CM.12, AC-CM.13).
+        // In Cruise Mode, `driveModeStyle == .cruise`, so this guard returns early.
+        // `finalApproachState` stays `.outside` for the duration of any Cruise Mode session.
+        // Belt-and-suspenders: also guards on `driveDestinationCoordinate != nil` below,
+        // which is always nil in Cruise Mode. The explicit mode check is the primary gate.
+        guard driveModeStyle == .destination else {
+            if finalApproachState != .outside {
+                finalApproachState = .outside
+            }
+            return
+        }
+
         // Guard 1: must be in active Drive Mode with a destination set.
         guard driveModeActive, driveDestinationCoordinate != nil else {
             if finalApproachState != .outside {
@@ -1222,6 +1402,10 @@ struct ContentView: View {
     ///
     /// Extracted from `.onChange(of: driveModeActive)` to reduce type-checker complexity
     /// in ContentView.body (W8.5c-polish PR-1 fix).
+    ///
+    /// CM-3: On entry, calls `drivingContextService?.setCruiseMode(driveModeStyle == .cruise)`
+    /// so the voice policy switches to `CruiseVoicePolicy` when in Cruise Mode.
+    /// On exit, calls `setCruiseMode(false)` to reset for the next session.
     private func handleDriveModeChange(_ active: Bool) {
         // Community 1.0 / Tier 1: inform pinService of Drive Mode state change.
         // The service applies the re-fetch guard (spec §6.3): skip if center moved < 200m.
@@ -1235,6 +1419,9 @@ struct ContentView: View {
             let service = DrivingContextService(voice: drivingVoice)
             drivingContextService = service
             drivingContext = nil
+            // CM-3: Enable Cruise Mode voice policy when entering in Cruise Mode.
+            // setCruiseMode is a no-op when isCruise == false (destination mode default).
+            service.setCruiseMode(driveModeStyle == .cruise)
             // Show muted toast if voice is muted from a previous session (OQ-3).
             if drivingVoice.isMuted {
                 ToastService.shared.show(message: "Voice muted \u{2014} tap to unmute")
@@ -1254,6 +1441,8 @@ struct ContentView: View {
         } else {
             // Exiting Drive Mode.
             locationService.endDriveMode()
+            // CM-3: Reset cruise mode flag for the next session.
+            drivingContextService?.setCruiseMode(false)
             drivingContextService = nil
             drivingContext = nil
             driveFollowEnabled = true

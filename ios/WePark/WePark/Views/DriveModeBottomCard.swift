@@ -228,14 +228,22 @@ struct DriveModeBottomCard: View {
         Button {
             voiceService.isMuted.toggle()
         } label: {
-            Image(systemName: voiceService.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                .font(.system(size: 18, weight: .medium))
-                .foregroundStyle(voiceService.isMuted ? Color.secondary : Color.accentColor)
-                .frame(width: 36, height: 36)
-                .background(.quaternary, in: Circle())
+            // HIG touch-target fix: interactive area is 44×44pt (HIG minimum).
+            // Visual glyph + circle background stay at 36pt to preserve card proportions;
+            // the outer 44pt frame adds invisible tap area around the visible circle.
+            ZStack {
+                Circle()
+                    .fill(.quaternary)
+                    .frame(width: 36, height: 36)
+                Image(systemName: voiceService.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                    .font(.system(size: 18, weight: .medium))
+                    .foregroundStyle(voiceService.isMuted ? Color.secondary : Color.accentColor)
+            }
+            .frame(width: 44, height: 44)
+            .contentShape(Rectangle())
         }
-        .accessibilityLabel(voiceService.isMuted ? "Unmute Drive Mode voice" : "Mute Drive Mode voice")
-        .accessibilityHint("Toggles the parking commentary voice announcements.")
+        .accessibilityLabel(voiceService.isMuted ? "Unmute parking callouts" : "Mute parking callouts")
+        .accessibilityHint("Toggles voice callouts for parking. Mute state is remembered across sessions.")
     }
 }
 
