@@ -131,7 +131,21 @@ final class CommunityPinAnnotation: NSObject, MKAnnotation {
     }
 
     var title: String? { pin.displayTitle }
-    var subtitle: String? { pin.displaySubtitle }
+
+    /// Callout subtitle.
+    ///
+    /// Tier 3 sub-PR #2: For `enforcement_active` and `sweeper_passed` pins, the subtitle
+    /// shows the time-since badge ("Just now", "5m ago") rather than the expiry time.
+    /// This matches the T3-3 decision: ephemeral pins show age, not expiry countdown.
+    /// The badge is computed lazily at callout-open time (no timer loop).
+    var subtitle: String? {
+        switch pin.pinType {
+        case .enforcementActive, .sweeperPassed:
+            return PinMarkerAnnotation.timeSinceBadge(pin: pin, now: Date())
+        default:
+            return pin.displaySubtitle
+        }
+    }
 
     init(pin: CommunityPin) {
         self.pin = pin
@@ -196,14 +210,57 @@ final class PinMarkerAnnotation: MKAnnotationView {
     /// Called from `mapView(_:viewFor:)` after dequeue.
     /// Updates the image and accessibility label to match the pin type.
     ///
+    /// Tier 3 sub-PR #2: For `enforcement_active` and `sweeper_passed` pins,
+    /// the callout subtitle shows the time-since badge ("Just now", "5m ago", etc.)
+    /// computed by `PinMarkerAnnotation.timeSinceBadge(pin:now:)`.
+    ///
     /// - Parameter pin: The `CommunityPin` this marker represents.
     func configure(for pin: CommunityPin) {
         image = Self.markerImage(for: pin.pinType)
         // Center the 32×32 image within the 44×44 touch target.
         centerOffset = .zero
         accessibilityLabel = "\(pin.pinType.displayLabel): \(pin.displayTitle ?? "")"
-        if let subtitle = pin.displaySubtitle {
-            accessibilityValue = subtitle
+
+        // Tier 3 sub-PR #2: Time-since badge in callout subtitle for ephemeral crowd pins.
+        // Pure function — no timer loop; computed lazily at callout-open time (T3-3 decision).
+        switch pin.pinType {
+        case .enforcementActive, .sweeperPassed:
+            let badge = Self.timeSinceBadge(pin: pin, now: Date())
+            accessibilityValue = badge
+            // The callout subtitle is driven by CommunityPinAnnotation.subtitle.
+            // PinMarkerAnnotation.configure doesn't set the MKAnnotation subtitle directly;
+            // however we expose the badge via accessibility and via the public function
+            // for callers (e.g. PinDetailSheet) to display if desired.
+        default:
+            if let subtitle = pin.displaySubtitle {
+                accessibilityValue = subtitle
+            }
+        }
+    }
+
+    // MARK: - Time-since badge (T3-3, AC-R25–R28)
+
+    /// Returns a human-readable "age since creation" string for a community pin.
+    ///
+    /// Pure function — `now: Date` is injected for testability.
+    /// In the live app, callers pass `Date()`. Tests pass a fixed fixture.
+    ///
+    /// Rules (spec §5):
+    ///   - age < 60s  → "Just now"
+    ///   - 1–59 min   → "Xm ago"
+    ///   - 60–119 min → "1h ago"
+    ///   - ≥120 min   → "Xh ago"
+    ///
+    /// No `Calendar.current` or `Calendar.easternTime` usage — pure `timeIntervalSince`
+    /// arithmetic only (W3 convention / AC-R28).
+    static func timeSinceBadge(pin: CommunityPin, now: Date) -> String {
+        let ageSeconds = now.timeIntervalSince(pin.createdAt)
+        let minutes = Int(ageSeconds / 60)
+        switch minutes {
+        case ..<1:       return "Just now"
+        case 1..<60:     return "\(minutes)m ago"
+        case 60..<120:   return "1h ago"
+        default:         return "\(minutes / 60)h ago"
         }
     }
 
@@ -244,12 +301,25 @@ final class PinMarkerAnnotation: MKAnnotationView {
     }
 
     /// Returns the SF Symbol name and circle fill color for the given pin type.
+    ///
+    /// Tier 3 sub-PR #2 additions (placeholder icons per spec §9 — no @designer file found):
+    ///   - enforcement_active: shield.fill (blue) — "civic authority" placeholder (spec §9.1).
+    ///   - sweeper_passed:     exclamationmark.triangle.fill (orange) — sweeper alert placeholder (§9.2).
+    ///     `truck.box.fill` is not available on iOS 17 min target; triangle used instead.
+    ///     @designer: see docs/design/tier3-marker-icons.md (not yet authored) for final icons.
     private static func markerStyle(for pinType: PinType) -> (symbolName: String, color: UIColor) {
         switch pinType {
         case .filming:
             return ("video.fill", UIColor.systemPurple)
         case .specialEvent:
             return ("star.fill", UIColor.systemOrange)
+        case .enforcementActive:
+            // Placeholder: shield.fill (blue). @designer to confirm per tier3-patrol-report-spec §9.1.
+            return ("shield.fill", UIColor.systemBlue)
+        case .sweeperPassed:
+            // Placeholder: exclamationmark.triangle.fill (orange). @designer to confirm per §9.2.
+            // truck.box.fill unavailable on iOS 17 min target — using triangle alert icon.
+            return ("exclamationmark.triangle.fill", UIColor.systemOrange)
         default:
             // Fallback for any type that reaches this path unexpectedly.
             return ("mappin.fill", UIColor.systemGray)
