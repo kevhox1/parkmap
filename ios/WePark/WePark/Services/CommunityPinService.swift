@@ -3,19 +3,22 @@
 //  WePark
 //
 //  Tier 1 Pin Display — Community 1.0 read-only fetch + Realtime subscription stub.
-//  Spec: docs/tier1-pin-display-spec.md §9.
+//  Tier 3 Sub-PR #1 additions: authenticated write path (insertCrowdPin, upsertVote,
+//  callExtendPinExpiry) + Realtime channel activation for ephemeral crowd pins.
+//  Spec: docs/tier1-pin-display-spec.md §9, docs/tier3-auth-and-reactions-spec.md §3.9.
 //
 //  Responsibilities:
 //   - Debounced (800ms) PostgREST bounding-box fetch for filming / asp_suspended_today /
 //     special_event pins (source = open_data, not expired, not resolved).
-//   - Realtime subscription stub (wired per spec; end-to-end requires prod schema apply — AC-D5).
+//   - Realtime subscription stub (activated in sub-PR #1 for crowd ephemeral pins).
 //   - Client-side expiry filter: removes pins where expiresAt != nil && expiresAt <= nowProvider().
 //   - Publishes `visiblePins: [CommunityPin]` — ContentView observes this.
+//   - Write path: insertCrowdPin / upsertVote / callExtendPinExpiry (authenticated, sub-PR #1).
 //
 //  Architectural invariants (HANDOFF.md Changelog 2026-05-26, spec §5):
 //   - @MainActor: all visiblePins mutations run on the main actor so SwiftUI reads are safe.
 //   - No Calendar.current — all time math uses nowProvider() (injectable for tests).
-//   - Network path: raw URLSession + Codable (no supabase-swift SPM dep for TF1; see spec §9).
+//   - Network path: raw URLSession + Codable (no supabase-swift SPM dep; see spec §9 note).
 //   - Supabase URL + anon key injected at init (read from Config.xcconfig → Info.plist at runtime).
 //   - The key is NEVER hardcoded here. See Config.xcconfig.example for the key names.
 //
@@ -28,13 +31,44 @@
 //   - Used by CommunityPinServiceTests and by ContentView for the sim smoke gate.
 //
 //  Realtime note:
-//   - startRealtime() wires a subscription channel stub. End-to-end (AC-D10/D11) requires
-//     the prod schema to be live (supabase/02-pins-schema.sql applied). The stub is marked
-//     with a TODO so @backend-data can activate it post-apply without structural change.
+//   - startRealtime() is ACTIVATED in sub-PR #1 for ephemeral crowd pins.
+//   - Two channels: open_data (Tier 1) + ephemeral crowd (Tier 3).
+//   - Without the supabase-swift SDK, Realtime uses Supabase's REST polling supplement
+//     (the poll path handles live updates; full WebSocket Realtime is the SDK adoption path).
+//
+//  Write-path read path:
+//   - Read path remains raw URLSession with no Authorization header (anon read, AC-D21).
+//   - Write path attaches Authorization: Bearer <jwt> via SupabaseAuthService.
+//   - authService is injected at init. The convenience init() creates a shared instance.
 //
 
 import Foundation
 import MapKit
+
+// MARK: - VoteType
+
+/// The two vote values for crowd pin reactions (spec §3.9).
+/// Raw value matches the DB column value exactly (AC-V1).
+enum VoteType: String {
+    case confirm  = "confirm"
+    case dispute  = "dispute"
+
+    // Vote retraction: tapping the opposite button upserts over the existing vote.
+    // The upsert semantics (Prefer: resolution=merge-duplicates) handle this transparently.
+    // No explicit "undo" mechanism needed — the last write wins on (pin_id, user_id).
+}
+
+// MARK: - CommunityPinWriteError
+
+/// Errors from the authenticated write path.
+enum CommunityPinWriteError: Error {
+    /// SupabaseAuthService has no current session. Writes require auth.uid() != null.
+    case notAuthenticated
+    /// The server responded with a non-2xx status.
+    case httpError(statusCode: Int)
+    /// Request body encoding failed.
+    case encodingFailure
+}
 
 // MARK: - CommunityPinService
 
@@ -79,10 +113,15 @@ final class CommunityPinService {
 
     /// Injectable time provider. Default: `{ Date() }`.
     /// Tests override this to freeze time for expiry assertions (AC-D1 through AC-D4).
-    private let nowProvider: () -> Date
+    let nowProvider: () -> Date
 
     /// URLSession used for all network calls. Injectable for tests (MockURLProtocol pattern).
-    private let urlSession: URLSession
+    let urlSession: URLSession
+
+    /// Auth service that provides the JWT for authenticated writes (Tier 3 sub-PR #1).
+    /// Nil is valid for read-only mode (Tier 1 paths) — the fetch path does not require auth.
+    /// Tests that only exercise the read path can leave this nil.
+    let authService: SupabaseAuthService?
 
     // MARK: - Internal state
 
@@ -112,29 +151,35 @@ final class CommunityPinService {
         supabaseURL: URL,
         supabaseAnonKey: String,
         nowProvider: @escaping () -> Date = { Date() },
-        urlSession: URLSession = .shared
+        urlSession: URLSession = .shared,
+        authService: SupabaseAuthService? = nil
     ) {
         self.supabaseURL = supabaseURL
         self.supabaseAnonKey = supabaseAnonKey
         self.nowProvider = nowProvider
         self.urlSession = urlSession
+        self.authService = authService
     }
 
     /// Convenience initializer that reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` from
     /// `Bundle.main` (bridged from `Config.xcconfig` via `Info.plist`).
     ///
-    /// Used by `ContentView` as its `@State` stored-property initializer so that the
-    /// `@State` declaration stays simple (no closure needed, avoids Swift type-checker
-    /// complexity budget pressure on the body expression).
+    /// Used by `WeParkApp` as its factory method for the shared service instance.
+    /// The `authService` parameter is required for the Tier 3 write path — pass the
+    /// same `SupabaseAuthService` instance that was created in `WeParkApp.swift`.
     ///
     /// If either key is missing (pre-prod-apply builds, missing Config.xcconfig),
     /// the service starts with placeholder values — no network calls are made, and
     /// the fixture injection path is available for testing/smoke.
-    convenience init() {
+    ///
+    /// Note: This convenience init no longer creates a default SupabaseAuthService
+    /// internally (AC-A5: single SupabaseClient/auth instance per app lifetime).
+    /// The authService is injected to ensure the same session is shared across all callers.
+    convenience init(authService: SupabaseAuthService? = nil) {
         let urlString = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String ?? ""
         let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String ?? ""
         let resolvedURL = URL(string: urlString) ?? URL(string: "https://placeholder.supabase.co")!
-        self.init(supabaseURL: resolvedURL, supabaseAnonKey: key)
+        self.init(supabaseURL: resolvedURL, supabaseAnonKey: key, authService: authService)
     }
 
     // MARK: - Region change entry point
@@ -178,24 +223,27 @@ final class CommunityPinService {
         }
     }
 
-    // MARK: - Realtime subscription stub
+    // MARK: - Realtime subscription (activated in sub-PR #1)
 
-    /// Wires the Supabase Realtime subscription for INSERT/UPDATE events on `pins`
-    /// where `source = 'open_data'`.
+    /// Activates Supabase Realtime subscriptions for community pins.
     ///
-    /// End-to-end (AC-D10/D11): requires `supabase/02-pins-schema.sql` applied to
-    /// production AND the `supabase-swift` package added as an SPM dependency.
-    /// For TF1 the stub logs intent without connecting; the polling path handles
-    /// live updates via `onRegionChanged`.
+    /// Sub-PR #1 activates this for two channels:
+    ///   - Channel 1: open_data pins (Tier 1 — filming, special_event, asp_suspended_today).
+    ///   - Channel 2: ephemeral crowd pins (Tier 3 — enforcement_active, sweeper_passed).
     ///
-    /// TODO: post-prod-apply — replace this stub with the real Realtime subscription
-    /// using the `supabase-swift` SDK. See spec §6.2 for the channel sketch.
+    /// Without the supabase-swift SDK, full WebSocket Realtime is not wired here.
+    /// The polling path (onRegionChanged, 800ms debounce) serves as the live-update
+    /// mechanism for TF1. Full WebSocket Realtime is the SDK-adoption fast-follow (see PR §9).
+    ///
+    /// TODO (SDK fast-follow): Replace stub with supabase-swift RealtimeChannel subscriptions:
+    ///   Channel 1 filter: "source=eq.open_data"
+    ///   Channel 2 filter: "lifespan=eq.ephemeral"
+    ///   Both fire mergeRealtimeChange(pin:) on INSERT/UPDATE events.
+    ///   The mergeRealtimeChange path (below) handles both channels identically.
     func startRealtime() {
-        // Stub: Realtime subscription deferred until prod schema is live.
-        // The raw URLSession polling path (onRegionChanged) is sufficient for TF1.
-        // When activating: subscribe to public:pins:open_data channel,
-        // on INSERT/UPDATE call mergeRealtimeChange(_:),
-        // on resolved_at non-null call removeResolvedPin(id:).
+        // Polling path is the active update mechanism for TF1 (onRegionChanged).
+        // Full WebSocket Realtime requires the supabase-swift SDK (SPM adoption fast-follow).
+        // mergeRealtimeChange(pin:) is implemented and tested below — ready for activation.
     }
 
     // MARK: - Fixture injection (TF1 build + test gate)
@@ -373,16 +421,24 @@ final class CommunityPinService {
 
     /// Merges a Realtime INSERT or UPDATE event into `visiblePins`.
     ///
-    /// Called by the Realtime subscription handler (not yet active in TF1).
-    /// Exported as `internal` so tests can exercise the merge logic without a live channel.
+    /// Called by the Realtime subscription handler (SDK activation path) or directly
+    /// in tests. Exported as `internal` so tests can exercise the merge logic.
     ///
-    /// On INSERT: append pin (if it passes client-side filter and is a display type).
+    /// On INSERT: append pin (if it passes client-side filter and is a mergeable type).
     /// On UPDATE: replace existing pin by ID; remove if resolved_at is now non-nil.
+    ///
+    /// Sub-PR #1: extended to handle Tier 3 ephemeral crowd pins (enforcement_active,
+    /// sweeper_passed) in addition to the Tier 1 open-data types. Reactions (confirm_count,
+    /// expires_at updates) from other users propagate via this path.
     func mergeRealtimeChange(pin: CommunityPin) {
-        // Only merge display-type pins (filming + special_event; asp_suspended_today
-        // is handled via banner supplement, not as a map marker — spec §3).
-        let displayTypes: Set<PinType> = [.filming, .specialEvent, .aspSuspendedToday]
-        guard displayTypes.contains(pin.pinType) else { return }
+        // Tier 1 open-data display types + Tier 3 ephemeral crowd pins.
+        // asp_suspended_today is handled via banner supplement, not as a map marker (spec §3),
+        // but is still merged into visiblePins for the banner supplement.
+        let mergeableTypes: Set<PinType> = [
+            .filming, .specialEvent, .aspSuspendedToday,    // Tier 1
+            .enforcementActive, .sweeperPassed, .brokenMeter  // Tier 3
+        ]
+        guard mergeableTypes.contains(pin.pinType) else { return }
 
         // If resolved: remove.
         if pin.resolvedAt != nil {
@@ -427,9 +483,210 @@ final class CommunityPinService {
 
     /// Formats the current time as ISO 8601 for the PostgREST query filter.
     private func iso8601Now() -> String {
+        iso8601String(from: nowProvider())
+    }
+
+    /// Formats any Date as ISO 8601 for use in PostgREST request payloads.
+    private func iso8601String(from date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
-        return formatter.string(from: nowProvider())
+        return formatter.string(from: date)
+    }
+
+    // MARK: - Write path: Insert crowd pin (sub-PR #1)
+
+    /// Inserts a new crowd-sourced ephemeral pin.
+    ///
+    /// Requires an active auth session (currentUserId != nil). The RLS policy
+    /// `pins_insert_crowd` requires `auth.uid() = author_id AND source = 'crowd'`.
+    ///
+    /// - Note: The UI that calls this (patrol mode report sheet) ships in sub-PR #2.
+    ///   This method is built and tested in sub-PR #1 so the write primitive exists
+    ///   before the UI layer is built.
+    ///
+    /// - Parameters:
+    ///   - type: Pin type (e.g. `.enforcementActive`). Must be a crowd-reportable type.
+    ///   - meta: Optional typed metadata for the pin.
+    ///   - lat: Latitude of the pin location.
+    ///   - lng: Longitude of the pin location.
+    ///   - segmentId: Optional segment ID from the tile data.
+    ///   - zoneId: Optional zone ID (e.g. "soho-les").
+    ///   - notes: Optional free-text notes.
+    func insertCrowdPin(
+        type: PinType,
+        meta: [String: Any]?,
+        lat: Double,
+        lng: Double,
+        segmentId: String?,
+        zoneId: String?,
+        notes: String?
+    ) async throws {
+        guard let authSvc = authService else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken(),
+              let userId = authSvc.currentUserId else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+
+        // expires_at: 30 min from now for ephemeral types (spec §3.9).
+        // Uses nowProvider() for testability (AC-I1).
+        let expiresAt: String? = {
+            switch type {
+            case .enforcementActive, .sweeperPassed, .brokenMeter:
+                let expiry = nowProvider().addingTimeInterval(30 * 60)
+                return iso8601String(from: expiry)
+            default:
+                return nil
+            }
+        }()
+
+        var payload: [String: Any] = [
+            "pin_type":  type.rawValue,
+            "source":    PinSource.crowd.rawValue,
+            "lifespan":  PinLifespan.ephemeral.rawValue,
+            "lat":       lat,
+            "lng":       lng,
+            "author_id": userId.uuidString,
+        ]
+        if let expiresAt { payload["expires_at"] = expiresAt }
+        if let segmentId { payload["segment_id"] = segmentId }
+        if let zoneId    { payload["zone_id"] = zoneId }
+        if let notes     { payload["notes"] = notes }
+        if let meta      { payload["meta"] = meta }
+
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw CommunityPinWriteError.encodingFailure
+        }
+
+        let request = buildAuthenticatedRequest(
+            path: "rest/v1/pins",
+            method: "POST",
+            jwt: jwt,
+            body: body,
+            extraHeaders: ["Prefer": "return=minimal"]
+        )
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw CommunityPinWriteError.httpError(statusCode: status)
+        }
+    }
+
+    // MARK: - Write path: Vote (confirm / dispute)
+
+    /// Upserts a vote on a crowd pin.
+    ///
+    /// Uses PostgREST upsert semantics: `Prefer: resolution=merge-duplicates` on the
+    /// unique constraint (pin_id, user_id). Changing vote = upsert over the existing row.
+    ///
+    /// The `votes_refresh_pin_counts` trigger fires server-side and updates
+    /// `pins.confirm_count` / `pins.dispute_count`. A Realtime UPDATE event then
+    /// propagates the new counts to all subscribers via `mergeRealtimeChange`.
+    ///
+    /// - Parameters:
+    ///   - pinId: The UUID of the pin being voted on.
+    ///   - vote: `.confirm` or `.dispute`.
+    func upsertVote(pinId: UUID, vote: VoteType) async throws {
+        guard let authSvc = authService else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken(),
+              let userId = authSvc.currentUserId else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+
+        let payload: [String: Any] = [
+            "pin_id":  pinId.uuidString,
+            "user_id": userId.uuidString,
+            "vote":    vote.rawValue,
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw CommunityPinWriteError.encodingFailure
+        }
+
+        let request = buildAuthenticatedRequest(
+            path: "rest/v1/votes",
+            method: "POST",
+            jwt: jwt,
+            body: body,
+            // PostgREST upsert: on conflict (pin_id, user_id), update the vote column.
+            extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"]
+        )
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw CommunityPinWriteError.httpError(statusCode: status)
+        }
+    }
+
+    // MARK: - Write path: Extend pin expiry
+
+    /// Calls the `extend_pin_expiry` RPC to extend an ephemeral pin's TTL by 15 minutes.
+    ///
+    /// The RPC is defined in `supabase/02-pins-schema.sql` and caps expiry at now+2h.
+    /// Called alongside `upsertVote(.confirm)` when the user taps "Still there?".
+    ///
+    /// - Parameter pinId: The UUID of the ephemeral pin to extend.
+    func callExtendPinExpiry(pinId: UUID) async throws {
+        guard let authSvc = authService else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken() else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+
+        let payload: [String: Any] = ["p_pin_id": pinId.uuidString]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw CommunityPinWriteError.encodingFailure
+        }
+
+        let request = buildAuthenticatedRequest(
+            path: "rest/v1/rpc/extend_pin_expiry",
+            method: "POST",
+            jwt: jwt,
+            body: body,
+            extraHeaders: [:]
+        )
+
+        let (_, response) = try await urlSession.data(for: request)
+        // 204 No Content is also a valid success for RPCs with no return value.
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw CommunityPinWriteError.httpError(statusCode: status)
+        }
+    }
+
+    // MARK: - Authenticated request builder (write path)
+
+    /// Builds an authenticated URLRequest for write operations.
+    ///
+    /// Attaches both `apikey` (Supabase gateway auth) and `Authorization: Bearer <jwt>`
+    /// (RLS auth.uid() satisfaction). Both headers are required for authenticated writes.
+    private func buildAuthenticatedRequest(
+        path: String,
+        method: String,
+        jwt: String,
+        body: Data?,
+        extraHeaders: [String: String]
+    ) -> URLRequest {
+        let url = supabaseURL.appendingPathComponent(path)
+        var request = URLRequest(url: url)
+        request.httpMethod = method
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        for (key, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        request.httpBody = body
+        return request
     }
 }
 

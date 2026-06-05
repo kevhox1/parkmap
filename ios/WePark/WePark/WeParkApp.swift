@@ -18,6 +18,13 @@
 //      After routing, pendingDeepLinkCarID is cleared to nil for idempotency — subsequent
 //      foreground events do not re-present the sheet.
 //
+//  Tier 3 sub-PR #1 additions:
+//    - SupabaseAuthService instantiated as @State at app root (single instance, AC-A5).
+//    - .task { await authService.ensureSession() } fires on first WindowGroup appear.
+//      Non-blocking: the map loads while auth completes in the background.
+//    - authService passed into ContentView and from there into CommunityPinService
+//      so the same anonymous identity is used for all writes (AC-A5 singleton invariant).
+//
 
 import SwiftUI
 import UserNotifications
@@ -97,9 +104,28 @@ struct WeParkApp: App {
 
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
+    // MARK: - Tier 3 sub-PR #1: Anonymous auth identity (AC-A5 singleton)
+
+    /// Single SupabaseAuthService instance for the app lifetime.
+    ///
+    /// Instantiated here (not in ContentView) to avoid body re-render races and to ensure
+    /// there is exactly one instance (AC-A5). The same instance is passed to ContentView and
+    /// from there into CommunityPinService so all writes share the same anonymous identity.
+    ///
+    /// Note: @State on App body properties is the Swift-idiomatic way to hold a single
+    /// service instance at the app root without escaping it into a global. The instance is
+    /// alive for the full app lifetime.
+    @State private var authService = SupabaseAuthService()
+
     var body: some Scene {
         WindowGroup {
-            ContentView(appDelegate: appDelegate)
+            ContentView(appDelegate: appDelegate, authService: authService)
+                .task {
+                    // Non-blocking: the map loads while auth completes in the background.
+                    // ensureSession() fails silently if the network is unavailable (AC-A4).
+                    // The app stays in read-only mode until auth is available.
+                    await authService.ensureSession()
+                }
         }
     }
 }
