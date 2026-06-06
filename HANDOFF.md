@@ -182,6 +182,21 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-06 — Tier 3 sub-PR #2 ships: universal community reporting (no patrol mode)
+
+**Product pivot (Kevin):** DROPPED the separate "Patrol mode." Reporting is now UNIVERSAL — the destination-less "look for parking" experience stays as the shipped **Find Parking / Cruise Mode**, and reporting is a capability available everywhere, not a mode you enter. Two context-appropriate affordances: (1) **resting/browsing** → long-press a block → `confirmationDialog` ("Park my car here" [W5, intact] / "Report enforcement or sweeper"); (2) **driving** (destination OR Find Parking) → one-tap **Report** button in the drive overlay (`flag.fill` + "Report" label, orange, inline with End pill + mute) → `ReportSheet` → drops the pin at current GPS (Waze-style, driving-safe — long-press is a no-op while driving). The `DriveModeStyle.patrol` enum case was removed.
+
+**What landed:** **PR #40** (`7da7eca`). New `Views/ReportSheet.swift` (Enforcement active [+ optional sub_tag pill: cleaning-truck-first / parking-agent / tow-truck / "not sure"=nil] / Street sweeper [passed / approaching]; neutral compliance copy, no "ticket"/"avoid" language; calls the sub-PR #1 `insertCrowdPin` with lifespan='ephemeral', source='crowd', expires_at=now+30min). `timeSinceBadge(pin:now:)` pure function (T3-3 decay = time-since badge). Marker icons per `@designer` (`docs/design/tier3-marker-icons.md`): **enforcement = `person.badge.clock.fill` teal** (civic/neutral, NOT a shield — the engineer's placeholder; teal/cyan are recessive vs Tier 1 orange/purple so authoritative pins dominate), **sweeper = `truck.box.fill` cyan**. Tapping a reported pin → existing `PinDetailSheet` + `ReactionsRow`. **Tests 331 → 351/0**, RegionSyncGuard intact, #31-clean. QA PASS-WITH-NITS (`docs/qa/tier3-pr40-qa.md`).
+
+**Tier 3 is now CODE-COMPLETE** across PRs #36–#40: typed-pin model → Tier 1 display → anonymous-auth + write path + reactions → universal reporting. The whole report→see→confirm/dispute→auto-resolve loop exists.
+
+**⚠️ TO GO LIVE + verify end-to-end — Kevin's manual steps (the sandbox can't tap a sim or hold live creds):**
+1. **Enable Anonymous Sign-ins** — Supabase → Authentication → Anonymous → enable (off by default; without it `signInAnonymously()` fails → no writes).
+2. **Apply `supabase/02e-auto-resolve-trigger.sql`** in the SQL editor (the 3-dispute auto-hide).
+3. **Manual smoke:** report a pin (long-press → Report, or in-drive Report button) → confirm the marker renders (teal enforcement / cyan sweeper) with the time-since badge → tap it → confirm/dispute via the ReactionsRow. This is the AC-R29/R40 verification nobody could do headlessly.
+
+**Remaining Tier 3 work:** sub-PR #3 (decay *display* layer — opacity-fade + auto-removal at expiry; the time-since BADGE is already done in #40, so #3 may be minimal). **Follow-ups:** adopt supabase-swift SDK (→ Keychain + real Realtime, currently URLSession + polling), and 3 cosmetic PR #40 nits (a "Street sweeper" vs spec's "Sweeper passed" row label — accepted as clearer; 2 stale code comments).
+
 ### 2026-06-05 (later) — Tier 3 sub-PR #1 ships: anonymous-auth + crowd write path + reactions
 
 **What landed:** **PR #39** (`d891763`). The first WRITE path + the reactions trust loop. `Services/SupabaseAuthService.swift` (silent `signInAnonymously()` on launch — no signup wall, per direction §6.3), `CommunityPinService` write methods (`insertCrowdPin` source='crowd'+author_id, `upsertVote` confirm/dispute on (pin_id,user_id), `callExtendPinExpiry` RPC), `PinDetailSheet` `ReactionsRow` (one-tap confirm/dispute + "Still there?", shown only for `lifespan==.ephemeral && source==.crowd`, A1 own-pin guard = iOS-only). Plus `supabase/02e-auto-resolve-trigger.sql` (`@backend-data`: auto-set `resolved_at` when `dispute_count>=3` on ephemeral crowd pins; on main, NOT yet applied to prod). **Tests 316 → 331/0**, RegionSyncGuard intact, #31-clean. QA PASS-WITH-NITS at `docs/qa/tier3-pr39-qa.md`.
