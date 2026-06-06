@@ -143,7 +143,11 @@ final class CommunityPinService {
 
     /// Repeating periodic refresh task (Fix 2). Created lazily in `startPeriodicRefresh()`.
     /// Cancelled by `stopPeriodicRefresh()` when Drive Mode activates or the service is torn down.
-    private var periodicRefreshTask: Task<Void, Never>? = nil
+    ///
+    /// `internal` (not `private`) so tests can assert scheduling invariants via `@testable import`:
+    /// e.g. "startPeriodicRefresh sets a non-nil task", "setDriveModeActive(true) clears the task".
+    /// This is the narrowest access widening required — all tests use it as a non-nil/nil probe only.
+    var periodicRefreshTask: Task<Void, Never>? = nil
 
     /// The last map region that was successfully fetched.
     /// Used by the periodic refresh to re-fetch the same viewport (Fix 2).
