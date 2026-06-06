@@ -182,6 +182,20 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-06 (later) — Tier 3 goes LIVE in prod + 5 live-test bugs fixed (Kevin's hands-on session)
+
+**Milestone: the community reporting loop works end-to-end in production.** Kevin enabled the two backend prereqs — **Anonymous Sign-ins** (Supabase → Auth → Anonymous; was OFF by default — this was the #1 "submit fails" cause, diagnosed via a direct `curl /auth/v1/signup` returning `anonymous_provider_disabled`) and applied **`02e-auto-resolve-trigger.sql`**. Verified via prod curl: anon sign-in → 200, insert crowd pin → 201 (RLS accepts). Then Kevin live-tested on the sim and found 5 real bugs, all fixed across **PR #41 + #42**:
+
+**PR #41** (`eb2d5e0`) — 3 bugs: (1) **crowd pins never displayed** — the fetch only pulled `source=eq.open_data` Tier 1 pins; added a 2nd concurrent fetch channel for `source=crowd` ephemeral enforcement/sweeper pins; (2) **long-press opened the parking-info card instead of the report dialog** — added `tap.require(toFail: longPress)` in MapViewRepresentable so a hold always wins over the segment tap (quick tap still opens block detail; ~0.4s tap delay is the accepted tradeoff); (3) **in-drive Report gave no block context** — ReportSheet now shows "Reporting on <street>" via `drivingContext?.street`. QA: orchestrator-verified PASS (`docs/qa/tier3-pr41-qa.md`; the qa-verifier agent flaked on the blank-sim artifact, so the orchestrator — not the author — independently ran tests + reviewed the #31-class gesture diff).
+
+**PR #42** (`e9d0bea`) — 2 bugs (slow/missing pins): root cause = NO instant feedback + NO auto-refresh (fetch only fired on map pan; `insertCrowdPin` used `return=minimal`; `startRealtime()` is a stub). Fixes: (1) **instant feedback** — `insertCrowdPin` now `return=representation` + appends via `mergeRealtimeChange` so a report appears immediately; (2) **periodic refresh** — a ~20–30s repeating re-fetch of the visible region (interim until websocket Realtime) so pins appear/expire without panning; (3) **marker safety net** — `markerImage` falls back to a colored dot if an SF Symbol fails to resolve (a pin must never silently vanish). NOTE: the "sweeper didn't appear" was NOT an icon bug (`truck.box.fill` resolves) — it was the refresh gap (sweeper was reported after the last pan). **Tests 351 → 373/0.** QA: orchestrator **live-verified** — inserted fresh enforcement+sweeper pins via the live anon-auth path and screenshotted BOTH a teal `person.badge.clock.fill` and a cyan `truck.box.fill` marker rendering at SoHo WITHOUT panning (`docs/qa/tier3-pr42-qa.md`). Tier 3 reporting is now confirmed working live, end to end.
+
+**OUTSTANDING:**
+- **SDK follow-up** (still): adopt `supabase-swift` → replaces the periodic-poll with real websocket Realtime + Keychain session storage. The polling is the TF1 stand-in.
+- **Pre-launch hardening:** enable **captcha** on anonymous sign-ins (Supabase warned: prevents bot sign-up spam / MAU bloat) before public launch.
+- **Cleanup:** 2 test crowd pins were inserted with a 2099 expiry for the render smoke and will NOT auto-expire — delete them (`delete from public.pins where source='crowd' and expires_at > '2030-01-01'`).
+- Same-coord reported pins overlap (no clustering yet) — minor, future.
+
 ### 2026-06-06 — Tier 3 sub-PR #2 ships: universal community reporting (no patrol mode)
 
 **Product pivot (Kevin):** DROPPED the separate "Patrol mode." Reporting is now UNIVERSAL — the destination-less "look for parking" experience stays as the shipped **Find Parking / Cruise Mode**, and reporting is a capability available everywhere, not a mode you enter. Two context-appropriate affordances: (1) **resting/browsing** → long-press a block → `confirmationDialog` ("Park my car here" [W5, intact] / "Report enforcement or sweeper"); (2) **driving** (destination OR Find Parking) → one-tap **Report** button in the drive overlay (`flag.fill` + "Report" label, orange, inline with End pill + mute) → `ReportSheet` → drops the pin at current GPS (Waze-style, driving-safe — long-press is a no-op while driving). The `DriveModeStyle.patrol` enum case was removed.
