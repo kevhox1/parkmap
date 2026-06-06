@@ -247,9 +247,10 @@ final class PinMarkerAnnotation: MKAnnotationView {
             accessibilityValue = badge
             // The callout subtitle is driven by CommunityPinAnnotation.subtitle.
         case .sweeperPassed:
-            // Design note §3: label reflects direction field ("passed" vs "coming_soon").
+            // Design note §3: label reflects direction field (.comingSoon → "Sweeper approaching";
+            // .passed or nil → "Sweeper passed").
             if case .sweeperPassed(let m) = pin.meta {
-                accessibilityLabel = m.direction == "coming_soon" ? "Sweeper approaching" : "Sweeper passed"
+                accessibilityLabel = m.direction == .comingSoon ? "Sweeper approaching" : "Sweeper passed"
             } else {
                 accessibilityLabel = "Sweeper passed"
             }
