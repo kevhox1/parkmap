@@ -1283,18 +1283,27 @@ struct ContentView: View {
                 // Visible whenever driveModeActive == true (both .destination and .cruise).
                 // Tapping drops a pin at the user's CURRENT GPS — no map-picking while driving.
                 // If GPS is unavailable, the button silently no-ops (guard let loc).
+                // Design note §4: icon-only fails glanceability bar — add .caption2 "Report" label
+                // beneath the flag icon, matching the End pill's text label for HStack consistency.
                 Button {
                     guard let loc = locationService.userLocation else { return }
                     activeSheet = .reportPin(coord: loc)
                 } label: {
-                    Image(systemName: "flag.fill")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(Color.orange)
+                    VStack(spacing: 2) {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 17, weight: .medium))
+                        Text("Report")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundStyle(Color.orange)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .padding(.horizontal, 8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                 }
+                .contentShape(Rectangle())
                 .accessibilityLabel("Report enforcement or sweeper")
-                .accessibilityHint("Drops a pin at your current location. Select report type, then tap Report.")
+                .accessibilityHint("Drops a pin at your current location.")
 
                 Spacer()
             }
