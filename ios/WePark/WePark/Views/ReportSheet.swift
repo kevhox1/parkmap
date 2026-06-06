@@ -46,6 +46,18 @@ struct ReportSheet: View {
     /// Called when the sheet should dismiss (on success or cancel).
     let onDismiss: () -> Void
 
+    /// Bug #4: Resolved street/block name for the "Reporting on X" context line.
+    ///
+    /// In-drive path: injected from `drivingContext?.street` (the same street name
+    /// shown in the DriveModeBottomCard). This is already resolved by the existing
+    /// DrivingContextService segment search — no new resolution needed.
+    ///
+    /// Resting path: nil (no continuous GPS + segment search in resting mode).
+    ///
+    /// When non-nil, the sheet shows "Reporting on <streetName>" below the header.
+    /// When nil, falls back to "Reporting at current location".
+    var streetName: String? = nil
+
     // MARK: - Primary type selection
 
     enum ReportType {
@@ -100,6 +112,19 @@ struct ReportSheet: View {
                     Text("Help your neighbors find safe parking.")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                    // Bug #4: "Reporting on X" context line — surfaces the resolved block
+                    // name so the user can confirm they are reporting on the correct street.
+                    // In-drive: streetName comes from drivingContext?.street (DrivingContextService).
+                    // Resting: streetName is nil → fallback label shown.
+                    HStack(spacing: 4) {
+                        Image(systemName: "location.fill")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                        Text(ReportSheet.locationContextLabel(streetName: streetName))
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.top, 2)
                 }
                 .padding(.horizontal, 20)
                 .padding(.top, 20)
@@ -397,5 +422,20 @@ struct ReportSheet: View {
     /// Pure static function — testable without a SwiftUI view instance.
     static func isEnabled(selectedType: ReportType?, isSubmitting: Bool) -> Bool {
         selectedType != nil && !isSubmitting
+    }
+
+    // MARK: - locationContextLabel (static, for test access)
+
+    /// Returns the "Reporting on X" context label for the given street name.
+    ///
+    /// Pure static function — testable without a SwiftUI view instance.
+    ///
+    /// - Parameter streetName: The resolved block/street name, or nil when unavailable.
+    /// - Returns: "Reporting on <streetName>" when non-nil; "Reporting at current location" otherwise.
+    static func locationContextLabel(streetName: String?) -> String {
+        if let name = streetName, !name.isEmpty {
+            return "Reporting on \(name)"
+        }
+        return "Reporting at current location"
     }
 }

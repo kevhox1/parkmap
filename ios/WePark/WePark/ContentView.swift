@@ -144,9 +144,14 @@ enum ActiveSheet: Identifiable {
     /// Presented when the user taps a `CommunityPinAnnotation` on the map.
     case pinDetail(CommunityPin)
     /// Tier 3 sub-PR #2: Universal community report sheet.
-    /// Resting entry: coord = long-press coordinate on map.
-    /// In-drive entry: coord = user's GPS at moment of tap.
-    case reportPin(coord: CLLocationCoordinate2D)
+    /// Resting entry: coord = long-press coordinate on map; streetName = nil.
+    /// In-drive entry: coord = user's GPS at moment of tap; streetName = drivingContext?.street.
+    ///
+    /// Bug #4: streetName added so the ReportSheet can show "Reporting on <street>"
+    /// when opened from the in-drive button. The existing DrivingContextService already
+    /// resolves the street name for the DriveModeBottomCard — we reuse that value here
+    /// rather than running a second segment search.
+    case reportPin(coord: CLLocationCoordinate2D, streetName: String?)
 
     var id: String {
         switch self {
@@ -158,7 +163,7 @@ enum ActiveSheet: Identifiable {
         case .parkUntil:                  return "parkUntil"
         case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
-        case .reportPin(let coord):       return "reportPin-\(coord.latitude)-\(coord.longitude)"
+        case .reportPin(let coord, _):    return "reportPin-\(coord.latitude)-\(coord.longitude)"
         }
     }
 }
@@ -534,7 +539,9 @@ struct ContentView: View {
                         return
                     }
                     pendingLongPressCoord = nil
-                    activeSheet = .reportPin(coord: coord)
+                    // Resting path: no street context (not in Drive Mode). streetName = nil →
+                    // ReportSheet shows "Reporting at current location" fallback.
+                    activeSheet = .reportPin(coord: coord, streetName: nil)
                 }
                 Button("Cancel", role: .cancel) {
                     pendingLongPressCoord = nil
@@ -709,15 +716,17 @@ struct ContentView: View {
             // complexity in sheetContent(_:) — same pattern as PR-1 @ViewBuilder extractions.
             pinDetailSheetContent(pin)
 
-        case .reportPin(let coord):
+        case .reportPin(let coord, let streetName):
             // Tier 3 sub-PR #2: Universal community report sheet.
             // Coordinate source depends on entry path:
-            //   - Resting: coord = long-press point on map
-            //   - In-drive: coord = user GPS at moment of tap
+            //   - Resting: coord = long-press point on map; streetName = nil
+            //   - In-drive: coord = user GPS at moment of tap; streetName = drivingContext?.street
+            // Bug #4: streetName passed through so ReportSheet shows "Reporting on <street>".
             ReportSheet(
                 coordinate: coord,
                 pinService: pinService,
-                onDismiss: { activeSheet = nil }
+                onDismiss: { activeSheet = nil },
+                streetName: streetName
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -1285,9 +1294,13 @@ struct ContentView: View {
                 // If GPS is unavailable, the button silently no-ops (guard let loc).
                 // Design note §4: icon-only fails glanceability bar — add .caption2 "Report" label
                 // beneath the flag icon, matching the End pill's text label for HStack consistency.
+                //
+                // Bug #4: Pass drivingContext?.street so ReportSheet can show
+                // "Reporting on <street>" — reuses the name already resolved by
+                // DrivingContextService for the DriveModeBottomCard (no new search).
                 Button {
                     guard let loc = locationService.userLocation else { return }
-                    activeSheet = .reportPin(coord: loc)
+                    activeSheet = .reportPin(coord: loc, streetName: drivingContext?.street)
                 } label: {
                     VStack(spacing: 2) {
                         Image(systemName: "flag.fill")

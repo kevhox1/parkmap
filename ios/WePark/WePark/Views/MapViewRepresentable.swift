@@ -465,19 +465,18 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Set initial camera region.
         mapView.setRegion(region, animated: false)
 
-        // UITapGestureRecognizer for block taps.
-        let tap = UITapGestureRecognizer(
-            target: context.coordinator,
-            action: #selector(Coordinator.handleTap(_:))
-        )
-        // Allow simultaneous recognition with MKMapView's built-in gesture recognizers
-        // (needed so map gestures like pan/pinch still work alongside our tap).
-        tap.delegate = context.coordinator
-        mapView.addGestureRecognizer(tap)
-
-        // W5: UILongPressGestureRecognizer for pin-drop.
+        // W5: UILongPressGestureRecognizer for pin-drop / report dialog.
         // 0.4s minimum duration — slightly faster than iOS default (0.5s) for better
         // responsiveness on a small phone. Above the 0.3s accidental-tap-hold threshold.
+        //
+        // IMPORTANT: longPress is declared BEFORE tap so tap.require(toFail: longPress)
+        // can reference it. The gesture priority rule (Bug #3 fix): a long-press on any
+        // surface — including over a street-segment polyline — must always win over the
+        // segment-tap handler. Without require(toFail:), UIKit fires BOTH recognizers
+        // concurrently (because shouldRecognizeSimultaneously returns true), so a 0.4s
+        // hold on a segment would simultaneously open BlockDetailView AND the
+        // confirmationDialog. require(toFail:) delays the tap until the 0.4s window
+        // passes without a long-press — if the long-press fires, the tap is cancelled.
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleLongPress(_:))
@@ -485,6 +484,23 @@ struct MapViewRepresentable: UIViewRepresentable {
         longPress.minimumPressDuration = 0.4
         longPress.delegate = context.coordinator
         mapView.addGestureRecognizer(longPress)
+
+        // UITapGestureRecognizer for block taps.
+        let tap = UITapGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handleTap(_:))
+        )
+        // Bug #3 fix: require the long-press to fail before the tap fires.
+        // This means: if the user holds for >= 0.4s (long-press threshold), the tap is
+        // cancelled and only the long-press handler fires. A normal quick tap (< 0.4s)
+        // lets the long-press fail naturally (it never reaches .began), so the tap fires
+        // as expected. This ensures long-press ALWAYS wins over segment-tap regardless
+        // of which surface is touched.
+        tap.require(toFail: longPress)
+        // Allow simultaneous recognition with MKMapView's built-in gesture recognizers
+        // (needed so map gestures like pan/pinch still work alongside our tap).
+        tap.delegate = context.coordinator
+        mapView.addGestureRecognizer(tap)
 
         context.coordinator.mapView = mapView
 
