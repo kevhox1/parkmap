@@ -134,20 +134,20 @@ final class DistanceFormattingTests: XCTestCase {
 
 final class EndDrivePillZOrderTests: XCTestCase {
 
-    // MARK: - Test 7: .aspInEffect — pill must clear the green ASP banner (non-zero padding)
+    // MARK: - Test 7: .aspInEffect — pill must clear the amber ASP banner (non-zero padding)
 
     /// Verifies that `paddingForBannerState` returns non-zero clearance for `.aspInEffect`.
     ///
     /// Regression guard for the PR-1 bug where the property returned 0 for `.aspInEffect`,
     /// placing the End Drive pill flush against the top of the screen with no clearance for
-    /// the status bar or the green "ASP in Effect Today" banner.
+    /// the status bar or the amber "ASP in Effect Today" banner.
     ///
     /// This is a pure logic test against `paddingForBannerState(_:)` — the actual view
     /// layout is verified by live-UI smoke (documented in the PR description). Live-UI smoke
     /// is mandatory per the merge gate established after the W8.5c-polish revert.
     func testEndDrivePillOffset_aspInEffect_clearsBanner() {
         let padding = paddingForBannerState(.aspInEffect)
-        XCTAssertGreaterThan(padding, 0, "End Drive pill must have non-zero top padding when ASP is in effect — the green banner is visible and the pill must clear it")
+        XCTAssertGreaterThan(padding, 0, "End Drive pill must have non-zero top padding when ASP is in effect — the amber banner is visible and the pill must clear it")
         XCTAssertEqual(padding, 44, "End Drive pill should have 44pt top padding for .aspInEffect")
     }
 
