@@ -134,9 +134,11 @@ final class CommunityPinService {
     // MARK: - Periodic refresh interval constant
 
     /// Interval for the periodic region re-fetch (Fix 2 / TF1 Realtime stand-in).
-    /// Chosen to be short enough to surface other users' fresh pins without hammering Supabase.
+    /// Set to 8s so other users' fresh reports appear in <10s instead of ~25–35s.
+    /// This is still the TF1 polling stand-in; real-time push via the supabase-swift
+    /// SDK WebSocket Realtime is the TF2 upgrade path that will replace this timer.
     /// Named constant so it can be referenced in tests without magic numbers.
-    static let pinRefreshIntervalSeconds: TimeInterval = 25
+    static let pinRefreshIntervalSeconds: TimeInterval = 8
 
     /// In-flight debounce task. Cancelled and replaced on each `onRegionChanged` call.
     private var fetchTask: Task<Void, Never>? = nil

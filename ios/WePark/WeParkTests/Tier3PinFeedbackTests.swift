@@ -469,8 +469,8 @@ final class PeriodicRefreshSchedulingTests: XCTestCase {
             "Fix 2: pinRefreshIntervalSeconds must be <= 300s (too infrequent for live crowd feedback)")
         // Verify exact current value as a regression guard. If this changes intentionally,
         // update this assertion alongside the constant.
-        XCTAssertEqual(interval, 25,
-            "Fix 2: pinRefreshIntervalSeconds must be 25s (the TF1 spec'd value)")
+        XCTAssertEqual(interval, 8,
+            "Fix 2: pinRefreshIntervalSeconds must be 8s (TF1 polling stand-in; real-time push is the TF2 SDK path)")
     }
 }
 
