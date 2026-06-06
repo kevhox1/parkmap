@@ -286,20 +286,18 @@ final class CommunityPinService {
 
     // MARK: - Network fetch
 
-    /// Issues the PostgREST bounding-box query and updates `visiblePins`.
+    /// Issues two PostgREST bounding-box queries in parallel and merges the results:
+    ///   - Channel 1 (open_data): filming / asp_suspended_today / special_event pins.
+    ///   - Channel 2 (crowd ephemeral): enforcement_active / sweeper_passed pins,
+    ///     source=crowd, lifespan=ephemeral, resolved_at is null, not expired.
     ///
-    /// Query spec (tier1-pin-display-spec.md §6):
-    ///   - pin_type = in.(filming, asp_suspended_today, special_event)
-    ///   - source = eq.open_data
-    ///   - resolved_at = is.null
-    ///   - or=(expires_at.is.null, expires_at.gt.<now-ISO>)
-    ///   - bounding box: lat/lng gte/lte from MKCoordinateRegion
-    ///
-    /// On success: replaces `visiblePins` with the filtered result.
+    /// Both channels share the same client-side filter on completion.
+    /// On success: replaces `visiblePins` with the merged, filtered result.
     /// On failure: sets `fetchError`; does NOT clear `visiblePins` (stale data stays visible).
     private func fetchPins(for region: MKCoordinateRegion) async {
         let bbox = BoundingBox(from: region)
-        guard let request = buildRequest(bbox: bbox) else {
+        guard let openDataRequest = buildOpenDataRequest(bbox: bbox),
+              let crowdRequest = buildCrowdEphemeralRequest(bbox: bbox) else {
             return
         }
 
@@ -308,17 +306,33 @@ final class CommunityPinService {
         lastFetchCenter = region.center
 
         do {
-            let (data, response) = try await urlSession.data(for: request)
+            // Issue both requests concurrently — independent channels, no ordering dependency.
+            async let openDataResult = urlSession.data(for: openDataRequest)
+            async let crowdResult = urlSession.data(for: crowdRequest)
 
-            if let httpResponse = response as? HTTPURLResponse,
+            let (openDataData, openDataResponse) = try await openDataResult
+            let (crowdData, crowdResponse) = try await crowdResult
+
+            if let httpResponse = openDataResponse as? HTTPURLResponse,
+               !(200..<300).contains(httpResponse.statusCode) {
+                fetchError = CommunityPinFetchError.httpError(statusCode: httpResponse.statusCode)
+                isLoading = false
+                return
+            }
+            if let httpResponse = crowdResponse as? HTTPURLResponse,
                !(200..<300).contains(httpResponse.statusCode) {
                 fetchError = CommunityPinFetchError.httpError(statusCode: httpResponse.statusCode)
                 isLoading = false
                 return
             }
 
-            let decoded = try decodeResponse(data: data)
-            visiblePins = clientSideFilter(decoded)
+            let openDataPins = try decodeResponse(data: openDataData)
+            let crowdPins = try decodeResponse(data: crowdData)
+
+            // Merge both channels: open_data first (deterministic ordering), then crowd.
+            // clientSideFilter deduplicates by filter logic (not by ID); both channels
+            // use distinct pin_type ranges so there is no overlap.
+            visiblePins = clientSideFilter(openDataPins + crowdPins)
             fetchError = nil
         } catch is CancellationError {
             // Task was cancelled (new region change arrived before debounce elapsed). No-op.
@@ -329,11 +343,15 @@ final class CommunityPinService {
         isLoading = false
     }
 
-    // MARK: - Request builder
+    // MARK: - Request builders
 
-    /// Builds the PostgREST URLRequest for the bounding-box pin query.
-    private func buildRequest(bbox: BoundingBox) -> URLRequest? {
-        // ISO 8601 timestamp for the client-side-expiry filter param.
+    /// Builds the PostgREST URLRequest for Channel 1: open-data pins.
+    ///
+    /// Fetches: filming, asp_suspended_today, special_event
+    ///   source = eq.open_data
+    ///   resolved_at = is.null
+    ///   expires_at is null OR > now
+    private func buildOpenDataRequest(bbox: BoundingBox) -> URLRequest? {
         let nowISO = iso8601Now()
 
         var components = URLComponents(
@@ -363,6 +381,51 @@ final class CommunityPinService {
         // Supabase PostgREST requires the anon key as the `apikey` header (AC-D21).
         // No `Authorization: Bearer <user-jwt>` header — anonymous read, per RLS policy
         // `pins_select_public` in supabase/02-pins-schema.sql §6.
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        return request
+    }
+
+    /// Builds the PostgREST URLRequest for Channel 2: crowd ephemeral pins.
+    ///
+    /// Fetches: enforcement_active, sweeper_passed
+    ///   source = eq.crowd
+    ///   lifespan = eq.ephemeral
+    ///   resolved_at = is.null       — 3-dispute-resolved pins are excluded (spec §3.9)
+    ///   expires_at is null OR > now — expired pins excluded server-side as well as client-side
+    ///
+    /// Bug #1 fix: this channel was documented in the service header comment but never
+    /// implemented in the request layer — crowd pins were fetched with zero results because
+    /// the open-data request's source=eq.open_data filter excluded them entirely.
+    private func buildCrowdEphemeralRequest(bbox: BoundingBox) -> URLRequest? {
+        let nowISO = iso8601Now()
+
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/pins_with_author"),
+            resolvingAgainstBaseURL: false
+        )
+
+        components?.queryItems = [
+            URLQueryItem(name: "pin_type",    value: "in.(enforcement_active,sweeper_passed)"),
+            URLQueryItem(name: "source",      value: "eq.crowd"),
+            URLQueryItem(name: "lifespan",    value: "eq.ephemeral"),
+            URLQueryItem(name: "resolved_at", value: "is.null"),
+            URLQueryItem(name: "or",          value: "(expires_at.is.null,expires_at.gt.\(nowISO))"),
+            URLQueryItem(name: "lat",         value: "gte.\(bbox.swLat)"),
+            URLQueryItem(name: "lat",         value: "lte.\(bbox.neLat)"),
+            URLQueryItem(name: "lng",         value: "gte.\(bbox.swLng)"),
+            URLQueryItem(name: "lng",         value: "lte.\(bbox.neLng)"),
+            URLQueryItem(
+                name: "select",
+                value: "id,pin_type,source,lifespan,lat,lng,segment_id,zone_id,expires_at,confirm_count,dispute_count,meta,notes,author_username,created_at,updated_at,resolved_at,author_id"
+            ),
+        ]
+
+        guard let url = components?.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
 

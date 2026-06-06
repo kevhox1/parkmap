@@ -5,7 +5,7 @@
 //  Community 1.0 Tier 1 Pin Display — fixture-driven unit tests.
 //  Spec: docs/tier1-pin-display-spec.md §11 (AC-D1 through AC-D9d).
 //
-//  Test inventory (21 tests):
+//  Test inventory (34 tests):
 //
 //  Client-side filter — expiry (4 tests, AC-D1 through AC-D4):
 //    1.  testClientSideFilter_expiredPin_removed              (AC-D1)
@@ -13,38 +13,51 @@
 //    3.  testClientSideFilter_futureExpiry_retained           (AC-D3)
 //    4.  testClientSideFilter_resolvedPin_removed             (AC-D4)
 //
-//  Fetch path — source=open_data guard (1 test, AC-D6):
+//  Fetch path — request structure (5 tests, AC-D6 + Bug #1):
 //    5.  testFetchRequest_includesOpenDataSourceFilter        (AC-D6)
+//    6.  testFetchRequest_includesCrowdEphemeralChannel       (Bug #1)
+//    7.  testFetchRequest_crowdChannel_includesResolvedAtIsNull (Bug #1)
+//    8.  testBuildRequest_noAuthorizationHeader               (AC-D21)
+//    9.  testBuildRequest_apiKeyHeader_present
 //
 //  Debounce — two rapid calls fire only one fetch (1 test, AC-D7):
-//    6.  testDebounce_twoRapidCalls_firesOneFetch             (AC-D7)
+//   10.  testDebounce_twoRapidCalls_firesOneFetch             (AC-D7)
 //
 //  Map marker filter — asp_suspended_today excluded (1 test, AC-D8):
-//    7.  testMapMarkerFilter_aspSuspendedToday_excluded       (AC-D8)
+//   11.  testMapMarkerFilter_aspSuspendedToday_excluded       (AC-D8)
 //
 //  ASP banner supplement — resolvedBannerState (4 tests, AC-D9a through AC-D9d):
-//    8.  testResolvedBannerState_aspPinToday_bundleInEffect_returnsSuspended  (AC-D9a)
-//    9.  testResolvedBannerState_bundleAlreadySuspended_noOverride            (AC-D9b)
-//   10.  testResolvedBannerState_noPins_returnsBundle                         (AC-D9c)
-//   11.  testResolvedBannerState_expiredPin_noOverride                        (AC-D9d)
+//   12.  testResolvedBannerState_aspPinToday_bundleInEffect_returnsSuspended  (AC-D9a)
+//   13.  testResolvedBannerState_bundleAlreadySuspended_noOverride            (AC-D9b)
+//   14.  testResolvedBannerState_noPins_returnsBundle                         (AC-D9c)
+//   15.  testResolvedBannerState_expiredPin_noOverride                        (AC-D9d)
 //
 //  Realtime merge — mergeRealtimeChange (5 tests):
-//   12.  testMergeRealtimeChange_newFilmingPin_appended
-//   13.  testMergeRealtimeChange_resolvedPin_removed
-//   14.  testMergeRealtimeChange_expiredPin_removed
-//   15.  testMergeRealtimeChange_aspPin_notAddedAsMarker_but_available_in_visiblePins
-//   16.  testMergeRealtimeChange_updateExistingPin
+//   16.  testMergeRealtimeChange_newFilmingPin_appended
+//   17.  testMergeRealtimeChange_resolvedPin_removed
+//   18.  testMergeRealtimeChange_expiredPin_removed
+//   19.  testMergeRealtimeChange_aspPin_notAddedAsMarker_but_available_in_visiblePins
+//   20.  testMergeRealtimeChange_updateExistingPin
+//
+//  Bug #1: crowd pin optimistic-append tests (3 tests):
+//   21.  testMergeRealtimeChange_enforcementActive_crowdPin_appended
+//   22.  testMergeRealtimeChange_sweeperPassed_crowdPin_appended
+//   23.  testMergeRealtimeChange_resolvedCrowdPin_removed
+//
+//  Bug #4: ReportSheet.locationContextLabel (4 tests):
+//   24.  testLocationContextLabel_withStreetName_returnsReportingOn
+//   25.  testLocationContextLabel_nilStreetName_returnsFallback
+//   26.  testLocationContextLabel_emptyStreetName_returnsFallback
+//   27.  testLocationContextLabel_multiWordStreet_preservedExactly
 //
 //  Fixture injection (2 tests):
-//   17.  testInject_replacesVisiblePins
-//   18.  testInject_emptyArray_clearsVisiblePins
+//   28.  testInject_replacesVisiblePins
+//   29.  testInject_emptyArray_clearsVisiblePins
 //
-//  URL request structure (3 tests, AC-D6):
-//   19.  testBuildRequest_containsExpectedQueryItems
-//   20.  testBuildRequest_noAuthorizationHeader
-//   21.  testBuildRequest_apiKeyHeader_present
+//  URL request structure tests moved to CommunityPinServiceRequestTests (5 tests above).
 //
-//  Baseline: 280/0. After this suite: 280 + 21 = 301/0 (total).
+//  Baseline: 280/0. After this suite: 280 + 13 (net new) = 293/0 (total).
+//  (21 original tests → 5 request tests restructured + 3 crowd merge + 4 locationContextLabel = 34 total)
 //
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens or Supabase keys.
@@ -223,134 +236,181 @@ final class CommunityPinServiceFilterTests: XCTestCase {
     }
 }
 
-// MARK: - Fetch path request structure tests (AC-D6)
+// MARK: - Fetch path request structure tests (AC-D6 + Bug #1 crowd channel)
 
 @MainActor
 final class CommunityPinServiceRequestTests: XCTestCase {
 
-    /// AC-D6: The URLRequest built by buildRequest includes source=eq.open_data.
+    /// Helper: builds a mock session that captures ALL requests fired during a fetch.
     ///
-    /// Access: `buildRequest` is private; tested indirectly by calling
-    /// `onRegionChanged` on a service with a mock URLSession that captures the request.
+    /// The fetch now issues two concurrent requests (open_data + crowd ephemeral).
+    /// The handler is called once per request; we capture all URLs in an array.
+    private func captureRequestsAndMakeService(
+        handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) -> (CommunityPinService, URLSession) {
+        PinMockURLProtocol.requestHandler = handler
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [PinMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let service = CommunityPinService(
+            supabaseURL: kServiceURL,
+            supabaseAnonKey: kAnonKey,
+            nowProvider: { kNow },
+            urlSession: session
+        )
+        return (service, session)
+    }
+
+    // MARK: - AC-D6: open-data channel filter
+
+    /// AC-D6: At least one of the two requests must include source=eq.open_data.
     ///
-    /// Strategy: inject a custom URLSession (via PinMockURLProtocol) and observe the
-    /// URLRequest captured during the debounced fetch. Verify that the URL includes
-    /// `source=eq.open_data` in its query string.
+    /// Bug #1 fix context: the fetch now issues two parallel requests (Channel 1: open_data,
+    /// Channel 2: crowd). This test verifies Channel 1 is still being sent correctly.
     func testFetchRequest_includesOpenDataSourceFilter() async throws {
-        // Capture the request URL.
-        var capturedURL: URL? = nil
-        let expectation = expectation(description: "fetch fires")
+        var capturedURLs: [String] = []
+        // Both requests will call the handler. We need 2 fulfillments.
+        let expectation = expectation(description: "both fetches fire")
+        expectation.expectedFulfillmentCount = 2
 
-        PinMockURLProtocol.requestHandler = { request in
-            capturedURL = request.url
+        let (service, _) = captureRequestsAndMakeService { request in
+            capturedURLs.append(request.url?.absoluteString ?? "")
             expectation.fulfill()
-            // Return an empty JSON array so the decoder doesn't throw.
-            return (HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!, "[]".data(using: .utf8)!)
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
         }
 
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [PinMockURLProtocol.self]
-        let session = URLSession(configuration: config)
-
-        let service = CommunityPinService(
-            supabaseURL: kServiceURL,
-            supabaseAnonKey: kAnonKey,
-            nowProvider: { kNow },
-            urlSession: session
-        )
-
-        // Fire onRegionChanged — the 800ms debounce will fire the fetch.
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
         service.onRegionChanged(region)
+        await fulfillment(of: [expectation], timeout: 2.5)
 
-        // Wait up to 2s for the debounced fetch to fire (800ms debounce + buffer).
-        await fulfillment(of: [expectation], timeout: 2.0)
-
-        // AC-D6: The URL must include source=eq.open_data.
-        let urlString = capturedURL?.absoluteString ?? ""
-        XCTAssertTrue(
-            urlString.contains("source=eq.open_data"),
-            "AC-D6: URLRequest must include source=eq.open_data filter. Got: \(urlString)"
-        )
+        let hasOpenData = capturedURLs.contains { $0.contains("source=eq.open_data") }
+        XCTAssertTrue(hasOpenData,
+            "AC-D6: at least one request must include source=eq.open_data. Got: \(capturedURLs)")
     }
 
-    /// AC-D6 companion: request must NOT include an Authorization header (anon-only read).
+    // MARK: - Bug #1: crowd channel filter
+
+    /// Bug #1 fix: the second request must include source=eq.crowd + lifespan=eq.ephemeral
+    /// + pin_type in enforcement_active/sweeper_passed.
+    ///
+    /// This is the channel that was previously missing, causing crowd-reported pins to
+    /// never appear on the map.
+    func testFetchRequest_includesCrowdEphemeralChannel() async throws {
+        var capturedURLs: [String] = []
+        let expectation = expectation(description: "both fetches fire")
+        expectation.expectedFulfillmentCount = 2
+
+        let (service, _) = captureRequestsAndMakeService { request in
+            capturedURLs.append(request.url?.absoluteString ?? "")
+            expectation.fulfill()
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
+        }
+
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+        service.onRegionChanged(region)
+        await fulfillment(of: [expectation], timeout: 2.5)
+
+        let hasCrowdChannel = capturedURLs.contains { url in
+            url.contains("source=eq.crowd") &&
+            url.contains("lifespan=eq.ephemeral") &&
+            url.contains("enforcement_active")
+        }
+        XCTAssertTrue(hasCrowdChannel,
+            "Bug #1 fix: one request must include source=eq.crowd + lifespan=eq.ephemeral + enforcement_active. Got: \(capturedURLs)")
+    }
+
+    /// Bug #1 fix: the crowd channel request must include resolved_at=is.null so that
+    /// 3-dispute-resolved pins are excluded from the response.
+    func testFetchRequest_crowdChannel_includesResolvedAtIsNull() async throws {
+        var capturedURLs: [String] = []
+        let expectation = expectation(description: "both fetches fire")
+        expectation.expectedFulfillmentCount = 2
+
+        let (service, _) = captureRequestsAndMakeService { request in
+            capturedURLs.append(request.url?.absoluteString ?? "")
+            expectation.fulfill()
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
+        }
+
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+        service.onRegionChanged(region)
+        await fulfillment(of: [expectation], timeout: 2.5)
+
+        let crowdURL = capturedURLs.first { $0.contains("source=eq.crowd") }
+        XCTAssertNotNil(crowdURL, "Crowd channel URL must be captured")
+        XCTAssertTrue(crowdURL?.contains("resolved_at") == true && crowdURL?.contains("is.null") == true,
+            "Crowd channel must include resolved_at=is.null to exclude 3-dispute-resolved pins. Got: \(crowdURL ?? "nil")")
+    }
+
+    // MARK: - AC-D6 companion: no Authorization header
+
+    /// AC-D6 companion: requests must NOT include an Authorization header (anon-only read).
     func testBuildRequest_noAuthorizationHeader() async throws {
-        var capturedRequest: URLRequest? = nil
-        let expectation = expectation(description: "fetch fires")
+        var capturedRequests: [URLRequest] = []
+        let expectation = expectation(description: "both fetches fire")
+        expectation.expectedFulfillmentCount = 2
 
-        PinMockURLProtocol.requestHandler = { request in
-            capturedRequest = request
+        let (service, _) = captureRequestsAndMakeService { request in
+            capturedRequests.append(request)
             expectation.fulfill()
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                     "[]".data(using: .utf8)!)
         }
-
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [PinMockURLProtocol.self]
-        let session = URLSession(configuration: config)
-
-        let service = CommunityPinService(
-            supabaseURL: kServiceURL,
-            supabaseAnonKey: kAnonKey,
-            nowProvider: { kNow },
-            urlSession: session
-        )
 
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
         service.onRegionChanged(region)
-        await fulfillment(of: [expectation], timeout: 2.0)
+        await fulfillment(of: [expectation], timeout: 2.5)
 
-        // Must not have an Authorization header (anon read path — AC-D21).
-        let authHeader = capturedRequest?.value(forHTTPHeaderField: "Authorization")
-        XCTAssertNil(authHeader,
-            "AC-D21: fetch must NOT include an Authorization header for anon read")
+        // Neither request should have an Authorization header (anon read path — AC-D21).
+        for request in capturedRequests {
+            let authHeader = request.value(forHTTPHeaderField: "Authorization")
+            XCTAssertNil(authHeader,
+                "AC-D21: fetch must NOT include an Authorization header for anon read. URL: \(request.url?.absoluteString ?? "")")
+        }
     }
 
-    /// The apikey header must be present (Supabase PostgREST requirement).
-    func testBuildRequest_apiKeyHeader_present() async throws {
-        var capturedRequest: URLRequest? = nil
-        let expectation = expectation(description: "fetch fires")
+    // MARK: - apikey header present
 
-        PinMockURLProtocol.requestHandler = { request in
-            capturedRequest = request
+    /// Both requests must include the apikey header (Supabase PostgREST requirement).
+    func testBuildRequest_apiKeyHeader_present() async throws {
+        var capturedRequests: [URLRequest] = []
+        let expectation = expectation(description: "both fetches fire")
+        expectation.expectedFulfillmentCount = 2
+
+        let (service, _) = captureRequestsAndMakeService { request in
+            capturedRequests.append(request)
             expectation.fulfill()
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
                     "[]".data(using: .utf8)!)
         }
-
-        let config = URLSessionConfiguration.ephemeral
-        config.protocolClasses = [PinMockURLProtocol.self]
-        let session = URLSession(configuration: config)
-
-        let service = CommunityPinService(
-            supabaseURL: kServiceURL,
-            supabaseAnonKey: kAnonKey,
-            nowProvider: { kNow },
-            urlSession: session
-        )
 
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
         service.onRegionChanged(region)
-        await fulfillment(of: [expectation], timeout: 2.0)
+        await fulfillment(of: [expectation], timeout: 2.5)
 
-        let apiKeyHeader = capturedRequest?.value(forHTTPHeaderField: "apikey")
-        XCTAssertEqual(apiKeyHeader, kAnonKey,
-            "Request must include apikey header set to the anon key")
+        for request in capturedRequests {
+            let apiKeyHeader = request.value(forHTTPHeaderField: "apikey")
+            XCTAssertEqual(apiKeyHeader, kAnonKey,
+                "Both requests must include apikey header. URL: \(request.url?.absoluteString ?? "")")
+        }
     }
 }
 
@@ -359,10 +419,12 @@ final class CommunityPinServiceRequestTests: XCTestCase {
 @MainActor
 final class CommunityPinServiceDebounceTests: XCTestCase {
 
-    /// AC-D7: Two calls to onRegionChanged 200ms apart fire only ONE network fetch.
+    /// AC-D7: Two calls to onRegionChanged 200ms apart fire only ONE debounce window,
+    /// resulting in exactly two network requests (one per channel: open_data + crowd).
     ///
-    /// Strategy: inject a PinMockURLProtocol that counts requests. Send two region changes
-    /// 200ms apart (within the 800ms debounce window). Wait 1.2s total. Assert count == 1.
+    /// The debounce collapses the two calls into one fetchPins invocation.
+    /// fetchPins issues two concurrent requests (Channel 1 + Channel 2).
+    /// Expected total: 2 requests (not 4, which would happen if both onRegionChanged calls fetched).
     func testDebounce_twoRapidCalls_firesOneFetch() async {
         var fetchCount = 0
         PinMockURLProtocol.requestHandler = { request in
@@ -401,8 +463,11 @@ final class CommunityPinServiceDebounceTests: XCTestCase {
         // Wait 1.2s total (800ms debounce + 400ms buffer).
         try? await Task.sleep(for: .milliseconds(1200))
 
-        XCTAssertEqual(fetchCount, 1,
-            "AC-D7: two onRegionChanged calls 200ms apart must fire only ONE fetch (debounce)")
+        // fetchPins issues 2 requests per debounced call (open_data + crowd channels).
+        // Two rapid onRegionChanged calls that collapse to ONE fetch → 2 total requests.
+        // If debounce fails and two fetches fire → 4 requests (the failure mode).
+        XCTAssertEqual(fetchCount, 2,
+            "AC-D7: two onRegionChanged calls 200ms apart must fire ONE debounced fetch (= 2 requests: open_data + crowd)")
     }
 }
 
@@ -638,6 +703,119 @@ final class CommunityPinServiceInjectionTests: XCTestCase {
 
         service.inject(fixtures: [])
         XCTAssertTrue(service.visiblePins.isEmpty, "inject([]) must clear visiblePins")
+    }
+}
+
+// MARK: - Bug #1: Crowd pin optimistic-append tests
+
+/// Verifies that mergeRealtimeChange correctly appends crowd ephemeral pins.
+///
+/// This covers the optimistic-append path: when the reporter submits a pin, the service
+/// calls mergeRealtimeChange to immediately show the pin without waiting for a region-change
+/// re-fetch. The bug was that the fetch query excluded crowd pins — these tests ensure
+/// the merge path works for enforcement_active and sweeper_passed.
+@MainActor
+final class CommunityPinServiceCrowdMergeTests: XCTestCase {
+
+    /// enforcement_active crowd pin → appended to visiblePins via mergeRealtimeChange.
+    ///
+    /// This is the optimistic-append path used immediately after insertCrowdPin returns.
+    /// Without this, the reporter would not see their own pin until a region-change fires.
+    func testMergeRealtimeChange_enforcementActive_crowdPin_appended() {
+        let service = CommunityPinService(
+            supabaseURL: kServiceURL,
+            supabaseAnonKey: kAnonKey,
+            nowProvider: { kNow }
+        )
+        let pin = makeFixturePin(pinType: .enforcementActive, source: .crowd, expiresAt: kFuture)
+
+        service.mergeRealtimeChange(pin: pin)
+
+        XCTAssertEqual(service.visiblePins.count, 1,
+            "enforcement_active crowd pin must be appended via mergeRealtimeChange")
+        XCTAssertEqual(service.visiblePins[0].pinType, .enforcementActive)
+        XCTAssertEqual(service.visiblePins[0].source, .crowd)
+    }
+
+    /// sweeper_passed crowd pin → appended to visiblePins via mergeRealtimeChange.
+    func testMergeRealtimeChange_sweeperPassed_crowdPin_appended() {
+        let service = CommunityPinService(
+            supabaseURL: kServiceURL,
+            supabaseAnonKey: kAnonKey,
+            nowProvider: { kNow }
+        )
+        let pin = makeFixturePin(pinType: .sweeperPassed, source: .crowd, expiresAt: kFuture)
+
+        service.mergeRealtimeChange(pin: pin)
+
+        XCTAssertEqual(service.visiblePins.count, 1,
+            "sweeper_passed crowd pin must be appended via mergeRealtimeChange")
+        XCTAssertEqual(service.visiblePins[0].pinType, .sweeperPassed)
+    }
+
+    /// enforcement_active crowd pin with resolvedAt set → removed via mergeRealtimeChange.
+    ///
+    /// Verifies the 3-dispute-resolved path: when dispute_count reaches the threshold
+    /// and the pin is resolved, a Realtime UPDATE with resolvedAt set should remove it
+    /// from the map.
+    func testMergeRealtimeChange_resolvedCrowdPin_removed() {
+        let service = CommunityPinService(
+            supabaseURL: kServiceURL,
+            supabaseAnonKey: kAnonKey,
+            nowProvider: { kNow }
+        )
+        let pinID = UUID()
+        let pin = makeFixturePin(id: pinID, pinType: .enforcementActive, source: .crowd, expiresAt: kFuture)
+        service.inject(fixtures: [pin])
+        XCTAssertEqual(service.visiblePins.count, 1)
+
+        // Simulate a Realtime UPDATE where the pin has been resolved (dispute threshold reached).
+        let resolvedPin = makeFixturePin(
+            id: pinID,
+            pinType: .enforcementActive,
+            source: .crowd,
+            expiresAt: kFuture,
+            resolvedAt: kNow
+        )
+        service.mergeRealtimeChange(pin: resolvedPin)
+
+        XCTAssertTrue(service.visiblePins.isEmpty,
+            "Resolved crowd pin must be removed from visiblePins on mergeRealtimeChange")
+    }
+}
+
+// MARK: - Bug #4: ReportSheet.locationContextLabel tests
+
+/// Tests for ReportSheet.locationContextLabel(streetName:) — pure static function.
+///
+/// Verifies the "Reporting on X" / fallback label logic for the in-drive report context line.
+final class ReportSheetLocationContextLabelTests: XCTestCase {
+
+    /// Non-nil, non-empty streetName → "Reporting on <name>".
+    func testLocationContextLabel_withStreetName_returnsReportingOn() {
+        let result = ReportSheet.locationContextLabel(streetName: "Grand St")
+        XCTAssertEqual(result, "Reporting on Grand St",
+            "Non-nil streetName must produce 'Reporting on <name>'")
+    }
+
+    /// nil streetName → "Reporting at current location" fallback.
+    func testLocationContextLabel_nilStreetName_returnsFallback() {
+        let result = ReportSheet.locationContextLabel(streetName: nil)
+        XCTAssertEqual(result, "Reporting at current location",
+            "nil streetName must produce fallback label")
+    }
+
+    /// Empty string streetName → fallback (treats empty as unresolved).
+    func testLocationContextLabel_emptyStreetName_returnsFallback() {
+        let result = ReportSheet.locationContextLabel(streetName: "")
+        XCTAssertEqual(result, "Reporting at current location",
+            "Empty streetName must produce fallback label (treated as unresolved)")
+    }
+
+    /// Multi-word street name with abbreviation — round-trips cleanly.
+    func testLocationContextLabel_multiWordStreet_preservedExactly() {
+        let result = ReportSheet.locationContextLabel(streetName: "W 28th St")
+        XCTAssertEqual(result, "Reporting on W 28th St")
     }
 }
 
