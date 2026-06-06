@@ -216,6 +216,7 @@ final class PinMarkerAnnotation: MKAnnotationView {
     ///
     /// - Parameter pin: The `CommunityPin` this marker represents.
     func configure(for pin: CommunityPin) {
+        // Fix 3: markerImage(for:) always returns a non-nil UIImage (filled circle fallback).
         image = Self.markerImage(for: pin.pinType)
         // Center the 32×32 image within the 44×44 touch target.
         centerOffset = .zero
@@ -298,23 +299,38 @@ final class PinMarkerAnnotation: MKAnnotationView {
     /// Colors (spec §7.1):
     ///   - filming:       `UIColor.systemPurple`
     ///   - special_event: `UIColor.systemOrange`
-    private static func markerImage(for pinType: PinType) -> UIImage? {
+    ///
+    /// Fix 3 — Marker safety net: if `UIImage(systemName:)` fails to resolve (e.g. the
+    /// symbol name is bad or the SF Symbol isn't available on this OS version), the SF
+    /// Symbol drawing step is skipped and the method returns the plain filled circle.
+    /// A pin NEVER silently disappears — at minimum a solid-color disc renders.
+    private static func markerImage(for pinType: PinType) -> UIImage {
         let (symbolName, circleColor) = markerStyle(for: pinType)
         let size = CGSize(width: imageSize, height: imageSize)
         let renderer = UIGraphicsImageRenderer(size: size)
 
-        return renderer.image { context in
+        return renderer.image { _ in
             // Draw filled circle background.
+            // Fix 3: the circle is always drawn — even if the SF Symbol is unavailable,
+            // the caller gets a non-nil solid-color disc instead of nil (no marker).
             circleColor.setFill()
             let circleRect = CGRect(origin: .zero, size: size)
             UIBezierPath(ovalIn: circleRect).fill()
 
             // Draw SF Symbol centered in the circle.
+            // If UIImage(systemName:) returns nil (bad symbol name, OS version mismatch, etc.)
+            // we skip the symbol step and return just the filled circle (Fix 3 safety net).
             let symbolSize = imageSize * 0.55  // 55% of circle diameter for visual balance.
             let symbolConfig = UIImage.SymbolConfiguration(pointSize: symbolSize, weight: .semibold)
             guard let symbol = UIImage(systemName: symbolName, withConfiguration: symbolConfig)?
                 .withTintColor(.white, renderingMode: .alwaysOriginal)
-            else { return }
+            else {
+                // Safety net (Fix 3): SF Symbol unavailable — the filled circle is the marker.
+                // This path is never reached for the four known-good symbols at iOS 17+
+                // (video.fill, star.fill, person.badge.clock.fill, truck.box.fill are all
+                // SF Symbols 5 / iOS 17+), but protects against future regressions.
+                return
+            }
 
             let symbolRect = CGRect(
                 x: (imageSize - symbol.size.width) / 2,

@@ -10,10 +10,16 @@
 //  Responsibilities:
 //   - Debounced (800ms) PostgREST bounding-box fetch for filming / asp_suspended_today /
 //     special_event pins (source = open_data, not expired, not resolved).
+//   - Periodic refresh (pinRefreshIntervalSeconds) re-fetches the last visible region so
+//     new pins from self + others appear, and expired pins drop, without manual panning.
+//     This is the TF1 stand-in for WebSocket Realtime. The timer fires only when a region
+//     has been fetched at least once and is cancelled/suspended when driveModeActive.
 //   - Realtime subscription stub (activated in sub-PR #1 for crowd ephemeral pins).
 //   - Client-side expiry filter: removes pins where expiresAt != nil && expiresAt <= nowProvider().
 //   - Publishes `visiblePins: [CommunityPin]` — ContentView observes this.
 //   - Write path: insertCrowdPin / upsertVote / callExtendPinExpiry (authenticated, sub-PR #1).
+//   - Optimistic add after insertCrowdPin: uses return=representation + mergeRealtimeChange
+//     so the reporter sees their own pin immediately without panning (Fix 1).
 //
 //  Architectural invariants (HANDOFF.md Changelog 2026-05-26, spec §5):
 //   - @MainActor: all visiblePins mutations run on the main actor so SwiftUI reads are safe.
@@ -125,8 +131,23 @@ final class CommunityPinService {
 
     // MARK: - Internal state
 
+    // MARK: - Periodic refresh interval constant
+
+    /// Interval for the periodic region re-fetch (Fix 2 / TF1 Realtime stand-in).
+    /// Chosen to be short enough to surface other users' fresh pins without hammering Supabase.
+    /// Named constant so it can be referenced in tests without magic numbers.
+    static let pinRefreshIntervalSeconds: TimeInterval = 25
+
     /// In-flight debounce task. Cancelled and replaced on each `onRegionChanged` call.
     private var fetchTask: Task<Void, Never>? = nil
+
+    /// Repeating periodic refresh task (Fix 2). Created lazily in `startPeriodicRefresh()`.
+    /// Cancelled by `stopPeriodicRefresh()` when Drive Mode activates or the service is torn down.
+    private var periodicRefreshTask: Task<Void, Never>? = nil
+
+    /// The last map region that was successfully fetched.
+    /// Used by the periodic refresh to re-fetch the same viewport (Fix 2).
+    private(set) var lastFetchedRegion: MKCoordinateRegion? = nil
 
     /// The map center used for the most recent completed fetch.
     /// Used by the Drive Mode re-fetch guard (spec §6.3: skip if center moved < 200m).
@@ -211,16 +232,69 @@ final class CommunityPinService {
             guard !Task.isCancelled else { return }
             await self.fetchPins(for: region)
         }
+
+        // Start the periodic refresh on the first region change if it's not already running
+        // (Drive Mode is not active). Subsequent region changes don't re-stack the timer.
+        if periodicRefreshTask == nil && !driveModeActive {
+            startPeriodicRefresh()
+        }
     }
 
     /// Informs the service whether Drive Mode is currently active.
     /// Affects the re-fetch guard in `onRegionChanged` (spec §6.3).
+    /// Also suspends/resumes the periodic refresh: active Drive Mode cancels the timer
+    /// to avoid hammering Supabase during navigation; exiting Drive Mode restarts it so
+    /// the resting map stays fresh for community pins.
     func setDriveModeActive(_ active: Bool) {
         driveModeActive = active
-        if !active {
+        if active {
+            // Suspend periodic refresh during Drive Mode (Fix 2).
+            stopPeriodicRefresh()
+        } else {
             // Reset last-fetch-center so the first non-Drive region change fetches fresh.
             lastFetchCenter = nil
+            // Resume periodic refresh if a region has been fetched (Fix 2).
+            startPeriodicRefresh()
         }
+    }
+
+    // MARK: - Periodic refresh (Fix 2 — TF1 Realtime stand-in)
+
+    /// Starts the periodic refresh loop.
+    ///
+    /// Safe to call multiple times — a running task is cancelled before creating a new one
+    /// to ensure at most one timer loop is active at any time (no stacking).
+    ///
+    /// No-op if driveModeActive is true (the caller is responsible for not calling this
+    /// while driving, but the guard here is a safety net).
+    ///
+    /// The loop re-fetches `lastFetchedRegion` every `pinRefreshIntervalSeconds`. It uses
+    /// `lastFetchedRegion` (captured at execution time, not at Task-creation time) so a
+    /// region change that arrives before the tick fires uses the new viewport automatically.
+    func startPeriodicRefresh() {
+        // Don't stack multiple timers.
+        stopPeriodicRefresh()
+        // Don't start during Drive Mode.
+        guard !driveModeActive else { return }
+        periodicRefreshTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(Self.pinRefreshIntervalSeconds))
+                guard !Task.isCancelled, let self else { break }
+                // Re-fetch the current region (captured at tick time, not at Task creation).
+                if let region = self.lastFetchedRegion {
+                    await self.fetchPins(for: region)
+                }
+            }
+        }
+    }
+
+    /// Cancels the periodic refresh task.
+    ///
+    /// Called when Drive Mode activates (to avoid hammering Supabase during navigation)
+    /// and when the service's active map is removed.
+    func stopPeriodicRefresh() {
+        periodicRefreshTask?.cancel()
+        periodicRefreshTask = nil
     }
 
     // MARK: - Realtime subscription (activated in sub-PR #1)
@@ -304,6 +378,8 @@ final class CommunityPinService {
         isLoading = true
         fetchError = nil
         lastFetchCenter = region.center
+        // Store the last fetched region so the periodic refresh (Fix 2) can re-fetch it.
+        lastFetchedRegion = region
 
         do {
             // Issue both requests concurrently — independent channels, no ordering dependency.
@@ -563,6 +639,11 @@ final class CommunityPinService {
     /// Requires an active auth session (currentUserId != nil). The RLS policy
     /// `pins_insert_crowd` requires `auth.uid() = author_id AND source = 'crowd'`.
     ///
+    /// Fix 1 — Optimistic add: uses `Prefer: return=representation` so PostgREST returns
+    /// the full inserted row as JSON. The returned pin is decoded and fed through
+    /// `mergeRealtimeChange(pin:)` so it appears on the map immediately — the reporter
+    /// sees their pin without needing to pan the map.
+    ///
     /// - Note: The UI that calls this (patrol mode report sheet) ships in sub-PR #2.
     ///   This method is built and tested in sub-PR #1 so the write primitive exists
     ///   before the UI layer is built.
@@ -622,19 +703,34 @@ final class CommunityPinService {
             throw CommunityPinWriteError.encodingFailure
         }
 
+        // Fix 1: return=representation requests the full inserted row back from PostgREST.
+        // The returned JSON array (PostgREST wraps single inserts in an array) is decoded
+        // and the first element is fed through mergeRealtimeChange so the reporter sees
+        // their pin immediately without waiting for a region-change re-fetch.
         let request = buildAuthenticatedRequest(
             path: "rest/v1/pins",
             method: "POST",
             jwt: jwt,
             body: body,
-            extraHeaders: ["Prefer": "return=minimal"]
+            extraHeaders: [
+                "Prefer": "return=representation",
+                "Accept": "application/json",
+            ]
         )
 
-        let (_, response) = try await urlSession.data(for: request)
+        let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw CommunityPinWriteError.httpError(statusCode: status)
+        }
+
+        // Fix 1: Decode the returned row and optimistically add it to visiblePins.
+        // PostgREST returns a JSON array for INSERT; take the first element.
+        // If decoding fails (e.g. schema mismatch), the write itself succeeded — don't throw.
+        // The pin will appear on the next periodic refresh or region-change fetch instead.
+        if let insertedPins = try? decodeResponse(data: data), let insertedPin = insertedPins.first {
+            mergeRealtimeChange(pin: insertedPin)
         }
     }
 
