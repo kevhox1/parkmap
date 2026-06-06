@@ -131,7 +131,21 @@ final class CommunityPinAnnotation: NSObject, MKAnnotation {
     }
 
     var title: String? { pin.displayTitle }
-    var subtitle: String? { pin.displaySubtitle }
+
+    /// Callout subtitle.
+    ///
+    /// Tier 3 sub-PR #2: For `enforcement_active` and `sweeper_passed` pins, the subtitle
+    /// shows the time-since badge ("Just now", "5m ago") rather than the expiry time.
+    /// This matches the T3-3 decision: ephemeral pins show age, not expiry countdown.
+    /// The badge is computed lazily at callout-open time (no timer loop).
+    var subtitle: String? {
+        switch pin.pinType {
+        case .enforcementActive, .sweeperPassed:
+            return PinMarkerAnnotation.timeSinceBadge(pin: pin, now: Date())
+        default:
+            return pin.displaySubtitle
+        }
+    }
 
     init(pin: CommunityPin) {
         self.pin = pin
@@ -196,14 +210,83 @@ final class PinMarkerAnnotation: MKAnnotationView {
     /// Called from `mapView(_:viewFor:)` after dequeue.
     /// Updates the image and accessibility label to match the pin type.
     ///
+    /// Tier 3 sub-PR #2: For `enforcement_active` and `sweeper_passed` pins,
+    /// the callout subtitle shows the time-since badge ("Just now", "5m ago", etc.)
+    /// computed by `PinMarkerAnnotation.timeSinceBadge(pin:now:)`.
+    ///
     /// - Parameter pin: The `CommunityPin` this marker represents.
     func configure(for pin: CommunityPin) {
         image = Self.markerImage(for: pin.pinType)
         // Center the 32×32 image within the 44×44 touch target.
         centerOffset = .zero
-        accessibilityLabel = "\(pin.pinType.displayLabel): \(pin.displayTitle ?? "")"
-        if let subtitle = pin.displaySubtitle {
-            accessibilityValue = subtitle
+
+        // Tier 3 sub-PR #2: Time-since badge in callout subtitle for ephemeral crowd pins.
+        // Pure function — no timer loop; computed lazily at callout-open time (T3-3 decision).
+        //
+        // Accessibility labels for Tier 3 pins use the format from docs/design/tier3-marker-icons.md §2–3:
+        //   enforcement_active: "Enforcement active" (+ "— <SubTag>" if sub_tag present)
+        //   sweeper_passed:     "Sweeper passed" or "Sweeper approaching" per direction field
+        // These are set here rather than falling through to displayLabel to avoid the
+        // redundant "<Label>: <Label>" pattern and to match the spec's label strings exactly.
+        switch pin.pinType {
+        case .enforcementActive:
+            // Design note §2: label = "Enforcement active" (+ sub_tag suffix if present).
+            // Sub_tag display strings per design note §2: "Parking agent", "Cleaning truck", "Tow truck".
+            if case .enforcementActive(let m) = pin.meta, let subTag = m.subTag {
+                let subTagLabel: String
+                switch subTag {
+                case .parkingAgent:  subTagLabel = "Parking agent"
+                case .cleaningTruck: subTagLabel = "Cleaning truck"
+                case .towTruck:      subTagLabel = "Tow truck"
+                }
+                accessibilityLabel = "Enforcement active — \(subTagLabel)"
+            } else {
+                accessibilityLabel = "Enforcement active"
+            }
+            let badge = Self.timeSinceBadge(pin: pin, now: Date())
+            accessibilityValue = badge
+            // The callout subtitle is driven by CommunityPinAnnotation.subtitle.
+        case .sweeperPassed:
+            // Design note §3: label reflects direction field (.comingSoon → "Sweeper approaching";
+            // .passed or nil → "Sweeper passed").
+            if case .sweeperPassed(let m) = pin.meta {
+                accessibilityLabel = m.direction == .comingSoon ? "Sweeper approaching" : "Sweeper passed"
+            } else {
+                accessibilityLabel = "Sweeper passed"
+            }
+            let badge = Self.timeSinceBadge(pin: pin, now: Date())
+            accessibilityValue = badge
+        default:
+            accessibilityLabel = "\(pin.pinType.displayLabel): \(pin.displayTitle ?? "")"
+            if let subtitle = pin.displaySubtitle {
+                accessibilityValue = subtitle
+            }
+        }
+    }
+
+    // MARK: - Time-since badge (T3-3, AC-R25–R28)
+
+    /// Returns a human-readable "age since creation" string for a community pin.
+    ///
+    /// Pure function — `now: Date` is injected for testability.
+    /// In the live app, callers pass `Date()`. Tests pass a fixed fixture.
+    ///
+    /// Rules (spec §5):
+    ///   - age < 60s  → "Just now"
+    ///   - 1–59 min   → "Xm ago"
+    ///   - 60–119 min → "1h ago"
+    ///   - ≥120 min   → "Xh ago"
+    ///
+    /// No `Calendar.current` or `Calendar.easternTime` usage — pure `timeIntervalSince`
+    /// arithmetic only (W3 convention / AC-R28).
+    static func timeSinceBadge(pin: CommunityPin, now: Date) -> String {
+        let ageSeconds = now.timeIntervalSince(pin.createdAt)
+        let minutes = Int(ageSeconds / 60)
+        switch minutes {
+        case ..<1:       return "Just now"
+        case 1..<60:     return "\(minutes)m ago"
+        case 60..<120:   return "1h ago"
+        default:         return "\(minutes / 60)h ago"
         }
     }
 
@@ -244,12 +327,32 @@ final class PinMarkerAnnotation: MKAnnotationView {
     }
 
     /// Returns the SF Symbol name and circle fill color for the given pin type.
+    ///
+    /// Icon/color assignments per docs/design/tier3-marker-icons.md:
+    ///   - filming:            video.fill (purple)      — Tier 1 / authoritative
+    ///   - special_event:      star.fill (orange)       — Tier 1 / authoritative
+    ///   - enforcement_active: person.badge.clock.fill (teal)  — Tier 3 / ephemeral crowd (§2)
+    ///   - sweeper_passed:     truck.box.fill (cyan)    — Tier 3 / ephemeral crowd (§3)
+    ///
+    /// Teal/cyan are intentionally cooler/recessive so crowd pins don't compete with the
+    /// Tier 1 orange/purple authoritative pins (design note §1).
+    ///
+    /// Both SF Symbols (person.badge.clock.fill, truck.box.fill) are SF Symbols 5 / iOS 17+.
+    /// Do NOT fall back to shield.fill for enforcement_active (design note §2).
     private static func markerStyle(for pinType: PinType) -> (symbolName: String, color: UIColor) {
         switch pinType {
         case .filming:
             return ("video.fill", UIColor.systemPurple)
         case .specialEvent:
             return ("star.fill", UIColor.systemOrange)
+        case .enforcementActive:
+            // Design note §2: person.badge.clock.fill = "civic worker on duty". systemTeal.
+            // Recessive color keeps Tier 3 crowd pins subordinate to Tier 1 (orange/purple).
+            return ("person.badge.clock.fill", UIColor.systemTeal)
+        case .sweeperPassed:
+            // Design note §3: truck.box.fill = service vehicle. systemCyan.
+            // Distinct from teal (enforcement) at glance; no alarm connotation (sweeper passed = good news).
+            return ("truck.box.fill", UIColor.systemCyan)
         default:
             // Fallback for any type that reaches this path unexpectedly.
             return ("mappin.fill", UIColor.systemGray)

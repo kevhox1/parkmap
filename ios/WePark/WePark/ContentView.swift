@@ -103,6 +103,17 @@
 //    - Drive Mode ends on "Park Here" confirm; "Not Yet" dismisses sheet only (OQ-6).
 //    - Reset finalApproachState + arrivalPromptFired on Drive Mode exit.
 //
+//  Tier 3 sub-PR #2 additions (universal community reporting):
+//    - DriveModeStyle.patrol case REMOVED (per OQ-NR3 decision).
+//    - ActiveSheet.reportPin(coord: CLLocationCoordinate2D) — new case.
+//    - @State pendingLongPressCoord: CLLocationCoordinate2D? — held while dialog is visible.
+//    - @State showRestingActionMenu: Bool — triggers the resting long-press confirmationDialog.
+//    - handleLongPress(at:) revised: no-op when driveModeActive == true; shows confirmationDialog
+//      when driveModeActive == false. W5 segment detection deferred to "Park my car here" action.
+//    - .confirmationDialog on body: two actions ("Park my car here" / "Report enforcement or sweeper").
+//    - In-drive Report button (flag.fill, orange) in driveModeOverlayLayer HStack (NR1 placement).
+//    - handleVisiblePinsChange: includes enforcement_active + sweeper_passed in map marker set.
+//
 
 import SwiftUI
 import MapKit
@@ -132,6 +143,10 @@ enum ActiveSheet: Identifiable {
     /// Community 1.0 / Tier 1: read-only detail sheet for a community pin (filming / special_event).
     /// Presented when the user taps a `CommunityPinAnnotation` on the map.
     case pinDetail(CommunityPin)
+    /// Tier 3 sub-PR #2: Universal community report sheet.
+    /// Resting entry: coord = long-press coordinate on map.
+    /// In-drive entry: coord = user's GPS at moment of tap.
+    case reportPin(coord: CLLocationCoordinate2D)
 
     var id: String {
         switch self {
@@ -143,6 +158,7 @@ enum ActiveSheet: Identifiable {
         case .parkUntil:                  return "parkUntil"
         case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
+        case .reportPin(let coord):       return "reportPin-\(coord.latitude)-\(coord.longitude)"
         }
     }
 }
@@ -154,12 +170,6 @@ enum ActiveSheet: Identifiable {
 /// CM-3: Added to provide an explicit, auditable gate for route-dependent behavior.
 /// The nil-based gate (`activeRoute == nil`) is implicit and has caused guard-inversion
 /// bugs before (W8.5c-polish QA). A named enum makes the routing gate grep-auditable.
-///
-/// ## Patrol mode convergence (spec §8)
-/// `.patrol` is reserved for tier3-patrol-mode-buildplan.md sub-PR #2. Patrol mode sets
-/// `driveModeStyle = .patrol` at entry — same camera/overlay stack as `.cruise`, plus
-/// the community reporting layer in `PatrolView.swift`. Do not duplicate `driveModeActive`
-/// for patrol mode; reuse this enum and `handleDriveModeChange`.
 enum DriveModeStyle {
     /// Drive Mode is not active. No camera tilt, no voice, no bottom card.
     case inactive
@@ -169,9 +179,6 @@ enum DriveModeStyle {
     /// Cruise Mode ("Find Parking"): route-less Drive Mode. No route polyline,
     /// no destination pin, no FinalApproachService calls. Voice gated by CruiseVoicePolicy.
     case cruise
-    /// Reserved for patrol mode (tier3 sub-PR #2). Behavior = cruise + community reporting.
-    /// Not yet implemented; declared here per spec §8 convergence contract.
-    case patrol
 }
 
 struct ContentView: View {
@@ -385,6 +392,16 @@ struct ContentView: View {
     /// so a subsequent `.onChange` can retry when GPS recovers.
     @State private var arrivalPromptFired: Bool = false
 
+    // MARK: - Tier 3 sub-PR #2: Resting long-press action menu state
+
+    /// Coordinate captured when the user long-presses the map while not driving.
+    /// Held while the confirmationDialog is visible; cleared on any action selection or cancel.
+    @State private var pendingLongPressCoord: CLLocationCoordinate2D? = nil
+
+    /// True while the resting long-press confirmationDialog is presented.
+    /// The dialog has two actions: "Park my car here" and "Report enforcement or sweeper."
+    @State private var showRestingActionMenu: Bool = false
+
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
     /// Community pin service. Fetches filming / asp_suspended_today / special_event pins
@@ -476,6 +493,52 @@ struct ContentView: View {
                 Button("Got It", role: .cancel) {}
             } message: {
                 Text("Parking commentary will pause if you background WePark during your drive. Keep the app in front for continuous guidance.")
+            }
+            // Tier 3 sub-PR #2: Resting long-press action menu.
+            // Fires when handleLongPress(at:) sets showRestingActionMenu = true
+            // (only when driveModeActive == false — in-drive long-press is a no-op).
+            .confirmationDialog(
+                "What do you want to do?",
+                isPresented: $showRestingActionMenu,
+                titleVisibility: .visible
+            ) {
+                Button("Park my car here") {
+                    guard let coord = pendingLongPressCoord else {
+                        pendingLongPressCoord = nil
+                        return
+                    }
+                    pendingLongPressCoord = nil
+                    // Run W5 candidate-segment detection (Path A) — same logic as the old
+                    // handleLongPress implementation, moved here per spec §4.1.
+                    let candidates = findCandidateSegments(
+                        lat: coord.latitude,
+                        lng: coord.longitude,
+                        radius: pinDropRadiusMeters,
+                        max: 4
+                    )
+                    let detected = candidates.first?.segment
+                    let detectedDistance = candidates.first?.distanceMeters
+                    let alternatives = Array(candidates.dropFirst())
+                    let intent = PinDropIntent(
+                        pinLat: coord.latitude,
+                        pinLng: coord.longitude,
+                        detectedSegment: detected,
+                        detectedSegmentDistance: detectedDistance,
+                        alternativeCandidates: alternatives
+                    )
+                    activeSheet = .parkConfirm(intent)
+                }
+                Button("Report enforcement or sweeper") {
+                    guard let coord = pendingLongPressCoord else {
+                        pendingLongPressCoord = nil
+                        return
+                    }
+                    pendingLongPressCoord = nil
+                    activeSheet = .reportPin(coord: coord)
+                }
+                Button("Cancel", role: .cancel) {
+                    pendingLongPressCoord = nil
+                }
             }
     }
 
@@ -645,6 +708,21 @@ struct ContentView: View {
             // Extracted into pinDetailSheetContent(_:) to reduce type-checker expression
             // complexity in sheetContent(_:) — same pattern as PR-1 @ViewBuilder extractions.
             pinDetailSheetContent(pin)
+
+        case .reportPin(let coord):
+            // Tier 3 sub-PR #2: Universal community report sheet.
+            // Coordinate source depends on entry path:
+            //   - Resting: coord = long-press point on map
+            //   - In-drive: coord = user GPS at moment of tap
+            ReportSheet(
+                coordinate: coord,
+                pinService: pinService,
+                onDismiss: { activeSheet = nil }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
 
         case .arrivalPrompt(let coord):
             // W8.5d: Arrival prompt — fires once per Drive Mode session when driver reaches
@@ -1201,6 +1279,32 @@ struct ContentView: View {
                     .accessibilityHint("Toggles voice callouts. Mute state is remembered across sessions.")
                 }
 
+                // Tier 3 sub-PR #2: In-drive Report button (NR1: inline with End pill HStack).
+                // Visible whenever driveModeActive == true (both .destination and .cruise).
+                // Tapping drops a pin at the user's CURRENT GPS — no map-picking while driving.
+                // If GPS is unavailable, the button silently no-ops (guard let loc).
+                // Design note §4: icon-only fails glanceability bar — add .caption2 "Report" label
+                // beneath the flag icon, matching the End pill's text label for HStack consistency.
+                Button {
+                    guard let loc = locationService.userLocation else { return }
+                    activeSheet = .reportPin(coord: loc)
+                } label: {
+                    VStack(spacing: 2) {
+                        Image(systemName: "flag.fill")
+                            .font(.system(size: 17, weight: .medium))
+                        Text("Report")
+                            .font(.caption2)
+                            .fontWeight(.medium)
+                    }
+                    .foregroundStyle(Color.orange)
+                    .frame(minWidth: 44, minHeight: 44)
+                    .padding(.horizontal, 8)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
+                .contentShape(Rectangle())
+                .accessibilityLabel("Report enforcement or sweeper")
+                .accessibilityHint("Drops a pin at your current location.")
+
                 Spacer()
             }
             .padding(.top, endDrivePillTopPadding)
@@ -1428,8 +1532,12 @@ struct ContentView: View {
     /// Extracted from `.onChange` closure to reduce type-checker expression complexity in
     /// `ContentView.body` — same pattern as the other `handle*` methods (PR-1 lesson).
     private func handleVisiblePinsChange(_ newPins: [CommunityPin]) {
-        // Map markers: filming + special_event only (AC-D8).
-        communityPins = newPins.filter { [.filming, .specialEvent].contains($0.pinType) }
+        // Map markers: Tier 1 display types + Tier 3 ephemeral crowd pins (sub-PR #2).
+        // filming + special_event: Tier 1 open-data markers (AC-D8).
+        // enforcement_active + sweeper_passed: Tier 3 crowd ephemeral markers (spec §2.1).
+        // asp_suspended_today drives the banner supplement below, not a map marker.
+        let mapMarkerTypes: Set<PinType> = [.filming, .specialEvent, .enforcementActive, .sweeperPassed]
+        communityPins = newPins.filter { mapMarkerTypes.contains($0.pinType) }
 
         // ASP banner supplement (spec §4.2 / AC-D9a through AC-D9d).
         // resolvedBannerState() returns .todaySuspended if a live Supabase pin
@@ -1722,33 +1830,31 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - W5: Long-press handling
+    // MARK: - W5 / Tier 3 sub-PR #2: Long-press handling
 
+    /// Handles a long-press gesture on the map.
+    ///
+    /// Behavior is context-dependent:
+    ///   - `driveModeActive == true`: long-press is suppressed (no-op). The in-drive
+    ///     Report button is the driving-safe entry path. Suppressing the gesture avoids
+    ///     accidental park-pin drops while maneuvering (spec §4.1).
+    ///   - `driveModeActive == false`: captures the coordinate and shows the
+    ///     resting action menu (confirmationDialog). The menu offers two actions:
+    ///     "Park my car here" (W5 flow) or "Report enforcement or sweeper" (Tier 3).
+    ///     Candidate-segment detection is deferred until the user picks an action —
+    ///     no wasted work if they pick "Report" (spec §4.1 note).
     private func handleLongPress(at coordinate: CLLocationCoordinate2D) {
-        // Clear any current selection and dismiss any open sheet before opening ParkConfirmView.
+        // While driving, long-press is intentionally a no-op (spec §4.1).
+        guard !driveModeActive else { return }
+
+        // Clear any current selection and dismiss any open sheet before showing the menu.
         selectedSegmentID = nil
         activeSheet = nil
 
-        // Run candidate-segment detection (Path A).
-        let candidates = findCandidateSegments(
-            lat: coordinate.latitude,
-            lng: coordinate.longitude,
-            radius: pinDropRadiusMeters,
-            max: 4
-        )
-
-        let detected = candidates.first?.segment
-        let detectedDistance = candidates.first?.distanceMeters
-        let alternatives = Array(candidates.dropFirst())
-
-        let intent = PinDropIntent(
-            pinLat: coordinate.latitude,
-            pinLng: coordinate.longitude,
-            detectedSegment: detected,
-            detectedSegmentDistance: detectedDistance,
-            alternativeCandidates: alternatives
-        )
-        activeSheet = .parkConfirm(intent)
+        // Capture coordinate and show the confirmationDialog.
+        // The dialog's action handlers (in body) build the PinDropIntent or reportPin sheet.
+        pendingLongPressCoord = coordinate
+        showRestingActionMenu = true
     }
 
     // MARK: - W5: "Park here →" Path B (from BlockDetailView)
