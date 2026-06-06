@@ -8,9 +8,12 @@
 //  This pushes the map content down rather than overlapping it.
 //
 //  Three states (from ASPSuspensionService.suspensionState(at:)):
-//    .todaySuspended(reason)    → red background, white text: "ASP Suspended — <reason>"
-//    .tomorrowSuspended(reason) → amber-yellow background, black text: "ASP Suspended Tomorrow — <reason>"
-//    .aspInEffect               → green background, white text: "ASP in Effect Today"
+//    .todaySuspended(reason)    → green background, white text: "ASP Suspended — <reason>"
+//                                 Good news for the parker (no need to move); green = safe/free.
+//    .tomorrowSuspended(reason) → soft blue background, white text: "ASP Suspended Tomorrow — <reason>"
+//                                 Informational preview; neutral/muted tone distinct from amber.
+//    .aspInEffect               → amber background, dark text: "ASP in Effect Today"
+//                                 Caution (must move on schedule); amber = pay-to-park / caution.
 //
 //  Not dismissible — the suspension status is a ground-truth safety fact that persists all day.
 //
@@ -64,20 +67,24 @@ struct ASPBanner: View {
     private var backgroundColor: Color {
         switch state {
         case .todaySuspended:
-            return .red
-        case .tomorrowSuspended:
-            // Amber-yellow from ParkingColors.meteredActive and the palette spec (§3).
-            return Color(red: 0.92, green: 0.76, blue: 0.0)
-        case .aspInEffect:
+            // Green = good news for the parker (no need to move). Reuses ParkingColors.freeComfortably.
             return .green
+        case .tomorrowSuspended:
+            // Soft blue: informational/preview tone; distinct from amber so the two don't look alike.
+            return Color(red: 0.24, green: 0.56, blue: 0.90)
+        case .aspInEffect:
+            // Amber-yellow: caution (must move on schedule). Reuses ParkingColors.meteredActive.
+            return Color(red: 0.92, green: 0.76, blue: 0.0)
         }
     }
 
     private var foregroundColor: Color {
         switch state {
-        case .tomorrowSuspended:
-            return .black
+        case .aspInEffect:
+            // Dark text on amber for contrast (WCAG AA on this amber value).
+            return Color(red: 0.15, green: 0.10, blue: 0.0)
         default:
+            // White text on green (todaySuspended) and soft blue (tomorrowSuspended).
             return .white
         }
     }
