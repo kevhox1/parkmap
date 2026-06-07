@@ -166,37 +166,80 @@ final class DriveCameraTiltTests: XCTestCase {
 
 // MARK: - Region-sync guard tests
 
-/// Tests for `MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive:)`.
+/// Tests for `MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive:isUserInteracting:)`.
 ///
-/// This pure function documents the invariant that `setRegion` is suppressed during Drive Mode
-/// to protect the 30° camera pitch applied by `applyDriveCameraPitch`. The previous guard
-/// used `driveHeading == nil`, which failed in the simulator (no magnetometer → heading always
-/// nil → `setRegion` always fired → pitch clobbered on every location update).
+/// This pure function documents the invariants that `setRegion` is suppressed during Drive Mode
+/// (to protect camera pitch) and during active user pan gestures (FT-5 snap-back bug fix).
 ///
-/// See W8.5c-polish PR-3 bug fix notes in MapViewRepresentable.swift for full diagnosis.
+/// The previous guard used `driveHeading == nil`, which failed in the simulator (no magnetometer
+/// → heading always nil → `setRegion` always fired → pitch clobbered on every location update).
+/// The `isUserInteracting` parameter (FT-5) extends the guard so that any SwiftUI re-render
+/// during an active pan (8s community-pin poll, ASP clock tick, overlay refresh) also suppresses
+/// `setRegion`, preventing the camera snap-back to the stale binding value.
+///
+/// See W8.5c-polish PR-3 bug fix notes and FT-5 spec for full diagnosis.
 final class RegionSyncGuardTests: XCTestCase {
 
-    // MARK: Test 7: Drive Mode active → region sync suppressed
+    // MARK: Test 7: Drive Mode active, not interacting → region sync suppressed
 
     /// Verifies that `shouldSyncRegionToBinding` returns `false` when Drive Mode is active,
     /// preventing `setRegion` from clobbering the 30° camera pitch.
     ///
     /// This is the invariant broken by the original `driveHeading == nil` guard on the
     /// simulator: heading was always nil → sync always ran → pitch always reset to 0.
-    func testRegionSync_driveModeActive_returnsFalse() {
-        let result = MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive: true)
+    func testRegionSync_driveModeActive_notInteracting_returnsFalse() {
+        let result = MapViewRepresentable.shouldSyncRegionToBinding(
+            driveModeActive: true,
+            isUserInteracting: false
+        )
         XCTAssertFalse(result,
             "Region sync must be suppressed during Drive Mode to protect camera pitch; " +
             "setRegion resets pitch to 0 and would clobber the 30° tilt")
     }
 
-    // MARK: Test 8: Drive Mode inactive → region sync allowed
+    // MARK: Test 8: Drive Mode inactive, not interacting → region sync allowed
 
-    /// Verifies that `shouldSyncRegionToBinding` returns `true` when Drive Mode is inactive,
-    /// allowing normal `setRegion` camera sync for user pan/zoom binding updates.
-    func testRegionSync_driveModeInactive_returnsTrue() {
-        let result = MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive: false)
+    /// Verifies that `shouldSyncRegionToBinding` returns `true` when Drive Mode is inactive
+    /// and no user gesture is in flight, allowing normal `setRegion` camera sync.
+    func testRegionSync_driveModeInactive_notInteracting_returnsTrue() {
+        let result = MapViewRepresentable.shouldSyncRegionToBinding(
+            driveModeActive: false,
+            isUserInteracting: false
+        )
         XCTAssertTrue(result,
-            "Region sync must be allowed when Drive Mode is inactive (normal pan/zoom binding)")
+            "Region sync must be allowed when Drive Mode is inactive and no user gesture is active")
+    }
+
+    // MARK: Test 9 (FT-5): Drive Mode inactive, user interacting → region sync suppressed
+
+    /// Verifies that `shouldSyncRegionToBinding` returns `false` when the user is actively
+    /// panning, even though Drive Mode is off. This is the FT-5 regression lock.
+    ///
+    /// Root cause of the FT-5 snap-back bug: SwiftUI re-renders during a pan gesture
+    /// (triggered by the 8-second community-pin poll, ASP clock tick, or overlay refresh)
+    /// called `updateUIView`, which invoked `setRegion` with the stale binding value,
+    /// snapping the camera back to its pre-pan position. This test locks the fix in place.
+    func testRegionSync_driveModeInactive_userInteracting_returnsFalse() {
+        let result = MapViewRepresentable.shouldSyncRegionToBinding(
+            driveModeActive: false,
+            isUserInteracting: true
+        )
+        XCTAssertFalse(result,
+            "Region sync must be suppressed while the user is panning (FT-5 snap-back fix); " +
+            "setRegion during an active gesture snaps the camera back to the stale binding value")
+    }
+
+    // MARK: Test 10 (FT-5): Drive Mode active, user interacting → region sync suppressed
+
+    /// Verifies that `shouldSyncRegionToBinding` returns `false` when both Drive Mode is active
+    /// AND a user gesture is in flight. Both conditions independently suppress sync; together
+    /// they must still suppress. Belt-and-suspenders; Drive Mode wins regardless.
+    func testRegionSync_driveModeActive_userInteracting_returnsFalse() {
+        let result = MapViewRepresentable.shouldSyncRegionToBinding(
+            driveModeActive: true,
+            isUserInteracting: true
+        )
+        XCTAssertFalse(result,
+            "Region sync must be suppressed when both Drive Mode is active and user is interacting")
     }
 }
