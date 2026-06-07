@@ -6,14 +6,18 @@
 //
 //  Presented via ActiveSheet.settings. Detents: .medium. DragIndicator: visible.
 //
-//  Content — exactly two sections:
-//    Section 1 — Notifications:
+//  Content — three sections:
+//    Section 1 — Help:
+//      "Help & FAQ" row — NavigationLink to FAQHelpView (beginner NYC parking guide).
+//      Placed first so new users find it immediately without scrolling.
+//
+//    Section 2 — Notifications:
 //      Toggle "Park-reminder notifications" — logical inverse of notificationsMutedKey.
 //      Toggle OFF: writes true to UserDefaults (mute). Cancels pending notifications.
 //      Toggle ON: writes false to UserDefaults (unmute). Re-schedules via onUnmute closure.
 //                 Fires ToastService.shared.show(message: "Reminders re-enabled") via onUnmute.
 //
-//    Section 2 — About:
+//    Section 3 — About:
 //      Version row: "Version" label + "<version> (<build>)" trailing text.
 //
 //  No termsURL constant, no Link row — deferred per resolved OQ-W7-1.
@@ -51,7 +55,17 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                // MARK: Section 1 — Notifications
+                // MARK: Section 1 — Help
+
+                Section("Help") {
+                    NavigationLink {
+                        FAQHelpView()
+                    } label: {
+                        Label("Help & FAQ", systemImage: "questionmark.circle")
+                    }
+                }
+
+                // MARK: Section 2 — Notifications
 
                 Section("Notifications") {
                     Toggle(isOn: notificationsActiveBinding) {
@@ -59,7 +73,7 @@ struct SettingsView: View {
                     }
                 }
 
-                // MARK: Section 2 — About
+                // MARK: Section 3 — About
 
                 Section {
                     HStack {
