@@ -2,33 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!--
-	  WePark Info.plist (custom-keys-only stub).
-
-	  GENERATE_INFOPLIST_FILE is still YES — Xcode merges this file with
-	  values from the INFOPLIST_KEY_* build settings (NSLocationWhenInUseUsageDescription,
-	  UISupportedInterfaceOrientations, scene manifest, etc.). Keep this file
-	  scoped to custom keys that Xcode's auto-generation cannot inject
-	  (INFOPLIST_KEY_<custom> is silently dropped for non-Apple-defined keys).
-
-	  MAPBOX_ACCESS_TOKEN is substituted at build time from the value defined
-	  in ios/WePark/Config.xcconfig (gitignored). See Config.xcconfig.example
-	  for setup. Read at runtime via:
-	    Bundle.main.object(forInfoDictionaryKey: "MAPBOX_ACCESS_TOKEN") as? String
-	-->
 	<key>MAPBOX_ACCESS_TOKEN</key>
 	<string>$(MAPBOX_ACCESS_TOKEN)</string>
-	<!--
-	  Community 1.0 / Tier 1 Pin Display — Supabase keys.
-	  Substituted at build time from Config.xcconfig (gitignored).
-	  See Config.xcconfig.example for SUPABASE_URL and SUPABASE_ANON_KEY setup.
-	  Read at runtime via:
-	    Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String
-	    Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String
-	-->
-	<key>SUPABASE_URL</key>
-	<string>$(SUPABASE_URL)</string>
 	<key>SUPABASE_ANON_KEY</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
+	<key>SUPABASE_URL</key>
+	<string>$(SUPABASE_URL)</string>
 </dict>
 </plist>
