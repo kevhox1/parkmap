@@ -182,6 +182,23 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-06 (🚀 TF1 SHIPPED) — WePark 1.0(1) is LIVE on TestFlight
+
+**The Phase 5 goal is achieved: a real signed build is on TestFlight and installs on Kevin's iPhone.** The full archive → upload happened via Xcode GUI (orchestrator guided Kevin step-by-step, Supabase-style). Key facts for the future:
+- **Apple Developer:** Kevin Hoxha, **Individual**, **Team ID `ZAA4UCS6CH`**, paid through 2027 (Apple ID `kevinhx2010@gmail.com`).
+- **Bundle ID CHANGED:** `com.wepark.app` was taken globally → registered + switched to **`com.kevinhoxha.wepark`** (PRODUCT_BUNDLE_IDENTIFIER updated for the app target both configs, `9afe0f7`; test target still `com.wepark.app.tests` — harmless, non-blocking). Xcode wrote `DEVELOPMENT_TEAM = ZAA4UCS6CH` + automatic signing.
+- **App Store Connect app:** display name **"WePark-NYC"** ("WePark" was taken), app id 6777589379, bundle `com.kevinhoxha.wepark`.
+- **Archive hurdle solved:** automatic signing failed with "Communication with Apple failed / team has no devices" — the fix was **registering a device** (Kevin's iPhone 15 Pro, UDID `00008130-0012444010A1401C`). After that, Product→Archive succeeded; Distribute→App Store Connect uploaded clean (Xcode 26 auto-defaults the option screens). Export compliance auto-cleared (the `ITSAppUsesNonExemptEncryption=NO` flag worked — build went straight to **"Ready to Submit"**, no compliance prompt).
+- **Build status:** 1.0 (1), Ready to Submit, internal testing group created, Kevin added himself + enabled auto-distribute. Installing via TestFlight app on his phone.
+
+**Open TF-follow items (next session):**
+- **External beta** (friends / NYC drivers / wider): needs an EXTERNAL group + "Test Information" filled (beta description, feedback email, privacy URL) + a one-time **Beta App Review** (~1 day). Orchestrator offered to help set this up (~15 min form).
+- **Mapbox token bundle-ID restriction** — STILL NOT DONE (Kevin's task; restrict the public token to `com.kevinhoxha.wepark` on the Mapbox dashboard — note the NEW bundle id).
+- **Host the privacy policy** (`docs/privacy-policy.md`) at a public URL (GitHub Pages) + fill contact email + paste into App Store Connect → App Privacy (required before external/public).
+- **🔴 supabase-swift SDK = hard TF2 req** (real-time websockets — see the SDK note below; poll is the 8s stand-in).
+- **Real-device feedback** — Kevin now has it on his phone; first real-device pass of Drive Mode / Find Parking / reporting will surface calibration (voice cadence/gaps, font sizes, the W8.5c-follow items) that the sim couldn't. This effectively replaces the long-pending "drive-test" gate.
+- Captcha on anon sign-ins (pre-public). Delete 2 forever-test pins (`delete from public.pins where source='crowd' and expires_at > '2030-01-01'`).
+
 ### 2026-06-06 (TF1 prep) — icon, config, privacy, FAQ, banner-color, real-time band-aid
 
 **Polish + TF1-readiness pass.** Shipped: **amber ASP banner** (PR #44 — fixed backwards color semantics: suspended=green/good, in-effect=amber/caution; matches the map's green=good language), **Help & FAQ screen** (PR #45 — beginner NYC-parking guide + how-to + official NYC.gov links, content in `docs/in-app-faq-content.md`, reachable from Settings), **real-time band-aid** (PR #43 — pin poll 25s→8s; full websocket SDK is a HARD TF2 requirement), **app icon** (white map-pin + green "P"/"NYC" on green gradient — generated via Swift/AppKit since no Pillow/ImageMagick; `sips` to resize to 1024), **TF1 build config** (PR #46 — corrected the location usage string [it falsely claimed "never sent off device"; community reports DO send a chosen location] + added `ITSAppUsesNonExemptEncryption=NO` to skip the export-compliance prompt), and a **privacy policy draft** + App-Store-Connect privacy-label answers (`docs/privacy-policy.md`).
