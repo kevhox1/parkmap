@@ -182,6 +182,17 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-06 (TF1 prep) — icon, config, privacy, FAQ, banner-color, real-time band-aid
+
+**Polish + TF1-readiness pass.** Shipped: **amber ASP banner** (PR #44 — fixed backwards color semantics: suspended=green/good, in-effect=amber/caution; matches the map's green=good language), **Help & FAQ screen** (PR #45 — beginner NYC-parking guide + how-to + official NYC.gov links, content in `docs/in-app-faq-content.md`, reachable from Settings), **real-time band-aid** (PR #43 — pin poll 25s→8s; full websocket SDK is a HARD TF2 requirement), **app icon** (white map-pin + green "P"/"NYC" on green gradient — generated via Swift/AppKit since no Pillow/ImageMagick; `sips` to resize to 1024), **TF1 build config** (PR #46 — corrected the location usage string [it falsely claimed "never sent off device"; community reports DO send a chosen location] + added `ITSAppUsesNonExemptEncryption=NO` to skip the export-compliance prompt), and a **privacy policy draft** + App-Store-Connect privacy-label answers (`docs/privacy-policy.md`).
+
+**⚠️ Cold-build lesson:** `FAQHelpView` (PR #45) merged with a latent type error (`faqSection(content:)` got a value, not the expected `() -> some View` closure) that passed WARM incremental builds but **failed a cold/clean build** — exactly what a TF1 archive is. Caught only when the icon build forced a fresh compile. Fixed (`33e994b`, wrap in `{ }`). **LESSON: use `xcodebuild clean build` (not warm incremental) for any TF1-archive-critical verification** — warm derivedData masks cold-build failures. (Tests now 377/0, clean build verified.)
+
+**TF1 status — code is ready; gap is Apple-account mechanics (Kevin's):**
+- ✅ DONE (orchestrator): app icon, privacy string accuracy, export-compliance flag, privacy-policy draft, FAQ, amber banner, cold-build verified.
+- ⏳ KEVIN: (1) Mapbox token bundle-ID restriction (`com.wepark.app`); (2) App Store Connect app record; (3) Signing & Capabilities (Developer Team + distribution signing — `DEVELOPMENT_TEAM` is currently unset); (4) host `docs/privacy-policy.md` at a public URL (e.g. GitHub Pages) + fill the contact email + paste URL into App Privacy; (5) then archive (Release) + upload to TestFlight. Tier 3 IS in TF1 (Kevin's call).
+- Cleanup: delete the 2 forever-test pins (`delete from public.pins where source='crowd' and expires_at > '2030-01-01'`).
+
 ### 2026-06-06 (later) — Tier 3 goes LIVE in prod + 5 live-test bugs fixed (Kevin's hands-on session)
 
 **Milestone: the community reporting loop works end-to-end in production.** Kevin enabled the two backend prereqs — **Anonymous Sign-ins** (Supabase → Auth → Anonymous; was OFF by default — this was the #1 "submit fails" cause, diagnosed via a direct `curl /auth/v1/signup` returning `anonymous_provider_disabled`) and applied **`02e-auto-resolve-trigger.sql`**. Verified via prod curl: anon sign-in → 200, insert crowd pin → 201 (RLS accepts). Then Kevin live-tested on the sim and found 5 real bugs, all fixed across **PR #41 + #42**:
