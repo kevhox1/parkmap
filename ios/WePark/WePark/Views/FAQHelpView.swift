@@ -34,14 +34,14 @@ struct FAQHelpView: View {
                 faqSection(
                     symbol: "car.2",
                     title: "How NYC parking works",
-                    content: section1Content
+                    content: { section1Content }
                 )
 
                 // Section 2 — How to use WePark
                 faqSection(
                     symbol: "map",
                     title: "How to use WePark",
-                    content: section2Content
+                    content: { section2Content }
                 )
 
                 // Section 3 — Official NYC sources (tappable links)
