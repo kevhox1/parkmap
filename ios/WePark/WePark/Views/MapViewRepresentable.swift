@@ -485,9 +485,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// - Parameters:
     ///   - driveModeActive: Whether Drive Mode is currently active.
     ///   - driveFollowEnabled: Whether follow mode is currently active (not paused).
+    ///   - isUserInteracting: Whether a user gesture is in flight right now (FT-5 flag, set
+    ///     SYNCHRONOUSLY in regionWillChangeAnimated). TF2-2: `driveFollowEnabled` flips via an
+    ///     async dispatch that is deferred until the drag ends (tracking-mode run loop), so during
+    ///     an active pan a GPS-tick recenter would still snap the camera back. Gating on
+    ///     `!isUserInteracting` closes that mid-drag race because the flag is synchronous.
     /// - Returns: `true` when `syncDriveRegion` should run; `false` to suppress it.
-    static func shouldSyncDriveRegion(driveModeActive: Bool, driveFollowEnabled: Bool) -> Bool {
-        driveModeActive && driveFollowEnabled
+    static func shouldSyncDriveRegion(driveModeActive: Bool, driveFollowEnabled: Bool, isUserInteracting: Bool) -> Bool {
+        driveModeActive && driveFollowEnabled && !isUserInteracting
     }
 
     // MARK: - FT-7: Shortest-arc rotation delta pure helper
@@ -699,7 +704,8 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         } else if MapViewRepresentable.shouldSyncDriveRegion(
             driveModeActive: driveModeActive,
-            driveFollowEnabled: driveFollowEnabled
+            driveFollowEnabled: driveFollowEnabled,
+            isUserInteracting: context.coordinator.isUserInteracting
         ) {
             // Drive Mode active + follow enabled: use pitch-preserving camera update so the
             // 30° tilt survives every follow-mode recenter. `setRegion` is banned here — it resets pitch.
