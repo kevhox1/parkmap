@@ -180,25 +180,26 @@ final class DriveZoomStyleTests: XCTestCase {
             "If 30° was the measured ceiling at the new zoom, remove this test and document in PR body.")
     }
 
-    // MARK: Test 11: driveModeCameraSpan is approximately 0.005°
+    // MARK: Test 11: driveModeCameraSpan is approximately 0.003° (FT-8 tightened value)
 
-    /// Verifies the span constant is in the expected ~0.005° range.
+    /// Verifies the span constant is the FT-8 tightened value (~0.003°).
+    /// FT-8: Tightened from 0.005° (~1,036m altitude) to 0.003° (~621m altitude).
+    /// At 0.003°, the camera focuses on roughly one Manhattan block.
     func testDriveModeCameraSpan_isApproximatelyCorrect() {
         let span = MapViewRepresentable.driveModeCameraSpan
-        XCTAssertEqual(span, 0.005, accuracy: 0.0005,
-            "driveModeCameraSpan should be ~0.005° (1–2 Manhattan blocks); got \(span)°")
+        XCTAssertEqual(span, 0.003, accuracy: 0.0005,
+            "driveModeCameraSpan should be ~0.003° (1 Manhattan block, FT-8 tightened); got \(span)°")
     }
 
-    // MARK: Test 12: altitudeForSpan at 0.005° → approximately 1,000–1,100m
+    // MARK: Test 12: altitudeForSpan at 0.005° → approximately 1,000–1,100m (fixed-input test)
 
-    /// Verifies the altitude formula at the Drive Mode span gives a plausible Drive Mode altitude.
+    /// Verifies the altitude formula at 0.005° gives a plausible altitude (~1,035m).
+    /// This test uses 0.005° directly (not the constant) to anchor the formula itself.
     ///
     /// Formula (spec §3.5): halfHeight = (0.005/2) * 111,000 = 277.5m.
     /// altitude = 277.5 / tan(15°) ≈ 277.5 / 0.2679 ≈ 1,035m.
-    /// (15° is the half-FOV angle for a standard iPhone ~60° total vertical FOV.)
     ///
-    /// We test a broad range (500–5,000m) to survive FOV variations across device sizes
-    /// while confirming the formula produces a plausible Drive Mode altitude.
+    /// We test a broad range (500–5,000m) to survive FOV variations across device sizes.
     func testAltitudeForSpan_driveMode_isApproximatelyTwoKm() {
         let altitude = MapViewRepresentable.altitudeForSpan(0.005)
         // Expected ~1,035m at 0.005°. Accept 500–5,000m for device-size robustness.

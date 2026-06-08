@@ -166,12 +166,12 @@ final class EMAStabilizerTests: XCTestCase {
         XCTAssertTrue(nearNorth, "Movement from south to north should produce ~0° bearing. Got \(result!)")
     }
 
-    // Test 8: Dead-band — heading change < 5° should NOT trigger map update.
+    // Test 8: Dead-band — heading change < 2° should NOT trigger map update (FT-7: lowered from 5° to 2°).
     // This tests the headingDiff utility used in MapViewRepresentable.
-    func testStabilizedHeading_deadBand_noMapUpdate_below5deg() {
-        let diff = MapViewRepresentable.headingDiff(93.0, 90.0)
-        XCTAssertEqual(diff, 3.0, accuracy: 0.01, "3° heading change should be below the 5° dead-band")
-        XCTAssertLessThan(diff, 5.0, "Diff < 5° should not trigger map camera update")
+    func testStabilizedHeading_deadBand_noMapUpdate_below2deg() {
+        let diff = MapViewRepresentable.headingDiff(91.5, 90.0)
+        XCTAssertEqual(diff, 1.5, accuracy: 0.01, "1.5° heading change should be below the 2° dead-band")
+        XCTAssertLessThan(diff, 2.0, "Diff < 2° should not trigger map camera update (FT-7: dead-band is 2°)")
     }
 }
 
@@ -815,16 +815,16 @@ final class RecentDestinationsStoreN1Tests: XCTestCase {
 @MainActor
 final class HeadingUpRotationTests: XCTestCase {
 
-    func testHeadingDiff_below5degrees_shouldNotTriggerUpdate() {
-        // 3° change is below dead-band.
-        let diff = MapViewRepresentable.headingDiff(93.0, 90.0)
-        XCTAssertLessThan(diff, 5.0, "3° diff should be below 5° dead-band threshold")
+    func testHeadingDiff_below2degrees_shouldNotTriggerUpdate() {
+        // 1.5° change is below the FT-7 dead-band (lowered from 5° to 2°).
+        let diff = MapViewRepresentable.headingDiff(91.5, 90.0)
+        XCTAssertLessThan(diff, 2.0, "1.5° diff should be below 2° dead-band threshold (FT-7)")
     }
 
-    func testHeadingDiff_above5degrees_shouldTriggerUpdate() {
-        // 10° change is above dead-band.
-        let diff = MapViewRepresentable.headingDiff(100.0, 90.0)
-        XCTAssertGreaterThan(diff, 5.0, "10° diff should exceed 5° dead-band threshold")
+    func testHeadingDiff_above2degrees_shouldTriggerUpdate() {
+        // 3° change is above the FT-7 dead-band (lowered from 5° to 2°).
+        let diff = MapViewRepresentable.headingDiff(93.0, 90.0)
+        XCTAssertGreaterThan(diff, 2.0, "3° diff should exceed 2° dead-band threshold (FT-7)")
     }
 
     func testHeadingDiff_nearZero360Boundary() {
@@ -923,7 +923,7 @@ final class HeadingUpRotationTests: XCTestCase {
             overlayPayload: MapViewRepresentable.OverlayPayload(generation: 0),
             activeRoute: nil,
             destinationCoordinate: nil,
-            driveHeading: 92.0,
+            driveHeading: 91.5,
             onDrivePanDetected: nil,
             coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
@@ -934,12 +934,12 @@ final class HeadingUpRotationTests: XCTestCase {
         // Establish last applied heading of 90°.
         coordinator.lastAppliedHeading = 90.0
 
-        // Sync with 92° (only 2° change — below 5° dead-band).
-        coordinator.syncDriveHeading(92.0, on: mapView)
+        // Sync with 91.5° (only 1.5° change — below FT-7 2° dead-band).
+        coordinator.syncDriveHeading(91.5, on: mapView)
 
-        // lastAppliedHeading should NOT update (dead-band suppressed the update).
+        // lastAppliedHeading should NOT update (2° dead-band suppressed the update).
         XCTAssertEqual(coordinator.lastAppliedHeading!, 90.0, accuracy: 0.01,
-                       "lastAppliedHeading should remain 90° when change is < 5°")
+                       "lastAppliedHeading should remain 90° when change is < 2° (FT-7 dead-band)")
     }
 }
 

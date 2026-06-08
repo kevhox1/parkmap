@@ -1078,6 +1078,7 @@ struct ContentView: View {
             driveHeading: locationService.driveHeading,
             driveModeActive: driveModeActive,
             onDrivePanDetected: handleDrivePanDetected,
+            driveFollowEnabled: driveFollowEnabled,
             coordinatorActions: coordinatorActions
         )
     }

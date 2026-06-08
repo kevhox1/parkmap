@@ -197,6 +197,20 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Default: nil (not in Drive Mode).
     var onDrivePanDetected: (() -> Void)? = nil
 
+    // MARK: - FT-10: Follow-pause flag
+
+    /// Whether Drive Mode follow is currently active.
+    ///
+    /// ContentView sets this to `false` when `onDrivePanDetected` fires (user panned/zoomed),
+    /// and back to `true` when the Re-center button is tapped (`recenterDriveMode()`).
+    ///
+    /// When `false`, `syncDriveRegion` must NOT recenter — the user has manually panned/zoomed
+    /// and the camera should stay where they left it until they explicitly tap Re-center.
+    ///
+    /// This property is a pure SwiftUI binding pass-through (same pattern as `driveModeActive`).
+    /// It carries no internal state in MapViewRepresentable; all state lives in ContentView.
+    var driveFollowEnabled: Bool = true
+
     // MARK: - W8.5c-polish PR-3 / PR-2: Drive Mode camera constants + pure-function decisions
 
     /// Camera pitch applied during Drive Mode.
@@ -213,13 +227,25 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// without structural change — call it with a different pitch value in the last 500m.
     static let driveModePitch: CGFloat = 45
 
-    /// Target latitude span during Drive Mode (~0.005° ≈ 1–2 Manhattan blocks).
+    /// Target latitude span during Drive Mode.
     ///
-    /// PR-2: this is the tighter zoom that replaces the wider Drive Mode span from PR-3.
-    /// At 0.005° the camera `centerCoordinateDistance` is approximately 2,000–2,300m
-    /// (computed by `altitudeForSpan(_:)`). This span was chosen per the spec's
-    /// "approximately 1–2 Manhattan blocks visible" UX target.
-    static let driveModeCameraSpan: CLLocationDegrees = 0.005
+    /// FT-8: Tightened from 0.005° (~1,036m altitude) to 0.003° (~621m altitude).
+    /// At 0.003°, the camera focuses on roughly one Manhattan block, improving the
+    /// "current block" UX intent without losing all cross-street context.
+    ///
+    /// Kevin: tune on-device — 0.0025° (~518m) if tighter, 0.004° if wider.
+    /// Altitude computed via altitudeForSpan(_:): halfH = (span/2)*111,000 / tan(15°).
+    ///   0.003° → halfH = 166.5m → altitude ≈ 621m.
+    static let driveModeCameraSpan: CLLocationDegrees = 0.003
+
+    /// Animation duration for Drive Mode camera + puck transitions (FT-7).
+    ///
+    /// 0.3s allows each GPS-fix animation to complete with 0.7s to spare at 1 Hz cadence.
+    /// Mid-animation retargeting: setCamera(animated:true) while a previous one is in flight
+    /// cancels the in-flight animation and starts fresh — no stacking.
+    ///
+    /// Kevin: tune on-device — try 0.5s if 0.3s feels abrupt on a real-device drive-test.
+    static let driveAnimationDuration: TimeInterval = 0.3
 
     /// Pure pitch-decision function: no MKMapView dependency, directly unit-testable.
     ///
@@ -444,6 +470,46 @@ struct MapViewRepresentable: UIViewRepresentable {
         !driveModeActive && !isUserInteracting
     }
 
+    // MARK: - FT-10: Drive follow-pause gate pure function
+
+    /// Returns whether `syncDriveRegion` should recenter the map during Drive Mode.
+    ///
+    /// Both conditions must be true: Drive Mode must be active AND follow must not be paused
+    /// by a user pan/zoom gesture. When follow is paused (`driveFollowEnabled == false`),
+    /// `syncDriveRegion` is suppressed so the user's manual camera position is preserved
+    /// until they tap Re-center.
+    ///
+    /// Separate from `shouldSyncRegionToBinding` which gates the `setRegion` (non-Drive-Mode)
+    /// path. Keeping them separate preserves RegionSyncGuardTests' contract (AC-FT7.10).
+    ///
+    /// - Parameters:
+    ///   - driveModeActive: Whether Drive Mode is currently active.
+    ///   - driveFollowEnabled: Whether follow mode is currently active (not paused).
+    /// - Returns: `true` when `syncDriveRegion` should run; `false` to suppress it.
+    static func shouldSyncDriveRegion(driveModeActive: Bool, driveFollowEnabled: Bool) -> Bool {
+        driveModeActive && driveFollowEnabled
+    }
+
+    // MARK: - FT-7: Shortest-arc rotation delta pure helper
+
+    /// Returns the shortest angular path from `from` to `to` in radians, in (-π, π].
+    ///
+    /// Without this helper, a puck rotating from 359° to 1° would animate the long way
+    /// (spinning 358° counter-clockwise instead of 2° clockwise). This function ensures
+    /// UIView.animate uses the correct arc direction for every heading update.
+    ///
+    /// - Parameters:
+    ///   - from: Current rotation angle in radians (any value; will be normalized).
+    ///   - to: Target rotation angle in radians (any value; will be normalized).
+    /// - Returns: The signed delta in (-π, π] to add to `from` to reach `to` by the shortest arc.
+    static func shortestArcDelta(from: CGFloat, to: CGFloat) -> CGFloat {
+        var delta = to - from
+        // Normalize to (-π, π] so the rotation takes the short arc, never the long way.
+        while delta >  .pi { delta -= 2 * .pi }
+        while delta < -.pi { delta += 2 * .pi }
+        return delta
+    }
+
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
@@ -631,11 +697,17 @@ struct MapViewRepresentable: UIViewRepresentable {
             if latDiff > 0.0001 || lngDiff > 0.0001 {
                 mapView.setRegion(region, animated: false)
             }
-        } else {
-            // Drive Mode: use pitch-preserving camera update so the 30° tilt survives
-            // every follow-mode recenter. `setRegion` is banned here — it resets pitch.
+        } else if MapViewRepresentable.shouldSyncDriveRegion(
+            driveModeActive: driveModeActive,
+            driveFollowEnabled: driveFollowEnabled
+        ) {
+            // Drive Mode active + follow enabled: use pitch-preserving camera update so the
+            // 30° tilt survives every follow-mode recenter. `setRegion` is banned here — it resets pitch.
             context.coordinator.syncDriveRegion(region, on: mapView)
         }
+        // When driveFollowEnabled == false: Drive Mode is active but follow is paused.
+        // The user has manually panned/zoomed. syncDriveRegion is suppressed until Re-center tapped.
+        // (FT-10 root cause fix — see spec §3 data flow.)
     }
 
     // MARK: - Coordinator
@@ -916,36 +988,63 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         /// Applies the stabilized Drive Mode heading to the map camera.
         ///
+        /// FT-7 changes from W8.5c baseline:
+        ///   - Dead-band lowered from 5° to 2° (OQ-FT7-1 resolved). With animated transitions
+        ///     the R-1 feedback-loop risk at a lower threshold is substantially reduced.
+        ///     2° is above GPS course noise (~0.5–1° at highway speed).
+        ///   - Camera rotation now animated (driveAnimationDuration = 0.3s). MapKit's animated
+        ///     setCamera cancels any in-flight animation and starts fresh — no stacking at 1 Hz.
+        ///   - Puck rotation animated via UIView.animate with shortestArcDelta so a 359°→1°
+        ///     transition takes 2° clockwise, not 358° counter-clockwise.
+        ///
         /// Port of `setDrivingMapRotation` (index.html:6584–6601) with R-1 dead-band guard:
         ///   - If `heading` is nil (Drive Mode off), reset camera to north-up (heading = 0).
-        ///   - If heading changed by <= 5 degrees, skip (avoids regionDidChangeAnimated feedback loop).
-        ///   - If changed by > 5 degrees, create a new MKMapCamera and call setCamera(_:animated:false).
+        ///   - If heading changed by <= 2 degrees, skip (avoids regionDidChangeAnimated feedback loop).
+        ///   - If changed by > 2 degrees, animate camera heading and puck rotation.
         ///
         /// Called from updateUIView on every SwiftUI render cycle that has a new driveHeading.
         func syncDriveHeading(_ heading: Double?, on mapView: MKMapView) {
             if let h = heading {
-                // Check dead-band (R-1 anti-loop). Only update if changed > 5 degrees.
+                // FT-7: Dead-band lowered from 5° to 2° (OQ-FT7-1 resolved).
+                // R-1 anti-loop: only update if heading changed > 2 degrees.
                 if let last = lastAppliedHeading {
                     let diff = MapViewRepresentable.headingDiff(h, last)
-                    guard diff > 5 else { return }
+                    guard diff > 2 else { return }
                 }
                 lastAppliedHeading = h
                 let camera = mapView.camera.copy() as! MKMapCamera
                 camera.heading = h
-                mapView.setCamera(camera, animated: false)
+                // FT-7 B.2: Animate camera rotation (was animated: false).
+                // Programmatic animated setCamera fires regionWillChangeAnimated with no active
+                // gesture recognizer → isUserGesture = false → onDrivePanDetected NOT called
+                // → driveFollowEnabled unaffected. Safe.
+                mapView.setCamera(camera, animated: true)
 
-                // PR-2: Rotate the directional puck to match the new heading.
-                // `mapView.view(for:)` returns the annotation view if visible; nil if off-screen.
-                // The rotation is applied directly to the view's transform — no new setCamera.
-                let headingRad = CGFloat(h * .pi / 180.0)
-                mapView.view(for: mapView.userLocation)?.transform =
-                    CGAffineTransform(rotationAngle: headingRad)
+                // FT-7 B.3: Animate puck rotation with shortest-arc delta.
+                // PR-2 applied the absolute angle; this causes 359°→1° to spin 358° the wrong way.
+                // shortestArcDelta ensures we always take the shorter arc (max 180° of rotation).
+                // .beginFromCurrentState: if the previous animation hasn't finished, start from
+                // wherever the view currently is rather than jumping to the old target.
+                let targetRad = CGFloat(h * .pi / 180.0)
+                if let puckView = mapView.view(for: mapView.userLocation) {
+                    // Decompose current transform angle from the existing transform.
+                    let currentAngle = atan2(puckView.transform.b, puckView.transform.a)
+                    let delta = MapViewRepresentable.shortestArcDelta(from: currentAngle, to: targetRad)
+                    UIView.animate(
+                        withDuration: MapViewRepresentable.driveAnimationDuration,
+                        delay: 0,
+                        options: [.curveEaseInOut, .allowUserInteraction, .beginFromCurrentState]
+                    ) {
+                        puckView.transform = puckView.transform.rotated(by: delta)
+                    }
+                }
             } else {
                 // Drive Mode exited — reset to north-up and clear state.
                 guard lastAppliedHeading != nil else { return }
                 lastAppliedHeading = nil
                 let camera = mapView.camera.copy() as! MKMapCamera
                 camera.heading = 0
+                // Exit path stays animated: false (immediate reset on Drive Mode exit is correct).
                 mapView.setCamera(camera, animated: false)
             }
         }
@@ -1048,15 +1147,20 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// Recenters the map on the given region's center coordinate during Drive Mode,
         /// preserving the current camera pitch and heading.
         ///
-        /// Called from `updateUIView` when `driveModeActive` is true and the map center has
-        /// diverged from the SwiftUI `region` binding — i.e., a follow-mode recenter was
-        /// requested by `recenterDriveMap` in ContentView. `setRegion(_:animated:)` is banned
-        /// here because it resets camera pitch to 0, clobbering the 30° Drive Mode tilt.
+        /// Called from `updateUIView` when `driveModeActive` is true AND `driveFollowEnabled`
+        /// is true — i.e., a follow-mode recenter was requested by `recenterDriveMap` in
+        /// ContentView. `setRegion(_:animated:)` is banned here because it resets camera pitch
+        /// to 0, clobbering the 45° Drive Mode tilt.
+        ///
+        /// FT-7 B.4: Now animated (was animated: false). The programmatic animated setCamera
+        /// fires regionWillChangeAnimated with no active gesture recognizer → isUserGesture=false
+        /// → onDrivePanDetected is NOT called → driveFollowEnabled stays true. No false pause.
+        ///
+        /// FT-10 note: This method is now only called when shouldSyncDriveRegion returns true
+        /// (driveFollowEnabled == true). The gate is enforced in updateUIView's else-branch.
         ///
         /// Implementation: copies the current `MKMapCamera` (preserving `pitch`, `heading`,
         /// and `centerCoordinateDistance`) and sets only `centerCoordinate` to the new center.
-        /// Uses `animated: false` to match the non-Drive-Mode `setRegion(animated: false)` path
-        /// and avoid fighting `syncDriveHeading`'s own `setCamera` calls.
         ///
         /// - Parameters:
         ///   - region: The SwiftUI `region` binding value — only `center` is used.
@@ -1070,7 +1174,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             let camera = mapView.camera.copy() as! MKMapCamera
             camera.centerCoordinate = region.center
             // pitch and heading are preserved from the copied camera — no pitch reset.
-            mapView.setCamera(camera, animated: false)
+            // FT-7 B.4: Animate the recenter (was animated: false). At 1 Hz GPS cadence,
+            // 0.3s animations complete with 0.7s to spare. No stacking — MapKit cancels
+            // in-flight animated setCamera when a new one starts.
+            mapView.setCamera(camera, animated: true)
         }
 
         // MARK: - MKMapViewDelegate: annotation view
