@@ -23,18 +23,21 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   rework + regressions on the #31-sensitive path.
 - **Lands in:** iOS (`MapViewRepresentable.swift`).
 
-### FT-9 🔴 "Lowry" shows free parking on the left — incorrect (DATA)
-- **Area:** Tile data / parking-rules classification. Backend-data domain.
-- **Observed (Kevin, 2026-06-08):** A street he calls "Lowry" is showing free parking on the left
-  side; that's wrong.
-- **Investigation so far:** NO "Lowry"/"Lowery" street exists anywhere in `tiles/` (1028 tiles) or
-  `osm_oneway.json`. Street names in tiles are uppercase NYC form (e.g. "2ND AVENUE"). Two leading
-  hypotheses: (a) the street isn't in the NYC open-data set under that name → app renders no-rules
-  as "free" (green), i.e. **absence of data is being shown as free parking, which is misleading**;
-  (b) it's a name variant / mishearing of the actual street. NEED FROM KEVIN: exact street name +
-  cross streets + borough (or the screenshot) to locate the segment.
-- **Lands in:** backend-data (tile pipeline / source data) + possibly rules-engine default behavior
-  for no-data segments. Investigate once location pinned.
+### FT-9 🔴 Bowery / 2nd Ave shown FREE on the left — should be metered/no-standing during the day (DATA)
+- **Area:** Tile data / parking-rules classification + overlay color mapping. Backend-data + rules-engine.
+- **Clarified (Kevin, 2026-06-08):** NOT "Lowry" — he meant **Bowery / 2nd Avenue** (Manhattan).
+  Those curbs should be METERED or unavailable (no-standing) during the daytime, which is when he was
+  using the app — but it showed FREE on the left side.
+- **Investigation so far:** Both streets ARE in the dataset with real rules (Bowery: 105 segment-rows
+  across 8 tiles — TRUCK_LOADING, NO_STANDING, NO_STOPPING; 2nd Ave sample: METERED 7AM–3PM +
+  NO_STANDING 3PM–8PM). So NOT a missing-data problem. Leading hypotheses: (a) the rules engine /
+  overlay maps METERED (and/or one-side curb regs) to a FREE/green state instead of a distinct
+  metered state during the day; (b) specific blocks have rules on one side/curb but the opposite-side
+  segment is empty → that side renders free; (c) side/arrow mismatch. "On the left" strongly implies a
+  per-curb (side) issue on a one-way ave (2nd Ave is one-way SB).
+- **Status:** 🔴 dispatched to backend-data to root-cause (tile rules + engine classification of
+  METERED/daytime + per-side coverage).
+- **Lands in:** backend-data (tiles + rules engine), possibly iOS overlay color mapping if engine is right.
 
 ### FT-8 🟡 Drive/Cruise default zoom too wide — shows too many streets
 - **Area:** Drive Mode / Cruise (Find Parking) camera zoom. `MapViewRepresentable.driveModeCameraSpan`.
