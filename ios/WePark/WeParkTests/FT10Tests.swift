@@ -38,10 +38,11 @@ final class FT10FollowPauseTests: XCTestCase {
     func testShouldSyncDriveRegion_activeAndFollowEnabled_returnsTrue() {
         let result = MapViewRepresentable.shouldSyncDriveRegion(
             driveModeActive: true,
-            driveFollowEnabled: true
+            driveFollowEnabled: true,
+            isUserInteracting: false
         )
         XCTAssertTrue(result,
-            "shouldSyncDriveRegion(true, true) must return true — Drive Mode active and follow enabled")
+            "shouldSyncDriveRegion(true, true, notInteracting) must return true — Drive Mode active, follow enabled, no gesture")
     }
 
     // MARK: AC-FT10.2 — driveModeActive=true, driveFollowEnabled=false → false
@@ -51,10 +52,27 @@ final class FT10FollowPauseTests: XCTestCase {
     func testShouldSyncDriveRegion_activeButFollowPaused_returnsFalse() {
         let result = MapViewRepresentable.shouldSyncDriveRegion(
             driveModeActive: true,
-            driveFollowEnabled: false
+            driveFollowEnabled: false,
+            isUserInteracting: false
         )
         XCTAssertFalse(result,
             "shouldSyncDriveRegion(true, false) must return false — follow paused, no snap-back")
+    }
+
+    // MARK: TF2-2 — driveModeActive=true, driveFollowEnabled=true, isUserInteracting=true → false
+
+    /// TF2-2 race fix: even while follow is nominally still enabled (because the async
+    /// driveFollowEnabled flip is deferred until the drag ends), an in-flight user gesture
+    /// must suppress the recenter so the camera doesn't snap back mid-drag. isUserInteracting
+    /// is set synchronously, so it closes the race.
+    func testShouldSyncDriveRegion_userInteracting_returnsFalse() {
+        let result = MapViewRepresentable.shouldSyncDriveRegion(
+            driveModeActive: true,
+            driveFollowEnabled: true,
+            isUserInteracting: true
+        )
+        XCTAssertFalse(result,
+            "shouldSyncDriveRegion(true, true, interacting) must return false — active gesture suppresses mid-drag recenter (TF2-2)")
     }
 
     // MARK: AC-FT10.3 — driveModeActive=false, driveFollowEnabled=true → false
@@ -63,7 +81,8 @@ final class FT10FollowPauseTests: XCTestCase {
     func testShouldSyncDriveRegion_inactiveWithFollowEnabled_returnsFalse() {
         let result = MapViewRepresentable.shouldSyncDriveRegion(
             driveModeActive: false,
-            driveFollowEnabled: true
+            driveFollowEnabled: true,
+            isUserInteracting: false
         )
         XCTAssertFalse(result,
             "shouldSyncDriveRegion(false, true) must return false — not in Drive Mode")
@@ -75,7 +94,8 @@ final class FT10FollowPauseTests: XCTestCase {
     func testShouldSyncDriveRegion_bothFalse_returnsFalse() {
         let result = MapViewRepresentable.shouldSyncDriveRegion(
             driveModeActive: false,
-            driveFollowEnabled: false
+            driveFollowEnabled: false,
+            isUserInteracting: false
         )
         XCTAssertFalse(result,
             "shouldSyncDriveRegion(false, false) must return false")
@@ -150,7 +170,8 @@ final class FT10FollowPauseTests: XCTestCase {
         // The actual syncDriveRegion call is inside updateUIView guarded by this result.
         let shouldSync = MapViewRepresentable.shouldSyncDriveRegion(
             driveModeActive: true,
-            driveFollowEnabled: false  // Follow paused by user pan/zoom
+            driveFollowEnabled: false,  // Follow paused by user pan/zoom
+            isUserInteracting: false
         )
         XCTAssertFalse(shouldSync,
             "When driveFollowEnabled=false, shouldSyncDriveRegion must return false " +

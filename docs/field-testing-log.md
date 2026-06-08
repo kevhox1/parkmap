@@ -11,7 +11,22 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
 
-### TF2-1 🔴 Can't pan the live (Drive/Cruise) map while stationary — only zoom works
+### TF2-2 🟢 Live-map pan still snaps back mid-drag (async race) — FIXED → build 4
+- **Area:** Drive Mode follow-recenter gate. `MapViewRepresentable.shouldSyncDriveRegion` / updateUIView.
+- **Observed (Kevin, build 3 w/ TF2-1):** scroll in drive mode "still snaps back, directionally better."
+- **Root cause:** two flags gate follow-pause: `isUserInteracting` (FT-5, set SYNCHRONOUSLY on touch)
+  and `driveFollowEnabled` (FT-10, set via async dispatch). The recenter (`syncDriveRegion`) was gated
+  only on `driveFollowEnabled`. During an active drag the run loop is in tracking mode, so the async
+  flip of `driveFollowEnabled` is deferred until the finger lifts — meanwhile each ~1 Hz GPS tick
+  recenters mid-drag → snap-back. TF2-1 made the pause fire at all, but the async timing still lost the
+  mid-drag race.
+- **Fix:** also gate `syncDriveRegion` on `!isUserInteracting` (synchronous) → closes the mid-drag
+  race. `shouldSyncDriveRegion(driveModeActive:driveFollowEnabled:isUserInteracting:)` now returns
+  `driveModeActive && driveFollowEnabled && !isUserInteracting`. Full suite green (+1 race-case test).
+- **Status:** 🟢 fixed; goes in build 4.
+- **Lands in:** iOS (`MapViewRepresentable.swift`).
+
+### TF2-1 🟢 Can't pan the live (Drive/Cruise) map while stationary — only zoom works — MERGED #52 (build 3)
 - **Area:** Drive Mode follow-pause / pan detection. `MapViewRepresentable.regionWillChangeAnimated`.
 - **Observed (Kevin, seated, TF2 build):** In the live screen, cannot pan at all — only zoom responds.
 - **Root cause:** the FT-10 follow-pause trigger (`onDrivePanDetected` → flips `driveFollowEnabled`
