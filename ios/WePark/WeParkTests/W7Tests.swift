@@ -38,10 +38,14 @@ final class W7NotificationSchedulerTests: XCTestCase {
         mockCenter = MockNotificationCenter()
         scheduler = NotificationScheduler(center: mockCenter)
         UserDefaults.standard.removeObject(forKey: AppConstants.notificationsMutedKey)
+        // FT-6: Ensure reminder offsets key is absent so ReminderOffsets.default (1h only) is used.
+        UserDefaults.standard.removeObject(forKey: AppConstants.reminderOffsetsKey)
     }
 
     override func tearDown() {
         UserDefaults.standard.removeObject(forKey: AppConstants.notificationsMutedKey)
+        // FT-6: Remove reminder offsets key so FT-6 tests don't bleed into pre-existing tests.
+        UserDefaults.standard.removeObject(forKey: AppConstants.reminderOffsetsKey)
         super.tearDown()
     }
 

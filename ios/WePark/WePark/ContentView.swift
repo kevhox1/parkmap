@@ -286,6 +286,12 @@ struct ContentView: View {
     /// and the negated binding) so ContentView stays decoupled from the key name.
     @State private var notificationsMuted: Bool = false
 
+    /// FT-6: Source of truth for the multi-preset reminder timing selection.
+    /// Initialized from UserDefaults in .task; SettingsView binds to this via $reminderOffsets.
+    /// Writes to UserDefaults are performed inside SettingsView's .onChange(of: offsets) via
+    /// ReminderOffsets.save, then onOffsetsChange() triggers a reschedule.
+    @State private var reminderOffsets: ReminderOffsets = .default
+
     // MARK: - W7.5: Park Until filter state
 
     /// The target departure time the user selected in ParkUntilSheet.
@@ -669,6 +675,7 @@ struct ContentView: View {
             // W7: Global settings sheet.
             SettingsView(
                 notificationsMuted: $notificationsMuted,
+                offsets: $reminderOffsets,
                 onUnmute: {
                     // Reschedule notification for the current pin if it opted in.
                     if let car = parkPinService.parkedCar, car.notifyOnRestriction {
@@ -680,6 +687,9 @@ struct ContentView: View {
                     }
                     // Show "Reminders re-enabled" toast regardless of whether a pin exists.
                     ToastService.shared.show(message: "Reminders re-enabled")
+                },
+                onOffsetsChange: {
+                    handleReminderOffsetsChange()
                 },
                 appVersion: appVersion,
                 buildNumber: buildNumber
@@ -1730,6 +1740,9 @@ struct ContentView: View {
         // W7: Initialize mute state from UserDefaults.
         notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
 
+        // FT-6: Initialize reminder offsets from UserDefaults.
+        reminderOffsets = ReminderOffsets.load(from: .standard)
+
         // W7: Initialize banner state.
         bannerState = aspService.suspensionState(at: .nowET)
 
@@ -1793,6 +1806,8 @@ struct ContentView: View {
         bannerState = aspService.suspensionState(at: .nowET)
         // Re-sync mute state in case it changed while backgrounded (edge case).
         notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
+        // FT-6: Re-sync reminder offsets on foreground (mirrors mute sync pattern).
+        reminderOffsets = ReminderOffsets.load(from: .standard)
         // W7.5: Stale-target guard — clear the Park Until filter if the target has passed.
         // This covers the case where the user backgrounded the app past their departure time.
         if let target = parkUntilTarget, target < .nowET {
@@ -1937,6 +1952,25 @@ struct ContentView: View {
                 NotificationScheduler.shared.cancelAll(for: car)
             }
         }
+    }
+
+    // MARK: - FT-6: Reminder offsets change handler
+
+    /// Called from SettingsView's onOffsetsChange closure when any reminder preset toggle changes.
+    ///
+    /// Cancels and re-schedules notifications for the current pin so the new preset set takes
+    /// effect immediately. Mirrors the existing unmute reschedule path (handleNotificationsMutedChange).
+    private func handleReminderOffsetsChange() {
+        guard let car = parkPinService.parkedCar,
+              car.notifyOnRestriction,
+              !notificationsMuted else { return }
+
+        NotificationScheduler.shared.cancelAllThenSchedule(
+            for: car,
+            oldCarID: car.id,
+            loadedSegments: tileLoader.segments,
+            engine: engine
+        )
     }
 
     // MARK: - W6: First pin dropped handler

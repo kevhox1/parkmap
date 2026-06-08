@@ -3,27 +3,35 @@
 //  WePark
 //
 //  W6: All UNUserNotificationCenter scheduling and cancellation logic.
+//  FT-6: Extended to support multi-preset reminders via ReminderOffsets.
 //
 //  No import SwiftUI — this is a pure service (QA invariant).
 //  No Calendar.current — all time math uses Calendar.easternTime (W3 invariant).
 //
 //  Architecture:
 //    - Singleton: NotificationScheduler.shared
-//    - Scheduling: schedule(for:loadedSegments:engine:now:) — takes a ParkedCar,
-//      resolves the segment, computes the next restriction, builds a
-//      UNNotificationRequest, and adds it to UNUserNotificationCenter.
+//    - Scheduling: schedule(for:loadedSegments:engine:now:parkUntil:) — takes a ParkedCar,
+//      resolves the segment, computes the next restriction, iterates active ReminderOffsets
+//      presets, and adds one UNNotificationRequest per preset to UNUserNotificationCenter.
 //    - Cancellation: cancelAll(for:) — cancels all pending requests whose identifier
 //      starts with "wepark.pin.<car.id.uuidString>". Also removes delivered notifications.
 //    - cancelAllThenSchedule(for:...) — convenience that cancels the previous pin's
 //      notifications (by oldCarID) then schedules for the new pin.
 //
-//  Identifier scheme: wepark.pin.<car.id.uuidString>.r0
-//    r0 = the single lead-time notification. r1 reserved for future two-notification
-//    design (OQ-W6-2 forward-compatibility).
+//  Preset-to-ruleIndex mapping (STABLE — never reorder, see spec §4.2):
+//    r0 = 15 min before  (leadSeconds: 900)
+//    r1 = 30 min before  (leadSeconds: 1800)
+//    r2 = 1 hour before  (leadSeconds: 3600)
+//    r3 = 2 hours before (leadSeconds: 7200)
+//    r4 = Night before   (20:00 ET prior calendar evening — DST-safe)
 //
-//  Notification content (§3.4):
-//    Title:   "Move your car — <street> (<side>)"
-//    Body:    "<restriction label> starts <time label>. Move by <time>."
+//  Identifier scheme: wepark.pin.<car.id.uuidString>.rN
+//    where N is the ruleIndex above (0–4). Stable mapping ensures prefix-based
+//    cancellation removes all five slots without needing to know which were active.
+//
+//  Notification content (per spec §5.6):
+//    Title:   "Move your car — <street> (<side>)" (unchanged)
+//    Body:    Per-preset lead phrase — see buildBody(for:restriction:engine:now:leadKind:)
 //    Sound:   default
 //    Badge:   1
 //    userInfo: { "wepark_car_id": carID, "wepark_action": "show_car_detail" }
@@ -31,14 +39,8 @@
 //  Trigger: UNCalendarNotificationTrigger (DST-safe wall-clock fire).
 //    DateComponents built from fireDate via Calendar.easternTime.
 //
-//  W7 mute integration point (§4.1):
-//    guard !UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
-//    This guard is a no-op in W6 (key absent = false). W7 activates by writing the key.
-//
-//  W7.5 "Park Until X" integration point (§4.3):
-//    schedule(for:loadedSegments:engine:now:parkUntil:) — parkUntil: Date? parameter.
-//    If non-nil and fireDate > parkUntil, skip scheduling.
-//    W6 ships with parkUntil: nil always.
+//  iOS pending-notification cap: 64 per app. With 5 presets and 1 active pin this feature
+//  enqueues at most 5 requests — well within budget. No pruning logic needed.
 //
 
 import Foundation
@@ -69,25 +71,19 @@ final class NotificationScheduler {
 
     // MARK: - Public API
 
-    /// Schedule a local notification for the given parked car's next upcoming restriction.
+    /// Schedule local notifications for the given parked car's next upcoming restriction.
     ///
-    /// Steps:
-    ///  1. Guard: W7 mute check (no-op in W6).
-    ///  2. Resolve segment from detectedSegmentID.
-    ///  3. Call engine.nextRestriction(for:at:).
-    ///  4. Guard: unrestricted (hours >= 168) → skip.
-    ///  5. Guard: active now (hours == 0) → skip.
-    ///  6. Compute fireDate = now + hours*3600 - leadTime. Guard: fireDate <= now → skip.
-    ///  7. Build UNMutableNotificationContent (§3.4).
-    ///  8. Build UNCalendarNotificationTrigger from Calendar.easternTime components.
-    ///  9. Add request to notification center.
+    /// For each active preset in ReminderOffsets (loaded from UserDefaults), computes a
+    /// fireDate and enqueues one UNNotificationRequest. Per-preset past-guard and
+    /// W7.5 parkUntil-guard are applied independently per reminder.
     ///
     /// - Parameters:
-    ///   - car: The parked car to schedule a reminder for.
+    ///   - car: The parked car to schedule reminders for.
     ///   - loadedSegments: All currently loaded segments (from TileLoader).
     ///   - engine: The rules engine used to compute the next restriction.
     ///   - now: The reference date (default: Date.nowET). Overridden by tests.
-    ///   - parkUntil: W7.5 integration point — if non-nil and fireDate > parkUntil, skip.
+    ///   - parkUntil: W7.5 integration point — if non-nil and fireDate > parkUntil, skip
+    ///                that individual reminder (but still schedule others).
     func schedule(
         for car: ParkedCar,
         loadedSegments: [Segment],
@@ -96,42 +92,47 @@ final class NotificationScheduler {
         parkUntil: Date? = nil
     ) {
         // W7 integration point: mute check.
-        // W6 stubs this as always false; W7 fills it in.
         guard !UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey) else { return }
 
         // W7: Per-pin opt-in check.
         guard car.notifyOnRestriction else { return }
 
-        // Step 1: Resolve segment. Nil detectedSegmentID → no notification.
+        // Resolve segment. Nil detectedSegmentID → no notification.
         guard let segmentID = car.detectedSegmentID,
               let segment = loadedSegments.first(where: { $0.id == segmentID }) else {
             return
         }
 
-        // Step 2: Compute next restriction.
+        // Compute next restriction.
         let restriction = engine.nextRestriction(for: segment, at: now)
 
-        // Step 3: Guard unrestricted.
+        // Guard unrestricted.
         guard !restriction.isUnrestricted else { return }
 
-        // Step 4: Guard active now.
+        // Guard active now.
         guard !restriction.isActiveNow else { return }
 
-        // Step 5: Compute fire date. leadTime = 1h (AppConstants.notificationLeadTimeSeconds).
-        let fireDate = now.addingTimeInterval(restriction.hours * 3600 - AppConstants.notificationLeadTimeSeconds)
+        // Load reminder offsets from UserDefaults.
+        let offsets = ReminderOffsets.load(from: .standard)
 
-        // Guard: fire date must be in the future.
-        guard fireDate > now else { return }
+        // Compute the anchor: absolute date of the restriction start.
+        let restrictionStart = now.addingTimeInterval(restriction.hours * 3600)
 
-        // Step 6: W7.5 park-until guard (no-op in W6; parameter always nil).
-        if let parkUntil = parkUntil, fireDate > parkUntil { return }
-
-        // Step 7: Guard notification permission before scheduling.
+        // Guard notification permission before scheduling any requests.
         center.getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized ||
                   settings.authorizationStatus == .provisional else { return }
 
-            self.scheduleRequest(for: car, restriction: restriction, engine: engine, segment: segment, fireDate: fireDate, now: now)
+            self.enqueuePresets(
+                offsets: offsets,
+                car: car,
+                restriction: restriction,
+                engine: engine,
+                segment: segment,
+                restrictionStart: restrictionStart,
+                now: now,
+                parkUntil: parkUntil
+            )
         }
     }
 
@@ -140,14 +141,18 @@ final class NotificationScheduler {
     /// (the test target has no notification entitlements), so the settings guard
     /// would always bail out. In production this path is never called directly.
     ///
-    /// Performs the same edge-case guards as `schedule(for:)` minus the settings check.
+    /// - Parameters:
+    ///   - offsets: Optional ReminderOffsets to use. When nil, reads from UserDefaults.standard.
+    ///              Inject a specific value in tests to avoid polluting global state.
     internal func scheduleForTest(
         for car: ParkedCar,
         loadedSegments: [Segment],
         engine: ParkingRulesEngine,
-        now: Date
+        now: Date,
+        offsets: ReminderOffsets? = nil,
+        parkUntil: Date? = nil
     ) {
-        // W7 mute check (tests can verify this too).
+        // W7 mute check.
         guard !UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey) else { return }
 
         // W7: Per-pin opt-in check.
@@ -162,10 +167,22 @@ final class NotificationScheduler {
         guard !restriction.isUnrestricted else { return }
         guard !restriction.isActiveNow else { return }
 
-        let fireDate = now.addingTimeInterval(restriction.hours * 3600 - AppConstants.notificationLeadTimeSeconds)
-        guard fireDate > now else { return }
+        // Use provided offsets or load from UserDefaults.standard.
+        let resolvedOffsets = offsets ?? ReminderOffsets.load(from: .standard)
 
-        scheduleRequest(for: car, restriction: restriction, engine: engine, segment: segment, fireDate: fireDate, now: now)
+        // Compute the anchor: absolute date of the restriction start.
+        let restrictionStart = now.addingTimeInterval(restriction.hours * 3600)
+
+        enqueuePresets(
+            offsets: resolvedOffsets,
+            car: car,
+            restriction: restriction,
+            engine: engine,
+            segment: segment,
+            restrictionStart: restrictionStart,
+            now: now,
+            parkUntil: parkUntil
+        )
     }
 
     /// Cancel all pending notification requests for the given car.
@@ -221,19 +238,141 @@ final class NotificationScheduler {
         }
     }
 
-    // MARK: - Request building (shared by schedule and scheduleForTest)
+    // MARK: - Multi-preset loop
 
-    /// Builds and enqueues a `UNNotificationRequest` for the given car and restriction.
-    /// Called from both the production path (after settings check) and the test path.
+    /// Iterates the active presets in `offsets` and enqueues one UNNotificationRequest per
+    /// preset that passes the per-preset guards (past-guard + parkUntil-guard).
+    ///
+    /// Called from both the production path (inside getNotificationSettings callback) and
+    /// the test path (scheduleForTest, which bypasses the settings check).
+    private func enqueuePresets(
+        offsets: ReminderOffsets,
+        car: ParkedCar,
+        restriction: NextRestriction,
+        engine: ParkingRulesEngine,
+        segment: Segment,
+        restrictionStart: Date,
+        now: Date,
+        parkUntil: Date?
+    ) {
+        // iOS pending-notification cap: 64 per app. With 5 presets and 1 pin this enqueues
+        // at most 5 requests — well within budget.
+
+        // r0 — 15 min before
+        if offsets.remind15Min {
+            let fireDate = restrictionStart.addingTimeInterval(-900)
+            if fireDate > now {
+                if let pu = parkUntil, fireDate > pu { /* skip */ } else {
+                    scheduleRequest(for: car, restriction: restriction, engine: engine,
+                                    segment: segment, fireDate: fireDate, ruleIndex: 0,
+                                    leadKind: .minutes15, now: now)
+                }
+            }
+        }
+
+        // r1 — 30 min before
+        if offsets.remind30Min {
+            let fireDate = restrictionStart.addingTimeInterval(-1800)
+            if fireDate > now {
+                if let pu = parkUntil, fireDate > pu { /* skip */ } else {
+                    scheduleRequest(for: car, restriction: restriction, engine: engine,
+                                    segment: segment, fireDate: fireDate, ruleIndex: 1,
+                                    leadKind: .minutes30, now: now)
+                }
+            }
+        }
+
+        // r2 — 1 hour before
+        if offsets.remind1Hour {
+            let fireDate = restrictionStart.addingTimeInterval(-3600)
+            if fireDate > now {
+                if let pu = parkUntil, fireDate > pu { /* skip */ } else {
+                    scheduleRequest(for: car, restriction: restriction, engine: engine,
+                                    segment: segment, fireDate: fireDate, ruleIndex: 2,
+                                    leadKind: .hour1, now: now)
+                }
+            }
+        }
+
+        // r3 — 2 hours before
+        if offsets.remind2Hours {
+            let fireDate = restrictionStart.addingTimeInterval(-7200)
+            if fireDate > now {
+                if let pu = parkUntil, fireDate > pu { /* skip */ } else {
+                    scheduleRequest(for: car, restriction: restriction, engine: engine,
+                                    segment: segment, fireDate: fireDate, ruleIndex: 3,
+                                    leadKind: .hours2, now: now)
+                }
+            }
+        }
+
+        // r4 — Night before (20:00 ET on the prior calendar evening — DST-safe)
+        if offsets.remindNightBefore {
+            if let nightBeforeDate = computeNightBeforeDate(relativeTo: restrictionStart) {
+                if nightBeforeDate > now {
+                    if let pu = parkUntil, nightBeforeDate > pu { /* skip */ } else {
+                        scheduleRequest(for: car, restriction: restriction, engine: engine,
+                                        segment: segment, fireDate: nightBeforeDate, ruleIndex: 4,
+                                        leadKind: .nightBefore, now: now)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Night-before date computation (DST-safe, Calendar.easternTime only)
+
+    /// Computes 20:00 ET on the calendar evening prior to the restriction day.
+    ///
+    /// Algorithm (spec §5.4):
+    ///  1. Get ET calendar day of restrictionStart.
+    ///  2. Subtract 1 calendar day.
+    ///  3. Build 20:00 ET on that prior day via Calendar.easternTime.date(from:) with
+    ///     fireComponents.timeZone = .easternTime — the same DST-safe pattern used throughout.
+    ///
+    /// Returns nil if the date components cannot be assembled (defensive; in practice always
+    /// succeeds for valid restrictionStart dates).
+    private func computeNightBeforeDate(relativeTo restrictionStart: Date) -> Date? {
+        // Step 2: subtract 1 calendar day from restrictionStart.
+        guard let priorDay = Calendar.easternTime.date(byAdding: .day, value: -1, to: restrictionStart) else {
+            return nil
+        }
+
+        // Step 3: extract prior day's Y/M/D components in ET.
+        let priorComponents = Calendar.easternTime.dateComponents([.year, .month, .day], from: priorDay)
+
+        // Step 4: build 20:00 ET on that prior day.
+        var fireComponents = DateComponents()
+        fireComponents.year   = priorComponents.year
+        fireComponents.month  = priorComponents.month
+        fireComponents.day    = priorComponents.day
+        fireComponents.hour   = AppConstants.nightBeforeHourET  // 20
+        fireComponents.minute = 0
+        fireComponents.second = 0
+        fireComponents.timeZone = .easternTime
+
+        return Calendar.easternTime.date(from: fireComponents)
+    }
+
+    // MARK: - Request building
+
+    /// Builds and enqueues a `UNNotificationRequest` for one preset.
+    ///
+    /// - Parameters:
+    ///   - ruleIndex: The stable slot index (0–4) per spec §4.2.
+    ///   - leadKind: The preset enum value used to select the body copy.
     private func scheduleRequest(
         for car: ParkedCar,
         restriction: NextRestriction,
         engine: ParkingRulesEngine,
         segment: Segment,
         fireDate: Date,
+        ruleIndex: Int,
+        leadKind: LeadKind,
         now: Date
     ) {
-        let content = buildContent(for: car, restriction: restriction, engine: engine, segment: segment, now: now)
+        let content = buildContent(for: car, restriction: restriction, engine: engine,
+                                   segment: segment, leadKind: leadKind, now: now)
 
         let components = Calendar.easternTime.dateComponents(
             [.year, .month, .day, .hour, .minute],
@@ -241,7 +380,7 @@ final class NotificationScheduler {
         )
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: false)
 
-        let identifier = Self.notificationID(for: car, ruleIndex: 0)
+        let identifier = Self.notificationID(for: car, ruleIndex: ruleIndex)
         let request = UNNotificationRequest(identifier: identifier, content: content, trigger: trigger)
 
         center.add(request) { error in
@@ -260,6 +399,8 @@ final class NotificationScheduler {
     }
 
     /// Prefix for all notifications belonging to a car. Used for prefix-based cancellation.
+    /// Cancelling by prefix removes r0–r4 (all five slots) without needing to know which
+    /// presets were active at scheduling time.
     func notificationIDPrefix(for car: ParkedCar) -> String {
         "wepark.pin.\(car.id.uuidString)"
     }
@@ -272,30 +413,51 @@ final class NotificationScheduler {
 
     // MARK: - Content builder
 
-    /// Builds the notification content per spec §3.4.
+    /// Per-preset body copy variant. Used by buildContent.
+    enum LeadKind {
+        case minutes15
+        case minutes30
+        case hour1
+        case hours2
+        case nightBefore
+    }
+
+    /// Builds the notification content per spec §5.6.
+    ///
+    /// Title is unchanged from W6. Body varies by leadKind with a per-preset lead phrase.
     private func buildContent(
         for car: ParkedCar,
         restriction: NextRestriction,
         engine: ParkingRulesEngine,
         segment: Segment,
+        leadKind: LeadKind,
         now: Date
     ) -> UNMutableNotificationContent {
         let content = UNMutableNotificationContent()
 
-        // Title: "Move your car — <street> (<side>)"
+        // Title: "Move your car — <street> (<side>)" (unchanged from W6)
         let streetDisplay = car.street.map { StreetNameNormalizer.canonical($0) }
             ?? StreetNameNormalizer.canonical(segment.street)
         let sideDisplay = car.detectedSide ?? segment.side
         content.title = "Move your car \u{2014} \(streetDisplay) (\(sideDisplay))"
 
-        // Body: "<restriction label> starts <time label>. Move by <time>."
+        // Per-preset body copy (spec §5.6).
         let label = restriction.label ?? "Parking restriction"
         let timeLabel = engine.nextRestrictionTimeLabel(hours: restriction.hours, now: now)
-
-        // Extract just the time portion (e.g., "7:00 AM" from "Today 7:00 AM")
-        // for the "Move by <time>" suffix — keep it concise.
         let moveByTime = extractTimeString(from: timeLabel)
-        content.body = "\(label) starts \(timeLabel). Move by \(moveByTime)."
+
+        switch leadKind {
+        case .minutes15:
+            content.body = "\(label) starts in 15 minutes. Move by \(moveByTime)."
+        case .minutes30:
+            content.body = "\(label) starts in 30 minutes. Move by \(moveByTime)."
+        case .hour1:
+            content.body = "\(label) starts in 1 hour. Move by \(moveByTime)."
+        case .hours2:
+            content.body = "\(label) starts in 2 hours. Move by \(moveByTime)."
+        case .nightBefore:
+            content.body = "\(label) starts tomorrow at \(moveByTime). Move your car by then."
+        }
 
         content.sound = .default
         content.badge = 1

@@ -56,8 +56,18 @@ enum AppConstants {
 
     /// Lead time (seconds) before the next restriction at which the notification fires.
     /// 1 hour — per `docs/ios-mvp-spec.md` §2.1 baseline and OQ-W6-1 answer.
-    /// Change only this constant to adjust the lead time globally.
+    /// Superseded by ReminderOffsets.remind1Hour preset in FT-6. Retained for documentation.
     static let notificationLeadTimeSeconds: TimeInterval = 1 * 3600
+
+    // MARK: - FT-6 Customizable Reminders
+
+    /// UserDefaults key for the serialized `ReminderOffsets` value (JSON-encoded Data).
+    /// Default (missing key) = `ReminderOffsets.default` = {remind1Hour: true, all others false}.
+    static let reminderOffsetsKey = "wepark_reminder_offsets"
+
+    /// Hour of day (Eastern Time) for the "Night before" reminder preset.
+    /// 20 = 8:00 PM ET. Constant named for future user-configurable upgrade (§10 follow-up).
+    static let nightBeforeHourET: Int = 20
 
     // MARK: - W8.5b: Recent destinations
 
