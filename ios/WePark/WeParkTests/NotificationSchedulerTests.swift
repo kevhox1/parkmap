@@ -159,11 +159,15 @@ final class NotificationSchedulerTests: XCTestCase {
 
         // Ensure mute key is absent before each test.
         UserDefaults.standard.removeObject(forKey: AppConstants.notificationsMutedKey)
+        // FT-6: Ensure reminder offsets key is absent so ReminderOffsets.default is used.
+        UserDefaults.standard.removeObject(forKey: AppConstants.reminderOffsetsKey)
     }
 
     override func tearDown() {
         UserDefaults.standard.removeObject(forKey: AppConstants.notificationsMutedKey)
         UserDefaults.standard.removeObject(forKey: AppConstants.notificationRationaleShownKey)
+        // FT-6: Remove reminder offsets key so FT-6 tests don't bleed into pre-existing tests.
+        UserDefaults.standard.removeObject(forKey: AppConstants.reminderOffsetsKey)
         super.tearDown()
     }
 
@@ -190,9 +194,9 @@ final class NotificationSchedulerTests: XCTestCase {
         XCTAssertEqual(mockCenter.addedRequests.count, 1, "T-W6.1: should schedule exactly 1 request")
 
         let req = mockCenter.addedRequests[0]
-        // Identifier scheme.
-        XCTAssertEqual(req.identifier, "wepark.pin.\(car.id.uuidString).r0",
-                       "T-W6.1: identifier must match scheme")
+        // Identifier scheme. FT-6: 1h preset maps to ruleIndex 2 (r2) per spec §4.2.
+        XCTAssertEqual(req.identifier, "wepark.pin.\(car.id.uuidString).r2",
+                       "T-W6.1: identifier must match scheme (r2 = 1h preset after FT-6)")
 
         // Trigger type.
         guard let trigger = req.trigger as? UNCalendarNotificationTrigger else {
@@ -323,9 +327,11 @@ final class NotificationSchedulerTests: XCTestCase {
 
         XCTAssertEqual(mockCenter.pendingRequests.count, 0,
                        "T-W6.7: pending requests should be empty after cancelAll")
+        // FT-6: 1h preset maps to ruleIndex 2 (r2). The prefix-based cancellation
+        // removes all r0–r4 slots; specifically the 1h-scheduled r2 should be present.
         XCTAssertTrue(
-            mockCenter.removedPendingIdentifiers.contains("wepark.pin.\(car.id.uuidString).r0"),
-            "T-W6.7: correct identifier removed"
+            mockCenter.removedPendingIdentifiers.contains("wepark.pin.\(car.id.uuidString).r2"),
+            "T-W6.7: correct identifier removed (r2 = 1h preset after FT-6)"
         )
     }
 
@@ -356,8 +362,9 @@ final class NotificationSchedulerTests: XCTestCase {
 
         XCTAssertEqual(mockCenter.pendingRequests.count, 1,
                        "T-W6.8: carA's request must be untouched")
+        // FT-6: 1h preset maps to ruleIndex 2 (r2). carA's r2 must NOT have been removed.
         XCTAssertFalse(
-            mockCenter.removedPendingIdentifiers.contains("wepark.pin.\(carA.id.uuidString).r0"),
+            mockCenter.removedPendingIdentifiers.contains("wepark.pin.\(carA.id.uuidString).r2"),
             "T-W6.8: carA's identifier must NOT have been removed"
         )
     }
@@ -557,5 +564,556 @@ final class NotificationSchedulerTests: XCTestCase {
         // Fire time should be 6am ET (hour: 6) — not 10am UTC (hour: 10).
         XCTAssertEqual(trigger.dateComponents.hour, 6,
                        "Trigger must use Eastern Time (6am ET), not UTC")
+    }
+}
+
+// MARK: - FT6ReminderTests
+
+/// FT-6 acceptance-criteria tests.
+///
+/// Uses MockNotificationCenter, scheduleForTest(for:...offsets:), and nsDate/nsCar/nsSegment
+/// helpers from the XCTestCase extension above. Tests are named AC-FT6.x per the spec.
+///
+/// Each test calls tearDown via XCTest infrastructure. The tearDown method below also cleans
+/// up the wepark_reminder_offsets key so tests do not leak global state.
+final class FT6ReminderTests: XCTestCase {
+
+    var engine: ParkingRulesEngine!
+    var mockCenter: MockNotificationCenter!
+    var scheduler: NotificationScheduler!
+
+    override func setUp() {
+        super.setUp()
+        engine = ParkingRulesEngine()
+        mockCenter = MockNotificationCenter()
+        scheduler = NotificationScheduler(center: mockCenter)
+        // Ensure known-clean state before each test.
+        UserDefaults.standard.removeObject(forKey: AppConstants.notificationsMutedKey)
+        UserDefaults.standard.removeObject(forKey: AppConstants.reminderOffsetsKey)
+    }
+
+    override func tearDown() {
+        UserDefaults.standard.removeObject(forKey: AppConstants.notificationsMutedKey)
+        UserDefaults.standard.removeObject(forKey: AppConstants.reminderOffsetsKey)
+        super.tearDown()
+    }
+
+    // MARK: - AC-FT6.1 — Default serialization and round-trip
+
+    func testFT6_AC1_DefaultSerializationRoundTrip() {
+        let original = ReminderOffsets.default
+        let data = try! JSONEncoder().encode(original)
+        let decoded = try! JSONDecoder().decode(ReminderOffsets.self, from: data)
+
+        XCTAssertEqual(decoded, ReminderOffsets.default, "AC-FT6.1: round-trip must equal .default")
+        XCTAssertTrue(decoded.remind1Hour, "AC-FT6.1: remind1Hour must be true")
+        XCTAssertFalse(decoded.remind15Min, "AC-FT6.1: remind15Min must be false")
+        XCTAssertFalse(decoded.remind30Min, "AC-FT6.1: remind30Min must be false")
+        XCTAssertFalse(decoded.remind2Hours, "AC-FT6.1: remind2Hours must be false")
+        XCTAssertFalse(decoded.remindNightBefore, "AC-FT6.1: remindNightBefore must be false")
+    }
+
+    // MARK: - AC-FT6.2 — Missing UserDefaults key returns default
+
+    func testFT6_AC2_MissingKeyReturnsDefault() {
+        // Use an ephemeral suite with no key set.
+        let suiteName = "ft6-test-suite-\(UUID().uuidString)"
+        let ephemeral = UserDefaults(suiteName: suiteName)!
+        // Ensure key is absent.
+        ephemeral.removeObject(forKey: AppConstants.reminderOffsetsKey)
+
+        let result = ReminderOffsets.load(from: ephemeral)
+
+        XCTAssertEqual(result, ReminderOffsets.default,
+                       "AC-FT6.2: missing key must return ReminderOffsets.default")
+
+        // Clean up the ephemeral suite.
+        UserDefaults.standard.removeSuite(named: suiteName)
+    }
+
+    // MARK: - AC-FT6.3 — Multi-preset scheduling: N requests for N active presets
+
+    func testFT6_AC3_MultiPreset_NRequestsForNActivePresets() {
+        // Thu 2026-05-07 at 4:00 ET, ASP Mon/Thu 7:00am → restriction ~3h away.
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC3_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC3_SEG")
+        let offsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: false,
+            remind1Hour: true,
+            remind2Hours: true,
+            remindNightBefore: false
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 3,
+                       "AC-FT6.3: 3 active presets → 3 requests")
+
+        let ids = Set(mockCenter.addedRequests.map { $0.identifier })
+        let expectedIDs: Set<String> = [
+            "wepark.pin.\(car.id.uuidString).r0",
+            "wepark.pin.\(car.id.uuidString).r2",
+            "wepark.pin.\(car.id.uuidString).r3"
+        ]
+        XCTAssertEqual(ids, expectedIDs,
+                       "AC-FT6.3: identifiers must be exactly r0, r2, r3 (set-equal, any order)")
+    }
+
+    // MARK: - AC-FT6.4 — Correct fire times for relative presets
+
+    func testFT6_AC4_CorrectFireTimesForRelativePresets() {
+        // Thu 2026-05-07 at 4:00 ET, ASP Mon/Thu 7:00am.
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC4_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC4_SEG")
+        let offsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: false,
+            remind1Hour: true,
+            remind2Hours: true,
+            remindNightBefore: false
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 3, "AC-FT6.4 prereq")
+
+        // Extract trigger components per identifier.
+        func triggerComps(_ ruleIndex: Int) -> DateComponents? {
+            let id = "wepark.pin.\(car.id.uuidString).r\(ruleIndex)"
+            guard let req = mockCenter.addedRequests.first(where: { $0.identifier == id }),
+                  let trigger = req.trigger as? UNCalendarNotificationTrigger else { return nil }
+            return trigger.dateComponents
+        }
+
+        // r0 (15min): fire 06:45 (7:00 − 15min)
+        let r0 = triggerComps(0)
+        XCTAssertEqual(r0?.hour, 6, "AC-FT6.4: r0 hour must be 6")
+        XCTAssertEqual(r0?.minute, 45, "AC-FT6.4: r0 minute must be 45")
+        XCTAssertEqual(r0?.day, 7, "AC-FT6.4: r0 day must be 7 (May 7)")
+        XCTAssertEqual(r0?.month, 5, "AC-FT6.4: r0 month must be 5 (May)")
+
+        // r2 (1h): fire 06:00 (7:00 − 1h)
+        let r2 = triggerComps(2)
+        XCTAssertEqual(r2?.hour, 6, "AC-FT6.4: r2 hour must be 6")
+        XCTAssertEqual(r2?.minute, 0, "AC-FT6.4: r2 minute must be 0")
+        XCTAssertEqual(r2?.day, 7, "AC-FT6.4: r2 day must be 7 (May 7)")
+        XCTAssertEqual(r2?.month, 5, "AC-FT6.4: r2 month must be 5 (May)")
+
+        // r3 (2h): fire 05:00 (7:00 − 2h)
+        let r3 = triggerComps(3)
+        XCTAssertEqual(r3?.hour, 5, "AC-FT6.4: r3 hour must be 5")
+        XCTAssertEqual(r3?.minute, 0, "AC-FT6.4: r3 minute must be 0")
+        XCTAssertEqual(r3?.day, 7, "AC-FT6.4: r3 day must be 7 (May 7)")
+        XCTAssertEqual(r3?.month, 5, "AC-FT6.4: r3 month must be 5 (May)")
+    }
+
+    // MARK: - AC-FT6.5 — Per-reminder past-guard skipping
+
+    func testFT6_AC5_PerReminderPastGuard_AllPast() {
+        // now = Thu 2026-05-07 06:50 ET (10 min before 7:00 AM ASP).
+        // All 5 fire times are in the past at 6:50.
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 6, minute: 50)
+        let segment = nsSegment(
+            id: "FT6_AC5A_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC5A_SEG")
+        let allOffsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: true,
+            remind1Hour: true,
+            remind2Hours: true,
+            remindNightBefore: true
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: allOffsets)
+
+        // 15min fires at 06:45 (past), 30min at 06:30 (past), 1h at 06:00 (past),
+        // 2h at 05:00 (past), night-before = yesterday 20:00 (past) → 0 requests.
+        XCTAssertEqual(mockCenter.addedRequests.count, 0,
+                       "AC-FT6.5a: all fire times past 6:50 AM → 0 requests")
+    }
+
+    func testFT6_AC5_PerReminderPastGuard_SomeActive() {
+        // now = Thu 2026-05-07 06:50 ET with restriction at 7:30 AM (40min away).
+        // 15min fires 07:15 (future), 30min fires 07:00 (future), 1h fires 06:30 (past),
+        // 2h fires 05:30 (past), night-before past → 2 requests (r0, r1).
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 6, minute: 50)
+        // ASP Mon/Thu with timeRange start=7:30am = minute 450
+        let segment = nsSegment(
+            id: "FT6_AC5B_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(450, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC5B_SEG")
+        let allOffsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: true,
+            remind1Hour: true,
+            remind2Hours: true,
+            remindNightBefore: true
+        )
+
+        // Prereq: restriction ~40min away.
+        let restriction = engine.nextRestriction(for: segment, at: now)
+        XCTAssertGreaterThan(restriction.hours, 0.6, "AC-FT6.5b prereq: restriction must be ~40min away")
+        XCTAssertLessThan(restriction.hours, 0.7, "AC-FT6.5b prereq: restriction must be ~40min away")
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: allOffsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 2,
+                       "AC-FT6.5b: 15min + 30min future → 2 requests")
+        let ids = Set(mockCenter.addedRequests.map { $0.identifier })
+        XCTAssertTrue(ids.contains("wepark.pin.\(car.id.uuidString).r0"),
+                      "AC-FT6.5b: r0 (15min) must be scheduled")
+        XCTAssertTrue(ids.contains("wepark.pin.\(car.id.uuidString).r1"),
+                      "AC-FT6.5b: r1 (30min) must be scheduled")
+    }
+
+    // MARK: - AC-FT6.6 — Night-before fires at 20:00 ET the prior evening
+
+    func testFT6_AC6_NightBefore_FiresAt2000ET() {
+        // Restriction on Mon 2026-05-11 at 07:00 ET. now = Fri 2026-05-08 12:00 ET.
+        // Night-before fire: Sun 2026-05-10 20:00 ET.
+        let now = nsDate(year: 2026, month: 5, day: 8, hour: 12, minute: 0)
+        // Mon/Thu ASP segment — next restriction is Mon May 11 7:00 AM.
+        let segment = nsSegment(
+            id: "FT6_AC6_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC6_SEG")
+        let offsets = ReminderOffsets(
+            remind15Min: false,
+            remind30Min: false,
+            remind1Hour: false,
+            remind2Hours: false,
+            remindNightBefore: true
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 1, "AC-FT6.6: 1 night-before request")
+
+        guard let trigger = mockCenter.addedRequests[0].trigger as? UNCalendarNotificationTrigger else {
+            XCTFail("AC-FT6.6: trigger must be UNCalendarNotificationTrigger")
+            return
+        }
+        let comps = trigger.dateComponents
+        // Night-before = Sun May 10 20:00 ET.
+        XCTAssertEqual(comps.day,   10, "AC-FT6.6: fire day must be 10 (Sun May 10)")
+        XCTAssertEqual(comps.month,  5, "AC-FT6.6: fire month must be 5 (May)")
+        XCTAssertEqual(comps.hour,  20, "AC-FT6.6: fire hour must be 20 (8 PM ET)")
+        XCTAssertEqual(comps.minute, 0, "AC-FT6.6: fire minute must be 0")
+
+        let id = mockCenter.addedRequests[0].identifier
+        XCTAssertEqual(id, "wepark.pin.\(car.id.uuidString).r4",
+                       "AC-FT6.6: identifier must be r4 (night-before ruleIndex)")
+    }
+
+    // MARK: - AC-FT6.7 — Night-before skip-if-past
+
+    func testFT6_AC7_NightBefore_SkipIfPast() {
+        // Restriction Mon 2026-05-11 at 07:00 ET.
+        // now = Sun 2026-05-10 21:00 ET (1h AFTER night-before fire time of 20:00).
+        let now = nsDate(year: 2026, month: 5, day: 10, hour: 21, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC7_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC7_SEG")
+        let offsets = ReminderOffsets(
+            remind15Min: false,
+            remind30Min: false,
+            remind1Hour: false,
+            remind2Hours: false,
+            remindNightBefore: true
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 0,
+                       "AC-FT6.7: night-before fire time 20:00 is past at 21:00 → 0 requests")
+    }
+
+    // MARK: - AC-FT6.8 — Night-before same-day skip
+
+    func testFT6_AC8_NightBefore_SameDaySkip() {
+        // now = Mon 2026-05-11 06:00 ET, restriction at 07:00 ET same day.
+        // Night-before fire would be Sun 2026-05-10 20:00 ET — in the past.
+        let now = nsDate(year: 2026, month: 5, day: 11, hour: 6, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC8_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC8_SEG")
+        let offsets = ReminderOffsets(
+            remind15Min: false,
+            remind30Min: false,
+            remind1Hour: false,
+            remind2Hours: false,
+            remindNightBefore: true
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 0,
+                       "AC-FT6.8: night-before fire (Sun 20:00) is past on Mon 06:00 → 0 requests")
+    }
+
+    // MARK: - AC-FT6.9 — Night-before DST boundary (spring forward)
+
+    func testFT6_AC9_NightBefore_DSTSpringForward() {
+        // Restriction on Sun 2026-03-08 at 07:00 ET (DST springs forward that morning:
+        // clocks jump 2:00 → 3:00 AM, so after the spring-forward it's EDT = UTC-4).
+        // now = Sat 2026-03-07 10:00 ET (still EST = UTC-5).
+        //
+        // Expected night-before fire: 2026-03-07 20:00 ET (still in EST = UTC-5,
+        // i.e., 01:00 UTC on 2026-03-08, BEFORE the spring-forward at 07:00).
+        //
+        // We use a noParking rule with days: [0] (Sunday) since no ASP category covers Sunday.
+        // This exercises computeHoursUntilActive, which correctly finds the Sun 7:00 AM window.
+        let now = nsDate(year: 2026, month: 3, day: 7, hour: 10, minute: 0)
+
+        // days: [0] = Sunday. timeRange 420–570 = 7:00 AM – 9:30 AM.
+        let segment = nsSegment(
+            id: "FT6_AC9_SEG",
+            rules: [nsRule(category: .noParking, days: [0], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC9_SEG")
+        let offsets = ReminderOffsets(
+            remind15Min: false,
+            remind30Min: false,
+            remind1Hour: false,
+            remind2Hours: false,
+            remindNightBefore: true
+        )
+
+        // Prereq: verify the engine finds a restriction on Sun Mar 8
+        // (21h from Sat 10:00 AM to Sun 7:00 AM).
+        let restriction = engine.nextRestriction(for: segment, at: now)
+        XCTAssertFalse(restriction.isUnrestricted, "AC-FT6.9 prereq: must find a restriction")
+        XCTAssertGreaterThan(restriction.hours, 20.9, "AC-FT6.9 prereq: restriction ~21h away")
+        XCTAssertLessThan(restriction.hours, 21.1, "AC-FT6.9 prereq: restriction ~21h away")
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 1,
+                       "AC-FT6.9: 1 night-before request")
+
+        guard let trigger = mockCenter.addedRequests[0].trigger as? UNCalendarNotificationTrigger else {
+            XCTFail("AC-FT6.9: trigger must be UNCalendarNotificationTrigger")
+            return
+        }
+        let comps = trigger.dateComponents
+        // Night-before = Sat 2026-03-07 20:00 ET (EST, UTC-5 → 01:00 UTC on Mar 8).
+        // DST correctness: Calendar.easternTime.date(from:) with .easternTime timeZone produces
+        // the correct absolute UTC instant for 20:00 ET on Mar 7 (EST), not 20:00 EDT.
+        XCTAssertEqual(comps.day,    7, "AC-FT6.9: fire day must be 7 (Sat Mar 7)")
+        XCTAssertEqual(comps.month,  3, "AC-FT6.9: fire month must be 3 (March)")
+        XCTAssertEqual(comps.hour,  20, "AC-FT6.9: fire hour must be 20 (8 PM ET)")
+        XCTAssertEqual(comps.minute, 0, "AC-FT6.9: fire minute must be 0")
+    }
+
+    // MARK: - AC-FT6.10 — Single-preset default matches prior behavior
+
+    func testFT6_AC10_DefaultOffsets_SingleRequest_PriorBehaviorParity() {
+        // Restriction 3h away on Thu 2026-05-07. Default offsets = {remind1Hour: true only}.
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC10_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC10_SEG")
+        let offsets = ReminderOffsets.default  // remind1Hour=true only
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 1,
+                       "AC-FT6.10: default offsets (1h only) → exactly 1 request")
+
+        let id = mockCenter.addedRequests[0].identifier
+        XCTAssertEqual(id, "wepark.pin.\(car.id.uuidString).r2",
+                       "AC-FT6.10: default 1h preset uses ruleIndex 2 (r2)")
+
+        guard let trigger = mockCenter.addedRequests[0].trigger as? UNCalendarNotificationTrigger else {
+            XCTFail("AC-FT6.10: trigger must be UNCalendarNotificationTrigger")
+            return
+        }
+        let comps = trigger.dateComponents
+        XCTAssertEqual(comps.hour, 6,
+                       "AC-FT6.10: fire hour = 6 (7:00 AM - 1h = 6:00 AM)")
+        XCTAssertEqual(comps.minute, 0,
+                       "AC-FT6.10: fire minute = 0")
+    }
+
+    // MARK: - AC-FT6.11 — notifyOnRestriction = false blocks all presets
+
+    func testFT6_AC11_NotifyOnRestrictionFalse_BlocksAllPresets() {
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC11_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        // Car with notifyOnRestriction = false.
+        let car = nsCar(segmentID: "FT6_AC11_SEG", notifyOnRestriction: false)
+        let allOffsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: true,
+            remind1Hour: true,
+            remind2Hours: true,
+            remindNightBefore: true
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: allOffsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 0,
+                       "AC-FT6.11: notifyOnRestriction=false → 0 requests regardless of offsets")
+    }
+
+    // MARK: - AC-FT6.12 — Global mute blocks all presets
+
+    func testFT6_AC12_GlobalMute_BlocksAllPresets() {
+        UserDefaults.standard.set(true, forKey: AppConstants.notificationsMutedKey)
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC12_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC12_SEG", notifyOnRestriction: true)
+        let allOffsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: true,
+            remind1Hour: true,
+            remind2Hours: true,
+            remindNightBefore: true
+        )
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: allOffsets)
+
+        XCTAssertEqual(mockCenter.addedRequests.count, 0,
+                       "AC-FT6.12: global mute true → 0 requests regardless of offsets")
+    }
+
+    // MARK: - AC-FT6.13 — Cancellation removes all ruleIndexes by prefix
+
+    func testFT6_AC13_Cancellation_RemovesAllRuleIndexesByPrefix() {
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "FT6_AC13_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC13_SEG")
+        let allOffsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: true,
+            remind1Hour: true,
+            remind2Hours: true,
+            remindNightBefore: false  // night-before is in the past at 04:00 Thu — won't schedule
+        )
+
+        // First, schedule with all 4 relative presets active (night-before is past at 04:00 Thu).
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: allOffsets)
+        XCTAssertEqual(mockCenter.addedRequests.count, 4,
+                       "AC-FT6.13 prereq: 4 requests for r0, r1, r2, r3")
+
+        // Populate pendingRequests from added requests (MockNotificationCenter tracks both).
+        XCTAssertEqual(mockCenter.pendingRequests.count, 4, "AC-FT6.13 prereq: 4 pending requests")
+
+        // Cancel using prefix.
+        let exp = expectation(description: "AC-FT6.13: cancelAll completes")
+        DispatchQueue.global().async {
+            self.scheduler.cancelAll(for: car)
+            Thread.sleep(forTimeInterval: 0.1)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(mockCenter.pendingRequests.count, 0,
+                       "AC-FT6.13: all pending requests removed by prefix cancellation")
+
+        // Verify all 4 scheduled identifiers were removed.
+        let removed = Set(mockCenter.removedPendingIdentifiers)
+        for ruleIndex in [0, 1, 2, 3] {
+            let expectedID = "wepark.pin.\(car.id.uuidString).r\(ruleIndex)"
+            XCTAssertTrue(removed.contains(expectedID),
+                          "AC-FT6.13: r\(ruleIndex) identifier must be in removedPendingIdentifiers")
+        }
+    }
+
+    // MARK: - AC-FT6.14 — parkUntil guard is per-reminder
+
+    func testFT6_AC14_ParkUntilGuard_IsPerReminder() {
+        // now = Thu 2026-05-07 04:00 ET, restriction at 07:00 AM (3h away).
+        // parkUntil = 06:30 AM ET (90 min from now).
+        // Active: 1h before (fires 06:00 — before parkUntil 06:30 → schedules r2)
+        //         15min before (fires 06:45 — after parkUntil 06:30 → skipped r0)
+        let now     = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let parkUntil = nsDate(year: 2026, month: 5, day: 7, hour: 6, minute: 30)
+        let segment = nsSegment(
+            id: "FT6_AC14_SEG",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "FT6_AC14_SEG")
+        let offsets = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: false,
+            remind1Hour: true,
+            remind2Hours: false,
+            remindNightBefore: false
+        )
+
+        scheduler.scheduleForTest(
+            for: car,
+            loadedSegments: [segment],
+            engine: engine,
+            now: now,
+            offsets: offsets,
+            parkUntil: parkUntil
+        )
+
+        // 1h fires 06:00 (before parkUntil 06:30) → schedules.
+        // 15min fires 06:45 (after parkUntil 06:30) → skipped.
+        XCTAssertEqual(mockCenter.addedRequests.count, 1,
+                       "AC-FT6.14: only 1h reminder passes parkUntil guard → 1 request")
+
+        let id = mockCenter.addedRequests[0].identifier
+        XCTAssertEqual(id, "wepark.pin.\(car.id.uuidString).r2",
+                       "AC-FT6.14: the scheduled request must be r2 (1h)")
+    }
+
+    // MARK: - AC-FT6.15 — ReminderOffsets.load + save round-trip via injected defaults
+
+    func testFT6_AC15_LoadSaveRoundTrip_InjectedDefaults() {
+        let suiteName = "ft6-roundtrip-suite-\(UUID().uuidString)"
+        let injected = UserDefaults(suiteName: suiteName)!
+
+        let original = ReminderOffsets(
+            remind15Min: true,
+            remind30Min: false,
+            remind1Hour: false,
+            remind2Hours: true,
+            remindNightBefore: true
+        )
+
+        ReminderOffsets.save(original, to: injected)
+        let loaded = ReminderOffsets.load(from: injected)
+
+        XCTAssertEqual(loaded.remind15Min,    original.remind15Min,    "AC-FT6.15: remind15Min must match")
+        XCTAssertEqual(loaded.remind30Min,    original.remind30Min,    "AC-FT6.15: remind30Min must match")
+        XCTAssertEqual(loaded.remind1Hour,    original.remind1Hour,    "AC-FT6.15: remind1Hour must match")
+        XCTAssertEqual(loaded.remind2Hours,   original.remind2Hours,   "AC-FT6.15: remind2Hours must match")
+        XCTAssertEqual(loaded.remindNightBefore, original.remindNightBefore, "AC-FT6.15: remindNightBefore must match")
+        XCTAssertEqual(loaded, original, "AC-FT6.15: full equality must hold after round-trip")
+
+        // Clean up.
+        UserDefaults.standard.removeSuite(named: suiteName)
     }
 }
