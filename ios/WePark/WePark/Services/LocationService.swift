@@ -30,6 +30,46 @@ import UIKit
 private let DRIVING_HEADING_MIN_SPEED_MPS: Double = 1.8
 private let DRIVING_HEADING_EMA_ALPHA: Double = 0.35
 
+// MARK: - FT-7: Pure heading-source selection function
+
+/// Pure static function: selects the appropriate heading value to feed into the drive heading EMA.
+///
+/// This function encodes the four-branch decision rule (spec §4.A.1):
+///   1. Moving in Drive Mode  → return GPS course (magnetometer ignored while car is moving).
+///   2. Stopped in Drive Mode → return nil (freeze-on-stop path: caller keeps last good heading).
+///   3. Not in Drive Mode, magnetometer heading available → return magnetometerHeading.
+///   4. Not in Drive Mode, no magnetometer → return nil.
+///
+/// This is a pure function with no side effects and no framework dependencies,
+/// making it directly unit-testable (AC-FT7.1–AC-FT7.3).
+///
+/// - Parameters:
+///   - course: GPS course from CLLocation.course (nil if course < 0 or unavailable).
+///   - magnetometerHeading: Device magnetometer heading (nil if unavailable).
+///   - speed: Current speed in m/s.
+///   - driveModeActive: Whether Drive Mode is currently active.
+/// - Returns: The heading value to pass to the EMA stabilizer, or nil to trigger freeze-on-stop.
+func selectDriveHeadingSource(
+    course: CLLocationDirection?,
+    magnetometerHeading: CLLocationDirection?,
+    speed: CLLocationSpeed,
+    driveModeActive: Bool
+) -> CLLocationDirection? {
+    if driveModeActive {
+        // In Drive Mode: gate entirely on speed.
+        if speed >= DRIVING_HEADING_MIN_SPEED_MPS {
+            // Moving — use GPS course only (magnetometer reflects phone-mount angle, not travel direction).
+            return course  // nil if course unavailable → caller triggers freeze-on-stop
+        } else {
+            // Stopped — freeze on last good heading (nil signals the stabilizer to preserve driveHeading).
+            return nil
+        }
+    } else {
+        // Not in Drive Mode — use magnetometer heading for compass display.
+        return magnetometerHeading
+    }
+}
+
 @Observable
 final class LocationService: NSObject {
 
@@ -322,18 +362,32 @@ extension LocationService: CLLocationManagerDelegate {
 
     func locationManager(_ manager: CLLocationManager, didUpdateHeading newHeading: CLHeading) {
         guard driveModeActiveInternal else { return }
-        // We use the magnetometer heading to update the EMA.
+
+        // FT-7 (A.3): While driving at speed, the magnetometer reflects the phone's physical
+        // mount angle (cup holder, dashboard mount) rather than the car's travel direction.
+        // GPS course from didUpdateLocations is the authoritative direction source while moving.
+        // Gate out magnetometer contributions when speed >= the drive threshold so GPS course dominates.
+        //
+        // OQ-FT7-2 resolved: we keep startUpdatingHeading running (compass stays functional outside
+        // Drive Mode; the gate here is cheaper than stop/start cycling the heading manager).
+        let currentSpeed = max(0, driveSpeed ?? 0)
+        if currentSpeed >= DRIVING_HEADING_MIN_SPEED_MPS {
+            // Moving in Drive Mode — ignore magnetometer; GPS course from didUpdateLocations is the source.
+            return
+        }
+
+        // Stopped in Drive Mode — magnetometer heading is acceptable (car is stationary, mount angle
+        // doesn't distort travel direction). Use it to update the compass display.
         // trueHeading >= 0 means the device has calibrated its heading relative to true north.
         // If trueHeading < 0, fall back to magneticHeading (raw compass, less accurate in cities).
         let rawHeading = newHeading.trueHeading >= 0 ? newHeading.trueHeading : newHeading.magneticHeading
         guard rawHeading >= 0 else { return }
 
         // Apply speed-gated EMA stabilization.
-        let speed = max(0, driveSpeed ?? 0)
         guard let coord = userLocation else { return }
         let stabilized = stabilizedHeading(
             rawHeading: rawHeading,
-            speed: speed,
+            speed: currentSpeed,
             current: coord
         )
         DispatchQueue.main.async { [weak self] in
