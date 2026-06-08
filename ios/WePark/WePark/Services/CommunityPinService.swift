@@ -646,7 +646,7 @@ final class CommunityPinService {
     /// after 5 minutes (a "Still there?" confirm can still extend +15 min up to the 2h
     /// cap via the extend RPC). Broken meters are NOT mobile — a meter stays broken for a
     /// while — so they keep the original 30-min lifetime.
-    static func ephemeralTTLSeconds(for type: PinType) -> TimeInterval? {
+    nonisolated static func ephemeralTTLSeconds(for type: PinType) -> TimeInterval? {
         switch type {
         case .enforcementActive, .sweeperPassed:
             return 5 * 60      // FT-1: mobile, very fresh
