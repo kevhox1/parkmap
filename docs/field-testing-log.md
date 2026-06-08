@@ -9,7 +9,24 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Session 2026-06-08
 
-### FT-6 🟡 Customizable ASP reminder timing — multiple reminders + "night before" (FEATURE) — FIX IN PR #48
+### FT-7 🔴 Drive Mode: jerky location/heading follow + arrow points askew — HIGH
+- **Area:** Drive Mode location/heading follow + car-pin (arrow) rotation. `MapViewRepresentable`
+  (`syncDriveHeading`, location-update path, camera recenter) + heading source.
+- **Observed (Kevin, driving, 2026-06-08):** (1) The arrow + map-follow update with visible LATENCY
+  and feel "disjointed / not smooth at all" — nothing like Apple Maps / Waze, which interpolate.
+  (2) The arrow points the WRONG / askew direction — not aligned to travel or the street. Kevin
+  suggests defaulting the heading to the street's (one-way) direction of travel.
+- **Hypotheses:** (a) location/heading applied at raw GPS cadence (~1 Hz) with `animated:false`
+  recenters → steppy; no interpolation/animation between fixes. (b) Heading source is noisy
+  (GPS course jitters at low speed, or magnetometer/device heading) and not snapped to the segment
+  bearing → askew. Possible fix: smooth/animate the puck+camera between fixes, and derive/clamp
+  heading toward the matched street segment's bearing (one-way direction).
+- **Status:** 🔴 open — investigating to scope. Likely needs tech-lead spec (touches the
+  #31-sensitive Drive Mode camera path; RegionSyncGuardTests + live-UI smoke gate mandatory).
+- **Lands in:** iOS (`MapViewRepresentable.swift`, heading/location plumbing), no backend.
+
+### FT-6 🟢 Customizable ASP reminder timing — multiple reminders + "night before" (FEATURE) — MERGED #48
+- **MERGED to main via PR #48 (squash 8162018).** On-device Smoke A/B pending Kevin's next TF build.
 - **Resolution (2026-06-08):** Built per `docs/ft6-customizable-reminders-spec.md`. Multi-select
   presets (15m/30m/1h/2h/night-before) as a global Settings default; default = {1h} for backward
   compat. QA PASS-WITH-NOTES, both nits resolved (`docs/qa/ft6-reminders-qa.md`). 395/0 tests, cold
