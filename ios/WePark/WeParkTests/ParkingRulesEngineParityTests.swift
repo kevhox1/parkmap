@@ -851,6 +851,159 @@ final class ASPSuspensionServiceTests: XCTestCase {
 
 // MARK: - Group 6: nextRestrictionTimeLabel format parity
 
+// MARK: - FT-9 Regression Tests: Metered-active pre-empts upcoming-ASP-free
+
+/// Regression tests for the FT-9 branch-ordering fix.
+///
+/// Before the fix, `safetyLabel(for:at:)` evaluated "upcoming ASP → Free until X" before the
+/// metered paid-hours check. Any segment with BOTH a METERED rule active now AND an upcoming
+/// ASP restriction (the dominant config on NYC metered commercial streets, e.g. 2nd Avenue W-side)
+/// returned `.free` / "Free until Tomorrow 8:30 AM" during the entire paid metered window.
+///
+/// After the fix, a metered-active segment correctly returns `.metered` / "paid until <end>".
+/// The free-hours case (meter not running, ASP upcoming) must NOT regress.
+///
+/// Reference segment from investigation doc:
+///   2ND_AVENUE_EAST_3RD_STREET_EAST_2ND_STREET_W_3
+///   Rules: ASP_DAILY 8:30-9:00 AM (510-540, days 1-6), METERED 9AM-10PM (540-1320, days 1-6)
+
+final class FT9MeteredLabelFixTests: XCTestCase {
+
+    var engine: ParkingRulesEngine!
+
+    override func setUp() {
+        super.setUp()
+        engine = ParkingRulesEngine(aspService: ASPSuspensionService())
+    }
+
+    /// The ASP_DAILY + METERED segment from 2nd Avenue. At 1:00 PM on a Wednesday (day=3,
+    /// minute=780), the METERED rule is active (540–1320). The engine must return .metered
+    /// severity and "paid until 10pm", NOT .free / "Free until Tomorrow 8:30 AM".
+    ///
+    /// This is the exact scenario described in docs/qa/ft9-bowery-2ndave-investigation.md §4.2.
+    func testFT9_MeteredActiveDuringPaidHours_NotFree() {
+        // Reproduce the 2nd Ave W-side segment: ASP_DAILY 8:30-9am + METERED 9am-10pm
+        let seg = makeSegment(
+            id: "2ND_AVENUE_EAST_3RD_STREET_EAST_2ND_STREET_W_3",
+            street: "2ND AVENUE",
+            dominantCategory: .metered,
+            rules: [
+                rule(category: .aspDaily, days: [1, 2, 3, 4, 5, 6], timeRanges: [(510, 540)]),
+                rule(category: .metered,  days: [1, 2, 3, 4, 5, 6], timeRanges: [(540, 1320)]),
+            ]
+        )
+
+        // Wednesday 2026-06-03 at 1:00 PM ET (day=3, minute=780)
+        let now = etDate(year: 2026, month: 6, day: 3, hour: 13, minute: 0)
+
+        let label = engine.safetyLabel(for: seg, at: now)
+
+        // Must NOT return .free or "Free until …" (the bug)
+        XCTAssertNotEqual(label.severity, .free,
+            "METERED active at 1pm must NOT return .free severity — got \(label.severity)")
+        XCTAssertFalse(label.text.hasPrefix("Free until"),
+            "METERED active at 1pm must NOT return 'Free until …' — got: \(label.text)")
+
+        // Must return .metered with the "paid until 10pm" label
+        XCTAssertEqual(label.severity, .metered,
+            "METERED active at 1pm must return .metered severity — got \(label.severity)")
+        XCTAssertEqual(label.text, "paid until 10pm",
+            "METERED active at 1pm must return 'paid until 10pm' — got: \(label.text)")
+
+        // Confirm currentState is still correct and UNCHANGED by the fix
+        let state = engine.currentState(for: seg, at: now)
+        XCTAssertEqual(state, .meteredActive,
+            "currentState must be .meteredActive at 1pm — got \(state)")
+    }
+
+    /// Boundary: at exactly 9:00 AM (minute=540), the METERED window starts (540 is inclusive).
+    /// Must return .metered, NOT .free.
+    func testFT9_MeteredActiveBoundary_9am() {
+        let seg = makeSegment(
+            id: "2ND_AVENUE_EAST_3RD_STREET_EAST_2ND_STREET_W_3",
+            street: "2ND AVENUE",
+            dominantCategory: .metered,
+            rules: [
+                rule(category: .aspDaily, days: [1, 2, 3, 4, 5, 6], timeRanges: [(510, 540)]),
+                rule(category: .metered,  days: [1, 2, 3, 4, 5, 6], timeRanges: [(540, 1320)]),
+            ]
+        )
+
+        // Wednesday 2026-06-03 at 9:00 AM ET exactly (minute=540)
+        let now = etDate(year: 2026, month: 6, day: 3, hour: 9, minute: 0)
+
+        let label = engine.safetyLabel(for: seg, at: now)
+
+        XCTAssertEqual(label.severity, .metered,
+            "At 9:00 AM (metered window start) must return .metered — got \(label.severity)")
+        XCTAssertFalse(label.text.hasPrefix("Free until"),
+            "At 9:00 AM must NOT return 'Free until …' — got: \(label.text)")
+
+        let state = engine.currentState(for: seg, at: now)
+        XCTAssertEqual(state, .meteredActive, "currentState must be .meteredActive at 9:00 AM")
+    }
+
+    /// Non-regression: a metered-INACTIVE segment with an upcoming ASP must still return the
+    /// "Free until <ASP time>" label. The fix must not break the off-peak metered + ASP case.
+    ///
+    /// Same segment at 8:00 AM (before 9AM metered start, after the ASP window 8:30-9AM but
+    /// queried before it). At 8:00 AM, metered is NOT active (540 > 480). ASP_DAILY 8:30-9AM
+    /// is upcoming in 30 min → should show "Free until Today 8:30 AM" / .free.
+    func testFT9_MeteredInactive_UpcomingASP_StillShowsFreeUntil() {
+        let seg = makeSegment(
+            id: "2ND_AVENUE_EAST_3RD_STREET_EAST_2ND_STREET_W_3",
+            street: "2ND AVENUE",
+            dominantCategory: .metered,
+            rules: [
+                rule(category: .aspDaily, days: [1, 2, 3, 4, 5, 6], timeRanges: [(510, 540)]),
+                rule(category: .metered,  days: [1, 2, 3, 4, 5, 6], timeRanges: [(540, 1320)]),
+            ]
+        )
+
+        // Wednesday 2026-06-03 at 8:00 AM ET (minute=480)
+        // Metered starts at 540 (9am) → not active yet.
+        // ASP_DAILY is at 510-540 (8:30-9am), which is 30 minutes away.
+        let now = etDate(year: 2026, month: 6, day: 3, hour: 8, minute: 0)
+
+        let label = engine.safetyLabel(for: seg, at: now)
+
+        // Metered is free right now, ASP is upcoming — must return .free / "Free until …"
+        XCTAssertEqual(label.severity, .free,
+            "At 8:00 AM (metered inactive) must return .free severity — got \(label.severity)")
+        XCTAssertTrue(label.text.hasPrefix("Free until") || label.text == "free until 8:30am",
+            "At 8:00 AM must return a 'Free until …' style label — got: \(label.text)")
+
+        // currentState should NOT be .meteredActive (meter is off)
+        let state = engine.currentState(for: seg, at: now)
+        XCTAssertNotEqual(state, .meteredActive,
+            "currentState must NOT be .meteredActive at 8:00 AM (before metered start)")
+    }
+
+    /// Confirm that a purely ASP-only segment (no METERED rules) still works correctly
+    /// after the fix. The new metered-check block must be a no-op for pure-ASP segments.
+    func testFT9_PureASPSegment_Unaffected() {
+        let seg = makeSegment(
+            dominantCategory: .aspDaily,
+            rules: [
+                rule(category: .aspDaily, days: [1, 2, 3, 4, 5, 6], timeRanges: [(510, 540)]),
+            ]
+        )
+
+        // Wednesday 2026-06-03 at 1:00 PM — ASP not active, upcoming tomorrow
+        let now = etDate(year: 2026, month: 6, day: 3, hour: 13, minute: 0)
+
+        let label = engine.safetyLabel(for: seg, at: now)
+
+        // Pure ASP with no METERED must still return "Free until <next ASP>" / .free
+        XCTAssertEqual(label.severity, .free,
+            "Pure ASP segment at 1pm must return .free — got \(label.severity)")
+        XCTAssertTrue(label.text.hasPrefix("Free until"),
+            "Pure ASP segment at 1pm must return 'Free until …' — got: \(label.text)")
+    }
+}
+
+
+
 final class TimeLabelFormatTests: XCTestCase {
 
     var engine: ParkingRulesEngine!
