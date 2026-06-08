@@ -35,9 +35,15 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   metered state during the day; (b) specific blocks have rules on one side/curb but the opposite-side
   segment is empty → that side renders free; (c) side/arrow mismatch. "On the left" strongly implies a
   per-curb (side) issue on a one-way ave (2nd Ave is one-way SB).
-- **Status:** 🔴 dispatched to backend-data to root-cause (tile rules + engine classification of
-  METERED/daytime + per-side coverage).
-- **Lands in:** backend-data (tiles + rules engine), possibly iOS overlay color mapping if engine is right.
+- **Root cause FOUND (backend-data, `docs/qa/ft9-bowery-2ndave-investigation.md`):** branch-ordering
+  bug in iOS `safetyLabel(for:at:)` (and PWA `actionableSafetyLabel()`): the "upcoming ASP → Free until X
+  (.free)" guard fires BEFORE the METERED paid-hours check, so any METERED curb with an upcoming ASP
+  returns `.free` "Free until…" (green chip + voice) during paid hours. Map polyline color (`currentState`)
+  is CORRECT (amber meteredActive) — only text/chip/voice surfaces lie. **Systemic — affects every metered
+  street citywide.** Fix: reorder so metered-active check precedes the ASP-free branch.
+- **Status:** 🟡 iOS fix in progress (ios/ft9-metered-label-fix) for TF2. PWA fix = separate
+  pwa-maintainer follow-up (not in TF2).
+- **Lands in:** iOS rules engine (`safetyLabel`) now; PWA `index.html` (`actionableSafetyLabel`) later.
 
 ### FT-8 🟡 Drive/Cruise default zoom too wide — shows too many streets
 - **Area:** Drive Mode / Cruise (Find Parking) camera zoom. `MapViewRepresentable.driveModeCameraSpan`.
@@ -49,12 +55,15 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   camera subsystem as FT-7 → bundle into FT-7 implementation; value tunable on-device.
 - **Lands in:** iOS (`MapViewRepresentable.swift`). Bundled with FT-7.
 
-### FT-7 🟡 Drive Mode: jerky location/heading follow + arrow points askew — SPEC'D
-- **Spec (2026-06-08):** `docs/ft7-drive-mode-smoothness-heading-spec.md`. Decisions: animate camera
-  transitions (~0.3s eased), course-only heading while driving (drop magnetometer blend), shortest-arc
-  puck rotation, dead-band 5°→2°. Bundling FT-8 zoom-tighten. OQ-FT7-2 (stop startUpdatingHeading vs
-  gate within didUpdateHeading): taking the safe default (gate within didUpdateHeading, keep compass);
-  flippable. Next: ios-engineer.
+### FT-7/8/10 🟢 Drive Mode camera & interaction — MERGED #49
+- **MERGED to main via PR #49 (squash 5704d2a).** Unified fix: FT-7 (course heading while driving,
+  0.3s animated camera + shortest-arc puck, dead-band 5°→2°), FT-8 (driveModeCameraSpan 0.005°→0.003°,
+  tunable), FT-10 (driveFollowEnabled gate unlocks pinch-zoom + pan; interaction pauses follow, existing
+  Re-center resumes heading-up). 426/0. QA PASS-WITH-NOTES (`docs/qa/ft7-8-10-drive-mode-qa.md`).
+  On-device feel validation = Kevin's TF2 drive-test tonight (2026-06-08 ~9pm).
+- **FT-7-followup (non-blocking cleanup, post-TF2):** wire the tested `selectDriveHeadingSource` helper
+  into the production heading path (currently inline-equivalent, behaviorally correct); fix stale 0.005°
+  comments in DriveZoomStyleTests; align didUpdateHeading stopped-path with helper Branch 2.
 - **Area:** Drive Mode location/heading follow + car-pin (arrow) rotation. `MapViewRepresentable`
   (`syncDriveHeading`, location-update path, camera recenter) + heading source.
 - **Observed (Kevin, driving, 2026-06-08):** (1) The arrow + map-follow update with visible LATENCY
