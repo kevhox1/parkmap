@@ -638,6 +638,25 @@ final class CommunityPinService {
         return formatter.string(from: date)
     }
 
+    /// Lifetime (seconds from report time) for an ephemeral crowd pin type, or nil for
+    /// non-expiring types.
+    ///
+    /// FT-1: enforcement agents and street sweepers are MOBILE and go stale fast — a
+    /// 30-min lifetime kept them on the map long after they'd moved on. They now expire
+    /// after 5 minutes (a "Still there?" confirm can still extend +15 min up to the 2h
+    /// cap via the extend RPC). Broken meters are NOT mobile — a meter stays broken for a
+    /// while — so they keep the original 30-min lifetime.
+    nonisolated static func ephemeralTTLSeconds(for type: PinType) -> TimeInterval? {
+        switch type {
+        case .enforcementActive, .sweeperPassed:
+            return 5 * 60      // FT-1: mobile, very fresh
+        case .brokenMeter:
+            return 30 * 60     // stationary condition — unchanged
+        default:
+            return nil          // non-ephemeral types do not auto-expire
+        }
+    }
+
     // MARK: - Write path: Insert crowd pin (sub-PR #1)
 
     /// Inserts a new crowd-sourced ephemeral pin.
@@ -679,17 +698,11 @@ final class CommunityPinService {
             throw CommunityPinWriteError.notAuthenticated
         }
 
-        // expires_at: 30 min from now for ephemeral types (spec §3.9).
-        // Uses nowProvider() for testability (AC-I1).
-        let expiresAt: String? = {
-            switch type {
-            case .enforcementActive, .sweeperPassed, .brokenMeter:
-                let expiry = nowProvider().addingTimeInterval(30 * 60)
-                return iso8601String(from: expiry)
-            default:
-                return nil
-            }
-        }()
+        // expires_at for ephemeral types. Uses nowProvider() for testability (AC-I1).
+        // TTL is resolved by the pure `ephemeralTTLSeconds(for:)` helper (FT-1).
+        let expiresAt: String? = Self.ephemeralTTLSeconds(for: type).map {
+            iso8601String(from: nowProvider().addingTimeInterval($0))
+        }
 
         var payload: [String: Any] = [
             "pin_type":  type.rawValue,

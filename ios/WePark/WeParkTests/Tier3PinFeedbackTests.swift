@@ -613,3 +613,31 @@ final class FeedbackFetchMockURLProtocol: URLProtocol {
     }
     override func stopLoading() {}
 }
+
+// MARK: - FT-1: Mobile-pin lifetime (enforcement / sweeper shortened to 5 min)
+
+/// Verifies `CommunityPinService.ephemeralTTLSeconds(for:)` — the pure helper that drives
+/// the `expires_at` set on insert. FT-1: enforcement agents + sweepers are mobile and go
+/// stale fast → 5 min; broken meters are stationary → 30 min; other types → no expiry.
+final class FT1MobilePinTTLTests: XCTestCase {
+
+    func testFT1_enforcementActive_expiresIn5Minutes() {
+        XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .enforcementActive), 5 * 60,
+                       "FT-1: enforcement agent pins must expire after 5 minutes")
+    }
+
+    func testFT1_sweeperPassed_expiresIn5Minutes() {
+        XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .sweeperPassed), 5 * 60,
+                       "FT-1: sweeper pins must expire after 5 minutes")
+    }
+
+    func testFT1_brokenMeter_keeps30Minutes() {
+        XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .brokenMeter), 30 * 60,
+                       "FT-1: broken-meter pins are stationary and keep the 30-minute lifetime")
+    }
+
+    func testFT1_nonEphemeralType_hasNoExpiry() {
+        XCTAssertNil(CommunityPinService.ephemeralTTLSeconds(for: .filming),
+                     "FT-1: non-ephemeral (open-data) types must not auto-expire")
+    }
+}
