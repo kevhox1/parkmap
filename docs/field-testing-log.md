@@ -9,6 +9,21 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Session 2026-06-08
 
+### FT-11 🔵 Direction-of-travel on agent/sweeper reports (FEATURE, post-TF2)
+- **Area:** Tier 3 report flow + marker rendering + one-way data. iOS + backend-data.
+- **Request (Kevin, 2026-06-08):** When reporting an enforcement agent or sweeper, capture/show which
+  WAY they're heading. Sweeper must follow the street's one-way direction (auto-derivable); an agent
+  can go either way (user picks).
+- **Proposed model:** direction = along-segment toward `from` vs toward `to` (segments carry from/to
+  cross-streets + line geometry); render as a directional arrow on the marker. Store in pin `meta`
+  (jsonb already exists; a `meta.direction` precedent exists). Sweeper: auto-derive from `osm_oneway.json`
+  / segment one-way; on two-way streets fall back to user pick (or the side's traffic direction) — TBD
+  in spec. Agent: user selects in the report sheet.
+- **Decisions (Kevin, 2026-06-08):** (1) Agent direction = TWO-ARROW picker along the segment (toward
+  each cross-street, labeled with cross-street names) in the report sheet. (2) Sweeper on a ONE-WAY
+  street auto-derives direction; sweeper on a TWO-WAY street uses the same two-arrow picker (user picks).
+- **Status:** 🟡 spec being written (post-TF2 build). iOS + backend-data; stores in pin `meta`, no schema change.
+
 ### FT-10 🔴 Drive/Cruise mode locks the map — can't zoom, pivot, or rotate
 - **Area:** Drive Mode map interaction. `MapViewRepresentable` makeUIView gesture flags + follow camera.
 - **Observed (Kevin, 2026-06-08):** While Drive/Cruise mode is on, the map is locked — can't zoom,
