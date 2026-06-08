@@ -429,10 +429,19 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// flattening pitch back to 0 on every location update. This function fixes that by
     /// gating on the authoritative Drive Mode flag, not the derived heading value.
     ///
-    /// - Parameter driveModeActive: Whether Drive Mode is currently active.
+    /// FT-5: `isUserInteracting` suppresses region sync while a user pan gesture is in flight.
+    /// Without this guard, any SwiftUI re-render during a drag (8-second community-pin poll,
+    /// ASP clock tick, overlay refresh, etc.) fires `updateUIView`, which calls `setRegion`
+    /// with the stale binding value, snapping the camera back to its pre-pan position.
+    /// The flag is set in `regionWillChangeAnimated` when gesture recognizers are active
+    /// and cleared unconditionally in `regionDidChangeAnimated` once the pan settles.
+    ///
+    /// - Parameters:
+    ///   - driveModeActive: Whether Drive Mode is currently active.
+    ///   - isUserInteracting: Whether a user pan/zoom gesture is currently in flight.
     /// - Returns: `true` when region sync should run; `false` to suppress it.
-    static func shouldSyncRegionToBinding(driveModeActive: Bool) -> Bool {
-        !driveModeActive
+    static func shouldSyncRegionToBinding(driveModeActive: Bool, isUserInteracting: Bool) -> Bool {
+        !driveModeActive && !isUserInteracting
     }
 
     func makeUIView(context: Context) -> MKMapView {
@@ -612,7 +621,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         // During Drive Mode, follow-mode recentering is handled by `syncDriveRegion` below,
         // which copies the current camera (preserving pitch + heading) and updates only the
         // center coordinate — so pitch survives every location update.
-        if MapViewRepresentable.shouldSyncRegionToBinding(driveModeActive: driveModeActive) {
+        if MapViewRepresentable.shouldSyncRegionToBinding(
+            driveModeActive: driveModeActive,
+            isUserInteracting: context.coordinator.isUserInteracting
+        ) {
             let mapRegion = mapView.region
             let latDiff = abs(mapRegion.center.latitude  - region.center.latitude)
             let lngDiff = abs(mapRegion.center.longitude - region.center.longitude)
@@ -680,6 +692,22 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// The combined approach avoids two sequential `setCamera` calls (which would fire
         /// `regionDidChangeAnimated` twice) per spec §3.4.
         var lastCapturedPriorDistance: CLLocationDistance = 0
+
+        // MARK: - FT-5: User interaction tracking
+
+        /// Whether a user pan/zoom gesture is currently in flight.
+        ///
+        /// Set to `true` in `regionWillChangeAnimated` when gesture recognizers are active,
+        /// indicating a user-driven map motion. Cleared to `false` unconditionally in
+        /// `regionDidChangeAnimated` once the gesture (including any deceleration animation)
+        /// fully settles.
+        ///
+        /// This flag is read by `shouldSyncRegionToBinding` to suppress `setRegion` during
+        /// active pans — preventing background SwiftUI re-renders (community-pin poll, ASP
+        /// clock tick, overlay refresh) from snapping the camera back to the stale binding
+        /// value mid-gesture. Lives on Coordinator (NSObject) only — no @State/@Binding/
+        /// @Published, no ContentView changes.
+        var isUserInteracting: Bool = false
 
         init(parent: MapViewRepresentable) {
             self.parent = parent
@@ -1240,14 +1268,25 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MARK: - MKMapViewDelegate: camera
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
-            // W8.5c: Detect user-initiated pans during Drive Mode (follow mode detection).
-            // We distinguish user gestures from programmatic updates by checking if any of
-            // the map's gesture recognizers is in a state that indicates a user interaction.
-            // `animated == false` doesn't reliably distinguish user vs programmatic on MKMapView.
-            guard parent.driveHeading != nil else { return }
+            // FT-5: Detect user-initiated gestures regardless of Drive Mode state.
+            // Check gesture recognizers FIRST, outside the Drive Mode guard, so that
+            // free-browse pans also set the interaction flag and suppress the region-sync
+            // snap-back bug (FT-5 root cause).
+            //
+            // We distinguish user gestures from programmatic recenters by checking whether
+            // any gesture recognizer is in an active state. Programmatic `setRegion` calls
+            // fire `regionWillChangeAnimated` with no active recognizer, so `isUserInteracting`
+            // stays `false` for those (correct — programmatic sync should not be suppressed).
             let isUserGesture = mapView.gestureRecognizers?.contains(where: {
                 $0.state == .began || $0.state == .changed || $0.state == .ended
             }) ?? false
+            if isUserGesture {
+                isUserInteracting = true
+            }
+
+            // W8.5c: Drive Mode follow-mode pan detection. Gated on driveHeading != nil
+            // exactly as before — body and dispatch logic are unchanged (AC-FT5.8).
+            guard parent.driveHeading != nil else { return }
             if isUserGesture {
                 DispatchQueue.main.async { [weak self] in
                     self?.parent.onDrivePanDetected?()
@@ -1257,6 +1296,13 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             let region = mapView.region
+            // FT-5: Clear the interaction flag synchronously and unconditionally, before
+            // the async onRegionChanged dispatch. Clears on every call — whether the change
+            // was user-driven or programmatic — to prevent the flag from getting stuck `true`
+            // if a programmatic recenter fires while no gesture is active (AC-FT5.9).
+            // MapKit fires this callback only after the deceleration animation completes,
+            // so clearing here is the correct moment (map has fully settled).
+            isUserInteracting = false
             // Defer the SwiftUI state write to the next run loop cycle.
             // regionDidChangeAnimated fires from a MapKit animation callback that can
             // overlap with SwiftUI's render pass — writing @State synchronously here
