@@ -896,12 +896,17 @@ final class FT6ReminderTests: XCTestCase {
             remindNightBefore: true
         )
 
-        // Prereq: verify the engine finds a restriction on Sun Mar 8
-        // (21h from Sat 10:00 AM to Sun 7:00 AM).
+        // Prereq: the engine reports ~21 WALL-CLOCK hours from Sat 10:00 to Sun 7:00
+        // (day/minute arithmetic, the W3 engine behavior). Note the true elapsed UTC
+        // interval is only 20h because clocks spring forward (the 2 AM hour is skipped) —
+        // but the engine counts wall-clock hours, so ~21 is the correct expectation here.
+        // The night-before fire date is computed independently from the restriction's
+        // calendar day (Sun) minus one day at 20:00 ET, so the DST hour-count quirk does
+        // not affect the assertions below.
         let restriction = engine.nextRestriction(for: segment, at: now)
         XCTAssertFalse(restriction.isUnrestricted, "AC-FT6.9 prereq: must find a restriction")
-        XCTAssertGreaterThan(restriction.hours, 20.9, "AC-FT6.9 prereq: restriction ~21h away")
-        XCTAssertLessThan(restriction.hours, 21.1, "AC-FT6.9 prereq: restriction ~21h away")
+        XCTAssertGreaterThan(restriction.hours, 20.9, "AC-FT6.9 prereq: restriction ~21 wall-clock h away")
+        XCTAssertLessThan(restriction.hours, 21.1, "AC-FT6.9 prereq: restriction ~21 wall-clock h away")
 
         scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: offsets)
 
@@ -1005,7 +1010,10 @@ final class FT6ReminderTests: XCTestCase {
     // MARK: - AC-FT6.13 — Cancellation removes all ruleIndexes by prefix
 
     func testFT6_AC13_Cancellation_RemovesAllRuleIndexesByPrefix() {
-        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        // now = Fri 2026-05-08 12:00 ET, restriction Mon 2026-05-11 07:00 AM (Mon/Thu ASP).
+        // All 5 fire times are in the future at Fri noon, so all 5 slots r0–r4 schedule —
+        // this exercises the night-before slot (r4), which the prior setup (04:00 Thu) skipped.
+        let now = nsDate(year: 2026, month: 5, day: 8, hour: 12, minute: 0)
         let segment = nsSegment(
             id: "FT6_AC13_SEG",
             rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
@@ -1016,16 +1024,16 @@ final class FT6ReminderTests: XCTestCase {
             remind30Min: true,
             remind1Hour: true,
             remind2Hours: true,
-            remindNightBefore: false  // night-before is in the past at 04:00 Thu — won't schedule
+            remindNightBefore: true  // Sun 05-10 20:00 ET is future at Fri noon → schedules r4
         )
 
-        // First, schedule with all 4 relative presets active (night-before is past at 04:00 Thu).
+        // Schedule with all 5 presets active (all fire times future from Fri noon).
         scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now, offsets: allOffsets)
-        XCTAssertEqual(mockCenter.addedRequests.count, 4,
-                       "AC-FT6.13 prereq: 4 requests for r0, r1, r2, r3")
+        XCTAssertEqual(mockCenter.addedRequests.count, 5,
+                       "AC-FT6.13 prereq: 5 requests for r0, r1, r2, r3, r4")
 
         // Populate pendingRequests from added requests (MockNotificationCenter tracks both).
-        XCTAssertEqual(mockCenter.pendingRequests.count, 4, "AC-FT6.13 prereq: 4 pending requests")
+        XCTAssertEqual(mockCenter.pendingRequests.count, 5, "AC-FT6.13 prereq: 5 pending requests")
 
         // Cancel using prefix.
         let exp = expectation(description: "AC-FT6.13: cancelAll completes")
@@ -1039,9 +1047,9 @@ final class FT6ReminderTests: XCTestCase {
         XCTAssertEqual(mockCenter.pendingRequests.count, 0,
                        "AC-FT6.13: all pending requests removed by prefix cancellation")
 
-        // Verify all 4 scheduled identifiers were removed.
+        // Verify all 5 scheduled identifiers were removed — including the night-before slot r4.
         let removed = Set(mockCenter.removedPendingIdentifiers)
-        for ruleIndex in [0, 1, 2, 3] {
+        for ruleIndex in [0, 1, 2, 3, 4] {
             let expectedID = "wepark.pin.\(car.id.uuidString).r\(ruleIndex)"
             XCTAssertTrue(removed.contains(expectedID),
                           "AC-FT6.13: r\(ruleIndex) identifier must be in removedPendingIdentifiers")
