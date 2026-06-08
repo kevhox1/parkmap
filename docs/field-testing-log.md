@@ -7,6 +7,28 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ---
 
+## TF2 Round 1 — on-device testing of build 1.0(2) (2026-06-08 evening)
+
+Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
+
+### TF2-1 🔴 Can't pan the live (Drive/Cruise) map while stationary — only zoom works
+- **Area:** Drive Mode follow-pause / pan detection. `MapViewRepresentable.regionWillChangeAnimated`.
+- **Observed (Kevin, seated, TF2 build):** In the live screen, cannot pan at all — only zoom responds.
+- **Root cause:** the FT-10 follow-pause trigger (`onDrivePanDetected` → flips `driveFollowEnabled`
+  false → suppresses the recenter) is gated behind `guard parent.driveHeading != nil` in
+  `regionWillChangeAnimated`. While STATIONARY (seated), speed is below the gate so `driveHeading`
+  is nil → pan-detection never fires → follow never pauses → every GPS tick recenters on the user,
+  yanking the pan back. Zoom survives because recenter only changes center, not zoom. (Would work
+  while actually driving, since driveHeading != nil then — but broken seated, which is how you inspect.)
+- **Fix:** gate the pan-detection on `parent.driveModeActive` (exists, line 193) instead of
+  `parent.driveHeading != nil`, so any user pan pauses follow whether moving or not. One-line change;
+  keep the FT-5 isUserInteracting logic + the heading-follow itself unchanged. Re-verify
+  RegionSyncGuardTests + #31 smoke gate (sensitive path).
+- **Status:** 🔴 open — fix identified. Goes in next TF2 build (build 3).
+- **Lands in:** iOS (`MapViewRepresentable.swift`).
+
+---
+
 ## Session 2026-06-08
 
 ### FT-11 🔵 Direction-of-travel on agent/sweeper reports (FEATURE, post-TF2)
