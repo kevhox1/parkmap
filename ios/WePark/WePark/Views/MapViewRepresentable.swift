@@ -1391,9 +1391,14 @@ struct MapViewRepresentable: UIViewRepresentable {
                 isUserInteracting = true
             }
 
-            // W8.5c: Drive Mode follow-mode pan detection. Gated on driveHeading != nil
-            // exactly as before — body and dispatch logic are unchanged (AC-FT5.8).
-            guard parent.driveHeading != nil else { return }
+            // Drive Mode follow-mode pan detection. TF2-1: gated on `driveModeActive`, NOT
+            // `driveHeading != nil`. The old heading gate meant a user pan only paused follow
+            // while MOVING (driveHeading is nil below the speed gate). Stationary (seated, or
+            // stopped at a light), a pan never paused follow → the recenter yanked it back every
+            // GPS tick → "can't pan, only zoom." Gating on driveModeActive makes any user pan
+            // pause follow whether moving or not. Programmatic recenters still don't trip it
+            // (isUserGesture is false — no active recognizer).
+            guard parent.driveModeActive else { return }
             if isUserGesture {
                 DispatchQueue.main.async { [weak self] in
                     self?.parent.onDrivePanDetected?()
