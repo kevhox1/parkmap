@@ -9,7 +9,49 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Session 2026-06-08
 
-### FT-7 🔴 Drive Mode: jerky location/heading follow + arrow points askew — HIGH
+### FT-10 🔴 Drive/Cruise mode locks the map — can't zoom, pivot, or rotate
+- **Area:** Drive Mode map interaction. `MapViewRepresentable` makeUIView gesture flags + follow camera.
+- **Observed (Kevin, 2026-06-08):** While Drive/Cruise mode is on, the map is locked — can't zoom,
+  can't pivot (pitch), can't turn the angle (rotate).
+- **Cause:** makeUIView sets `mapView.isRotateEnabled = false` + `mapView.isPitchEnabled = false`
+  (MapViewRepresentable.swift:442-443). Plus the continuous follow-recenter would fight manual
+  zoom/pan anyway. Standard nav apps (Waze/Apple) allow pinch-zoom (and often pan with a "re-center"
+  affordance) while keeping heading-up; rotation is usually locked to heading-up by design.
+- **Design question:** which gestures to allow in drive mode (zoom? pitch? rotate?), and whether
+  manual interaction should temporarily break follow + show a re-center button (Waze pattern).
+- **Same subsystem as FT-7 + FT-8** (Drive Mode camera/interaction) → design together to avoid
+  rework + regressions on the #31-sensitive path.
+- **Lands in:** iOS (`MapViewRepresentable.swift`).
+
+### FT-9 🔴 "Lowry" shows free parking on the left — incorrect (DATA)
+- **Area:** Tile data / parking-rules classification. Backend-data domain.
+- **Observed (Kevin, 2026-06-08):** A street he calls "Lowry" is showing free parking on the left
+  side; that's wrong.
+- **Investigation so far:** NO "Lowry"/"Lowery" street exists anywhere in `tiles/` (1028 tiles) or
+  `osm_oneway.json`. Street names in tiles are uppercase NYC form (e.g. "2ND AVENUE"). Two leading
+  hypotheses: (a) the street isn't in the NYC open-data set under that name → app renders no-rules
+  as "free" (green), i.e. **absence of data is being shown as free parking, which is misleading**;
+  (b) it's a name variant / mishearing of the actual street. NEED FROM KEVIN: exact street name +
+  cross streets + borough (or the screenshot) to locate the segment.
+- **Lands in:** backend-data (tile pipeline / source data) + possibly rules-engine default behavior
+  for no-data segments. Investigate once location pinned.
+
+### FT-8 🟡 Drive/Cruise default zoom too wide — shows too many streets
+- **Area:** Drive Mode / Cruise (Find Parking) camera zoom. `MapViewRepresentable.driveModeCameraSpan`.
+- **Observed (Kevin, 2026-06-08, screenshot referenced but not received by agent):** Default zoom in
+  Find-Parking/Cruise mode shows too many streets at once; wants it tighter — focused on the street
+  you're currently on.
+- **Cause:** `driveModeCameraSpan = 0.005°` (~2,000–2,300m altitude) in MapViewRepresentable.swift:222.
+  Reducing it (e.g. ~0.0025–0.003°) zooms in to roughly the current block. One-constant tweak, same
+  camera subsystem as FT-7 → bundle into FT-7 implementation; value tunable on-device.
+- **Lands in:** iOS (`MapViewRepresentable.swift`). Bundled with FT-7.
+
+### FT-7 🟡 Drive Mode: jerky location/heading follow + arrow points askew — SPEC'D
+- **Spec (2026-06-08):** `docs/ft7-drive-mode-smoothness-heading-spec.md`. Decisions: animate camera
+  transitions (~0.3s eased), course-only heading while driving (drop magnetometer blend), shortest-arc
+  puck rotation, dead-band 5°→2°. Bundling FT-8 zoom-tighten. OQ-FT7-2 (stop startUpdatingHeading vs
+  gate within didUpdateHeading): taking the safe default (gate within didUpdateHeading, keep compass);
+  flippable. Next: ios-engineer.
 - **Area:** Drive Mode location/heading follow + car-pin (arrow) rotation. `MapViewRepresentable`
   (`syncDriveHeading`, location-update path, camera recenter) + heading source.
 - **Observed (Kevin, driving, 2026-06-08):** (1) The arrow + map-follow update with visible LATENCY
