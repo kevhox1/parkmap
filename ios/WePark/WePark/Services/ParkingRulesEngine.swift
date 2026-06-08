@@ -93,6 +93,29 @@ final class ParkingRulesEngine {
             }
         }
 
+        // FT-9 fix: metered-paid-hours check runs BEFORE the "upcoming ASP → free until X"
+        // branch. A segment that is actively metered right now (meter running) must return
+        // .metered severity regardless of any future ASP restriction scheduled on the block.
+        // Previously the ASP "Free until X" branch fired first, returning .free / "Free until
+        // Tomorrow 8:30 AM" on every metered commercial block during the entire paid window.
+        // See docs/qa/ft9-bowery-2ndave-investigation.md §4.2 for the full trace.
+        //
+        // IMPORTANT: this block only promotes "metered active now" to the top. The free-hours
+        // metered case ("free until 9am") still falls through to the METERED check below after
+        // the ASP branch — matching the investigation doc §6.1 recommendation exactly.
+        if dom == .metered || rules.contains(where: { $0.category == .metered }) {
+            let lbl = meteredStatus(for: segment, at: now)
+            // lbl is like "Metered (paid until 7pm)" or "Metered (free until 9am)"
+            if lbl.localizedCaseInsensitiveContains("paid until") {
+                // Meter is running right now — return immediately; don't fall through to ASP branch.
+                let stripped = stripMeteredWrapper(lbl)
+                return SafetyLabel(text: stripped, severity: .metered)
+            }
+            // Meter is NOT running right now (free until / free for / free).
+            // Fall through to the ASP branch below so that the "Free until <ASP time>" label
+            // is still shown correctly during off-peak metered hours.
+        }
+
         // Upcoming ASP or NO_PARKING / TRUCK_LOADING restriction → "Free until <when>"
         if restriction.hours < 168 {
             if let cat = restriction.category, cat.isASP {
@@ -105,11 +128,12 @@ final class ParkingRulesEngine {
             }
         }
 
-        // Metered block — use meteredStatus which formats "paid until 7pm" / "free until 9am"
+        // Metered block during off-peak hours — use meteredStatus which formats "free until 9am"
+        // (the "paid until" case was already handled above; this handles the remaining cases).
         // JS checks: if (dom === 'METERED' || rules.some(r => r.category === 'METERED'))
         if dom == .metered || rules.contains(where: { $0.category == .metered }) {
             let lbl = meteredStatus(for: segment, at: now)
-            // lbl is like "Metered (paid until 7pm)" or "Metered (free until 9am)"
+            // lbl is like "Metered (free until 9am)" / "Metered (free for 2d)" / "Metered (free)"
             // Strip "Metered (" prefix and ")" suffix to get the inner part — matches JS:
             //   lbl.replace(/^Metered \(|\)$/g, '')
             let stripped = stripMeteredWrapper(lbl)
