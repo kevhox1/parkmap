@@ -7,6 +7,25 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ---
 
+## Session 2026-06-08
+
+### FT-6 🔵 Customizable ASP reminder timing — multiple reminders + "night before" (FEATURE)
+- **Area:** `NotificationScheduler` + Settings UI. iOS-only.
+- **Request (Kevin, 2026-06-08):** First ASP notification landed well ("looks great") but fires at a
+  fixed 1h before. Wants to customize *when* reminders fire and have MULTIPLE per restriction —
+  e.g. 1h before AND 15 min before, plus **a reminder the night before** he has to move the car.
+- **Current state:** single notification per pin at fixed `notificationLeadTimeSeconds = 1*3600`
+  (Constants.swift:60). BUT architecture is already forward-compatible: ID scheme
+  `wepark.pin.<carID>.r<ruleIndex>` and `notificationID(for:ruleIndex:)` are parameterized; W6 spec
+  reserved `r1` for "future two-notification design." So this is an extension, not a rebuild.
+- **Design questions (surfaced to Kevin):** global-Settings vs per-pin config; preset lead-times vs
+  fully custom; "night before" semantics (recommend: fixed clock time the prior evening, default
+  8:00 PM ET, skip if already past); iOS 64-pending-notification cap (non-issue at ~4-5/pin).
+- **Lands in:** iOS only (`NotificationScheduler.swift`, `Constants.swift`, `SettingsView.swift`,
+  maybe `ParkedCar` if per-pin). Tech-lead spec after Kevin's decisions. No backend/schema change.
+
+---
+
 ## Session 2026-06-06 (cont.)
 
 ### FT-5 🟡 Map snaps back to previous view while panning (free-browse mode) — MERGED, on-device confirm pending
