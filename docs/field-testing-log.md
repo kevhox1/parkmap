@@ -9,7 +9,12 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Session 2026-06-08
 
-### FT-6 🔵 Customizable ASP reminder timing — multiple reminders + "night before" (FEATURE)
+### FT-6 🟡 Customizable ASP reminder timing — multiple reminders + "night before" (FEATURE) — FIX IN PR #48
+- **Resolution (2026-06-08):** Built per `docs/ft6-customizable-reminders-spec.md`. Multi-select
+  presets (15m/30m/1h/2h/night-before) as a global Settings default; default = {1h} for backward
+  compat. QA PASS-WITH-NOTES, both nits resolved (`docs/qa/ft6-reminders-qa.md`). 395/0 tests, cold
+  clean build + sim launch verified. **PR #48 open.** On-device Smoke A (Settings render/persist) +
+  Smoke B (multi-preset notification delivery) pending Kevin's next TestFlight build → flip 🟢 after.
 - **Area:** `NotificationScheduler` + Settings UI. iOS-only.
 - **Request (Kevin, 2026-06-08):** First ASP notification landed well ("looks great") but fires at a
   fixed 1h before. Wants to customize *when* reminders fire and have MULTIPLE per restriction —
