@@ -9,12 +9,13 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Session 2026-06-06 (cont.)
 
-### FT-5 🟡 Map snaps back to previous view while panning (free-browse mode) — FIX IN PR
+### FT-5 🟡 Map snaps back to previous view while panning (free-browse mode) — MERGED, on-device confirm pending
 - **Resolution (2026-06-07):** Fix implemented per `docs/ft5-region-sync-interaction-guard-spec.md`
   (isUserInteracting guard in `MapViewRepresentable.updateUIView`). QA PASS, zero findings
   (`docs/qa/ft5-region-sync-qa.md`). Cold clean build + sim launch verified by orchestrator.
-  Unit tests lock the guard logic (4 RegionSyncGuardTests cases). PR open to main. Behavioral
-  pan-test (10s no snap-back) to be confirmed by Kevin on-device — flip to 🟢 after he verifies.
+  Unit tests lock the guard logic (4 RegionSyncGuardTests cases). **MERGED to main via PR #47
+  (squash 6dbde45).** Behavioral pan-test (10s no snap-back) to be confirmed by Kevin on the next
+  TestFlight build (reaches device via TF2) — flip to 🟢 after he verifies on-device.
 - **Area:** `MapViewRepresentable.updateUIView` non-Drive-Mode region sync. Core map UX.
 - **Observed:** While scrolling/panning the map (not in Drive Mode), it frequently snaps back to
   the prior view. Not every time — happens often. (Kevin has video examples; agent can't view video.)
