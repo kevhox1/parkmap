@@ -182,34 +182,29 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     /// Whether Drive Mode is currently active.
     ///
-    /// Used to gate the region-sync path in `updateUIView`: when Drive Mode is active,
-    /// `setRegion(_:animated:)` is suppressed because it resets camera pitch to 0, clobbering
-    /// the 30° tilt set by `applyDriveCameraPitch`. Follow-mode recentering during Drive Mode
-    /// uses a pitch-preserving `setCamera` path instead (`syncDriveRegion`).
+    /// Used to gate the heading-sync path (`syncDriveHeading`) and the directional puck
+    /// rendering in `mapView(_:viewFor:)`. Phase 2: Drive Mode position follow is owned
+    /// natively by MapKit (`.follow` tracking mode set via `CoordinatorActions.setDriveTrackingMode`).
     ///
     /// On the simulator there is no magnetometer, so `driveHeading` is always nil during
     /// Drive Mode — the original guard `if driveHeading == nil` failed to suppress `setRegion`
     /// in the sim, flattening pitch on every location update. This property fixes that.
     var driveModeActive: Bool = false
 
-    /// Callback when the user manually pans the map during Drive Mode (follow mode disabled).
-    /// ContentView sets `driveFollowEnabled = false` to show the Recenter button.
-    /// Default: nil (not in Drive Mode).
-    var onDrivePanDetected: (() -> Void)? = nil
+    // MARK: - Phase 2: Tracking-mode change output callback
 
-    // MARK: - FT-10: Follow-pause flag
-
-    /// Whether Drive Mode follow is currently active.
+    /// Phase 2: Called when MapKit changes `userTrackingMode` — including when a user pan
+    /// during Drive Mode causes MapKit to break `.follow` (setting mode to `.none`).
     ///
-    /// ContentView sets this to `false` when `onDrivePanDetected` fires (user panned/zoomed),
-    /// and back to `true` when the Re-center button is tapped (`recenterDriveMode()`).
+    /// This is an OUTPUT closure: Coordinator → ContentView. It follows the same pattern
+    /// as `onRegionChanged` and replaces the deleted `onDrivePanDetected`.
     ///
-    /// When `false`, `syncDriveRegion` must NOT recenter — the user has manually panned/zoomed
-    /// and the camera should stay where they left it until they explicitly tap Re-center.
+    /// ContentView responds by updating `driveTrackingModeNone` @State to show/hide the
+    /// Recenter button. When `mode == .none` during Drive Mode → show Recenter. When
+    /// `mode != .none` → hide Recenter.
     ///
-    /// This property is a pure SwiftUI binding pass-through (same pattern as `driveModeActive`).
-    /// It carries no internal state in MapViewRepresentable; all state lives in ContentView.
-    var driveFollowEnabled: Bool = true
+    /// Default: nil (no-op). Set from ContentView's `mapRepresentable` property.
+    var onTrackingModeChanged: ((MKUserTrackingMode) -> Void)? = nil
 
     // MARK: - W8.5c-polish PR-3 / PR-2: Drive Mode camera constants + pure-function decisions
 
@@ -377,6 +372,26 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// mutation inside `updateUIView`). ContentView calls this closure from its
         /// action handlers (themselves outside SwiftUI's view-update cycle).
         var setRegion: ((MKCoordinateRegion) -> Void)?
+
+        // MARK: Phase 2: Native Drive Mode follow
+
+        /// Engages or disengages native MapKit position-follow in Drive Mode.
+        ///
+        /// `true`  → `mapView.userTrackingMode = .follow` (smooth native position centering).
+        /// `false` → `mapView.userTrackingMode = .none` (MapKit releases position follow).
+        ///
+        /// Called from ContentView's `.onChange(of: driveModeActive)` handler — OUTSIDE
+        /// `updateUIView` — so the tracking-mode set never races SwiftUI's view-update cycle.
+        ///
+        /// Design note: `.follow` (not `.followWithHeading`) is used intentionally.
+        ///   - `.follow` centers position natively; MapKit does NOT rotate the map heading.
+        ///   - `syncDriveHeading` continues to set `camera.heading` from GPS course (FT-7).
+        ///   - The two are orthogonal: `setCamera(heading:)` does NOT reset `userTrackingMode`.
+        ///     MapKit's follow resumes centering on the next GPS fix without conflict.
+        ///   - `.followWithHeading` would use the compass (magnetometer) for rotation — exactly
+        ///     the FT-7 bug (askew when phone is mounted at an angle). Explicitly rejected.
+        var setDriveTrackingMode: ((Bool) -> Void)?
+
     }
 
     /// Shared action box. Created by ContentView and passed in; populated by `makeUIView`.
@@ -450,33 +465,6 @@ struct MapViewRepresentable: UIViewRepresentable {
     static func headingDiff(_ a: Double, _ b: Double) -> Double {
         let d = abs(((a - b).truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360))
         return d > 180 ? 360 - d : d
-    }
-
-    // MARK: - FT-10: Drive follow-pause gate pure function
-
-    /// Returns whether `syncDriveRegion` should recenter the map during Drive Mode.
-    ///
-    /// Both conditions must be true: Drive Mode must be active AND follow must not be paused
-    /// by a user pan/zoom gesture. When follow is paused (`driveFollowEnabled == false`),
-    /// `syncDriveRegion` is suppressed so the user's manual camera position is preserved
-    /// until they tap Re-center.
-    ///
-    /// Phase 1 note: `shouldSyncRegionToBinding` was deleted in Phase 1 (map-phase1-browse).
-    /// Browse-mode camera is now fully owned by MapKit. The only programmatic camera writes
-    /// in browse mode come through `coordinatorActions.setRegion`, called explicitly from
-    /// ContentView action handlers. This function gates the Drive Mode follow path only.
-    ///
-    /// - Parameters:
-    ///   - driveModeActive: Whether Drive Mode is currently active.
-    ///   - driveFollowEnabled: Whether follow mode is currently active (not paused).
-    ///   - isUserInteracting: Whether a user gesture is in flight right now (FT-5 flag, set
-    ///     SYNCHRONOUSLY in regionWillChangeAnimated). TF2-2: `driveFollowEnabled` flips via an
-    ///     async dispatch that is deferred until the drag ends (tracking-mode run loop), so during
-    ///     an active pan a GPS-tick recenter would still snap the camera back. Gating on
-    ///     `!isUserInteracting` closes that mid-drag race because the flag is synchronous.
-    /// - Returns: `true` when `syncDriveRegion` should run; `false` to suppress it.
-    static func shouldSyncDriveRegion(driveModeActive: Bool, driveFollowEnabled: Bool, isUserInteracting: Bool) -> Bool {
-        driveModeActive && driveFollowEnabled && !isUserInteracting
     }
 
     // MARK: - FT-7: Shortest-arc rotation delta pure helper
@@ -637,6 +625,19 @@ struct MapViewRepresentable: UIViewRepresentable {
             mapView?.setRegion(newRegion, animated: true)
         }
 
+        // Phase 2: Native Drive Mode follow tracking-mode closure.
+        // Engaging/disengaging MapKit's native position-follow (.follow / .none).
+        // MUST be called from ContentView's .onChange(of: driveModeActive) — OUTSIDE
+        // updateUIView — to satisfy the #31 architectural invariant (no camera/tracking
+        // mutation inside updateUIView).
+        //
+        // Design: .follow (not .followWithHeading) — see CoordinatorActions.setDriveTrackingMode
+        // doc comment for the full analysis. syncDriveHeading drives heading rotation separately.
+        coordinatorActions.setDriveTrackingMode = { [weak mapView] active in
+            guard let mapView = mapView else { return }
+            mapView.userTrackingMode = active ? .follow : .none
+        }
+
         return mapView
     }
 
@@ -669,36 +670,32 @@ struct MapViewRepresentable: UIViewRepresentable {
         // UIKit state that races SwiftUI's mount cycle.
         context.coordinator.syncCommunityPinAnnotations(communityPins, on: mapView)
 
-        // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11).
+        // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11, P2-AC-5).
         // Port of setDrivingMapRotation (index.html:6584–6601) with R-1 dead-band guard.
-        // Only update when heading changes > 5 degrees to prevent tight regionDidChange feedback loop.
+        // Only update when heading changes > 2 degrees to prevent tight regionDidChange feedback loop.
+        //
+        // Phase 2 coexistence note (P2-AC-5): syncDriveHeading calls setCamera(animated:true)
+        // with only the heading changed. This does NOT reset userTrackingMode to .none —
+        // MapKit's .follow continues to center the position on the next GPS fix. The two are
+        // orthogonal: tracking mode controls center; camera heading is a separate mutable property.
+        // Apple Maps uses exactly this pattern internally (follow + manual heading).
+        //
+        // Phase 2 invariant: NO camera mutation (setCamera, setRegion, userTrackingMode =)
+        // happens inside updateUIView. The Drive Mode follow recentering that was here before
+        // (syncDriveRegion / shouldSyncDriveRegion) is removed in Phase 2 — native MapKit
+        // .follow tracking mode owns position centering without code in updateUIView.
         context.coordinator.syncDriveHeading(driveHeading, on: mapView)
 
-        // Phase 1: Browse-mode `setRegion` push REMOVED.
+        // Phase 1+2: Browse-mode `setRegion` push REMOVED (Phase 1).
+        // Drive Mode manual follow loop REMOVED (Phase 2).
         //
-        // MapKit owns the camera in browse mode after Phase 1. The `region` binding is now
-        // READ-ONLY from the map: regionDidChangeAnimated → onRegionChanged → tile loading /
-        // overlay culling / ASP banner. ContentView never writes `region` → map in browse mode.
+        // MapKit owns ALL camera centering:
+        //   - Browse mode: MapKit native pan/zoom, no programmatic setRegion in updateUIView.
+        //   - Drive Mode: MapKit .follow tracking mode, set via coordinatorActions.setDriveTrackingMode
+        //     from ContentView's .onChange(of: driveModeActive) — OUTSIDE updateUIView.
         //
-        // Programmatic recenter (find-me, find-car, launch center) calls
-        // `coordinatorActions.setRegion?(newRegion)` directly from action handlers outside
-        // `updateUIView` — satisfying the #31 architectural invariant (no camera mutation
-        // inside `updateUIView`).
-        //
-        // Drive Mode follow recentering (unchanged from Phase 1): `syncDriveRegion` handles
-        // pitch-preserving camera updates when `shouldSyncDriveRegion` returns true.
-        if MapViewRepresentable.shouldSyncDriveRegion(
-            driveModeActive: driveModeActive,
-            driveFollowEnabled: driveFollowEnabled,
-            isUserInteracting: context.coordinator.isUserInteracting
-        ) {
-            // Drive Mode active + follow enabled: use pitch-preserving camera update so the
-            // 45° tilt survives every follow-mode recenter. `setRegion` is banned here — it resets pitch.
-            context.coordinator.syncDriveRegion(region, on: mapView)
-        }
-        // When driveFollowEnabled == false: Drive Mode is active but follow is paused.
-        // The user has manually panned/zoomed. syncDriveRegion is suppressed until Re-center tapped.
-        // (FT-10 root cause fix — see spec §3 data flow.)
+        // updateUIView is now a pure mechanical sync (overlays, annotations, heading).
+        // No camera mutations here. Invariant: satisfies the #31 architectural constraint.
     }
 
     // MARK: - Coordinator
@@ -1135,44 +1132,6 @@ struct MapViewRepresentable: UIViewRepresentable {
             )
         }
 
-        // MARK: - W8.5c-polish PR-3: Pitch-preserving Drive Mode region sync
-
-        /// Recenters the map on the given region's center coordinate during Drive Mode,
-        /// preserving the current camera pitch and heading.
-        ///
-        /// Called from `updateUIView` when `driveModeActive` is true AND `driveFollowEnabled`
-        /// is true — i.e., a follow-mode recenter was requested by `recenterDriveMap` in
-        /// ContentView. `setRegion(_:animated:)` is banned here because it resets camera pitch
-        /// to 0, clobbering the 45° Drive Mode tilt.
-        ///
-        /// FT-7 B.4: Now animated (was animated: false). The programmatic animated setCamera
-        /// fires regionWillChangeAnimated with no active gesture recognizer → isUserGesture=false
-        /// → onDrivePanDetected is NOT called → driveFollowEnabled stays true. No false pause.
-        ///
-        /// FT-10 note: This method is now only called when shouldSyncDriveRegion returns true
-        /// (driveFollowEnabled == true). The gate is enforced in updateUIView's else-branch.
-        ///
-        /// Implementation: copies the current `MKMapCamera` (preserving `pitch`, `heading`,
-        /// and `centerCoordinateDistance`) and sets only `centerCoordinate` to the new center.
-        ///
-        /// - Parameters:
-        ///   - region: The SwiftUI `region` binding value — only `center` is used.
-        ///   - mapView: The live `MKMapView` instance.
-        func syncDriveRegion(_ region: MKCoordinateRegion, on mapView: MKMapView) {
-            let mapRegion = mapView.region
-            let latDiff = abs(mapRegion.center.latitude  - region.center.latitude)
-            let lngDiff = abs(mapRegion.center.longitude - region.center.longitude)
-            guard latDiff > 0.0001 || lngDiff > 0.0001 else { return }
-
-            let camera = mapView.camera.copy() as! MKMapCamera
-            camera.centerCoordinate = region.center
-            // pitch and heading are preserved from the copied camera — no pitch reset.
-            // FT-7 B.4: Animate the recenter (was animated: false). At 1 Hz GPS cadence,
-            // 0.3s animations complete with 0.7s to spare. No stacking — MapKit cancels
-            // in-flight animated setCamera when a new one starts.
-            mapView.setCamera(camera, animated: true)
-        }
-
         // MARK: - MKMapViewDelegate: annotation view
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -1370,32 +1329,24 @@ struct MapViewRepresentable: UIViewRepresentable {
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             // FT-5: Detect user-initiated gestures regardless of Drive Mode state.
             // Check gesture recognizers FIRST, outside the Drive Mode guard, so that
-            // free-browse pans also set the interaction flag and suppress the region-sync
-            // snap-back bug (FT-5 root cause).
+            // free-browse pans also set the interaction flag.
             //
             // We distinguish user gestures from programmatic recenters by checking whether
-            // any gesture recognizer is in an active state. Programmatic `setRegion` calls
-            // fire `regionWillChangeAnimated` with no active recognizer, so `isUserInteracting`
-            // stays `false` for those (correct — programmatic sync should not be suppressed).
+            // any gesture recognizer is in an active state. Programmatic `setRegion` /
+            // `setCamera` calls fire `regionWillChangeAnimated` with no active recognizer,
+            // so `isUserInteracting` stays `false` for those (correct — programmatic camera
+            // moves, including syncDriveHeading's setCamera, should not trigger pan detection).
+            //
+            // Phase 2 note: `isUserInteracting` is still used by `syncDriveHeading` to prevent
+            // re-applying heading while a user gesture is in flight (prevents jitter). The
+            // old `onDrivePanDetected` / `driveFollowEnabled` mechanism is removed in Phase 2.
+            // User pan detection during Drive Mode is now handled by MapKit's tracking-mode
+            // delegate callback `mapView(_:didChange:animated:)` — see below.
             let isUserGesture = mapView.gestureRecognizers?.contains(where: {
                 $0.state == .began || $0.state == .changed || $0.state == .ended
             }) ?? false
             if isUserGesture {
                 isUserInteracting = true
-            }
-
-            // Drive Mode follow-mode pan detection. TF2-1: gated on `driveModeActive`, NOT
-            // `driveHeading != nil`. The old heading gate meant a user pan only paused follow
-            // while MOVING (driveHeading is nil below the speed gate). Stationary (seated, or
-            // stopped at a light), a pan never paused follow → the recenter yanked it back every
-            // GPS tick → "can't pan, only zoom." Gating on driveModeActive makes any user pan
-            // pause follow whether moving or not. Programmatic recenters still don't trip it
-            // (isUserGesture is false — no active recognizer).
-            guard parent.driveModeActive else { return }
-            if isUserGesture {
-                DispatchQueue.main.async { [weak self] in
-                    self?.parent.onDrivePanDetected?()
-                }
             }
         }
 
@@ -1414,6 +1365,32 @@ struct MapViewRepresentable: UIViewRepresentable {
             // triggers "Modifying state during view update" warnings.
             DispatchQueue.main.async { [weak self] in
                 self?.parent.onRegionChanged(region)
+            }
+        }
+
+        // MARK: - Phase 2: Tracking-mode change delegate (P2-AC-1, P2-AC-6, P2-AC-7)
+
+        /// Fires when MapKit changes `userTrackingMode` — including when a user pan/gesture
+        /// during Drive Mode causes MapKit to set it to `.none` (tracking break).
+        ///
+        /// Phase 2 Drive Mode pan detection replaces the old `regionWillChangeAnimated` +
+        /// `onDrivePanDetected` mechanism. MapKit guarantees this callback fires on any
+        /// tracking-mode change, including gesture-driven breaks — it is the standard signal
+        /// Apple Maps uses for the same purpose.
+        ///
+        /// When `mode == .none` fires during Drive Mode → tell ContentView to show Recenter.
+        /// When `mode != .none` fires (re-engage by Recenter tap) → tell ContentView to hide it.
+        ///
+        /// Safety: dispatched via `DispatchQueue.main.async` — this callback fires from MapKit's
+        /// internal queue, not SwiftUI's render cycle, so it is safe to dispatch @State writes.
+        ///
+        /// P2-AC-5 coexistence: `syncDriveHeading` calls `setCamera(animated:true)` with only
+        /// the heading changed. Per MapKit documentation and behavior, `setCamera` does NOT
+        /// reset `userTrackingMode` — only user gestures and `setUserTrackingMode` do. This
+        /// callback will NOT fire spuriously from `syncDriveHeading`'s camera updates.
+        func mapView(_ mapView: MKMapView, didChange mode: MKUserTrackingMode, animated: Bool) {
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onTrackingModeChanged?(mode)
             }
         }
 

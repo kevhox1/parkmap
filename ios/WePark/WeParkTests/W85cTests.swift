@@ -708,7 +708,6 @@ final class DriveModeBottomCardTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: nil,
-            onDrivePanDetected: nil,
             coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
@@ -852,7 +851,6 @@ final class HeadingUpRotationTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: nil,
-            onDrivePanDetected: nil,
             coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
@@ -891,7 +889,6 @@ final class HeadingUpRotationTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: 90.0,
-            onDrivePanDetected: nil,
             coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
@@ -924,7 +921,6 @@ final class HeadingUpRotationTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: 91.5,
-            onDrivePanDetected: nil,
             coordinatorActions: MapViewRepresentable.CoordinatorActions()
         )
 
