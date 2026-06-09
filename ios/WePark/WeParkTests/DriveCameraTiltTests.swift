@@ -109,7 +109,6 @@ final class DriveCameraTiltTests: XCTestCase {
             activeRoute: nil,
             destinationCoordinate: nil,
             driveHeading: 90,   // Drive Mode active; heading = 90°
-            onDrivePanDetected: nil,
             coordinatorActions: actions
         )
         let coordinator = MapViewRepresentable.Coordinator(parent: representable)
@@ -164,111 +163,134 @@ final class DriveCameraTiltTests: XCTestCase {
     }
 }
 
-// MARK: - Phase 1 browse-mode camera ownership tests
+// MARK: - Phase 2 camera ownership tests (replaces Phase 1 RegionSyncGuardTests)
 
-/// Tests for the Phase 1 (map-phase1-browse) camera ownership model.
+/// Tests for the Phase 2 (native follow) camera ownership model.
 ///
-/// Phase 1 removes `shouldSyncRegionToBinding` and the corresponding `setRegion` push in
-/// `updateUIView`. MapKit now owns the camera in browse mode. These tests verify:
+/// Phase 2 removes `shouldSyncDriveRegion`, `syncDriveRegion`, `driveFollowEnabled`, and
+/// `onDrivePanDetected`. MapKit's `.follow` tracking mode now owns Drive Mode position centering.
+/// These tests verify:
 ///
-///   1. `shouldSyncRegionToBinding` is gone (compile-time: any reference would not build).
-///   2. `shouldSyncDriveRegion` still gates Drive Mode follow correctly (Phase 1 invariant:
-///      Drive Mode camera path is unchanged).
-///   3. `coordinatorActions.setRegion` closure is the mechanism for programmatic recenter
-///      in browse mode — verified by confirming the closure is wired and callable.
-///   4. Drive Mode follow remains gated by `isUserInteracting` (TF2-2 / FT-5 non-regression).
+///   1. `shouldSyncDriveRegion` is gone (compile-time: any reference would not build).
+///   2. `setRegion` closure is still the mechanism for browse-mode programmatic recenter.
+///   3. `setDriveTrackingMode` closure is the Phase 2 mechanism for Drive Mode follow.
+///   4. `onTrackingModeChanged` is a property on `MapViewRepresentable` (output closure).
 ///
-/// Previous tests 7–10 tested `shouldSyncRegionToBinding`, which is deleted. These four
-/// replacement tests cover the new browse-mode camera contract with equivalent depth.
+/// Tests 7–10 previously tested `shouldSyncDriveRegion`. Replacement tests here cover the
+/// Phase 2 camera contract with equivalent depth.
 ///
-/// See map-rebuild-native-mapkit-spec.md §3 (Phase 1 architecture) and §10 (programmatic
-/// recenter risk and resolution) for the design rationale.
+/// See map-rebuild-native-mapkit-spec.md §3 (Phase 2 architecture) and P2-AC-1 through
+/// P2-AC-8 for the design rationale.
 final class RegionSyncGuardTests: XCTestCase {
 
-    // MARK: Test 7 (Phase 1 replacement): Drive Mode — syncDriveRegion gated when follow active
-
-    /// Verifies `shouldSyncDriveRegion` returns `true` when Drive Mode is active and follow
-    /// is enabled — confirming the Drive Mode follow path is unchanged in Phase 1.
-    ///
-    /// This is the Drive-Mode-only gate that remains after Phase 1 removes the browse-mode
-    /// `setRegion` push. The browse camera is fully owned by MapKit; this function gates only
-    /// the pitch-preserving `syncDriveRegion` call.
-    func testDriveRegionSync_activeAndFollowEnabled_returnsTrue() {
-        let result = MapViewRepresentable.shouldSyncDriveRegion(
-            driveModeActive: true,
-            driveFollowEnabled: true,
-            isUserInteracting: false
-        )
-        XCTAssertTrue(result,
-            "shouldSyncDriveRegion(active=true, follow=true, interacting=false) must return true; " +
-            "Drive Mode follow path must remain operational in Phase 1")
-    }
-
-    // MARK: Test 8 (Phase 1 replacement): Browse mode — setRegion closure wired and callable
+    // MARK: Test 7 (Phase 2 replacement): Browse mode — setRegion closure wired and callable
 
     /// Verifies that `CoordinatorActions.setRegion` can be wired to a closure and called.
     ///
-    /// In Phase 1, programmatic recenter (find-me, find-car, launch center, search result)
+    /// In Phase 1+2, programmatic recenter (find-me, find-car, launch center, search result)
     /// fires `coordinatorActions.setRegion?(newRegion)` directly from ContentView action
-    /// handlers — OUTSIDE `updateUIView`. This test verifies the closure property exists on
-    /// `CoordinatorActions` and behaves as a simple optional callable (the production path
-    /// is `mapView.setRegion(_:animated:true)`, but here we verify the wire-up contract).
+    /// handlers — OUTSIDE `updateUIView`.
     func testCoordinatorActions_setRegion_isCallable() {
         let actions = MapViewRepresentable.CoordinatorActions()
 
-        // Wire a spy closure.
         var receivedRegion: MKCoordinateRegion? = nil
         actions.setRegion = { region in
             receivedRegion = region
         }
 
-        // Simulate the recenterMap path: fire the closure.
         let expected = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
             span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004)
         )
         actions.setRegion?(expected)
 
-        // Verify the closure received the region.
         XCTAssertNotNil(receivedRegion,
             "setRegion closure must fire when called from the recenterMap path")
         XCTAssertEqual(receivedRegion?.center.latitude ?? 0, expected.center.latitude, accuracy: 0.0001,
             "setRegion must receive the exact region passed by recenterMap")
     }
 
-    // MARK: Test 9 (Phase 1 replacement): Drive Mode — follow paused suppresses syncDriveRegion
+    // MARK: Test 8 (Phase 2 replacement): Drive Mode — setDriveTrackingMode closure callable
 
-    /// Verifies `shouldSyncDriveRegion` returns `false` when Drive Mode is active but follow
-    /// is paused (FT-10 root cause fix). Phase 1 does not change this invariant.
-    ///
-    /// This is the snap-back prevention guard that protects Drive Mode from snapping the
-    /// camera back to the GPS position after the user has manually panned.
-    func testDriveRegionSync_followPaused_returnsFalse() {
-        let result = MapViewRepresentable.shouldSyncDriveRegion(
-            driveModeActive: true,
-            driveFollowEnabled: false,
-            isUserInteracting: false
-        )
-        XCTAssertFalse(result,
-            "shouldSyncDriveRegion must return false when follow is paused (FT-10); " +
-            "camera must stay where user left it until Recenter is tapped")
+    /// Verifies `CoordinatorActions.setDriveTrackingMode` exists and is callable.
+    /// This is the Phase 2 replacement for `shouldSyncDriveRegion` / `syncDriveRegion`.
+    /// In production, it calls `mapView.userTrackingMode = active ? .follow : .none`.
+    func testCoordinatorActions_setDriveTrackingMode_isCallable() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+
+        var capturedActive: Bool? = nil
+        actions.setDriveTrackingMode = { active in
+            capturedActive = active
+        }
+
+        actions.setDriveTrackingMode?(true)
+        XCTAssertEqual(capturedActive, true,
+            "setDriveTrackingMode must be callable with true (Drive Mode entry)")
+
+        actions.setDriveTrackingMode?(false)
+        XCTAssertEqual(capturedActive, false,
+            "setDriveTrackingMode must be callable with false (Drive Mode exit)")
     }
 
-    // MARK: Test 10 (Phase 1 replacement / TF2-2 non-regression): isUserInteracting suppresses Drive follow
+    // MARK: Test 9 (Phase 2 replacement): onTrackingModeChanged is a MapViewRepresentable property
 
-    /// Verifies `shouldSyncDriveRegion` returns `false` when `isUserInteracting` is true,
-    /// even if follow is nominally enabled. This is the TF2-2 mid-drag race fix.
-    ///
-    /// Phase 1 preserves this invariant: `isUserInteracting` is still set synchronously in
-    /// `regionWillChangeAnimated`, and the Drive Mode follow gate still checks it.
-    func testDriveRegionSync_userInteracting_suppressesFollowEvenIfEnabled() {
-        let result = MapViewRepresentable.shouldSyncDriveRegion(
-            driveModeActive: true,
-            driveFollowEnabled: true,
-            isUserInteracting: true
+    /// Verifies `onTrackingModeChanged` is a valid settable property on `MapViewRepresentable`.
+    /// This is the Phase 2 replacement for `onDrivePanDetected`.
+    func testMapViewRepresentable_onTrackingModeChanged_isSettable() {
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
         )
-        XCTAssertFalse(result,
-            "shouldSyncDriveRegion must return false when user is interacting (TF2-2 mid-drag race fix); " +
-            "an active gesture suppresses Drive Mode follow recenter regardless of driveFollowEnabled")
+        var r = MapViewRepresentable(
+            region: .constant(region),
+            selectedSegmentID: .constant(nil),
+            onTap: { _ in },
+            onLongPress: { _ in },
+            onRegionChanged: { _ in },
+            onCarPinTapped: {},
+            carPin: nil,
+            overlayPayload: .init(),
+            activeRoute: nil,
+            destinationCoordinate: nil,
+            coordinatorActions: .init()
+        )
+
+        var modeReceived: MKUserTrackingMode? = nil
+        r.onTrackingModeChanged = { mode in
+            modeReceived = mode
+        }
+
+        r.onTrackingModeChanged?(MKUserTrackingMode.none)
+        XCTAssertEqual(modeReceived, MKUserTrackingMode.none,
+            "onTrackingModeChanged must be settable and callable on MapViewRepresentable")
+    }
+
+    // MARK: Test 10 (Phase 2 replacement / TF2-2 non-regression): isUserInteracting still works
+
+    /// Verifies `isUserInteracting` flag still exists on the Coordinator and starts false.
+    /// The flag is still used in Phase 2 by `syncDriveHeading` to suppress heading updates
+    /// during active user gestures. The old TF2-2 guard (`shouldSyncDriveRegion` +
+    /// `isUserInteracting`) is replaced, but the flag itself remains active.
+    func testCoordinator_isUserInteracting_defaultsFalse() {
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+        let r = MapViewRepresentable(
+            region: .constant(region),
+            selectedSegmentID: .constant(nil),
+            onTap: { _ in },
+            onLongPress: { _ in },
+            onRegionChanged: { _ in },
+            onCarPinTapped: {},
+            carPin: nil,
+            overlayPayload: .init(),
+            activeRoute: nil,
+            destinationCoordinate: nil,
+            coordinatorActions: .init()
+        )
+        let coordinator = MapViewRepresentable.Coordinator(parent: r)
+        XCTAssertFalse(coordinator.isUserInteracting,
+            "isUserInteracting must default to false (no gesture in flight at init)")
     }
 }

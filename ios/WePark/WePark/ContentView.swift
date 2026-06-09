@@ -363,9 +363,16 @@ struct ContentView: View {
     /// Current driving context (nil when no street data near GPS position).
     @State private var drivingContext: DrivingContext? = nil
 
-    /// True when the user has manually panned the map away from their GPS position.
-    /// Cleared when the Recenter button is tapped or on each follow-mode location update.
-    @State private var driveFollowEnabled: Bool = true
+    /// True when MapKit has broken Drive Mode position-follow due to a user pan/gesture.
+    ///
+    /// Phase 2: replaces the old `driveFollowEnabled` flag. The signal now comes from
+    /// `mapView(_:didChange:animated:)` in the Coordinator — MapKit fires this delegate
+    /// callback when `userTrackingMode` transitions to `.none` during Drive Mode (user pan).
+    ///
+    /// When `true` → show the Recenter button overlay.
+    /// When `false` → Recenter button hidden (MapKit is following, or Drive Mode is off).
+    /// Cleared to `false` on Drive Mode exit and on Recenter tap (optimistic hide).
+    @State private var driveTrackingModeNone: Bool = false
 
     /// S-1 fix (spec §7 R-3, AC-DM.23): controls the one-time background-limitation alert.
     /// Set to true on the first-ever Drive Mode start if the gate key is not yet set.
@@ -1035,13 +1042,6 @@ struct ContentView: View {
         pinService.onRegionChanged(newRegion)
     }
 
-    /// Forwards Drive Mode pan detection to the follow-mode toggle.
-    private func handleDrivePanDetected() {
-        if driveModeActive {
-            driveFollowEnabled = false
-        }
-    }
-
     /// Forwards community pin taps to the sheet presentation.
     private func handleCommunityPinTapped(_ pin: CommunityPin) {
         activeSheet = .pinDetail(pin)
@@ -1077,8 +1077,7 @@ struct ContentView: View {
             onCommunityPinTapped: handleCommunityPinTapped(_:),
             driveHeading: locationService.driveHeading,
             driveModeActive: driveModeActive,
-            onDrivePanDetected: handleDrivePanDetected,
-            driveFollowEnabled: driveFollowEnabled,
+            onTrackingModeChanged: handleTrackingModeChanged(_:),
             coordinatorActions: coordinatorActions
         )
     }
@@ -1333,9 +1332,10 @@ struct ContentView: View {
             }
             .padding(.top, endDrivePillTopPadding)
             Spacer()
-            // W8.5c: Recenter pill — OQ-2: floating above the bottom card,
-            // only visible when follow mode is paused (AC-W85c.15).
-            if !driveFollowEnabled {
+            // Phase 2: Recenter pill — visible when MapKit has broken Drive Mode follow
+            // due to a user pan (driveTrackingModeNone == true, P2-AC-6, P2-AC-7).
+            // Replaces the old driveFollowEnabled == false signal.
+            if driveTrackingModeNone {
                 Button {
                     recenterDriveMode()
                 } label: {
@@ -1483,24 +1483,29 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - W8.5c: Recenter in Drive Mode
+    // MARK: - Phase 2: Recenter in Drive Mode (P2-AC-7, OQ-3)
 
-    /// Snaps the map camera back to the user's current GPS position during Drive Mode.
-    /// Mirrors recenterDriveMode() from index.html:5800–5807.
+    /// Re-engages MapKit's native position-follow and restores the Drive Mode camera defaults.
+    ///
+    /// Phase 2 replaces the old `recenterDriveMode()` that wrote `region` and set
+    /// `driveFollowEnabled = true`. The new approach:
+    ///   1. `coordinatorActions.setDriveTrackingMode?(true)` → `mapView.userTrackingMode = .follow`
+    ///      (MapKit re-centers smoothly on the next GPS fix).
+    ///   2. `coordinatorActions.applyDrivePitch?(true, preDrivePitch)` → restores 45° pitch + tight
+    ///      zoom (per OQ-3: "restore drive defaults" is better UX than "silently follow from current").
+    ///   3. `driveTrackingModeNone = false` optimistically hides the Recenter button immediately
+    ///      (the `mapView(_:didChange:animated:)` callback will confirm via `onTrackingModeChanged`,
+    ///      but optimistic hide prevents flicker).
+    ///
+    /// Architecture: no `region` write, no `updateUIView` call. Both coordinator closures fire
+    /// outside SwiftUI's view-update cycle — #31 invariant is maintained.
     private func recenterDriveMode() {
-        driveFollowEnabled = true
-        if let loc = locationService.userLocation {
-            recenterDriveMap(on: loc)
-        }
-    }
-
-    /// Recenters the map during Drive Mode (drive zoom, no span change).
-    private func recenterDriveMap(on coordinate: CLLocationCoordinate2D) {
-        region = MKCoordinateRegion(
-            center: coordinate,
-            latitudinalMeters: AppConstants.drivingZoomMeters,
-            longitudinalMeters: AppConstants.drivingZoomMeters
-        )
+        // Optimistic hide — prevents flicker while waiting for the delegate callback.
+        driveTrackingModeNone = false
+        // Re-engage native follow.
+        coordinatorActions.setDriveTrackingMode?(true)
+        // Restore drive camera defaults (OQ-3: pitch 45°, tight zoom ~621m altitude).
+        coordinatorActions.applyDrivePitch?(true, preDrivePitch)
     }
 
     // MARK: - W5.1: Recenter actions
@@ -1598,7 +1603,9 @@ struct ContentView: View {
         if active {
             // Entering Drive Mode.
             locationService.startDriveMode()
-            driveFollowEnabled = true
+            // Phase 2: driveTrackingModeNone starts false (native follow will be engaged
+            // via coordinatorActions.setDriveTrackingMode in handleDriveModeAndCamera).
+            driveTrackingModeNone = false
             // Create DrivingContextService and wire the voice service.
             let service = DrivingContextService(voice: drivingVoice)
             drivingContextService = service
@@ -1629,7 +1636,8 @@ struct ContentView: View {
             drivingContextService?.setCruiseMode(false)
             drivingContextService = nil
             drivingContext = nil
-            driveFollowEnabled = true
+            // Phase 2: clear Recenter button on Drive Mode exit.
+            driveTrackingModeNone = false
             // Deactivate audio session.
             AudioSessionManager.shared.deactivateDriveSession()
             // W8.5d: Reset final-approach state for the next session.
@@ -1711,12 +1719,14 @@ struct ContentView: View {
                 recenterMap(on: coord)
             }
         }
-        // W8.5c: Drive Mode follow-mode + context update.
+        // W8.5c: Drive Mode context update.
+        // Phase 2: Manual follow-mode recenter block REMOVED.
+        //   The `if driveFollowEnabled { recenterDriveMap(on: coord) }` block is gone.
+        //   MapKit's native `.follow` tracking mode (set on Drive Mode entry via
+        //   `coordinatorActions.setDriveTrackingMode?(true)`) owns position centering —
+        //   MapKit centers the map on every GPS fix automatically, with native smooth animation.
+        //   No code in ContentView's location update handler is needed for follow.
         if driveModeActive {
-            // Follow-mode: recenter map on user when follow is enabled.
-            if driveFollowEnabled {
-                recenterDriveMap(on: coord)
-            }
             // Context update: compute parking commentary for new position.
             if let service = drivingContextService {
                 service.update(
@@ -1922,11 +1932,46 @@ struct ContentView: View {
 
     // MARK: - Drive Mode combined handler (extracted for type-checker budget)
 
-    /// Handles Drive Mode entry/exit: lifecycle + camera/style in one call.
-    /// Merged from two separate .onChange handlers to reduce the modifier chain.
+    /// Handles Drive Mode entry/exit: lifecycle + camera/style + native follow in one call.
+    ///
+    /// Phase 2 additions (P2-AC-1, P2-AC-2):
+    ///   - On entry: `coordinatorActions.setDriveTrackingMode?(true)` engages MapKit `.follow`
+    ///     for smooth native position centering (called AFTER `handleDriveCameraChange` so the
+    ///     pitch/zoom setCamera runs first, then MapKit's follow aligns position).
+    ///   - On exit:  `coordinatorActions.setDriveTrackingMode?(false)` disengages follow.
+    ///
+    /// The tracking-mode OUTPUT path (MapKit → ContentView) does NOT go through
+    /// CoordinatorActions closures. Instead, `onTrackingModeChanged` is a parameter on
+    /// `MapViewRepresentable` (same pattern as `onRegionChanged`) — passed from the
+    /// `mapRepresentable` property and updated by `updateUIView` via `parent` assignment.
+    /// ContentView's `handleTrackingModeChanged(_:)` is called from the Coordinator delegate
+    /// via `parent.onTrackingModeChanged?(mode)` when MapKit fires the tracking-mode callback.
+    ///
+    /// Architecture: all calls fire from `.onChange(of: driveModeActive)` — OUTSIDE `updateUIView`.
+    /// No camera or tracking-mode mutation inside `updateUIView`. #31 invariant maintained.
     private func handleDriveModeAndCamera(_ active: Bool) {
         handleDriveModeChange(active)
         handleDriveCameraChange(active)
+        // Phase 2: Engage or disengage MapKit native position-follow (P2-AC-1, P2-AC-2).
+        // Called AFTER handleDriveCameraChange so pitch+zoom setCamera fires before follow.
+        coordinatorActions.setDriveTrackingMode?(active)
+    }
+
+    // MARK: - Phase 2: Tracking-mode change handler (P2-AC-6, P2-AC-7)
+
+    /// Handles `mapView(_:didChange:animated:)` delegate callbacks from the Coordinator.
+    ///
+    /// Called from `MapViewRepresentable.onTrackingModeChanged` (a parameter on the struct,
+    /// same pattern as `onRegionChanged`). SwiftUI ensures the closure is always fresh on
+    /// re-render via `updateUIView`'s `context.coordinator.parent = self` assignment.
+    ///
+    /// Behavior:
+    ///   - `mode == .none` while `driveModeActive` → `driveTrackingModeNone = true` → Recenter button shows.
+    ///   - `mode != .none` while `driveModeActive` → `driveTrackingModeNone = false` → Recenter button hides.
+    ///   - Not in Drive Mode → no-op (guard prevents spurious state change).
+    private func handleTrackingModeChanged(_ mode: MKUserTrackingMode) {
+        guard driveModeActive else { return }
+        driveTrackingModeNone = (mode == .none)
     }
 
     // MARK: - onAppear handler (extracted for type-checker budget)
