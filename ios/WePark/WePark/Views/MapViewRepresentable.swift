@@ -365,6 +365,18 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// Called on Drive Mode entry/exit to swap between the directional puck and the
         /// default blue dot. Implemented by briefly toggling `showsUserLocation`.
         var refreshUserLocationPuck: ((Bool) -> Void)?
+
+        // MARK: Phase 1: Programmatic browse-mode recenter
+
+        /// Directly moves the camera to the given region (animated). Used by browse-mode
+        /// recenter actions (find-me, find-car, search result, launch center) after the
+        /// Phase 1 removal of the `setRegion` push in `updateUIView`.
+        ///
+        /// Wired in `makeUIView` to call `mapView.setRegion(_:animated:true)` directly —
+        /// outside `updateUIView` (satisfying the #31 architectural invariant: no camera
+        /// mutation inside `updateUIView`). ContentView calls this closure from its
+        /// action handlers (themselves outside SwiftUI's view-update cycle).
+        var setRegion: ((MKCoordinateRegion) -> Void)?
     }
 
     /// Shared action box. Created by ContentView and passed in; populated by `makeUIView`.
@@ -440,36 +452,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         return d > 180 ? 360 - d : d
     }
 
-    // MARK: - W8.5c-polish PR-3: Region-sync guard pure function
-
-    /// Returns whether `updateUIView` should sync the SwiftUI `region` binding to the map
-    /// view via `setRegion(_:animated:)`.
-    ///
-    /// `setRegion` resets the camera to top-down (pitch = 0, heading = 0). During Drive Mode
-    /// that would clobber the 30° tilt applied by `applyDriveCameraPitch`. Region sync is
-    /// therefore suppressed while Drive Mode is active; follow-mode recentering uses
-    /// `syncDriveRegion` (a pitch-preserving `setCamera` path) instead.
-    ///
-    /// On the simulator, `driveHeading` is always nil (no magnetometer), so the previous
-    /// guard `if driveHeading == nil` never suppressed the sync during Drive Mode in the sim,
-    /// flattening pitch back to 0 on every location update. This function fixes that by
-    /// gating on the authoritative Drive Mode flag, not the derived heading value.
-    ///
-    /// FT-5: `isUserInteracting` suppresses region sync while a user pan gesture is in flight.
-    /// Without this guard, any SwiftUI re-render during a drag (8-second community-pin poll,
-    /// ASP clock tick, overlay refresh, etc.) fires `updateUIView`, which calls `setRegion`
-    /// with the stale binding value, snapping the camera back to its pre-pan position.
-    /// The flag is set in `regionWillChangeAnimated` when gesture recognizers are active
-    /// and cleared unconditionally in `regionDidChangeAnimated` once the pan settles.
-    ///
-    /// - Parameters:
-    ///   - driveModeActive: Whether Drive Mode is currently active.
-    ///   - isUserInteracting: Whether a user pan/zoom gesture is currently in flight.
-    /// - Returns: `true` when region sync should run; `false` to suppress it.
-    static func shouldSyncRegionToBinding(driveModeActive: Bool, isUserInteracting: Bool) -> Bool {
-        !driveModeActive && !isUserInteracting
-    }
-
     // MARK: - FT-10: Drive follow-pause gate pure function
 
     /// Returns whether `syncDriveRegion` should recenter the map during Drive Mode.
@@ -479,8 +461,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// `syncDriveRegion` is suppressed so the user's manual camera position is preserved
     /// until they tap Re-center.
     ///
-    /// Separate from `shouldSyncRegionToBinding` which gates the `setRegion` (non-Drive-Mode)
-    /// path. Keeping them separate preserves RegionSyncGuardTests' contract (AC-FT7.10).
+    /// Phase 1 note: `shouldSyncRegionToBinding` was deleted in Phase 1 (map-phase1-browse).
+    /// Browse-mode camera is now fully owned by MapKit. The only programmatic camera writes
+    /// in browse mode come through `coordinatorActions.setRegion`, called explicitly from
+    /// ContentView action handlers. This function gates the Drive Mode follow path only.
     ///
     /// - Parameters:
     ///   - driveModeActive: Whether Drive Mode is currently active.
@@ -519,8 +503,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.showsUserLocation = true  // W5.1: show blue dot for recenter feature
-        mapView.isRotateEnabled = false
-        mapView.isPitchEnabled = false
+        mapView.isRotateEnabled = true
+        mapView.isPitchEnabled = true
         mapView.showsCompass = true
         mapView.showsScale = true
 
@@ -643,6 +627,16 @@ struct MapViewRepresentable: UIViewRepresentable {
             mapView.showsUserLocation = true
         }
 
+        // Phase 1: Browse-mode programmatic recenter closure.
+        // After removing the `setRegion` push in `updateUIView`, browse-mode recenter
+        // actions (find-me, find-car, search result, launch center) must call the camera
+        // directly. This closure wraps `mapView.setRegion(_:animated:true)` and is called
+        // from ContentView's action handlers — OUTSIDE `updateUIView` — satisfying the
+        // #31 architectural invariant (no camera mutation inside `updateUIView`).
+        coordinatorActions.setRegion = { [weak mapView] newRegion in
+            mapView?.setRegion(newRegion, animated: true)
+        }
+
         return mapView
     }
 
@@ -680,35 +674,26 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Only update when heading changes > 5 degrees to prevent tight regionDidChange feedback loop.
         context.coordinator.syncDriveHeading(driveHeading, on: mapView)
 
-        // Sync camera to the SwiftUI `region` binding when not in Drive Mode.
+        // Phase 1: Browse-mode `setRegion` push REMOVED.
         //
-        // `setRegion` resets the camera to top-down (pitch = 0, heading = 0), which would
-        // clobber the 30° tilt applied by `applyDriveCameraPitch`. Guard uses
-        // `shouldSyncRegionToBinding(driveModeActive:)` rather than `driveHeading == nil`
-        // because the simulator has no magnetometer — driveHeading is always nil in the sim
-        // even during Drive Mode, so the old guard never suppressed `setRegion` there,
-        // flattening pitch back to 0 on every location update (W8.5c-polish PR-3 bug fix).
+        // MapKit owns the camera in browse mode after Phase 1. The `region` binding is now
+        // READ-ONLY from the map: regionDidChangeAnimated → onRegionChanged → tile loading /
+        // overlay culling / ASP banner. ContentView never writes `region` → map in browse mode.
         //
-        // During Drive Mode, follow-mode recentering is handled by `syncDriveRegion` below,
-        // which copies the current camera (preserving pitch + heading) and updates only the
-        // center coordinate — so pitch survives every location update.
-        if MapViewRepresentable.shouldSyncRegionToBinding(
-            driveModeActive: driveModeActive,
-            isUserInteracting: context.coordinator.isUserInteracting
-        ) {
-            let mapRegion = mapView.region
-            let latDiff = abs(mapRegion.center.latitude  - region.center.latitude)
-            let lngDiff = abs(mapRegion.center.longitude - region.center.longitude)
-            if latDiff > 0.0001 || lngDiff > 0.0001 {
-                mapView.setRegion(region, animated: false)
-            }
-        } else if MapViewRepresentable.shouldSyncDriveRegion(
+        // Programmatic recenter (find-me, find-car, launch center) calls
+        // `coordinatorActions.setRegion?(newRegion)` directly from action handlers outside
+        // `updateUIView` — satisfying the #31 architectural invariant (no camera mutation
+        // inside `updateUIView`).
+        //
+        // Drive Mode follow recentering (unchanged from Phase 1): `syncDriveRegion` handles
+        // pitch-preserving camera updates when `shouldSyncDriveRegion` returns true.
+        if MapViewRepresentable.shouldSyncDriveRegion(
             driveModeActive: driveModeActive,
             driveFollowEnabled: driveFollowEnabled,
             isUserInteracting: context.coordinator.isUserInteracting
         ) {
             // Drive Mode active + follow enabled: use pitch-preserving camera update so the
-            // 30° tilt survives every follow-mode recenter. `setRegion` is banned here — it resets pitch.
+            // 45° tilt survives every follow-mode recenter. `setRegion` is banned here — it resets pitch.
             context.coordinator.syncDriveRegion(region, on: mapView)
         }
         // When driveFollowEnabled == false: Drive Mode is active but follow is paused.
@@ -780,11 +765,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// `regionDidChangeAnimated` once the gesture (including any deceleration animation)
         /// fully settles.
         ///
-        /// This flag is read by `shouldSyncRegionToBinding` to suppress `setRegion` during
-        /// active pans — preventing background SwiftUI re-renders (community-pin poll, ASP
-        /// clock tick, overlay refresh) from snapping the camera back to the stale binding
-        /// value mid-gesture. Lives on Coordinator (NSObject) only — no @State/@Binding/
-        /// @Published, no ContentView changes.
+        /// Phase 1: `shouldSyncRegionToBinding` was deleted; this flag is no longer used to
+        /// suppress browse-mode `setRegion` (that entire path is removed). The flag is still
+        /// read by `shouldSyncDriveRegion` to suppress Drive Mode follow (`syncDriveRegion`)
+        /// during an active mid-drag gesture (TF2-2 race fix).
+        ///
+        /// Lives on Coordinator (NSObject) only — no @State/@Binding/@Published, no
+        /// ContentView changes.
         var isUserInteracting: Bool = false
 
         init(parent: MapViewRepresentable) {

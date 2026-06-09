@@ -304,17 +304,20 @@ final class FT10FT5NonInterferenceTests: XCTestCase {
             "(programmatic recenter is not a user gesture)")
     }
 
-    // MARK: shouldSyncRegionToBinding unchanged — existing RegionSyncGuardTests still pass
+    // MARK: Phase 1: browse-mode setRegion push removed — Drive Mode path unchanged
 
-    /// Smoke check: shouldSyncRegionToBinding still returns false when driveModeActive=true.
-    /// This verifies the FT-5 / FT-10 separation: shouldSyncRegionToBinding and
-    /// shouldSyncDriveRegion are distinct functions with distinct contracts.
-    func testShouldSyncRegionToBinding_stillReturnsFalseInDriveMode() {
-        let result = MapViewRepresentable.shouldSyncRegionToBinding(
-            driveModeActive: true,
+    /// Smoke check: Phase 1 removed `shouldSyncRegionToBinding` (browse-mode `setRegion` push
+    /// deleted). Drive Mode follow is gated solely by `shouldSyncDriveRegion`. This test
+    /// verifies the Drive Mode guard returns false when browse mode would have been active
+    /// (driveModeActive=false) — confirming there is no cross-path contamination after Phase 1.
+    func testShouldSyncDriveRegion_driveModeInactive_returnsFalse() {
+        let result = MapViewRepresentable.shouldSyncDriveRegion(
+            driveModeActive: false,
+            driveFollowEnabled: true,
             isUserInteracting: false
         )
         XCTAssertFalse(result,
-            "shouldSyncRegionToBinding must still return false in Drive Mode (FT-5 / PR-3 invariant)")
+            "shouldSyncDriveRegion must return false when Drive Mode is inactive — " +
+            "the Drive follow path must not fire in browse mode after Phase 1")
     }
 }
