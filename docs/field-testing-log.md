@@ -7,6 +7,19 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ---
 
+## Map rebuild (native MapKit) — `docs/map-rebuild-native-mapkit-spec.md`
+
+- **Phase 1 (browse liberation) 🟢 MERGED #54, build 1.0(5), VERIFIED ON-DEVICE (Kevin):** "much cleaner,
+  just like Apple Maps, streets rendering." Enabled rotate/tilt; MapKit owns the browse camera (removed
+  the updateUIView setRegion push → snap-back class gone); programmatic centering preserved via
+  coordinatorActions.setRegion. Drive Mode untouched.
+- **Phase 2 (native drive follow) 📋 spec'd, next:** replace hand-rolled follow with native
+  userTrackingMode=.follow + keep FT-7 course heading (not compass). OQ-1/3 approved by Kevin.
+- **Tech-debt cleanup (deferred, low-pri):** Swift strict-concurrency/Sendability warnings in
+  NotificationScheduler (UNUserNotificationCenter completion-handler closures) + RouteService
+  (nowET / bundleTokenProvider main-actor isolation) — warnings only, compile+run fine, not Swift 6
+  mode. Batch with FT-7 selectDriveHeadingSource wiring + FT-9 string-match→boolean in a housekeeping PR.
+
 ## TF2 Round 1 — on-device testing of build 1.0(2) (2026-06-08 evening)
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
