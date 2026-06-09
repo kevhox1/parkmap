@@ -1531,12 +1531,22 @@ struct ContentView: View {
 
     /// Animates the map region to center on the given coordinate at street-level zoom.
     /// ~400m span shows the target block plus a few surrounding blocks.
+    ///
+    /// Phase 1 (map-phase1-browse): `updateUIView` no longer pushes `region` to the map in
+    /// browse mode (MapKit owns the camera). Programmatic centering is preserved by calling
+    /// `coordinatorActions.setRegion?` directly — this fires `mapView.setRegion(_:animated:true)`
+    /// outside `updateUIView`, satisfying the #31 architectural invariant.
+    ///
+    /// Writing `region` is still required for tile loading (`rebuildOverlays` span gating,
+    /// `DriveModeDestinationView.currentRegion`, and the initial `tileLoader.loadTiles` call).
     private func recenterMap(on coordinate: CLLocationCoordinate2D) {
-        region = MKCoordinateRegion(
+        let newRegion = MKCoordinateRegion(
             center: coordinate,
             latitudinalMeters: 400,
             longitudinalMeters: 400
         )
+        region = newRegion
+        coordinatorActions.setRegion?(newRegion)
     }
 
     // MARK: - Community 1.0 / Tier 1: visible pins change handler
