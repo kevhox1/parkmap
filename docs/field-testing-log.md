@@ -13,12 +13,20 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   just like Apple Maps, streets rendering." Enabled rotate/tilt; MapKit owns the browse camera (removed
   the updateUIView setRegion push → snap-back class gone); programmatic centering preserved via
   coordinatorActions.setRegion. Drive Mode untouched.
-- **Phase 2 (native drive follow) 📋 spec'd, next:** replace hand-rolled follow with native
-  userTrackingMode=.follow + keep FT-7 course heading (not compass). OQ-1/3 approved by Kevin.
-- **Tech-debt cleanup (deferred, low-pri):** Swift strict-concurrency/Sendability warnings in
-  NotificationScheduler (UNUserNotificationCenter completion-handler closures) + RouteService
-  (nowET / bundleTokenProvider main-actor isolation) — warnings only, compile+run fine, not Swift 6
-  mode. Batch with FT-7 selectDriveHeadingSource wiring + FT-9 string-match→boolean in a housekeeping PR.
+- **Phase 2 (native drive follow) 🟢 MERGED #55, build 1.0(6):** native userTrackingMode=.follow +
+  FT-7 course heading (not compass, orthogonal). Pan→`didChange:mode:`→Recenter button; Recenter
+  re-engages .follow + restores 45° pitch + FT-8 zoom. Removed syncDriveRegion/shouldSyncDriveRegion/
+  driveFollowEnabled/onDrivePanDetected/recenterDriveMap. QA PASS-WITH-NOTES (`docs/qa/map-phase2-qa.md`),
+  446/0. ⏳ Kevin's on-device DRIVE-TEST is the irreducible gate (native .follow can't run headless).
+- **Tech-debt cleanup (deferred, low-pri) — batch into one housekeeping PR:**
+  - Swift strict-concurrency/Sendability warnings: NotificationScheduler (UNUserNotificationCenter
+    completion-handler closures) + RouteService (nowET / bundleTokenProvider main-actor isolation).
+    Warnings only, compile+run fine, not Swift 6 mode.
+  - FT-7 followup: wire `selectDriveHeadingSource` into the production path (currently inline-equivalent).
+  - FT-9 followup: replace the "paid until" string-match gate with an `isMeteredActivePaidHours` boolean.
+  - Phase 2 stale comments: `isUserInteracting` doc + `syncDriveHeading` comments still name deleted
+    symbols (shouldSyncDriveRegion/onDrivePanDetected/driveFollowEnabled). Comment-only.
+  - Missing test: assert `recenterMap` (ContentView) actually calls `coordinatorActions.setRegion?`.
 
 ## TF2 Round 1 — on-device testing of build 1.0(2) (2026-06-08 evening)
 
