@@ -32,7 +32,42 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
 
-### TF2-3 🔴 Arrow points the wrong way most of the time (esp. cruise / no-destination) — HIGH
+### TF2-5 🔴 Parking lines drawn in the MIDDLE of the road, not on the curb — SYSTEMIC (geometry)
+- **Area:** Tile pipeline curb-offset geometry. `build/preprocess.js` `offsetPolyline`. Backend-data.
+- **Observed (Kevin, throughout the map):** parking-regulation lines render in the middle of the road,
+  not at real curb parking. (And TF2-4 wrong-side is the SAME root cause.)
+- **Root cause (confirmed in code):** `offsetPolyline` uses a "Simple compass-based offset" — classifies
+  each street as N/S or E/W (`|totalDLat|>|totalDLng|`) then offsets PURELY in lat or lng (cardinal).
+  But the NYC grid is ROTATED (~29° for the numbered grid; East Village on its own skew). On any angled
+  street a cardinal offset pushes the line DIAGONALLY relative to the road → lands mid-road or on the
+  wrong curb. Offset magnitude 0.00004° (~4.4m) may also be too small for wide avenues.
+- **Fix:** replace cardinal offset with a TRUE PERPENDICULAR offset — per-segment bearing → offset 90°
+  to it (real street normal, lat/lng aspect-corrected) toward the curb for the side label. Subtle part:
+  map side (N/S/E/W) → left/right of the segment's from→to direction. Systemic → FULL TILE REBUILD
+  (~1028 files) — BUNDLE with the pending FT-11 oneway regen (one rebuild for both). Needs Kevin's
+  approval for the rebuild (per docs/tile-geometry-investigation.md Q1 pattern).
+- **Note:** separate from the earlier intersection-overshoot geometry issue (docs/tile-geometry-
+  investigation.md, INTERSECTION_SETBACK_M) — could fix both in the same rebuild.
+- **Status:** 🔴 open — root-caused; needs backend-data fix design + Kevin's rebuild approval.
+- **Lands in:** backend-data (`build/preprocess.js` + tile regen). TF2-4 resolves as a side effect.
+
+### TF2-4 🔴 School-zone restriction on wrong side/position — E 2nd St (DATA / side-assignment) — likely TF2-5 root cause
+- **Area:** Tile data side/position correctness (same class as FT-9). Backend-data.
+- **Observed (Kevin, on-device):** the red school-zone restriction on E 2nd St appears on the wrong
+  side/position; "north side ... should be west side, not east side." Construction is on the east
+  side but further down toward the block edge.
+- **Probe:** EAST 2ND STREET has N (37) + S (35) side segments with rules in tiles. E 2nd runs E-W →
+  N/S curbs (the "west/east side" wording is ambiguous: wrong-curb vs wrong-end-of-block — pending
+  Kevin clarification + exact block between which avenues).
+- **3 possible causes:** (a) NYC SOURCE data error (city sign dataset wrong side → fix is Tier 2
+  community sign-correction, not pipeline); (b) pipeline side-assignment bug (systematic); (c) render
+  offset (polyline on wrong side visually).
+- **Status:** 🔴 open — NEED exact block (E 2nd between which aves) + side-vs-position clarification,
+  then backend-data pulls the segment to determine cause.
+- **Lands in:** backend-data (tiles) and/or iOS (render); or deferred to Tier 2 sign-corrections if
+  it's a NYC source error.
+
+### TF2-3 🟢 Arrow points the wrong way most of the time (esp. cruise / no-destination) — FIXED build 7
 - **Area:** Drive Mode heading-up rotation. `MapViewRepresentable.syncDriveHeading` + LocationService heading source.
 - **Observed (Kevin, on-device):** live location/heading "not good"; arrow points the WRONG way most of
   the time, especially in Drive Mode with NO destination (cruise/parking-hunt).
