@@ -405,12 +405,22 @@ final class PinMarkerAnnotation: MKAnnotationView {
                 cgCtx.saveGState()
                 // Move to center.
                 cgCtx.translateBy(x: cx, y: cy)
-                // Rotate: bearing is compass-degrees (0=north CW). CoreGraphics uses
-                // radians and the y-axis is flipped in UIKit (positive y downward), so
-                // clockwise compass rotation maps directly to positive CGFloat radians.
-                let radians = CGFloat(bearing * .pi / 180.0)
+                // Build-7 FT-11 chevron orientation fix:
+                // `chevron.forward` points EAST natively (its rest orientation = +x axis in UIKit).
+                // Compass bearing is 0=north CW. In UIKit (y-down), clockwise rotation maps
+                // +x (east) to the compass direction as follows:
+                //   rotate(by: bearing * π/180) → east-pointing symbol rotates to point at
+                //   bearing degrees CW from east (NOT from north) — 90° off.
+                // Correction: subtract 90° so the zero-rotation case aligns east→north.
+                //   rotate(by: (bearing - 90) * π/180):
+                //     bearing=0   → rotate by -π/2 → symbol points north ✓
+                //     bearing=90  → rotate by  0   → symbol points east  ✓
+                //     bearing=180 → rotate by +π/2 → symbol points south ✓
+                //     bearing=270 → rotate by  +π  → symbol points west  ✓
+                let radians = CGFloat((bearing - 90) * .pi / 180.0)
                 cgCtx.rotate(by: radians)
-                // Offset outward from center along the (now-rotated) x-axis.
+                // Offset outward from center along the (now-rotated) +x axis,
+                // which points in the compass direction `bearing` after the -90° correction.
                 // Place at 55% of radius from center so it overlaps the circle edge.
                 let offset: CGFloat = imageSize * 0.22
                 cgCtx.translateBy(x: offset, y: -chevron.size.height / 2)

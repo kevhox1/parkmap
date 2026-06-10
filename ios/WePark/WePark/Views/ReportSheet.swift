@@ -479,11 +479,16 @@ struct ReportSheet: View {
         } label: {
             HStack(spacing: 6) {
                 // Chevron rotated to the real block bearing.
-                // Bearing is compass-degrees (0=north, 90=east); SwiftUI rotation is
-                // clockwise from the top (same convention) — no conversion needed.
+                // Bearing is compass-degrees (0=north, 90=east). `chevron.forward` points
+                // EAST natively, so (bearing - 90) corrects the 90° offset — see below.
+                // Build-7 FT-11 chevron orientation fix:
+                // `chevron.forward` points EAST natively. SwiftUI rotationEffect is CW
+                // from the element's rest orientation. Without correction, bearing=0 (north)
+                // renders the chevron pointing east (90° off).
+                // Applying (bearing - 90) corrects: bearing=0→−90°→north ✓, bearing=90→0°→east ✓.
                 Image(systemName: "chevron.forward")
                     .font(.system(size: 14, weight: .bold))
-                    .rotationEffect(.degrees(bearing))
+                    .rotationEffect(.degrees(bearing - 90))
                     .foregroundStyle(isSelected ? tint : .secondary)
 
                 Text(label)
