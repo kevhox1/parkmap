@@ -58,6 +58,22 @@ struct Segment: Codable, Identifiable {
     /// `ParkingRulesEngine.dominantCategory(rules:)`.
     let dominantCategory: Category?
 
+    // MARK: - FT-11: One-way data (decoded optionally — tile regen ships separately)
+
+    /// True when the segment's street is one-way. Nil/absent = treat as two-way.
+    ///
+    /// Populated by the tile pipeline once @backend-data ships the `build/preprocess.js` change.
+    /// Until then this is nil for all segments, and code that checks it falls back gracefully
+    /// (sweeper → show direction picker instead of auto-deriving).
+    let oneway: Bool?
+
+    /// Which endpoint legal one-way travel heads toward: `"from"` or `"to"`.
+    ///
+    /// Non-nil only when `oneway == true`. Nil when the street is two-way or when the tile
+    /// predates the FT-11 pipeline change. iOS uses this to auto-derive the sweeper
+    /// direction without asking the user.
+    let onewayToward: String?
+
     // MARK: - Computed helpers
 
     /// Converts raw `line` pairs to Core Location coordinates for MapKit.
@@ -76,6 +92,38 @@ struct Segment: Codable, Identifiable {
         return coords[mid]
     }
 
+    // MARK: - Init
+    //
+    // Explicit memberwise init so callers that predate FT-11 (including tests)
+    // don't need to supply `oneway` / `onewayToward`. Default is nil for both —
+    // semantically identical to "data absent from tile" (treat as two-way).
+    //
+    // The synthesised memberwise init would require ALL stored properties,
+    // which would break every Segment(…dominantCategory:) call site in the test suite.
+    init(
+        id: String,
+        street: String,
+        fromStreet: String,
+        to: String,
+        side: String,
+        line: [[Double]],
+        rules: [ParkingRule],
+        dominantCategory: Category?,
+        oneway: Bool? = nil,
+        onewayToward: String? = nil
+    ) {
+        self.id             = id
+        self.street         = street
+        self.fromStreet     = fromStreet
+        self.to             = to
+        self.side           = side
+        self.line           = line
+        self.rules          = rules
+        self.dominantCategory = dominantCategory
+        self.oneway         = oneway
+        self.onewayToward   = onewayToward
+    }
+
     // MARK: - CodingKeys
     enum CodingKeys: String, CodingKey {
         case id
@@ -86,5 +134,8 @@ struct Segment: Codable, Identifiable {
         case line
         case rules
         case dominantCategory
+        // FT-11: one-way fields (optional — absent on pre-FT-11 tiles)
+        case oneway
+        case onewayToward = "oneway_toward"
     }
 }

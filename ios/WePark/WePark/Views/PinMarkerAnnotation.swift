@@ -122,9 +122,26 @@ extension PinType {
 ///
 /// Tap handling: `Coordinator.mapView(_:didSelect:)` casts to `CommunityPinAnnotation`
 /// and fires `activeSheet = .pinDetail(annotation.pin)` (spec §7.4).
+///
+/// FT-11: `bearing` carries the pre-computed compass bearing toward the stored
+/// `heading_toward` endpoint. Passed through to `PinMarkerAnnotation.configure(for:bearing:)`
+/// so the marker can render the directional chevron without needing segment data.
+/// Nil for legacy pins (OD-3: render unchanged, no chevron).
 final class CommunityPinAnnotation: NSObject, MKAnnotation {
 
     let pin: CommunityPin
+
+    /// FT-11: Pre-computed compass bearing [0, 360) toward `pin.meta.headingToward`.
+    ///
+    /// Set by the annotation-building loop in ContentView (or MapViewRepresentable's
+    /// `syncCommunityPinAnnotations`) when `pin.segmentId` resolves to a known segment
+    /// and the meta contains a `headingToward` value.
+    ///
+    /// Nil when:
+    ///   - The pin predates FT-11 (no `headingToward` in meta).
+    ///   - The pin has no `segmentId` (off-segment report, OD-1).
+    ///   - The segment is no longer in the loaded tile set.
+    let bearing: Double?
 
     var coordinate: CLLocationCoordinate2D {
         CLLocationCoordinate2D(latitude: pin.lat, longitude: pin.lng)
@@ -147,8 +164,20 @@ final class CommunityPinAnnotation: NSObject, MKAnnotation {
         }
     }
 
+    /// Initialise with the pin only (no direction data — legacy / off-segment path).
     init(pin: CommunityPin) {
         self.pin = pin
+        self.bearing = nil
+    }
+
+    /// FT-11: Initialise with pin + pre-computed bearing for directional chevron rendering.
+    ///
+    /// - Parameters:
+    ///   - pin: The community pin to display.
+    ///   - bearing: Compass bearing [0, 360) toward the stored heading endpoint. Nil = no chevron.
+    init(pin: CommunityPin, bearing: Double?) {
+        self.pin = pin
+        self.bearing = bearing
     }
 }
 
@@ -214,10 +243,17 @@ final class PinMarkerAnnotation: MKAnnotationView {
     /// the callout subtitle shows the time-since badge ("Just now", "5m ago", etc.)
     /// computed by `PinMarkerAnnotation.timeSinceBadge(pin:now:)`.
     ///
-    /// - Parameter pin: The `CommunityPin` this marker represents.
-    func configure(for pin: CommunityPin) {
+    /// FT-11: When `bearing` is non-nil, a directional chevron is composited onto
+    /// the circle marker image, rotated to the stored heading. When `bearing` is nil
+    /// (legacy pin, OD-3), the marker renders without any chevron — fully backward-compatible.
+    ///
+    /// - Parameters:
+    ///   - pin: The `CommunityPin` this marker represents.
+    ///   - bearing: Compass bearing [0, 360) for the directional chevron. Nil = no chevron.
+    func configure(for pin: CommunityPin, bearing: Double? = nil) {
         // Fix 3: markerImage(for:) always returns a non-nil UIImage (filled circle fallback).
-        image = Self.markerImage(for: pin.pinType)
+        // FT-11: compositing the chevron is optional — nil bearing → same image as before.
+        image = Self.markerImage(for: pin.pinType, bearing: bearing)
         // Center the 32×32 image within the 44×44 touch target.
         centerOffset = .zero
 
@@ -304,12 +340,18 @@ final class PinMarkerAnnotation: MKAnnotationView {
     /// symbol name is bad or the SF Symbol isn't available on this OS version), the SF
     /// Symbol drawing step is skipped and the method returns the plain filled circle.
     /// A pin NEVER silently disappears — at minimum a solid-color disc renders.
-    private static func markerImage(for pinType: PinType) -> UIImage {
+    ///
+    /// FT-11 — Directional chevron overlay (OD-2): when `bearing` is non-nil, a small
+    /// `chevron.forward` SF Symbol is drawn on top of the circle, rotated to the compass
+    /// bearing. The chevron uses a high-contrast white color and is sized at ~30% of the
+    /// circle diameter so it does not obscure the primary SF Symbol (AC-24).
+    /// When `bearing` is nil: identical to the pre-FT-11 output (OD-3 backward-compat).
+    private static func markerImage(for pinType: PinType, bearing: Double? = nil) -> UIImage {
         let (symbolName, circleColor) = markerStyle(for: pinType)
         let size = CGSize(width: imageSize, height: imageSize)
         let renderer = UIGraphicsImageRenderer(size: size)
 
-        return renderer.image { _ in
+        return renderer.image { context in
             // Draw filled circle background.
             // Fix 3: the circle is always drawn — even if the SF Symbol is unavailable,
             // the caller gets a non-nil solid-color disc instead of nil (no marker).
@@ -339,6 +381,48 @@ final class PinMarkerAnnotation: MKAnnotationView {
                 height: symbol.size.height
             )
             symbol.draw(in: symbolRect)
+
+            // FT-11: Directional chevron overlay (OD-2).
+            // Drawn only when a bearing is provided. Uses CGContext rotation so the chevron
+            // points in the compass direction of travel. The chevron is drawn at the
+            // bottom-right edge of the circle (roughly 7 o'clock position when bearing = 0)
+            // at ~30% of the circle diameter to avoid obscuring the primary symbol (AC-24).
+            if let bearing = bearing {
+                let chevronSize: CGFloat = imageSize * 0.30
+                let chevronConfig = UIImage.SymbolConfiguration(
+                    pointSize: chevronSize, weight: .bold
+                )
+                guard let chevron = UIImage(systemName: "chevron.forward",
+                                            withConfiguration: chevronConfig)?
+                    .withTintColor(.white, renderingMode: .alwaysOriginal)
+                else { return }
+
+                // Translate origin to circle center, rotate by bearing, then draw the
+                // chevron offset from center so it sits on the edge of the circle.
+                let cgCtx = context.cgContext
+                let cx = imageSize / 2
+                let cy = imageSize / 2
+                cgCtx.saveGState()
+                // Move to center.
+                cgCtx.translateBy(x: cx, y: cy)
+                // Rotate: bearing is compass-degrees (0=north CW). CoreGraphics uses
+                // radians and the y-axis is flipped in UIKit (positive y downward), so
+                // clockwise compass rotation maps directly to positive CGFloat radians.
+                let radians = CGFloat(bearing * .pi / 180.0)
+                cgCtx.rotate(by: radians)
+                // Offset outward from center along the (now-rotated) x-axis.
+                // Place at 55% of radius from center so it overlaps the circle edge.
+                let offset: CGFloat = imageSize * 0.22
+                cgCtx.translateBy(x: offset, y: -chevron.size.height / 2)
+                // Draw the chevron at the offset position.
+                let chevronRect = CGRect(
+                    x: 0, y: 0,
+                    width: chevron.size.width,
+                    height: chevron.size.height
+                )
+                chevron.draw(in: chevronRect)
+                cgCtx.restoreGState()
+            }
         }
     }
 

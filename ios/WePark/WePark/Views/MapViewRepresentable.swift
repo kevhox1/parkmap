@@ -172,6 +172,16 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Default: nil (no-op).
     var onCommunityPinTapped: ((CommunityPin) -> Void)? = nil
 
+    /// FT-11: Currently-loaded tile segments, used to compute directional chevron bearings
+    /// for enforcement_active and sweeper_passed community pins.
+    ///
+    /// Passed from ContentView's `tileLoader.segments`. Used only in
+    /// `syncCommunityPinAnnotations` to look up a pin's segment by `segmentId` so the
+    /// bearing can be computed at annotation-build time.
+    ///
+    /// Default: empty (no segments until tiles load; bearing defaults to nil = no chevron).
+    var segments: [Segment] = []
+
     // MARK: W8.5c: Heading-up rotation
 
     /// Stabilized Drive Mode heading in degrees [0, 360). Non-nil → camera heading set.
@@ -668,7 +678,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         // This call is safe inside updateUIView because it only calls mapView.addAnnotation /
         // mapView.removeAnnotation based on a diff — not setCamera, setRegion, or any other
         // UIKit state that races SwiftUI's mount cycle.
-        context.coordinator.syncCommunityPinAnnotations(communityPins, on: mapView)
+        // FT-11: pass segments so the bearing for enforcement/sweeper pins can be computed.
+        context.coordinator.syncCommunityPinAnnotations(communityPins, segments: segments, on: mapView)
 
         // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11, P2-AC-5).
         // Port of setDrivingMapRotation (index.html:6584–6601) with R-1 dead-band guard.
@@ -950,7 +961,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         ///   - Pins in `current` but not in `desired` → removeAnnotation.
         ///   - Pins in both → no-op (position/title don't change for open-data pins
         ///     within a single session; a future PATCH-event path can force-update if needed).
-        func syncCommunityPinAnnotations(_ pins: [CommunityPin], on mapView: MKMapView) {
+        /// FT-11 extension: segments parameter added so directional bearings can be computed
+        /// for enforcement_active and sweeper_passed pins that carry a `heading_toward` value.
+        func syncCommunityPinAnnotations(
+            _ pins: [CommunityPin],
+            segments: [Segment],
+            on mapView: MKMapView
+        ) {
             let desiredByID = Dictionary(uniqueKeysWithValues: pins.map { ($0.id, $0) })
             let currentIDs = Set(communityPinAnnotations.keys)
             let desiredIDs = Set(desiredByID.keys)
@@ -968,10 +985,39 @@ struct MapViewRepresentable: UIViewRepresentable {
             let toAdd = desiredIDs.subtracting(currentIDs)
             for id in toAdd {
                 guard let pin = desiredByID[id] else { continue }
-                let annotation = CommunityPinAnnotation(pin: pin)
+                // FT-11: compute bearing when the pin carries a heading_toward value.
+                let bearing = Self.resolveBearing(for: pin, segments: segments)
+                let annotation = CommunityPinAnnotation(pin: pin, bearing: bearing)
                 communityPinAnnotations[id] = annotation
                 mapView.addAnnotation(annotation)
             }
+        }
+
+        /// FT-11: Computes the compass bearing for a directional pin.
+        ///
+        /// Returns nil (no chevron) when:
+        ///   - The pin type is not `enforcement_active` or `sweeper_passed`.
+        ///   - The pin has no `heading_toward` in meta (legacy pin, OD-3).
+        ///   - The pin has no `segmentId` or the segment is not in the loaded set (OD-1).
+        private static func resolveBearing(for pin: CommunityPin, segments: [Segment]) -> Double? {
+            // Only enforcement and sweeper pins get chevrons.
+            guard pin.pinType == .enforcementActive || pin.pinType == .sweeperPassed else {
+                return nil
+            }
+
+            // Extract the headingToward value from the typed meta.
+            let headingToward: HeadingToward?
+            switch pin.meta {
+            case .enforcementActive(let m): headingToward = m.headingToward
+            case .sweeperPassed(let m):     headingToward = m.headingToward
+            default:                        return nil
+            }
+
+            guard let heading = headingToward else { return nil }
+            guard let segmentId = pin.segmentId else { return nil }
+            guard let segment = segments.first(where: { $0.id == segmentId }) else { return nil }
+
+            return SegmentBearing.bearing(segment: segment, toward: heading)
         }
 
         // MARK: - W8.5c: Heading-up rotation
@@ -1202,7 +1248,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                     reuseIdentifier: PinMarkerAnnotation.reuseIdentifier
                 )
                 view.annotation = pinAnnotation
-                view.configure(for: pinAnnotation.pin)
+                // FT-11: pass the pre-computed bearing for the directional chevron.
+                // `bearing` is nil for legacy pins (OD-3 backward-compat — no chevron).
+                view.configure(for: pinAnnotation.pin, bearing: pinAnnotation.bearing)
                 return view
             }
 

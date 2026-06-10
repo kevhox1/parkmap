@@ -414,6 +414,22 @@ struct BlockNoteMeta: Codable {
     }
 }
 
+// MARK: - HeadingToward
+
+/// FT-11: Encodes which endpoint of a segment the enforcement agent or sweeper
+/// is travelling toward. Stored as `meta.heading_toward` in the Supabase JSONB column.
+///
+/// The raw values (`"from"` / `"to"`) match the segment's own endpoint vocabulary:
+///   - `.from` → moving toward the `fromStreet` cross-street end.
+///   - `.toward_to` → moving toward the `to` cross-street end.
+///
+/// Note on naming: `to` is a Swift keyword, so the enum case is named `toward_to`
+/// with a raw value of `"to"` to preserve the JSON contract exactly.
+enum HeadingToward: String, Codable {
+    case from      = "from"
+    case toward_to = "to"
+}
+
 // MARK: EnforcementActiveMeta
 
 /// `pin_type = 'enforcement_active'`
@@ -430,8 +446,13 @@ struct EnforcementActiveMeta: Codable {
     /// nil = not specified; UI shows generic "Enforcement active" copy.
     let subTag: SubTag?
 
+    /// FT-11: Travel direction — which segment endpoint the agent is moving toward.
+    /// Nil on legacy pins that predate FT-11. Map marker renders without a chevron when nil.
+    let headingToward: HeadingToward?
+
     private enum CodingKeys: String, CodingKey {
-        case subTag = "sub_tag"
+        case subTag       = "sub_tag"
+        case headingToward = "heading_toward"
     }
 }
 
@@ -447,6 +468,16 @@ struct SweeperPassedMeta: Codable {
     }
 
     let direction: Direction?
+
+    /// FT-11: Travel direction — which segment endpoint the sweeper is moving toward.
+    /// Nil on legacy pins and on pins for two-way streets where the user didn't specify.
+    /// Map marker renders without a chevron when nil.
+    let headingToward: HeadingToward?
+
+    private enum CodingKeys: String, CodingKey {
+        case direction
+        case headingToward = "heading_toward"
+    }
 }
 
 // MARK: BrokenMeterMeta
