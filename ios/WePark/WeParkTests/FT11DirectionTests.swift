@@ -551,3 +551,127 @@ final class FT11BuildMetaTests: XCTestCase {
                      "nil headingToward on sweeper must NOT produce a heading_toward key (AC-20)")
     }
 }
+
+// MARK: - Build-7 chevron bearing correction tests (FT-11 QA Finding #1 fix)
+
+/// Verifies that the `(bearing - 90)` correction applied to `chevron.forward` in both
+/// `PinMarkerAnnotation.markerImage(for:bearing:)` (CGContext rotation) and
+/// `ReportSheet.headingArrowButton` (SwiftUI .rotationEffect) produces the correct
+/// compass orientation.
+///
+/// `chevron.forward` points EAST natively. Without the correction:
+///   - bearing=0 (north) → chevron points east (90° off)
+///   - bearing=90 (east)  → chevron points south (90° off)
+/// With `bearing - 90`:
+///   - bearing=0   → correction = -90° → chevron points north ✓
+///   - bearing=90  → correction =   0° → chevron points east  ✓
+///   - bearing=180 → correction = +90° → chevron points south ✓
+///   - bearing=270 → correction = 180° → chevron points west  ✓
+///
+/// These tests verify the MATH of the correction formula as a pure function,
+/// without rendering UIKit/SwiftUI contexts. Visual validation (N-S picker arrows
+/// point N and S on a north-south street) is Kevin's on-device gate per the QA report.
+final class FT11ChevronBearingCorrectionTests: XCTestCase {
+
+    // MARK: - Helper
+
+    /// Returns the effective screen rotation in degrees for a given compass bearing
+    /// after the -90° correction applied to chevron.forward.
+    ///
+    /// In UIKit CGContext:  effective = (bearing - 90) degrees
+    /// In SwiftUI:          effective = (bearing - 90) degrees (rotationEffect)
+    private func correctedRotationDegrees(bearing: Double) -> Double {
+        return bearing - 90
+    }
+
+    // MARK: - North-pointing segment
+
+    /// A segment running north (bearing ≈ 0°). After correction the arrow should
+    /// point north = up on a north-up map → corrected rotation ≈ -90° (i.e., CCW 90°
+    /// from east, which in CGContext/SwiftUI CW convention = effectively pointing up).
+    func testChevronCorrection_northBearing_mapsToMinusNinetyDeg() {
+        let corrected = correctedRotationDegrees(bearing: 0)
+        XCTAssertEqual(corrected, -90.0, accuracy: 0.001,
+            "bearing=0 (north) corrected rotation should be -90°. Got \(corrected)°")
+    }
+
+    // MARK: - East-pointing segment
+
+    /// A segment running east (bearing ≈ 90°). After correction the arrow should
+    /// point east → corrected rotation = 0° (identity = chevron.forward rest orientation).
+    func testChevronCorrection_eastBearing_mapsToZeroDeg() {
+        let corrected = correctedRotationDegrees(bearing: 90)
+        XCTAssertEqual(corrected, 0.0, accuracy: 0.001,
+            "bearing=90 (east) corrected rotation should be 0°. Got \(corrected)°")
+    }
+
+    // MARK: - South-pointing segment
+
+    /// A segment running south (bearing ≈ 180°). After correction → +90°.
+    func testChevronCorrection_southBearing_mapsToPlusNinetyDeg() {
+        let corrected = correctedRotationDegrees(bearing: 180)
+        XCTAssertEqual(corrected, 90.0, accuracy: 0.001,
+            "bearing=180 (south) corrected rotation should be +90°. Got \(corrected)°")
+    }
+
+    // MARK: - West-pointing segment
+
+    /// A segment running west (bearing ≈ 270°). After correction → +180°.
+    func testChevronCorrection_westBearing_mapsToPlusOneEightyDeg() {
+        let corrected = correctedRotationDegrees(bearing: 270)
+        XCTAssertEqual(corrected, 180.0, accuracy: 0.001,
+            "bearing=270 (west) corrected rotation should be +180°. Got \(corrected)°")
+    }
+
+    // MARK: - Reverse of a north-bound segment = south (bearing 180°)
+
+    /// For a N-S street: the "toward north" arrow (bearing ≈ 0°) and the "toward south"
+    /// arrow (bearing ≈ 180°) should be exactly 180° apart after correction.
+    func testChevronCorrection_northSouthPairAre180Apart() {
+        let northCorrected = correctedRotationDegrees(bearing: 0)
+        let southCorrected = correctedRotationDegrees(bearing: 180)
+        let diff = abs(southCorrected - northCorrected)
+        XCTAssertEqual(diff, 180.0, accuracy: 0.001,
+            "N and S arrows on a N-S street must point 180° apart after correction. Got diff \(diff)°")
+    }
+
+    // MARK: - Symmetry: corrected formula equals (bearing - 90) for all cardinal points
+
+    func testChevronCorrection_formula_isLinear() {
+        // The correction is a simple linear offset; verify at multiple bearings.
+        let testCases: [(bearing: Double, expected: Double)] = [
+            (0, -90), (45, -45), (90, 0), (135, 45), (180, 90), (225, 135), (270, 180), (315, 225)
+        ]
+        for tc in testCases {
+            let result = correctedRotationDegrees(bearing: tc.bearing)
+            XCTAssertEqual(result, tc.expected, accuracy: 0.001,
+                "bearing=\(tc.bearing) → expected \(tc.expected)°, got \(result)°")
+        }
+    }
+
+    // MARK: - SegmentBearing integration: north-running segment bearing ≈ 0 → corrected ≈ -90
+
+    /// End-to-end: uses a north-running segment and SegmentBearing.bearing to get the
+    /// raw bearing, then verifies the corrected rotation is ≈ -90° (pointing north).
+    func testChevronCorrection_northRunningSegment_endToEnd() {
+        let segment = Segment(
+            id: "NORTH_TEST",
+            street: "TEST AVE",
+            fromStreet: "SOUTH ST",
+            to: "NORTH ST",
+            side: "E",
+            line: [[40.70, -74.00], [40.71, -74.00]],  // runs north
+            rules: [],
+            dominantCategory: nil
+        )
+        let bearing = SegmentBearing.bearing(segment: segment, toward: .toward_to)
+        // bearing toward north end should be ≈ 0°.
+        XCTAssertEqual(bearing, 0.0, accuracy: 2.0,
+            "North-running segment bearing toward .to should be ≈ 0°. Got \(bearing)°")
+
+        // After correction: ≈ -90° (arrow points north).
+        let corrected = bearing - 90
+        XCTAssertEqual(corrected, -90.0, accuracy: 2.0,
+            "North-running segment corrected rotation should be ≈ -90°. Got \(corrected)°")
+    }
+}

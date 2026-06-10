@@ -62,44 +62,67 @@ final class FT7HeadingSourceTests: XCTestCase {
 
     /// When driveModeActive=true but speed < threshold, selectDriveHeadingSource returns nil
     /// regardless of course availability, signaling the EMA stabilizer to freeze.
+    ///
+    /// Build-7: gate lowered from 1.8 → 0.5 m/s (TF2-3 #2 fix). A truly stopped car
+    /// (0.0 m/s) must still freeze.
     func testSelectDriveHeadingSource_stoppedInDriveMode_returnsNil() {
         let result = selectDriveHeadingSource(
             course: 45.0,
             magnetometerHeading: 90.0,
-            speed: 0.5,
+            speed: 0.0,
             driveModeActive: true
         )
         XCTAssertNil(result,
-            "Stopped in Drive Mode (speed 0.5 m/s < 1.8 threshold) should return nil (freeze-on-stop)")
+            "Stopped in Drive Mode (speed 0.0 m/s < 0.5 threshold) should return nil (freeze-on-stop)")
     }
 
-    // MARK: AC-FT7.1 variant — exact speed gate boundary
+    // MARK: AC-FT7.1 variant — exact speed gate boundary (build-7: 0.5 m/s)
 
-    /// Speed exactly at DRIVING_HEADING_MIN_SPEED_MPS (1.8 m/s) should be treated as moving.
+    /// Speed exactly at DRIVING_HEADING_MIN_SPEED_MPS (0.5 m/s after build-7 fix) should
+    /// be treated as moving and return GPS course.
     func testSelectDriveHeadingSource_exactSpeedGate_returnsCourse() {
         let result = selectDriveHeadingSource(
             course: 180.0,
             magnetometerHeading: 270.0,
-            speed: 1.8,
+            speed: 0.5,
             driveModeActive: true
         )
-        XCTAssertNotNil(result, "Speed exactly at gate (1.8 m/s) should return a heading, not nil")
+        XCTAssertNotNil(result, "Speed exactly at gate (0.5 m/s) should return a heading, not nil")
         XCTAssertEqual(result!, 180.0, accuracy: 0.001,
-            "Speed exactly at gate (1.8 m/s) should return GPS course (180°). Got: \(result!)")
+            "Speed exactly at gate (0.5 m/s) should return GPS course (180°). Got: \(result!)")
     }
 
-    // MARK: AC-FT7.3 variant — speed just below gate
+    // MARK: AC-FT7.3 variant — speed just below gate (build-7: below 0.5 m/s)
 
-    /// Speed just below DRIVING_HEADING_MIN_SPEED_MPS (1.79 m/s) should freeze.
+    /// Speed just below DRIVING_HEADING_MIN_SPEED_MPS (0.49 m/s) should freeze.
     func testSelectDriveHeadingSource_justBelowSpeedGate_returnsNil() {
         let result = selectDriveHeadingSource(
             course: 180.0,
             magnetometerHeading: 270.0,
-            speed: 1.79,
+            speed: 0.49,
             driveModeActive: true
         )
         XCTAssertNil(result,
-            "Speed just below gate (1.79 m/s) should return nil (freeze-on-stop). Got: \(result as Any)")
+            "Speed just below gate (0.49 m/s) should return nil (freeze-on-stop). Got: \(result as Any)")
+    }
+
+    // MARK: Build-7 TF2-3 #2 — cruise speed (0.8 m/s) stays live after gate lowered to 0.5
+
+    /// Parking-hunt / cruise speeds (~0.5–1.5 m/s) should now return GPS course after the
+    /// build-7 gate lowering from 1.8 → 0.5 m/s. This verifies the TF2-3 #2 fix.
+    func testSelectDriveHeadingSource_cruiseSpeed_returnsGPSCourse_afterBuild7Fix() {
+        // 0.8 m/s ≈ slow roll / parking creep. Was below the old 1.8 m/s gate (would freeze);
+        // now above the new 0.5 m/s gate (should stay live).
+        let result = selectDriveHeadingSource(
+            course: 45.0,
+            magnetometerHeading: 270.0,
+            speed: 0.8,
+            driveModeActive: true
+        )
+        XCTAssertNotNil(result,
+            "Cruise speed 0.8 m/s should now return GPS course (above build-7 gate of 0.5 m/s)")
+        XCTAssertEqual(result!, 45.0, accuracy: 0.001,
+            "Cruise speed 0.8 m/s should return GPS course (45°). Got: \(result as Any)")
     }
 
     // MARK: Not in Drive Mode — magnetometer heading returned
@@ -149,8 +172,9 @@ final class FT7HeadingSourceTests: XCTestCase {
         let goodHeading = service.stabilizedHeading(rawHeading: 45.0, speed: 5.0, current: coord2)
         XCTAssertNotNil(goodHeading, "Should have a good heading after moving tick")
 
-        // Now call with speed below gate — should return the frozen driveHeading.
-        let frozenHeading = service.stabilizedHeading(rawHeading: 45.0, speed: 0.5, current: coord2)
+        // Now call with speed clearly below gate (0.0 m/s = fully stopped).
+        // Build-7: gate is now 0.5 m/s; 0.5 is AT the gate (returns course), so use 0.0.
+        let frozenHeading = service.stabilizedHeading(rawHeading: 45.0, speed: 0.0, current: coord2)
         XCTAssertNotNil(frozenHeading, "Freeze-on-stop should preserve last good heading (not nil)")
         XCTAssertEqual(frozenHeading!, goodHeading!, accuracy: 1.0,
             "Freeze-on-stop should return same heading as last good value")
@@ -274,5 +298,51 @@ final class FT7ShortestArcTests: XCTestCase {
         let expected: CGFloat = CGFloat(90.0 * .pi / 180.0)
         let delta = MapViewRepresentable.shortestArcDelta(from: from, to: to)
         XCTAssertEqual(delta, expected, accuracy: 0.001, "45° → 135° should be +90°. Got: \(delta * 180 / .pi)°")
+    }
+
+    // MARK: Build-7 TF2-3 #1 — Puck rotation target is identity (0) in drive mode
+
+    /// The puck rotation target in drive mode is 0 (screen-up / identity).
+    /// On a heading-up map the camera already rotates travel direction to screen-up,
+    /// so the puck (which points north at rest) should stay at 0 screen rotation.
+    ///
+    /// This test verifies that shortestArcDelta(from: currentAngle, to: 0) produces the
+    /// correct shortest-arc correction for any arbitrary non-zero puck angle — the
+    /// mathematical core of the build-7 puck double-rotation fix.
+
+    func testPuckRotation_target_isIdentity_fromNorth() {
+        // Puck already at 0 (north) — delta should be 0.
+        let delta = MapViewRepresentable.shortestArcDelta(from: 0, to: 0)
+        XCTAssertEqual(delta, 0, accuracy: 0.0001,
+            "Puck already at 0 (identity) should produce 0 delta")
+    }
+
+    func testPuckRotation_target_isIdentity_fromEast() {
+        // Puck at 90° (east) — shortestArc to 0 should be -π/2 (CCW 90°).
+        let from: CGFloat = CGFloat(90.0 * .pi / 180.0)
+        let target: CGFloat = 0
+        let delta = MapViewRepresentable.shortestArcDelta(from: from, to: target)
+        let expected: CGFloat = CGFloat(-90.0 * .pi / 180.0)
+        XCTAssertEqual(delta, expected, accuracy: 0.001,
+            "Puck at 90° to target 0 should return -π/2 (CCW 90°). Got: \(delta * 180 / .pi)°")
+    }
+
+    func testPuckRotation_target_isIdentity_fromSouth() {
+        // Puck at 180° — shortestArc to 0 is ±π (either 180° direction; abs = π).
+        let from: CGFloat = .pi
+        let target: CGFloat = 0
+        let delta = MapViewRepresentable.shortestArcDelta(from: from, to: target)
+        XCTAssertEqual(abs(delta), .pi, accuracy: 0.001,
+            "Puck at 180° to target 0 should return abs = π. Got: \(abs(delta) * 180 / .pi)°")
+    }
+
+    func testPuckRotation_target_isIdentity_from359() {
+        // Puck at 359° — shortestArc to 0 is +1° (1 degree CW), not -359°.
+        let from: CGFloat = CGFloat(359.0 * .pi / 180.0)
+        let target: CGFloat = 0
+        let delta = MapViewRepresentable.shortestArcDelta(from: from, to: target)
+        let expected: CGFloat = CGFloat(1.0 * .pi / 180.0)
+        XCTAssertEqual(delta, expected, accuracy: 0.001,
+            "Puck at 359° to target 0 should take short arc (+1°). Got: \(delta * 180 / .pi)°")
     }
 }

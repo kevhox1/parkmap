@@ -89,21 +89,24 @@ final class EMAStabilizerTests: XCTestCase {
     }
 
     // Test 2: Below speed threshold returns last good heading.
+    // Build-7: threshold lowered from 1.8 → 0.5 m/s (TF2-3 #2 fix); use 0.0 m/s (fully stopped)
+    // to be definitively below the new threshold.
     func testStabilizedHeading_belowSpeedThreshold_returnsLastGood() {
         // First tick at speed 5 m/s to establish last good heading.
         _ = service.stabilizedHeading(rawHeading: 90.0, speed: 5.0, current: w85cAnchor)
 
-        // Second tick at 0.5 m/s (below threshold).
-        let result = service.stabilizedHeading(rawHeading: 45.0, speed: 0.5, current: w85cAnchor)
+        // Second tick at 0.0 m/s (fully stopped — clearly below 0.5 m/s threshold).
+        let result = service.stabilizedHeading(rawHeading: 45.0, speed: 0.0, current: w85cAnchor)
         XCTAssertNotNil(result, "Below-speed tick should return last good heading (freeze)")
         XCTAssertEqual(result!, 90.0, accuracy: 1.0,
                        "Below-speed tick should freeze on last good heading, not update to 45°")
     }
 
     // Test 3: No prior heading + below speed → nil.
+    // Build-7: threshold lowered from 1.8 → 0.5 m/s; use 0.0 m/s (fully stopped).
     func testStabilizedHeading_noPriorHeading_belowSpeed_returnsNil() {
-        // Call with below-threshold speed with no prior history.
-        let result = service.stabilizedHeading(rawHeading: nil, speed: 0.5, current: w85cAnchor)
+        // Call with clearly below-threshold speed (0.0 m/s) with no prior history.
+        let result = service.stabilizedHeading(rawHeading: nil, speed: 0.0, current: w85cAnchor)
         XCTAssertNil(result, "No prior heading + below speed should return nil")
     }
 

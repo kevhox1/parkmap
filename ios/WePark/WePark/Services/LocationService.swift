@@ -12,8 +12,13 @@
 //    - W8.5c: startDriveMode() / endDriveMode() flip into continuous navigation mode.
 //    - W8.5c: EMA heading stabilizer (port of stabilizedHeading, index.html:6546–6570).
 //
-//  EMA stabilizer constants (calibration deferred to W8.5c-follow post-drive-test):
-//    DRIVING_HEADING_MIN_SPEED_MPS = 1.8 (same as PWA, index.html constant)
+//  EMA stabilizer constants:
+//    DRIVING_HEADING_MIN_SPEED_MPS = 0.5 (build-7 TF2-3 fix: lowered from 1.8 to 0.5 m/s
+//      so GPS-course heading stays live while crawling for parking in cruise mode.
+//      Rationale: parking-hunt speeds are often 0.5–1.5 m/s; at 1.8 the heading was
+//      freezing prematurely and compounding the double-rotation bug (TF2-3 #2).
+//      On-device-tunable: if the heading jitters while stopped, raise toward 1.0.
+//      Magnetometer is intentionally NOT reintroduced — FT-7 fix preserved.)
 //    DRIVING_HEADING_EMA_ALPHA = 0.35 (same as PWA, index.html constant)
 //
 //  No import SwiftUI (QA invariant — pure service).
@@ -27,7 +32,17 @@ import UIKit
 
 // MARK: - Constants
 
-private let DRIVING_HEADING_MIN_SPEED_MPS: Double = 1.8
+/// Minimum speed (m/s) for GPS-course heading to be considered reliable.
+///
+/// Build-7 TF2-3 fix: lowered from 1.8 → 0.5 m/s so that the heading stays live
+/// while crawling for parking at low speeds (cruise mode). Below this threshold the
+/// stabilizer freezes on the last good heading rather than snapping to north.
+///
+/// On-device-tunable: raise toward 1.0 if heading jitters visibly while the car
+/// is fully stopped; lower toward 0.3 if it still freezes too early while crawling.
+///
+/// Course-only policy preserved (magnetometer NOT reintroduced — FT-7 fix).
+private let DRIVING_HEADING_MIN_SPEED_MPS: Double = 0.5
 private let DRIVING_HEADING_EMA_ALPHA: Double = 0.35
 
 // MARK: - FT-7: Pure heading-source selection function
@@ -218,7 +233,7 @@ final class LocationService: NSObject {
     /// Swift port of `stabilizedHeading` from `index.html:6546–6570`.
     ///
     /// Algorithm:
-    ///   1. Speed gate: if speed < 1.8 m/s, return last good heading (freeze on stop).
+    ///   1. Speed gate: if speed < DRIVING_HEADING_MIN_SPEED_MPS, return last good heading (freeze on stop).
     ///   2. Course-from-movement fallback: if raw heading is nil but we have a previous
     ///      coordinate, compute bearing between prev and current.
     ///   3. EMA with circular wraparound: new_ema = ema + alpha * normalize(raw - ema).

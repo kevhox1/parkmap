@@ -983,10 +983,18 @@ struct MapViewRepresentable: UIViewRepresentable {
 
             // Add pins that are new to the desired set.
             let toAdd = desiredIDs.subtracting(currentIDs)
+            guard !toAdd.isEmpty else { return }
+
+            // Build a [id: Segment] dict once for O(1) lookup per new pin.
+            // QA Minor #2: replaces the previous O(n) `first(where:)` scan in resolveBearing.
+            // Cost: one O(n) pass over `segments` here, amortised across all new pins in `toAdd`.
+            // At current pin volume (O(10–100) new pins per diff), this is a no-op in practice.
+            let segmentByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+
             for id in toAdd {
                 guard let pin = desiredByID[id] else { continue }
                 // FT-11: compute bearing when the pin carries a heading_toward value.
-                let bearing = Self.resolveBearing(for: pin, segments: segments)
+                let bearing = Self.resolveBearing(for: pin, segmentByID: segmentByID)
                 let annotation = CommunityPinAnnotation(pin: pin, bearing: bearing)
                 communityPinAnnotations[id] = annotation
                 mapView.addAnnotation(annotation)
@@ -999,7 +1007,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         ///   - The pin type is not `enforcement_active` or `sweeper_passed`.
         ///   - The pin has no `heading_toward` in meta (legacy pin, OD-3).
         ///   - The pin has no `segmentId` or the segment is not in the loaded set (OD-1).
-        private static func resolveBearing(for pin: CommunityPin, segments: [Segment]) -> Double? {
+        ///
+        /// Build-7 QA Minor #2: accepts a pre-built `[id: Segment]` dict instead of the raw
+        /// array so callers can do an O(1) lookup rather than O(n) `first(where:)` per pin.
+        /// The dict is built once in `syncCommunityPinAnnotations` and passed through.
+        private static func resolveBearing(for pin: CommunityPin, segmentByID: [String: Segment]) -> Double? {
             // Only enforcement and sweeper pins get chevrons.
             guard pin.pinType == .enforcementActive || pin.pinType == .sweeperPassed else {
                 return nil
@@ -1015,7 +1027,8 @@ struct MapViewRepresentable: UIViewRepresentable {
 
             guard let heading = headingToward else { return nil }
             guard let segmentId = pin.segmentId else { return nil }
-            guard let segment = segments.first(where: { $0.id == segmentId }) else { return nil }
+            // O(1) dict lookup replacing the previous O(n) linear scan (QA Minor #2).
+            guard let segment = segmentByID[segmentId] else { return nil }
 
             return SegmentBearing.bearing(segment: segment, toward: heading)
         }
@@ -1033,10 +1046,27 @@ struct MapViewRepresentable: UIViewRepresentable {
         ///   - Puck rotation animated via UIView.animate with shortestArcDelta so a 359°→1°
         ///     transition takes 2° clockwise, not 358° counter-clockwise.
         ///
+        /// Build-7 TF2-3 #1 — Puck double-rotation fix:
+        ///   Previously the puck was rotated by the ABSOLUTE heading `h` in screen space.
+        ///   On a heading-up map (`camera.heading = h`) the map itself rotates so that the
+        ///   travel direction faces screen-up. The puck asset (`location.north.fill`) points
+        ///   north at rest. After the camera rotates heading-up, a north-pointing asset that
+        ///   stays at 0 screen rotation points UP = travel direction — which is exactly correct.
+        ///   Applying an additional absolute-heading rotation double-counted the rotation,
+        ///   leaving the puck off by the map's heading (wrong everywhere except h ≈ north).
+        ///
+        ///   Fix: rotate the puck to IDENTITY (0 radians = screen-up) in drive mode.
+        ///   The heading-up camera already handles the directional orientation; the puck
+        ///   merely needs to point up the screen.
+        ///
+        ///   `shortestArcDelta` still ensures a smooth shortest-arc animation from the
+        ///   puck's current screen angle back to identity (0). On exit, the puck resets
+        ///   to identity immediately (same as before).
+        ///
         /// Port of `setDrivingMapRotation` (index.html:6584–6601) with R-1 dead-band guard:
         ///   - If `heading` is nil (Drive Mode off), reset camera to north-up (heading = 0).
         ///   - If heading changed by <= 2 degrees, skip (avoids regionDidChangeAnimated feedback loop).
-        ///   - If changed by > 2 degrees, animate camera heading and puck rotation.
+        ///   - If changed by > 2 degrees, animate camera heading; keep puck pointing screen-up.
         ///
         /// Called from updateUIView on every SwiftUI render cycle that has a new driveHeading.
         func syncDriveHeading(_ heading: Double?, on mapView: MKMapView) {
@@ -1056,12 +1086,24 @@ struct MapViewRepresentable: UIViewRepresentable {
                 // → driveFollowEnabled unaffected. Safe.
                 mapView.setCamera(camera, animated: true)
 
-                // FT-7 B.3: Animate puck rotation with shortest-arc delta.
-                // PR-2 applied the absolute angle; this causes 359°→1° to spin 358° the wrong way.
-                // shortestArcDelta ensures we always take the shorter arc (max 180° of rotation).
-                // .beginFromCurrentState: if the previous animation hasn't finished, start from
-                // wherever the view currently is rather than jumping to the old target.
-                let targetRad = CGFloat(h * .pi / 180.0)
+                // Build-7 TF2-3 #1: Puck target is IDENTITY (0 = screen-up).
+                //
+                // On a heading-up map the camera rotates so travel direction = screen-up.
+                // The puck asset (location.north.fill) points north at rest. After the camera
+                // rotates, a zero-screen-rotation puck points up the screen = travel direction.
+                // Rotating by the absolute heading too would double-count — off by `h` degrees.
+                //
+                // shortestArcDelta animates from the current puck angle to 0 via the shortest
+                // arc. .beginFromCurrentState: if a previous animation is in-flight, continue
+                // from wherever the view currently is rather than jumping to the stale target.
+                //
+                // Note: `setCamera(animated:true)` means `mapView.camera.heading` may lag by
+                // one animation frame. Reading it here would give a stale value. We do NOT
+                // read `mapView.camera.heading` — we use the desired target (0 = identity) which
+                // is independent of the camera lag. This is why the relative-to-camera approach
+                // (h - camera.heading) is less robust: the stale heading makes it non-zero
+                // mid-animation and causes visible jitter. Static identity is the safe target.
+                let targetRad: CGFloat = 0  // screen-up in heading-up mode
                 if let puckView = mapView.view(for: mapView.userLocation) {
                     // Decompose current transform angle from the existing transform.
                     let currentAngle = atan2(puckView.transform.b, puckView.transform.a)
@@ -1207,10 +1249,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 view.image = UIImage(systemName: "location.north.fill", withConfiguration: config)?
                     .withTintColor(.systemBlue, renderingMode: .alwaysOriginal)
 
-                // Apply current heading rotation. CGAffineTransform rotation is in radians,
-                // clockwise from north. MKMapView coordinate system: 0° = north, clockwise.
-                let headingRad = CGFloat((parent.driveHeading ?? 0) * .pi / 180.0)
-                view.transform = CGAffineTransform(rotationAngle: headingRad)
+                // Build-7 TF2-3 #1: Puck initialised at IDENTITY (no rotation).
+                //
+                // In heading-up drive mode the map camera already rotates so travel direction
+                // faces screen-up. `location.north.fill` points north at rest; after the
+                // camera rotates, a zero-screen-rotation puck points up = travel direction.
+                // Applying the absolute heading here would double-count the rotation.
+                //
+                // `syncDriveHeading` will animate any subsequent puck corrections via
+                // shortestArcDelta → target 0. On initial dequeue this is already correct.
+                view.transform = .identity
 
                 view.canShowCallout = false
                 view.isAccessibilityElement = true
