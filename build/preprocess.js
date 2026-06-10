@@ -13,6 +13,7 @@ const path = require('path');
 // ==== Configuration ====
 const ROOT = path.resolve(__dirname, '..');
 const OSM_DATA_PATH = path.join(ROOT, 'osm_data.json');
+const OSM_ONEWAY_PATH = path.join(ROOT, 'osm_oneway.json');
 const TILES_DIR = path.join(ROOT, 'tiles');
 // iOS app bundle reads tiles from this Resources path (see HANDOFF.md
 // "iOS app: Resources land flat at app bundle root at build time").
@@ -171,6 +172,9 @@ function parseSchedule(desc) {
 
 // ==== Geometry Functions ====
 let OSM_STREETS = {};
+// Keyed by canonical uppercase abbreviated street name (e.g. "2 AVE", "SPRING ST")
+// as produced by build-oneway-data.js canonicalStreetName().
+let OSM_ONEWAY = {};
 
 // Name mapping: NYC uppercase -> OSM title case
 const NYC_TO_OSM = {
@@ -269,6 +273,138 @@ function osmName(nycName) {
 
   osmNameCache[upper] = null;
   return null;
+}
+
+// ==== One-way derivation (FT-11) ====
+// Translate a NYC-normalized street name (e.g. "2ND AVENUE", "SPRING STREET")
+// to the canonical uppercase abbreviated key used as osm_oneway.json keys
+// (e.g. "2 AVE", "SPRING ST").  Mirrors canonicalStreetName() in build-oneway-data.js.
+const ONEWAY_SUFFIX_NORMALIZE = [
+  [/\bSTREETS\b/g, 'ST'], [/\bSTREET\b/g, 'ST'],
+  [/\bAVENUES\b/g, 'AVE'], [/\bAVENUE\b/g, 'AVE'],
+  [/\bBOULEVARD\b/g, 'BLVD'],
+  [/\bPLACE\b/g, 'PL'],
+  [/\bPLAZA\b/g, 'PLZ'],
+  [/\bDRIVE\b/g, 'DR'],
+  [/\bROAD\b/g, 'RD'],
+  [/\bPARKWAY\b/g, 'PKWY'],
+  [/\bEXPRESSWAY\b/g, 'EXPY'],
+  [/\bTERRACE\b/g, 'TER'],
+  [/\bCOURT\b/g, 'CT'],
+  [/\bSQUARE\b/g, 'SQ'],
+  [/\bHIGHWAY\b/g, 'HWY'],
+  [/\bBRIDGE\b/g, 'BR'],
+  [/\bTUNNEL\b/g, 'TUN'],
+  [/\bEAST\b/g, 'E'], [/\bWEST\b/g, 'W'], [/\bNORTH\b/g, 'N'], [/\bSOUTH\b/g, 'S'],
+  [/\bFIRST\b/g, '1'], [/\bSECOND\b/g, '2'], [/\bTHIRD\b/g, '3'],
+  [/\bFOURTH\b/g, '4'], [/\bFIFTH\b/g, '5'], [/\bSIXTH\b/g, '6'],
+  [/\bSEVENTH\b/g, '7'], [/\bEIGHTH\b/g, '8'], [/\bNINTH\b/g, '9'],
+  [/\bTENTH\b/g, '10'], [/\bELEVENTH\b/g, '11'], [/\bTWELFTH\b/g, '12'],
+];
+
+const onewayNameCache = {};
+function canonicalNameForOneway(nycName) {
+  if (!nycName) return null;
+  if (onewayNameCache[nycName] !== undefined) return onewayNameCache[nycName];
+  let s = nycName.toUpperCase().trim();
+  // Drop ordinal suffixes on digits (1ST → 1, 2ND → 2, 3RD → 3, 23RD → 23)
+  s = s.replace(/(\d+)(ST|ND|RD|TH)\b/g, '$1');
+  for (const [re, rep] of ONEWAY_SUFFIX_NORMALIZE) s = s.replace(re, rep);
+  s = s.replace(/\s+/g, ' ').trim();
+  // Famous aliases
+  if (s === 'AVE OF THE AMERICAS') s = '6 AVE';
+  if (s === 'AVE OF AMERICAS') s = '6 AVE';
+  onewayNameCache[nycName] = s;
+  return s;
+}
+
+// Find the OSM-oneway way that best covers the block midpoint.
+// Returns the way object {polyline, oneway} or null.
+function findBestOnewayWay(ways, midLat, midLng) {
+  let best = null;
+  let bestDist = Infinity;
+  for (const way of ways) {
+    const poly = way.polyline;
+    if (!poly || poly.length < 2) continue;
+    // Find closest point on this polyline to the block midpoint
+    for (let i = 0; i < poly.length - 1; i++) {
+      const [aLat, aLng] = poly[i];
+      const [bLat, bLng] = poly[i + 1];
+      const abLat = bLat - aLat, abLng = bLng - aLng;
+      const apLat = midLat - aLat, apLng = midLng - aLng;
+      const ab2 = abLat * abLat + abLng * abLng;
+      let t = ab2 > 0 ? (apLat * abLat + apLng * abLng) / ab2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const pLat = aLat + t * abLat;
+      const pLng = aLng + t * abLng;
+      const dLat = (midLat - pLat) * 111320;
+      const dLng = (midLng - pLng) * 111320 * Math.cos(midLat * Math.PI / 180);
+      const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = way;
+      }
+    }
+  }
+  // Only accept if the best way is within 100m (noise guard for coverage gaps)
+  return bestDist < 100 ? best : null;
+}
+
+// Derive oneway fields for a segment given its block and blockGeo.
+// Returns { oneway: boolean, oneway_toward: "from"|"to"|undefined }.
+// Additive only — existing segment fields are not modified.
+function getOnewayFields(block, blockGeo) {
+  const canonKey = canonicalNameForOneway(block.street);
+  if (!canonKey) return { oneway: false };
+
+  const ways = OSM_ONEWAY[canonKey];
+  if (!ways || ways.length === 0) return { oneway: false };
+
+  // Filter to only directional ways
+  const directionalWays = ways.filter(w => w.oneway === 'yes' || w.oneway === 'reverse');
+  if (directionalWays.length === 0) return { oneway: false };
+
+  // Find the midpoint of the (possibly setback-trimmed) block line
+  const line = blockGeo.line;
+  const mid = Math.floor(line.length / 2);
+  const midLat = line[mid][0];
+  const midLng = line[mid][1];
+
+  const bestWay = findBestOnewayWay(directionalWays, midLat, midLng);
+  if (!bestWay) return { oneway: false };
+
+  // Compute direction vectors using geographic coordinates.
+  // Segment direction: line[0] → line[last]
+  const segFirst = line[0];
+  const segLast = line[line.length - 1];
+  const segDLat = (segLast[0] - segFirst[0]) * 111320;
+  const segDLng = (segLast[1] - segFirst[1]) * 111320 * Math.cos(((segFirst[0] + segLast[0]) / 2) * Math.PI / 180);
+
+  // OSM way direction: polyline[0] → polyline[last]
+  const poly = bestWay.polyline;
+  const wayFirst = poly[0];
+  const wayLast = poly[poly.length - 1];
+  const wayDLat = (wayLast[0] - wayFirst[0]) * 111320;
+  const wayDLng = (wayLast[1] - wayFirst[1]) * 111320 * Math.cos(((wayFirst[0] + wayLast[0]) / 2) * Math.PI / 180);
+
+  // Dot product: positive means segment and way run in the same direction
+  const dot = segDLat * wayDLat + segDLng * wayDLng;
+
+  // oneway="yes": legal travel is in polyline order (wayFirst → wayLast)
+  // oneway="reverse": legal travel is against polyline order (wayLast → wayFirst)
+  let legalTravelMatchesSeg;
+  if (bestWay.oneway === 'yes') {
+    // Legal travel direction matches way direction; matches segment direction iff dot > 0
+    legalTravelMatchesSeg = dot > 0;
+  } else {
+    // oneway="reverse": legal travel is opposite way direction; matches segment iff dot < 0
+    legalTravelMatchesSeg = dot < 0;
+  }
+
+  // If legal travel goes in the same direction as seg (line[0]→line[last] = ptFrom→ptTo),
+  // then legal travel heads toward "to". Otherwise toward "from".
+  const oneway_toward = legalTravelMatchesSeg ? 'to' : 'from';
+  return { oneway: true, oneway_toward };
 }
 
 function geoDist(lat1, lng1, lat2, lng2) {
@@ -649,7 +785,15 @@ async function main() {
   const osmRaw = fs.readFileSync(OSM_DATA_PATH, 'utf8');
   OSM_STREETS = JSON.parse(osmRaw);
   const streetCount = Object.keys(OSM_STREETS).length;
-  console.log(`   Loaded ${streetCount} streets from OSM data\n`);
+  console.log(`   Loaded ${streetCount} streets from OSM data`);
+
+  // 1b. Load one-way data (FT-11)
+  if (fs.existsSync(OSM_ONEWAY_PATH)) {
+    OSM_ONEWAY = JSON.parse(fs.readFileSync(OSM_ONEWAY_PATH, 'utf8'));
+    console.log(`   Loaded ${Object.keys(OSM_ONEWAY).length} streets from osm_oneway.json\n`);
+  } else {
+    console.warn('   WARNING: osm_oneway.json not found — oneway fields will be false for all segments\n');
+  }
 
   // 2. Fetch signs from both Socrata datasets
   console.log('🔄 Fetching parking signs from NYC Socrata API...');
@@ -789,6 +933,7 @@ async function main() {
         if (!offsetLine || offsetLine.length < 2) continue;
 
         const segId = `${block.street}_${block.from}_${block.to}_${block.side}`.replace(/\s+/g, '_');
+        const onewayFields0 = getOnewayFields(block, blockGeo);
         allSegments.push({
           id: segId,
           street: block.street,
@@ -797,10 +942,16 @@ async function main() {
           side: block.side,
           line: offsetLine,
           rules: [],
-          dominantCategory: 'UNKNOWN'
+          dominantCategory: 'UNKNOWN',
+          oneway: onewayFields0.oneway,
+          ...(onewayFields0.oneway_toward !== undefined && { oneway_toward: onewayFields0.oneway_toward })
         });
         continue;
       }
+
+      // Compute oneway fields once per block — all sub-segments share the same
+      // street/from/to, so direction is constant across the block face (FT-11).
+      const onewayFields = getOnewayFields(block, blockGeo);
 
       subSegments.forEach((zone, idx) => {
         let line;
@@ -831,7 +982,9 @@ async function main() {
           side: block.side,
           line: offsetLine,
           rules,
-          dominantCategory: mostRestrictiveCategory(zone.rules)
+          dominantCategory: mostRestrictiveCategory(zone.rules),
+          oneway: onewayFields.oneway,
+          ...(onewayFields.oneway_toward !== undefined && { oneway_toward: onewayFields.oneway_toward })
         });
       });
     } else {
