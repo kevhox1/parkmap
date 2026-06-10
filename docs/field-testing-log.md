@@ -32,6 +32,24 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
 
+### TF2-3 🔴 Arrow points the wrong way most of the time (esp. cruise / no-destination) — HIGH
+- **Area:** Drive Mode heading-up rotation. `MapViewRepresentable.syncDriveHeading` + LocationService heading source.
+- **Observed (Kevin, on-device):** live location/heading "not good"; arrow points the WRONG way most of
+  the time, especially in Drive Mode with NO destination (cruise/parking-hunt).
+- **Root cause #1 (dominant): DOUBLE-ROTATION.** `syncDriveHeading` sets `camera.heading = h`
+  (map rotates heading-up → travel = screen-up) AND rotates the puck view by the ABSOLUTE heading `h`.
+  In a heading-up map the arrow should point straight up (0 rotation); rotating it by `h` too leaves it
+  off by the map's heading. Only correct when h≈north. → "wrong most of the time."
+- **Root cause #2 (why cruise is worse): STALE LOW-SPEED HEADING.** Parking-hunt speeds are often below
+  `DRIVING_HEADING_MIN_SPEED_MPS = 1.8`, where GPS course is unreliable → heading freezes at last-good
+  (FT-7 dropped the compass). Combined with #1, very visibly wrong while crawling. Destination mode masks
+  it (route line gives orientation cue); cruise has none.
+- **Fix:** (1) rotate the puck RELATIVE to camera heading (`h - camera.heading` ≈ 0 in heading-up mode;
+  simplest: arrow points static-up while heading-up). (2) reduce low-speed staleness — lower the speed
+  gate and/or smarter slow-speed heading. #31-sensitive path; RegionSyncGuard + live-UI gate.
+- **Status:** 🔴 open — root-caused; fix proposed. Goes in next build (bundle w/ FT-11 picker).
+- **Lands in:** iOS (`MapViewRepresentable.swift` puck rotation, `LocationService` speed gate).
+
 ### TF2-2 🟢 Live-map pan still snaps back mid-drag (async race) — FIXED → build 4
 - **Area:** Drive Mode follow-recenter gate. `MapViewRepresentable.shouldSyncDriveRegion` / updateUIView.
 - **Observed (Kevin, build 3 w/ TF2-1):** scroll in drive mode "still snaps back, directionally better."
