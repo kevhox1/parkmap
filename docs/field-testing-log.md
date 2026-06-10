@@ -98,7 +98,12 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Decisions (Kevin, 2026-06-08):** (1) Agent direction = TWO-ARROW picker along the segment (toward
   each cross-street, labeled with cross-street names) in the report sheet. (2) Sweeper on a ONE-WAY
   street auto-derives direction; sweeper on a TWO-WAY street uses the same two-arrow picker (user picks).
-- **Status:** 🟡 spec being written (post-TF2 build). iOS + backend-data; stores in pin `meta`, no schema change.
+- **Status (2026-06-10):** 🟡 iOS DONE (picker + auto-derive + marker chevron), QA PASS-WITH-NOTES
+  (`docs/qa/ft11-ios-qa.md`), 466/0, merged base to main. iOS works standalone (graceful fallback to
+  picker when oneway data absent). ⚠️ QA Finding #1: chevron renders 90° off (chevron.forward points
+  east; needs `bearing-90` correction) → BUNDLED into the build-7 TF2-3 rotation-fix pass.
+  Backend tile fields (oneway/oneway_toward) staged on branch `data/ft11-oneway-tiles` — DEFERRED regen
+  (run `node build/preprocess.js`, ~1027 files; + sw.js CACHE_VERSION bump for PWA).
 
 ### FT-10 🔴 Drive/Cruise mode locks the map — can't zoom, pivot, or rotate
 - **Area:** Drive Mode map interaction. `MapViewRepresentable` makeUIView gesture flags + follow camera.
