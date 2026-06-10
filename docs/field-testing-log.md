@@ -48,10 +48,12 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   approval for the rebuild (per docs/tile-geometry-investigation.md Q1 pattern).
 - **Note:** separate from the earlier intersection-overshoot geometry issue (docs/tile-geometry-
   investigation.md, INTERSECTION_SETBACK_M) — could fix both in the same rebuild.
-- **Status:** 🔴 open — root-caused; needs backend-data fix design + Kevin's rebuild approval.
-- **Lands in:** backend-data (`build/preprocess.js` + tile regen). TF2-4 resolves as a side effect.
+- **Status:** 🟢 FIXED — perpendicular street-normal offset (per-vertex bearing, mean-lat projection,
+  dot-product side selection, CURB_OFFSET_METERS=5). Full tile rebuild committed (1254da5): ~1026 tiles,
+  PWA + iOS bundle, +31919 oneway segments. PWA live (CACHE v34); iOS = build 8. ⏳ Kevin visual confirm
+  (PWA now / iOS build 8): lines should hug the correct curb, not mid-road.
 
-### TF2-4 🔴 School-zone restriction on wrong side/position — E 2nd St (DATA / side-assignment) — likely TF2-5 root cause
+### TF2-4 🟡 School-zone wrong side — E 2nd St — likely RESOLVED by TF2-5 curb-offset rebuild
 - **Area:** Tile data side/position correctness (same class as FT-9). Backend-data.
 - **Observed (Kevin, on-device):** the red school-zone restriction on E 2nd St appears on the wrong
   side/position; "north side ... should be west side, not east side." Construction is on the east
