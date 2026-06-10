@@ -58,6 +58,18 @@ struct ReportSheet: View {
     /// When nil, falls back to "Reporting at current location".
     var streetName: String? = nil
 
+    /// FT-11: The resolved tile segment at the report location.
+    ///
+    /// Resting path: injected from `findCandidateSegments` when the long-press lands
+    /// on a named block. Nil when the long-press is off any segment.
+    ///
+    /// In-drive path: injected from DrivingContextService's nearest segment.
+    ///
+    /// When non-nil and the selected type supports it, the two-arrow direction picker
+    /// is shown so the user can specify which way the agent/sweeper is heading.
+    /// When nil (OD-1): picker is hidden and `heading_toward` is omitted from meta.
+    var segment: Segment? = nil
+
     // MARK: - Primary type selection
 
     enum ReportType {
@@ -94,10 +106,46 @@ struct ReportSheet: View {
     @State private var isSubmitting: Bool = false
     @State private var submitError: String? = nil
 
+    /// FT-11: The chosen or auto-derived travel direction.
+    ///
+    /// Set by the `HeadingTowardPicker` (user tap) or auto-derived for one-way sweeper
+    /// segments. Nil when the picker is hidden (off-segment, OD-1) or not yet chosen.
+    @State private var selectedHeadingToward: HeadingToward? = nil
+
     // MARK: - Derived
 
     private var isReportEnabled: Bool {
         ReportSheet.isEnabled(selectedType: selectedType, isSubmitting: isSubmitting)
+    }
+
+    /// FT-11: True when the direction picker should be shown.
+    ///
+    /// Rules (from spec §5.2 / stream B2):
+    ///   - enforcement active + segment non-nil → always show
+    ///   - sweeper + segment non-nil + NOT one-way → show
+    ///   - sweeper + segment nil OR one-way → hide (auto-derived or off-segment)
+    private var shouldShowDirectionPicker: Bool {
+        guard let type = selectedType, let seg = segment else { return false }
+        switch type {
+        case .enforcementActive:
+            return true
+        case .sweeper:
+            // One-way segment: auto-derive, no picker needed.
+            return seg.oneway != true
+        }
+    }
+
+    /// FT-11: Auto-derived heading for a one-way sweeper report.
+    ///
+    /// Computed from `segment.onewayToward` when the segment is one-way. Returns nil
+    /// for two-way segments or when oneway data is absent (picker fallback).
+    private var autoHeadingToward: HeadingToward? {
+        guard let seg = segment, seg.oneway == true else { return nil }
+        switch seg.onewayToward {
+        case "from": return .from
+        case "to":   return .toward_to
+        default:     return nil
+        }
     }
 
     // MARK: - Body
@@ -153,6 +201,13 @@ struct ReportSheet: View {
                                 .padding(.bottom, 4)
                         }
 
+                        // FT-11: Direction picker for enforcement (always when segment non-nil).
+                        if selectedType == .enforcementActive && shouldShowDirectionPicker {
+                            headingTowardPickerRow
+                                .padding(.leading, 20)
+                                .padding(.bottom, 4)
+                        }
+
                         // Row 2: Sweeper
                         reportTypeRow(
                             label: "Street sweeper",
@@ -165,6 +220,13 @@ struct ReportSheet: View {
                         // Sweeper direction toggle: visible only when sweeper is selected
                         if selectedType == .sweeper {
                             sweeperDirectionRow
+                                .padding(.leading, 20)
+                                .padding(.bottom, 4)
+                        }
+
+                        // FT-11: Direction picker for sweeper (only when not auto-derived).
+                        if selectedType == .sweeper && shouldShowDirectionPicker {
+                            headingTowardPickerRow
                                 .padding(.leading, 20)
                                 .padding(.bottom, 4)
                         }
@@ -234,6 +296,8 @@ struct ReportSheet: View {
             // Reset sub-state when type changes
             if type != .enforcementActive { selectedSubTag = nil }
             if type != .sweeper { sweeperDirection = .passed }
+            // FT-11: Reset direction picker selection when the top-level type changes.
+            selectedHeadingToward = nil
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: symbolName)
@@ -355,6 +419,90 @@ struct ReportSheet: View {
         }
     }
 
+    // MARK: - FT-11: Heading-toward direction picker row
+
+    /// Two-arrow picker letting the user specify which direction the agent/sweeper
+    /// is travelling. Each arrow button is:
+    ///   - Labeled with the cross-street name it points toward (fromStreet / to).
+    ///   - Oriented to the actual block bearing using a rotated SF Symbol chevron.
+    ///   - Visually selected (filled background) when tapped.
+    ///
+    /// Shown for:
+    ///   - `enforcement_active` when segment is non-nil (always).
+    ///   - `sweeper_passed` when segment is non-nil and NOT one-way.
+    ///
+    /// Hidden entirely when the segment is nil (OD-1).
+    ///
+    /// Accessibility: each button has an accessibilityLabel equal to the cross-street name.
+    @ViewBuilder
+    private var headingTowardPickerRow: some View {
+        if let seg = segment {
+            let bearingToFrom = SegmentBearing.bearing(segment: seg, toward: .from)
+            let bearingToTo   = SegmentBearing.bearing(segment: seg, toward: .toward_to)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Which way?")
+                    .font(.footnote.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 4)
+
+                HStack(spacing: 8) {
+                    // Arrow toward the "from" cross-street
+                    headingArrowButton(
+                        label: seg.fromStreet,
+                        toward: .from,
+                        bearing: bearingToFrom
+                    )
+                    // Arrow toward the "to" cross-street
+                    headingArrowButton(
+                        label: seg.to,
+                        toward: .toward_to,
+                        bearing: bearingToTo
+                    )
+                }
+                .padding(.horizontal, 4)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func headingArrowButton(
+        label: String,
+        toward: HeadingToward,
+        bearing: Double
+    ) -> some View {
+        let isSelected = selectedHeadingToward == toward
+        let tint: Color = selectedType == .enforcementActive ? .blue : .orange
+
+        Button {
+            selectedHeadingToward = toward
+        } label: {
+            HStack(spacing: 6) {
+                // Chevron rotated to the real block bearing.
+                // Bearing is compass-degrees (0=north, 90=east); SwiftUI rotation is
+                // clockwise from the top (same convention) — no conversion needed.
+                Image(systemName: "chevron.forward")
+                    .font(.system(size: 14, weight: .bold))
+                    .rotationEffect(.degrees(bearing))
+                    .foregroundStyle(isSelected ? tint : .secondary)
+
+                Text(label)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .foregroundStyle(isSelected ? tint : .secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(isSelected ? tint.opacity(0.15) : Color(.systemGray6))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityHint("Heading toward \(label)")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
     // MARK: - Submit
 
     private func submitReport() async {
@@ -362,18 +510,29 @@ struct ReportSheet: View {
         isSubmitting = true
         submitError = nil
 
+        // FT-11: Resolve the effective heading_toward.
+        // For one-way sweeper: use the auto-derived value.
+        // For picker cases: use the user's selection (may be nil if not yet chosen).
+        let effectiveHeading: HeadingToward?
+        if type == .sweeper, let autoHeading = autoHeadingToward {
+            effectiveHeading = autoHeading
+        } else {
+            effectiveHeading = selectedHeadingToward
+        }
+
         do {
             let (pinType, meta) = ReportSheet.buildMeta(
                 type: type,
                 subTag: selectedSubTag,
-                sweeperDirection: sweeperDirection
+                sweeperDirection: sweeperDirection,
+                headingToward: effectiveHeading
             )
             try await pinService.insertCrowdPin(
                 type: pinType,
                 meta: meta,
                 lat: coordinate.latitude,
                 lng: coordinate.longitude,
-                segmentId: nil,
+                segmentId: segment?.id,    // FT-11: wire segmentId (was hard-coded nil)
                 zoneId: nil,
                 notes: nil
             )
@@ -396,22 +555,35 @@ struct ReportSheet: View {
     ///   enforcement_active + subTag? → PinType.enforcementActive + {sub_tag: <rawValue>} or nil
     ///   sweeper passed               → PinType.sweeperPassed + {direction: "passed"}
     ///   sweeper approaching          → PinType.sweeperPassed + {direction: "coming_soon"}
+    ///
+    /// FT-11: `headingToward` is an additional optional parameter. When non-nil, the
+    /// raw value (`"from"` or `"to"`) is written into the meta dict as `"heading_toward"`.
+    /// When nil, the key is omitted entirely (AC-20: no spurious nil in meta).
     static func buildMeta(
         type: ReportType,
         subTag: EnforcementActiveMeta.SubTag?,
-        sweeperDirection: SweeperDirection
+        sweeperDirection: SweeperDirection,
+        headingToward: HeadingToward? = nil
     ) -> (PinType, [String: Any]?) {
         switch type {
         case .enforcementActive:
+            var dict: [String: Any] = [:]
             if let tag = subTag {
-                return (.enforcementActive, ["sub_tag": tag.rawValue])
+                dict["sub_tag"] = tag.rawValue
             }
-            // No sub_tag selected → meta nil (matches the DB null-meta case for generic enforcement).
-            return (.enforcementActive, nil)
+            if let heading = headingToward {
+                dict["heading_toward"] = heading.rawValue
+            }
+            // If dict is empty (no sub_tag, no heading_toward) → return nil meta
+            // (matches the DB null-meta case for generic enforcement).
+            return (.enforcementActive, dict.isEmpty ? nil : dict)
 
         case .sweeper:
-            let direction = sweeperDirection.directionRawValue
-            return (.sweeperPassed, ["direction": direction])
+            var dict: [String: Any] = ["direction": sweeperDirection.directionRawValue]
+            if let heading = headingToward {
+                dict["heading_toward"] = heading.rawValue
+            }
+            return (.sweeperPassed, dict)
         }
     }
 

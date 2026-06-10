@@ -151,7 +151,10 @@ enum ActiveSheet: Identifiable {
     /// when opened from the in-drive button. The existing DrivingContextService already
     /// resolves the street name for the DriveModeBottomCard — we reuse that value here
     /// rather than running a second segment search.
-    case reportPin(coord: CLLocationCoordinate2D, streetName: String?)
+    ///
+    /// FT-11: segment added so ReportSheet can show the direction picker with real
+    /// cross-street labels and block bearing. Nil when the long-press is off-segment (OD-1).
+    case reportPin(coord: CLLocationCoordinate2D, streetName: String?, segment: Segment? = nil)
 
     var id: String {
         switch self {
@@ -163,7 +166,7 @@ enum ActiveSheet: Identifiable {
         case .parkUntil:                  return "parkUntil"
         case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
-        case .reportPin(let coord, _):    return "reportPin-\(coord.latitude)-\(coord.longitude)"
+        case .reportPin(let coord, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
         }
     }
 }
@@ -554,7 +557,17 @@ struct ContentView: View {
                     pendingLongPressCoord = nil
                     // Resting path: no street context (not in Drive Mode). streetName = nil →
                     // ReportSheet shows "Reporting at current location" fallback.
-                    activeSheet = .reportPin(coord: coord, streetName: nil)
+                    //
+                    // FT-11: Resolve the nearest segment (same radius as W5 park-pin search)
+                    // so ReportSheet can show the direction picker with real cross-street labels.
+                    // Nil when the long-press is off any segment (OD-1: picker hidden).
+                    let reportSegment = findCandidateSegments(
+                        lat: coord.latitude,
+                        lng: coord.longitude,
+                        radius: pinDropRadiusMeters,
+                        max: 1
+                    ).first?.segment
+                    activeSheet = .reportPin(coord: coord, streetName: nil, segment: reportSegment)
                 }
                 Button("Cancel", role: .cancel) {
                     pendingLongPressCoord = nil
@@ -733,17 +746,19 @@ struct ContentView: View {
             // complexity in sheetContent(_:) — same pattern as PR-1 @ViewBuilder extractions.
             pinDetailSheetContent(pin)
 
-        case .reportPin(let coord, let streetName):
+        case .reportPin(let coord, let streetName, let seg):
             // Tier 3 sub-PR #2: Universal community report sheet.
             // Coordinate source depends on entry path:
             //   - Resting: coord = long-press point on map; streetName = nil
             //   - In-drive: coord = user GPS at moment of tap; streetName = drivingContext?.street
             // Bug #4: streetName passed through so ReportSheet shows "Reporting on <street>".
+            // FT-11: seg passed through so ReportSheet shows the direction picker.
             ReportSheet(
                 coordinate: coord,
                 pinService: pinService,
                 onDismiss: { activeSheet = nil },
-                streetName: streetName
+                streetName: streetName,
+                segment: seg
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -1075,6 +1090,7 @@ struct ContentView: View {
             destinationCoordinate: driveDestinationCoordinate,
             communityPins: communityPins,
             onCommunityPinTapped: handleCommunityPinTapped(_:),
+            segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
             driveHeading: locationService.driveHeading,
             driveModeActive: driveModeActive,
             onTrackingModeChanged: handleTrackingModeChanged(_:),
@@ -1310,7 +1326,20 @@ struct ContentView: View {
                 // DrivingContextService for the DriveModeBottomCard (no new search).
                 Button {
                     guard let loc = locationService.userLocation else { return }
-                    activeSheet = .reportPin(coord: loc, streetName: drivingContext?.street)
+                    // FT-11: Resolve the nearest segment so ReportSheet shows the direction
+                    // picker. Use the same haversine candidate search as the resting path
+                    // (pinDropRadiusMeters = 35m). In-drive GPS is live so this is accurate.
+                    let driveSegment = findCandidateSegments(
+                        lat: loc.latitude,
+                        lng: loc.longitude,
+                        radius: pinDropRadiusMeters,
+                        max: 1
+                    ).first?.segment
+                    activeSheet = .reportPin(
+                        coord: loc,
+                        streetName: drivingContext?.street,
+                        segment: driveSegment
+                    )
                 } label: {
                     VStack(spacing: 2) {
                         Image(systemName: "flag.fill")
