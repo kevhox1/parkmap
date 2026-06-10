@@ -619,39 +619,102 @@ function extractSubSegment(blockGeo, startFt, endFt) {
   return result;
 }
 
+// True perpendicular curb offset (TF2-5).
+// Replaces the old compass-based offset that only shifted in lat OR lng, which
+// produced diagonal artifacts on NYC's rotated grid (numbered streets ~29° off
+// north; East Village on its own skew).
+//
+// Algorithm:
+//   1. Project to a locally metric space: x = lng * cos(latRef), y = lat.
+//      This makes the projected plane isotropic (equal-scale in both axes),
+//      so perpendiculars are geometrically correct.
+//   2. At each point, compute the local street direction by averaging the unit
+//      vectors of the incoming and outgoing segments.  Endpoints use the single
+//      adjacent segment; interior points average both.
+//   3. The two candidate normals perpendicular to direction (dx, dy) are
+//      n1 = (+dy, -dx) and n2 = (-dy, +dx) in projected (x, y).
+//   4. Select the normal whose dot product with the side's compass unit vector
+//      is positive: N→(0,+1), S→(0,−1), E→(+1,0), W→(−1,0).
+//      This robustly picks the curb-facing perpendicular for any street angle.
+//   5. Offset by CURB_OFFSET_METERS along the chosen normal, then unproject.
+//
+// Intersection setback (INTERSECTION_SETBACK_M) is handled separately by
+// trimIntersectionSetback() — this function handles only lateral curb offset.
+const CURB_OFFSET_METERS = 5;
+const DEG_TO_RAD = Math.PI / 180;
+const METERS_PER_DEG_LAT = 111320; // 1° lat ≈ 111,320 m (constant)
+
+// Compass unit vectors in projected space (x = lng*cosLat, y = lat)
+const SIDE_COMPASS = {
+  N: { x: 0, y: 1 },
+  S: { x: 0, y: -1 },
+  E: { x: 1, y: 0 },
+  W: { x: -1, y: 0 },
+};
+
 function offsetPolyline(points, side) {
-  const offset = 0.00004;
   if (!points || points.length < 2) return points || [];
   const valid = points.filter(p => Array.isArray(p) && p.length >= 2 && isFinite(p[0]) && isFinite(p[1]));
   if (valid.length < 2) return valid;
 
-  // Determine overall street orientation from first to last point
-  const totalDLat = valid[valid.length-1][0] - valid[0][0];
-  const totalDLng = valid[valid.length-1][1] - valid[0][1];
-  const isNorthSouth = Math.abs(totalDLat) > Math.abs(totalDLng);
+  // Reference latitude for the projection (mean of all points)
+  const meanLat = valid.reduce((sum, p) => sum + p[0], 0) / valid.length;
+  const cosLat = Math.cos(meanLat * DEG_TO_RAD);
 
-  // Simple compass-based offset:
-  // N/S streets: East side = positive lng offset, West side = negative lng offset
-  // E/W streets: North side = positive lat offset, South side = negative lat offset
-  let latOff = 0, lngOff = 0;
-  if (isNorthSouth) {
-    // N/S street: offset in longitude
-    if (side === 'E') lngOff = offset;
-    else if (side === 'W') lngOff = -offset;
-    else if (side === 'N') latOff = offset;  // rare for N/S street but handle it
-    else if (side === 'S') latOff = -offset;
-  } else {
-    // E/W street: offset in latitude
-    if (side === 'N') latOff = offset;
-    else if (side === 'S') latOff = -offset;
-    else if (side === 'E') lngOff = offset;  // rare for E/W street but handle it
-    else if (side === 'W') lngOff = -offset;
-  }
+  // Project to metric-like plane: x = lng * cosLat, y = lat
+  const proj = valid.map(([lat, lng]) => [lng * cosLat, lat]);
 
-  return valid.map(([lat, lng]) => [
-    Math.round((lat + latOff) * 1e6) / 1e6,
-    Math.round((lng + lngOff) * 1e6) / 1e6
-  ]);
+  // Compute local street direction unit vector at each point
+  const dirs = proj.map((pt, i) => {
+    let dx = 0, dy = 0;
+    if (i > 0) {
+      const segDx = proj[i][0] - proj[i - 1][0];
+      const segDy = proj[i][1] - proj[i - 1][1];
+      const len = Math.sqrt(segDx * segDx + segDy * segDy);
+      if (len > 0) { dx += segDx / len; dy += segDy / len; }
+    }
+    if (i < proj.length - 1) {
+      const segDx = proj[i + 1][0] - proj[i][0];
+      const segDy = proj[i + 1][1] - proj[i][1];
+      const len = Math.sqrt(segDx * segDx + segDy * segDy);
+      if (len > 0) { dx += segDx / len; dy += segDy / len; }
+    }
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > 1e-10) return [dx / len, dy / len];
+    // Degenerate point: fall back to overall polyline direction
+    const fallDx = proj[proj.length - 1][0] - proj[0][0];
+    const fallDy = proj[proj.length - 1][1] - proj[0][1];
+    const fallLen = Math.sqrt(fallDx * fallDx + fallDy * fallDy);
+    return fallLen > 0 ? [fallDx / fallLen, fallDy / fallLen] : [1, 0];
+  });
+
+  // Offset distance in degree-lat units (the unit of y in projected space)
+  const offsetDist = CURB_OFFSET_METERS / METERS_PER_DEG_LAT;
+
+  const sv = SIDE_COMPASS[side] || { x: 0, y: 1 }; // default N if unrecognised
+
+  return proj.map(([px, py], i) => {
+    const [dx, dy] = dirs[i];
+
+    // Two candidate perpendicular normals
+    const n1x = dy, n1y = -dx;   // rotate direction 90° CW in projected space
+    const n2x = -dy, n2y = dx;   // rotate direction 90° CCW
+
+    // Pick the one pointing toward the side's compass direction
+    const dot1 = n1x * sv.x + n1y * sv.y;
+    const dot2 = n2x * sv.x + n2y * sv.y;
+    const nx = dot1 >= dot2 ? n1x : n2x;
+    const ny = dot1 >= dot2 ? n1y : n2y;
+
+    // Offset in projected space, then unproject (lng = x / cosLat, lat = y)
+    const newX = px + nx * offsetDist;
+    const newY = py + ny * offsetDist;
+
+    return [
+      Math.round(newY * 1e6) / 1e6,
+      Math.round((newX / cosLat) * 1e6) / 1e6,
+    ];
+  });
 }
 
 // ==== Sub-segment creation ====
