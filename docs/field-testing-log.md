@@ -47,8 +47,14 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Fix:** (1) rotate the puck RELATIVE to camera heading (`h - camera.heading` ≈ 0 in heading-up mode;
   simplest: arrow points static-up while heading-up). (2) reduce low-speed staleness — lower the speed
   gate and/or smarter slow-speed heading. #31-sensitive path; RegionSyncGuard + live-UI gate.
-- **Status:** 🔴 open — root-caused; fix proposed. Goes in next build (bundle w/ FT-11 picker).
-- **Lands in:** iOS (`MapViewRepresentable.swift` puck rotation, `LocationService` speed gate).
+- **Status:** 🟢 FIXED → build 7. Puck target = identity (arrow points up; map heading-up rotation does
+  the work), speed gate 1.8→0.5 m/s (course-only, FT-7 intact), + FT-11 chevron `bearing-90`. QA
+  PASS-WITH-NOTES (`docs/qa/build7-rotation-qa.md`), 479/0. On-device "arrow up / map turns under it"
+  = Kevin's drive-test gate.
+- **TF2-3-followup (small, next build):** lock `isRotateEnabled` (± pitch) OFF during Drive Mode so a
+  manual rotation can't knock heading-up off (Apple/Waze nav behavior + FT-10 intent). QA flagged a
+  transient self-correcting misdirection if user manually rotates mid-drive. Not blocking build 7.
+- **Lands in:** iOS (`MapViewRepresentable.swift` puck rotation + makeUIView gesture flags, `LocationService` speed gate).
 
 ### TF2-2 🟢 Live-map pan still snaps back mid-drag (async race) — FIXED → build 4
 - **Area:** Drive Mode follow-recenter gate. `MapViewRepresentable.shouldSyncDriveRegion` / updateUIView.
