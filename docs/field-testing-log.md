@@ -40,8 +40,10 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   (2) After stopping: a "Park here / Park my car" button → confirmation pop-up with a SIGN-CHECK
   checklist + novice education (check posted signs; fire hydrant 15ft rule; etc.). Note: ParkConfirmView
   ("Park here") + pin-drop flow already exist — integrate, don't duplicate.
-- **Status:** 🔵 dispatched to tech-lead for spec (voice copy + bottom-card copy + checklist content +
-  side-level aggregation logic in DrivingContextService).
+- **Status:** 🟢 MERGED #59 → build 9. Side-level catch-all voice/card copy, aggregateSide (free ≥6m),
+  Park-here → always-shown sign-check sheet → existing ParkConfirm flow. QA PASS-WITH-NOTES
+  (`docs/qa/tf2-7-guidance-qa.md`); QA Finding #1 (due-north tie-break → one chip stuck '—') FIXED
+  in-branch w/ signed-angle tiebreaker + regression test. 505/0. On-device voice/sheet feel = Kevin.
 - **Lands in:** iOS (DrivingContextService commentary, DriveModeBottomCard, ParkConfirm flow).
 
 ### TF2-6 🔴 Cruise entry ZOOMS OUT (should zoom in) + buildings occlude at 45° pitch
@@ -53,7 +55,9 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   right but entry doesn't. Fix: swap order on entry (match recenter) + re-apply guard.
 - **Buildings/pitch:** match Apple/Waze nav: `showsBuildings = false` during drive mode (flat in nav),
   consider pitch 45°→~30° (tunable). We already use their native .follow — these are tunables.
-- **Status:** 🔴 fix dispatched (ios-engineer) → build 9.
+- **Status:** 🟢 MERGED #58 → build 9. Entry order swapped (tracking first, zoom last — matches
+  Recenter), buildings OFF in drive, pitch 45°→30°. QA PASS-WITH-NOTES (`docs/qa/tf2-6-camera-qa.md`),
+  480/0. On-device cruise-entry-ends-tight = Kevin.
 - **Lands in:** iOS (`ContentView.handleDriveModeAndCamera` ordering, MapViewRepresentable drive config).
 
 ### TF2-5 🔴 Parking lines drawn in the MIDDLE of the road, not on the curb — SYSTEMIC (geometry)
