@@ -7,11 +7,16 @@
 //  CM-2: Cruise Mode extension — `setCruiseMode(_:)` switches voice cadence to
 //         `CruiseVoicePolicy` (gate on at least one free/metered side) + Cruise Mode
 //         phrasing via `CruiseVoicePolicy.utteranceText(for:)`.
+//  TF2-7: Side-level aggregation — `SideOpportunity` + `aggregateSide(segments:side:engine:date:minimumFreeLength:)`
+//         replaces single-segment `safetyLabel` calls in `update(...)`.
+//         Voice copy updated to use catch-all templates (§4.1) — "Free parking sections on
+//         the [side] — check signs." / "Metered on the [side]." / "No parking on either side."
 //
 //  Responsibilities:
 //    - Find the closest block to the driver's GPS position.
 //    - Classify N/S/E/W sides as "left" or "right" relative to the driver's heading.
-//    - Compute safety label for each side via ParkingRulesEngine.
+//    - Aggregate ALL segments on each cardinal side via aggregateSide → SideOpportunity.
+//    - Compute safety label for each side (wrapped from SideOpportunity for downstream use).
 //    - Detect block changes and trigger voice cues via DrivingVoice.
 //    - In Cruise Mode: gate announcements via CruiseVoicePolicy.shouldAnnounce, and
 //      use CruiseVoicePolicy.utteranceText for Cruise-specific phrasing.
@@ -41,6 +46,29 @@ struct DrivingContext: Equatable {
 
     /// Block identity key for change detection. Mirrors PWA: `${ctx.street}|${ctx.from}|${ctx.to}`.
     var blockKey: String { "\(street)|\(from)|\(to)" }
+}
+
+// MARK: - TF2-7: SideOpportunity
+
+/// Aggregated parking opportunity for one side of the current block.
+///
+/// Returned by `DrivingContextService.aggregateSide(segments:side:engine:date:minimumFreeLength:)`.
+/// Reduces all segments on one cardinal side to a single actionable classification.
+///
+/// Mapping to voice + card (spec §3.2):
+///   `.free`       → "Free parking sections on the [left/right] — check signs."
+///   `.metered`    → "Metered on the [left/right]."
+///   `.restricted` → (silent in Cruise Mode; "No parking on either side." in destination mode when both restricted)
+///   `.unknown`    → (silent)
+enum SideOpportunity: Equatable {
+    /// At least one qualifying free-now stretch ≥ minimumFreeLength exists on this side.
+    case free
+    /// No qualifying free stretch; at least one metered segment exists.
+    case metered
+    /// No free or metered segments — entire side is restricted or no-standing.
+    case restricted
+    /// No segments found for this side (data gap).
+    case unknown
 }
 
 // MARK: - Side bearing constants
@@ -195,6 +223,7 @@ final class DrivingContextService {
         let block = (street: closest.street, from: closest.fromStreet, to: closest.to)
 
         // Step 3: Find all sides (N/S/E/W) for this block.
+        // TF2-7: We now resolve cardinal side strings, not individual segments.
         let allSides = ["N", "S", "E", "W"]
         let sidesPresent: [(side: String, segment: Segment)] = allSides.compactMap { s in
             guard let seg = findSegment(
@@ -203,31 +232,40 @@ final class DrivingContextService {
             return (s, seg)
         }
 
-        // Step 4: Classify left/right (port of sideRelativeToHeading loop, index.html:5568–5571).
-        var leftSeg: Segment? = nil
-        var rightSeg: Segment? = nil
+        // Step 4: Classify left/right cardinal sides (port of sideRelativeToHeading loop, index.html:5568–5571).
+        // TF2-7: Resolve cardinal side strings ("N"/"S"/"E"/"W"), not segment references.
+        var leftCardinalSide: String? = nil
+        var rightCardinalSide: String? = nil
 
         if let h = heading {
-            for (s, seg) in sidesPresent {
+            for (s, _) in sidesPresent {
                 let which = sideRelativeToHeading(heading: h, side: s)
-                if which == "left" && leftSeg == nil { leftSeg = seg }
-                else if which == "right" && rightSeg == nil { rightSeg = seg }
+                if which == "left" && leftCardinalSide == nil { leftCardinalSide = s }
+                else if which == "right" && rightCardinalSide == nil { rightCardinalSide = s }
             }
         }
 
         // Step 5: Fallback when heading unavailable (index.html:5575–5579).
         // North/West → Left, South/East → Right.
-        if leftSeg == nil && rightSeg == nil && !sidesPresent.isEmpty {
-            leftSeg = sidesPresent.first(where: { $0.side == "N" || $0.side == "W" })?.segment
-                ?? sidesPresent.first?.segment
-            rightSeg = sidesPresent.first(where: { $0.side == "S" || $0.side == "E" })?.segment
-                ?? (sidesPresent.count > 1 ? sidesPresent[1].segment : nil)
+        if leftCardinalSide == nil && rightCardinalSide == nil && !sidesPresent.isEmpty {
+            leftCardinalSide = sidesPresent.first(where: { $0.side == "N" || $0.side == "W" })?.side
+                ?? sidesPresent.first?.side
+            rightCardinalSide = sidesPresent.first(where: { $0.side == "S" || $0.side == "E" })?.side
+                ?? (sidesPresent.count > 1 ? sidesPresent[1].side : nil)
         }
 
-        // Step 6: Compute safety labels (index.html:5584–5585).
-        let noData = SafetyLabel(text: "No data", severity: .unknown)
-        let leftLabel  = leftSeg.map  { engine.safetyLabel(for: $0, at: date) } ?? noData
-        let rightLabel = rightSeg.map { engine.safetyLabel(for: $0, at: date) } ?? noData
+        // Step 6: TF2-7 — side-level aggregation replaces single-segment safetyLabel calls.
+        // aggregateSide reduces ALL segments on the cardinal side to one SideOpportunity.
+        // Pre-filter to the current block (street + from + to) so aggregateSide only sees
+        // segments for this block, not other blocks on the same cardinal side.
+        // (spec §3.5: "segments: [Segment] — all segments for the current street/from/to combination")
+        let blockSegments = segments.filter {
+            $0.street == block.street && $0.fromStreet == block.from && $0.to == block.to
+        }
+        let leftOpp  = leftCardinalSide.map  { DrivingContextService.aggregateSide(segments: blockSegments, side: $0, engine: engine, date: date) } ?? .unknown
+        let rightOpp = rightCardinalSide.map { DrivingContextService.aggregateSide(segments: blockSegments, side: $0, engine: engine, date: date) } ?? .unknown
+        let leftLabel  = SafetyLabel(for: leftOpp)
+        let rightLabel = SafetyLabel(for: rightOpp)
 
         let context = DrivingContext(
             street: block.street,
@@ -246,8 +284,13 @@ final class DrivingContextService {
         if blockKey != lastBlockKey {
             lastBlockKey = blockKey
             if !isCruiseMode {
-                // Destination Mode: announce every block change (unchanged pre-CM-2 behavior).
-                speakContext(context, text: buildUtteranceText(context))
+                // Destination Mode: announce every block change (pre-CM-2 behavior preserved).
+                // TF2-7: buildUtteranceText returns "" for the one-restricted+one-unknown case;
+                // skip speakContext for empty text to avoid burning the 12s min-gap timer.
+                let text = buildUtteranceText(context)
+                if !text.isEmpty {
+                    speakContext(context, text: text)
+                }
             } else if CruiseVoicePolicy.shouldAnnounce(context: context) {
                 // Cruise Mode: only announce when at least one side is free or metered.
                 speakContext(context, text: CruiseVoicePolicy.utteranceText(for: context))
@@ -278,19 +321,166 @@ final class DrivingContextService {
         voice.speak(text)
     }
 
-    /// Port of speakDrivingContext's text construction (index.html:5964–5970).
+    /// Builds the destination-mode voice utterance text for a driving context.
+    ///
+    /// TF2-7: Replaced the zone-by-zone format ("Left side, free until Thu 9:30am.
+    /// Right side, no parking.") with the same catch-all templates used by
+    /// `CruiseVoicePolicy.utteranceText(for:)` — spec §4.3.
+    ///
+    /// Destination mode retains one meaningful difference from Cruise Mode:
+    /// all-restricted blocks are NOT silenced. If both sides are `.restricted`,
+    /// destination mode announces: "[Street]. No parking on either side."
+    /// This keeps the driver informed in navigation mode (spec §4.3).
+    ///
+    /// Copy strings (exact — QA verifies against these, spec §4.1):
+    ///   - Both free      → "[Street]. Free parking sections on both sides — check signs."
+    ///   - Left free only → "[Street]. Free parking sections on the left — check signs."
+    ///   - Right free only→ "[Street]. Free parking sections on the right — check signs."
+    ///   - No free, left metered only  → "[Street]. Metered on the left."
+    ///   - No free, right metered only → "[Street]. Metered on the right."
+    ///   - No free, both metered       → "[Street]. Metered on both sides."
+    ///   - Both restricted → "[Street]. No parking on either side."
+    ///   - One restricted + one unknown → (no announcement — consistent with Cruise Mode)
     func buildUtteranceText(_ context: DrivingContext) -> String {
         let street = expandAbbreviations(titleCase(context.street))
-        var parts = [street + "."]
-        let lText = context.leftLabel.text
-        let rText = context.rightLabel.text
-        if !lText.isEmpty && lText != "No data" {
-            parts.append("Left side, \(lText).")
+        let leftFree     = context.leftLabel.severity == .free
+        let rightFree    = context.rightLabel.severity == .free
+        let leftMetered  = context.leftLabel.severity == .metered
+        let rightMetered = context.rightLabel.severity == .metered
+        let leftRestricted  = context.leftLabel.severity == .restricted
+        let rightRestricted = context.rightLabel.severity == .restricted
+
+        let clause: String
+        if leftFree && rightFree {
+            clause = "Free parking sections on both sides — check signs."
+        } else if leftFree {
+            clause = "Free parking sections on the left — check signs."
+        } else if rightFree {
+            clause = "Free parking sections on the right — check signs."
+        } else if leftMetered && rightMetered {
+            clause = "Metered on both sides."
+        } else if leftMetered {
+            clause = "Metered on the left."
+        } else if rightMetered {
+            clause = "Metered on the right."
+        } else if leftRestricted && rightRestricted {
+            // Destination mode: announce all-restricted blocks (spec §4.3 meaningful difference).
+            clause = "No parking on either side."
+        } else {
+            // One restricted + one unknown, or both unknown — no announcement value.
+            // Return empty string; speakContext's min-gap guard still fires but the
+            // empty string is harmless when spoken by AVSpeechSynthesizer.
+            return ""
         }
-        if !rText.isEmpty && rText != "No data" {
-            parts.append("Right side, \(rText).")
+        return "\(street). \(clause)"
+    }
+
+    // MARK: - TF2-7: Side-level aggregation
+
+    /// Reduces all segments on one cardinal side of the current block to a single
+    /// `SideOpportunity` — answers "is there any free stretch, metered zone, or nothing
+    /// usable on this side?" rather than exposing zone-by-zone granularity.
+    ///
+    /// Pure static function contract: no side effects, no stored state, no framework imports.
+    /// Testable at zero cost. Mirrors the `CruiseVoicePolicy` / `FinalApproachService` pattern.
+    ///
+    /// Algorithm (spec §3.5):
+    ///   1. Filter `segments` to those matching the given cardinal `side`.
+    ///   2. For each matching segment, call `engine.safetyLabel(for: segment, at: date)`.
+    ///   3. If any segment has severity `.free` AND its haversine length ≥ `minimumFreeLength`
+    ///      → return `.free` immediately (short-circuit — "any free stretch ≥ one car length").
+    ///   4. If no `.free` found but any segment has severity `.metered` → return `.metered`.
+    ///   5. If segments were found but none were free or metered → return `.restricted`.
+    ///   6. If no segments matched the side → return `.unknown`.
+    ///
+    /// - Parameters:
+    ///   - segments: All segments for the current tile region (not pre-filtered to block).
+    ///   - side: Cardinal side string — "N", "S", "E", or "W".
+    ///   - engine: ParkingRulesEngine for safetyLabel evaluation.
+    ///   - date: Evaluation date. Pass `.nowET` in production; inject a fixed date in tests.
+    ///   - minimumFreeLength: Minimum free-stretch length in meters to count as qualifying.
+    ///     Defaults to 6.0m (one car length — same as the tile-geometry intersection-clip
+    ///     setback constant from PR #21, spec §3.3). Injectable for unit tests.
+    ///
+    /// - Returns: `SideOpportunity` classification for the given side.
+    static func aggregateSide(
+        segments: [Segment],
+        side: String,
+        engine: ParkingRulesEngine,
+        date: Date,
+        minimumFreeLength: Double = 6.0
+    ) -> SideOpportunity {
+        // Step 1: Filter to segments matching the given cardinal side.
+        let sideSegments = segments.filter { $0.side == side }
+
+        // Step 6 (early): no segments found for this side → unknown (data gap).
+        guard !sideSegments.isEmpty else { return .unknown }
+
+        var hasMetered = false
+
+        // Steps 2–4: classify each segment.
+        for seg in sideSegments {
+            let label = engine.safetyLabel(for: seg, at: date)
+            switch label.severity {
+            case .free:
+                // Step 3: check minimum free-stretch length via haversine.
+                let length = segmentLengthMeters(seg)
+                if length >= minimumFreeLength {
+                    return .free  // Short-circuit: qualifying free stretch found.
+                }
+                // Free segment too short — fall through. Does not count as qualifying.
+                // A sub-6m free sliver beside a restricted zone is not actionable.
+            case .metered:
+                hasMetered = true
+            case .restricted, .unknown:
+                break
+            }
         }
-        return parts.joined(separator: " ")
+
+        // Step 4: no qualifying free, but at least one metered.
+        if hasMetered { return .metered }
+
+        // Step 5: segments found but none free or metered.
+        return .restricted
+    }
+
+    /// Computes the haversine length of a segment's polyline in meters.
+    ///
+    /// Sums the haversine distance between consecutive coordinate pairs in `segment.line`.
+    /// Used by `aggregateSide` to check the 6m minimum-free-stretch threshold (spec §3.3).
+    ///
+    /// Internal (not private) so `TF27Tests` can verify the threshold behaviour directly
+    /// without needing to construct a full `ParkingRulesEngine` context.
+    /// Accessibility note: `@testable import WePark` exposes `internal` to tests.
+    static func segmentLengthMeters(_ segment: Segment) -> Double {
+        let coords = segment.line
+        guard coords.count >= 2 else { return 0 }
+        var total = 0.0
+        for i in 0..<(coords.count - 1) {
+            guard coords[i].count >= 2, coords[i+1].count >= 2 else { continue }
+            let a = CLLocationCoordinate2D(latitude: coords[i][0], longitude: coords[i][1])
+            let b = CLLocationCoordinate2D(latitude: coords[i+1][0], longitude: coords[i+1][1])
+            total += staticHaversineMeters(from: a, to: b)
+        }
+        return total
+    }
+
+    /// Static haversine helper for use by `aggregateSide` and `segmentLengthMeters`.
+    /// Mirrors the instance `haversineMeters(from:to:)` method; kept static so `aggregateSide`
+    /// (which is static) can call it without a service instance.
+    private static func staticHaversineMeters(
+        from a: CLLocationCoordinate2D,
+        to b: CLLocationCoordinate2D
+    ) -> Double {
+        let R = 6_371_000.0
+        let dLat = (b.latitude  - a.latitude)  * .pi / 180
+        let dLng = (b.longitude - a.longitude) * .pi / 180
+        let lat1 = a.latitude * .pi / 180
+        let lat2 = b.latitude * .pi / 180
+        let sinHalfLat = sin(dLat / 2)
+        let sinHalfLng = sin(dLng / 2)
+        let h = sinHalfLat * sinHalfLat + cos(lat1) * cos(lat2) * sinHalfLng * sinHalfLng
+        return 2 * R * asin(sqrt(h))
     }
 
     // MARK: - Geometry: closest segment

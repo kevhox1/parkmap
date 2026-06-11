@@ -39,3 +39,32 @@ struct SafetyLabel: Equatable {
         case unknown
     }
 }
+
+// MARK: - TF2-7: SideOpportunity → SafetyLabel bridge
+
+extension SafetyLabel {
+
+    /// Converts a `SideOpportunity` aggregation result to a `SafetyLabel` for downstream
+    /// consumers (`DrivingContext`, `DriveModeBottomCard`, `CruiseVoicePolicy`).
+    ///
+    /// Placed in an extension (not the primary struct body) to preserve the compiler-synthesized
+    /// memberwise `init(text:severity:)` — required by `ParkingRulesEngine` and tests.
+    ///
+    /// Card chip text per spec §3.2:
+    ///   `.free`       → "Free — check signs" (chip width; voice has the full "sections" qualifier)
+    ///   `.metered`    → "Metered"
+    ///   `.restricted` → "No parking"
+    ///   `.unknown`    → "—"
+    init(for opportunity: SideOpportunity) {
+        switch opportunity {
+        case .free:
+            self.init(text: "Free — check signs", severity: .free)
+        case .metered:
+            self.init(text: "Metered", severity: .metered)
+        case .restricted:
+            self.init(text: "No parking", severity: .restricted)
+        case .unknown:
+            self.init(text: "—", severity: .unknown)
+        }
+    }
+}
