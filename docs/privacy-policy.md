@@ -1,10 +1,6 @@
 # WePark — Privacy Policy
 
-**Draft — review before public App Store launch (legal eyes recommended for GA; fine for a closed TestFlight beta). Last updated: 2026-06-06.**
-
-> **TODO before TF1:** host this at a public URL (e.g. GitHub Pages alongside the PWA: `https://kevhox1.github.io/parkmap/privacy.html`) and paste that URL into App Store Connect → App Privacy. Fill in the contact email placeholder.
-
----
+**Last updated: 2026-06-11.**
 
 WePark helps you find legal, free street parking in New York City. We care about your privacy and collect as little as possible. This policy explains what we collect, why, and who it's shared with.
 
@@ -30,7 +26,7 @@ WePark helps you find legal, free street parking in New York City. We care about
 - **Apple** — standard iOS services and push notifications (APNs).
 
 ## Data retention
-- Community reports are ephemeral and auto-expire (typically within ~30 minutes for live reports).
+- Community reports are ephemeral and auto-expire (within ~5 minutes for moving reports like enforcement agents and street sweepers; up to ~30 minutes for stationary ones like broken meters).
 - Your anonymous identifier persists on your device until you delete the app.
 
 ## Accuracy disclaimer
@@ -43,7 +39,7 @@ WePark is not directed to children under 13 and does not knowingly collect their
 We may update this policy; material changes will be reflected here with a new date.
 
 ## Contact
-Questions about privacy? Contact **[your-contact-email@example.com]**.
+Questions about privacy? Contact **kevinhx2010@gmail.com**.
 
 ---
 
