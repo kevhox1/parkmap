@@ -1721,6 +1721,19 @@ struct ContentView: View {
         // (spec §3.6 R-3: preferredConfiguration is a separate MapKit path from setCamera.)
         coordinatorActions.applyDriveMapStyle?(active, preDriveMapConfiguration)
 
+        // TF2-6 (Issue 2a): Toggle 3D building extrusions.
+        // `mapView.showsBuildings` is on MKMapView, not MKStandardMapConfiguration — so it
+        // cannot be embedded in `targetMapConfiguration`. Toggling it here via CoordinatorActions
+        // keeps the mutation outside `updateUIView` (satisfying the #31 architectural invariant).
+        //
+        // On entry: hide buildings (flat nav map, matching Apple/Waze behaviour). 3D buildings
+        //   occlude parking lines and lane markings at the 30° drive pitch, especially in dense
+        //   Manhattan blocks. Hiding them gives a clearer view of the road ahead.
+        // On exit: restore buildings (browsing the map post-drive, buildings are useful).
+        //
+        // Kevin: change `false` to `true` below if you prefer buildings visible in Drive Mode.
+        coordinatorActions.setShowsBuildings?(!active)
+
         // Refresh the user-location annotation view so MapKit re-queries `mapView(_:viewFor:)`,
         // which returns the directional puck when `driveModeActive` is true, or nil (restoring
         // the default blue dot) when false. Implemented by briefly toggling `showsUserLocation`.
@@ -1963,27 +1976,48 @@ struct ContentView: View {
 
     /// Handles Drive Mode entry/exit: lifecycle + camera/style + native follow in one call.
     ///
-    /// Phase 2 additions (P2-AC-1, P2-AC-2):
-    ///   - On entry: `coordinatorActions.setDriveTrackingMode?(true)` engages MapKit `.follow`
-    ///     for smooth native position centering (called AFTER `handleDriveCameraChange` so the
-    ///     pitch/zoom setCamera runs first, then MapKit's follow aligns position).
-    ///   - On exit:  `coordinatorActions.setDriveTrackingMode?(false)` disengages follow.
+    /// TF2-6 ENTRY ORDER FIX (Issue 1):
+    ///   On ENTRY the previous order was: camera (pitch+zoom setCamera) → tracking (.follow).
+    ///   This caused the visible zoom-out bug: MapKit's `.follow` engagement moves the camera
+    ///   to its own default altitude, overriding the just-applied FT-8 tight zoom. By the time
+    ///   setCamera fired, MapKit had already reset the zoom.
     ///
-    /// The tracking-mode OUTPUT path (MapKit → ContentView) does NOT go through
-    /// CoordinatorActions closures. Instead, `onTrackingModeChanged` is a parameter on
-    /// `MapViewRepresentable` (same pattern as `onRegionChanged`) — passed from the
-    /// `mapRepresentable` property and updated by `updateUIView` via `parent` assignment.
-    /// ContentView's `handleTrackingModeChanged(_:)` is called from the Coordinator delegate
-    /// via `parent.onTrackingModeChanged?(mode)` when MapKit fires the tracking-mode callback.
+    ///   The Recenter path (`recenterDriveMode`) always worked correctly because it does the
+    ///   OPPOSITE order: tracking FIRST, then applyDrivePitch (camera). When `.follow` is
+    ///   already engaged before our setCamera fires, our setCamera is the LAST writer and wins.
+    ///
+    ///   Fix: match the recenter order on entry — engage tracking first, then apply camera.
+    ///   Empirical sim test confirms the simple order swap suffices: the re-apply guard in
+    ///   `mapView(_:didChange:animated:)` was not needed (see MapViewRepresentable comment).
+    ///
+    /// EXIT ORDER (unchanged, correct):
+    ///   On EXIT: camera restore fires first, then tracking disengages. This is acceptable:
+    ///   the `.follow` that's still active when we issue the restore-camera setCamera will move
+    ///   the center to the user's position (fine UX — you're still near the user after Drive Mode).
+    ///   Tracking disengage fires immediately after so follow won't keep running. The key
+    ///   camera restore (pitch + zoom back to pre-drive values) is applied by our setCamera,
+    ///   which MapKit's follow does not undo (follow only changes center, not pitch or altitude).
     ///
     /// Architecture: all calls fire from `.onChange(of: driveModeActive)` — OUTSIDE `updateUIView`.
     /// No camera or tracking-mode mutation inside `updateUIView`. #31 invariant maintained.
     private func handleDriveModeAndCamera(_ active: Bool) {
         handleDriveModeChange(active)
-        handleDriveCameraChange(active)
-        // Phase 2: Engage or disengage MapKit native position-follow (P2-AC-1, P2-AC-2).
-        // Called AFTER handleDriveCameraChange so pitch+zoom setCamera fires before follow.
-        coordinatorActions.setDriveTrackingMode?(active)
+
+        if active {
+            // TF2-6: ENTRY — engage tracking FIRST, then apply camera (pitch+zoom).
+            // Tracking first lets MapKit know to follow the user; our setCamera then fires
+            // AFTER MapKit's initial .follow camera placement and wins as the last writer.
+            // This matches recenterDriveMode's order (which was always correct).
+            coordinatorActions.setDriveTrackingMode?(true)
+            handleDriveCameraChange(true)
+        } else {
+            // EXIT — restore camera first, then disengage tracking.
+            // Camera restore (pitch+zoom back to pre-drive values) applies pitch/altitude —
+            // MapKit's .follow does not override pitch/altitude, only center, so the restore
+            // is not cancelled. Disengaging tracking immediately after stops follow.
+            handleDriveCameraChange(false)
+            coordinatorActions.setDriveTrackingMode?(false)
+        }
     }
 
     // MARK: - Phase 2: Tracking-mode change handler (P2-AC-6, P2-AC-7)

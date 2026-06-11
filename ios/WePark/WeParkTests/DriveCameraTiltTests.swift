@@ -15,15 +15,15 @@
 //  W8.5c-polish and are explicitly forbidden by spec §5 and AC-6.
 //
 //  Test inventory:
-//    1. testPitchDecision_onEntry_returnsConstantPitch  — active=true  → driveModePitch (45°, PR-2)
+//    1. testPitchDecision_onEntry_returnsConstantPitch  — active=true  → driveModePitch (30°, TF2-6)
 //    2. testPitchDecision_onExit_restoresPriorPitch     — active=false → priorPitch (5°)
 //    3. testPitchDecision_onExit_noPrior_returnsZero    — active=false → 0 when priorPitch=0
 //    4. testHeadingDeadBand_afterPitchChange_duplicateHeadingIsSkipped  — R-1 coexistence
-//    5. testPitchDecision_onEntry_returnsConstantValue  — verifies constant = 45° (PR-2 measured)
+//    5. testPitchDecision_onEntry_returnsConstantValue  — verifies constant = 30° (TF2-6 value)
 //    6. testPitchDecision_onExit_restoresNonZeroPrior   — OQ-3: non-zero priorPitch is preserved
 //
-//  PR-2 change: driveModePitch updated 30° → 45° (measured at tighter zoom ~0.005° span).
-//  Tests 1 and 5 updated accordingly (spec §5: "update the existing targetPitch test").
+//  TF2-6 change: driveModePitch lowered 45° → 30° (Apple/Waze parity — buildings occlude at 45°).
+//  Tests 1 and 5 updated accordingly.
 //  Baseline before PR-3: 207/0. PR-3 added 6. PR-2 updates 2 existing tests.
 //
 //  No Calendar.current use.
@@ -44,10 +44,11 @@ final class DriveCameraTiltTests: XCTestCase {
 
     /// Verifies `targetPitch(forDriveModeActive:priorPitch:)` returns `driveModePitch` on entry.
     ///
-    /// PR-3 shipped 30° (safe ceiling at the wider span ~0.04°, altitude ~180,000m).
-    /// PR-2 updated to 45° after empirical measurement at the tighter span ~0.005°
-    /// (altitude ~480m via altitudeForSpan): at that altitude MapKit allows steeper pitch
-    /// without clamping. 45° was measured to round-trip faithfully.
+    /// TF2-6: driveModePitch lowered 45° → 30° (Apple/Waze parity, Issue 2b).
+    /// 30° is also un-clamped at the Drive Mode zoom (~621m altitude via altitudeForSpan);
+    /// MapKit only clamps pitch at wide altitudes (~180,000m where ceiling ≈ 35°).
+    /// At ~621m the ceiling is 60°+, so both 45° and 30° are faithful — 30° is preferred
+    /// because it reduces building occlusion of lane markings and parking lines.
     func testPitchDecision_onEntry_returnsConstantPitch() {
         let result = MapViewRepresentable.targetPitch(forDriveModeActive: true, priorPitch: 0)
         XCTAssertEqual(result, MapViewRepresentable.driveModePitch, accuracy: 1,
@@ -129,17 +130,17 @@ final class DriveCameraTiltTests: XCTestCase {
 
     // MARK: Test 5: pitch constant range guard
 
-    /// Verifies that `driveModePitch` is 45° (PR-2 empirically measured value) and that
+    /// Verifies that `driveModePitch` is 30° (TF2-6 value) and that
     /// `targetPitch` delegates to it regardless of priorPitch.
     ///
-    /// PR-2 changed from 30° (PR-3) to 45° after measuring that MapKit allows steeper pitch
-    /// at the tighter Drive Mode zoom (span ~0.005°, altitude ~480m via altitudeForSpan).
+    /// TF2-6: lowered 45° → 30° (Apple/Waze parity — buildings occlude at 45°, Issue 2b).
+    /// Kevin: tune on-device — try 35° for more depth, 25° for a flatter view.
     /// Guards against silent constant changes — any change requires updating this test
     /// with a spec-approved deviation note.
     func testPitchDecision_onEntry_returnsConstantValue() {
-        // The constant must be 45° (PR-2 empirical measurement result).
-        XCTAssertEqual(MapViewRepresentable.driveModePitch, 45, accuracy: 0.001,
-            "driveModePitch must be 45° (PR-2 measured value at tighter zoom); got \(MapViewRepresentable.driveModePitch)°")
+        // The constant must be 30° (TF2-6 Apple/Waze parity value).
+        XCTAssertEqual(MapViewRepresentable.driveModePitch, 30, accuracy: 0.001,
+            "driveModePitch must be 30° (TF2-6 Apple/Waze parity value); got \(MapViewRepresentable.driveModePitch)°")
 
         // targetPitch on entry must equal the constant regardless of priorPitch.
         let result = MapViewRepresentable.targetPitch(forDriveModeActive: true, priorPitch: 15)
@@ -292,5 +293,33 @@ final class RegionSyncGuardTests: XCTestCase {
         let coordinator = MapViewRepresentable.Coordinator(parent: r)
         XCTAssertFalse(coordinator.isUserInteracting,
             "isUserInteracting must default to false (no gesture in flight at init)")
+    }
+
+    // MARK: Test 11 (TF2-6): setShowsBuildings closure is callable
+
+    /// Verifies `CoordinatorActions.setShowsBuildings` exists and is callable.
+    ///
+    /// TF2-6 (Issue 2a): `MKMapView.showsBuildings` is NOT a property of
+    /// `MKStandardMapConfiguration`, so building visibility is toggled separately via
+    /// this CoordinatorActions closure. Called from ContentView's
+    /// `.onChange(of: driveModeActive)` — OUTSIDE `updateUIView` — satisfying #31.
+    ///
+    /// `true`  → show buildings (browse mode / Drive Mode exit).
+    /// `false` → hide buildings (Drive Mode entry — flat nav map, Apple/Waze parity).
+    func testCoordinatorActions_setShowsBuildings_isCallable() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+
+        var capturedValue: Bool? = nil
+        actions.setShowsBuildings = { show in
+            capturedValue = show
+        }
+
+        actions.setShowsBuildings?(false)
+        XCTAssertEqual(capturedValue, false,
+            "setShowsBuildings must be callable with false (Drive Mode entry — hide buildings)")
+
+        actions.setShowsBuildings?(true)
+        XCTAssertEqual(capturedValue, true,
+            "setShowsBuildings must be callable with true (Drive Mode exit — restore buildings)")
     }
 }
