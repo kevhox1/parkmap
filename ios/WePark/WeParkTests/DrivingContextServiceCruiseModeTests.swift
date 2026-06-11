@@ -176,6 +176,33 @@ final class DrivingContextServiceCruiseModeTests: XCTestCase {
         )
     }
 
+    // MARK: - Test 4c: TF2-7 QA Finding #1 — heading-0 tie-break assigns BOTH sides.
+
+    /// Regression lock for the due-north tie-break: at heading 0 with N/S-labeled sides,
+    /// dLeft == dRight for both sides; the old `<=` tie-break sent BOTH to "left", leaving
+    /// the right side unassigned ("—"). The signed-angle tiebreaker must assign the two
+    /// opposite sides to OPPOSITE relative sides, so both-restricted still speaks
+    /// "No parking on either side." (it was silent before the fix — right side .unknown).
+    func testDestinationMode_headingZeroTieBreak_bothSidesAssigned() {
+        let segs = [
+            w85cMakeSeg(street: "5 AVE", from: "34 ST", to: "35 ST",
+                        side: "N", category: .noParking, lat: 40.750, lng: -73.980),
+            w85cMakeSeg(street: "5 AVE", from: "34 ST", to: "35 ST",
+                        side: "S", category: .noParking, lat: 40.750, lng: -73.980)
+        ]
+        // heading: 0 (due north) — the exact-tie case. Both sides must be assigned
+        // (one left, one right), so the both-restricted utterance fires.
+        service.update(coordinate: anchor, heading: 0, segments: segs, engine: engine, date: testDate)
+        XCTAssertGreaterThan(
+            mockVoice.speakCallCount, 0,
+            "TF2-7 QA #1: heading-0 must assign both sides (was: right side stuck at unknown → silent)"
+        )
+        XCTAssertTrue(
+            (mockVoice.spokenTexts.first ?? "").contains("No parking on either side."),
+            "TF2-7 QA #1: both-restricted phrasing must fire at heading 0"
+        )
+    }
+
     // MARK: - Test 5: Cruise Mode + two rapid block changes → second is gated by min gap.
 
     func testCruiseMode_blockChange_respectsMinGap() {

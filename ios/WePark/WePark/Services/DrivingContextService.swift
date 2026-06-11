@@ -523,7 +523,16 @@ final class DrivingContextService {
         let rightBearing = (heading + 90).truncatingRemainder(dividingBy: 360)
         let dLeft  = bearingDelta(sb, leftBearing)
         let dRight = bearingDelta(sb, rightBearing)
-        return dLeft <= dRight ? "left" : "right"
+        // TF2-7 QA Finding #1: on an exact tie (heading aligned with the side bearing or its
+        // reciprocal — e.g. due-north travel with N/S-labeled sides), the old `dLeft <= dRight`
+        // sent BOTH opposite sides to "left", leaving the right chip unassigned ("—"). Break the
+        // tie with the SIGNED angle from heading to the side bearing: clockwise (0..<180) → right,
+        // counterclockwise → left. Opposite sides then land on opposite relative sides.
+        if dLeft == dRight {
+            let signed = (sb - heading + 360).truncatingRemainder(dividingBy: 360)
+            return signed < 180 ? "right" : "left"
+        }
+        return dLeft < dRight ? "left" : "right"
     }
 
     /// Smallest angular distance between two compass bearings (0–180).
