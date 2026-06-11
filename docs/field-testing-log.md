@@ -32,6 +32,30 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
 
+### TF2-7 🔵 Cruise guidance hard to comprehend — simplify voice/text + "Park here" sign-check flow (UX/FEATURE)
+- **Observed (Kevin, drive test):** zone-by-zone transitions (no-parking → metered → free along one
+  block) make the free-parking callouts hard to follow while driving.
+- **Kevin's direction:** (1) catch-all side-level summary — voice + bottom card say "free parking on
+  the LEFT side" (not per-zone detail); explain it "might not be everywhere" (set expectations).
+  (2) After stopping: a "Park here / Park my car" button → confirmation pop-up with a SIGN-CHECK
+  checklist + novice education (check posted signs; fire hydrant 15ft rule; etc.). Note: ParkConfirmView
+  ("Park here") + pin-drop flow already exist — integrate, don't duplicate.
+- **Status:** 🔵 dispatched to tech-lead for spec (voice copy + bottom-card copy + checklist content +
+  side-level aggregation logic in DrivingContextService).
+- **Lands in:** iOS (DrivingContextService commentary, DriveModeBottomCard, ParkConfirm flow).
+
+### TF2-6 🔴 Cruise entry ZOOMS OUT (should zoom in) + buildings occlude at 45° pitch
+- **Observed (Kevin):** entering Drive Mode → Find Parking nearby, the map zooms OUT instead of in to
+  the current street. Also 3D buildings get in the way at the drive pitch, esp. when arrow/chevron off.
+- **Root cause (zoom, confirmed):** `handleDriveModeAndCamera` applies pitch+zoom FIRST then engages
+  `.follow` — MapKit's .follow engagement zooms to its own default altitude, overriding the FT-8 tight
+  zoom. Recenter does the opposite (correct) order — tracking then zoom — which is why Recenter looks
+  right but entry doesn't. Fix: swap order on entry (match recenter) + re-apply guard.
+- **Buildings/pitch:** match Apple/Waze nav: `showsBuildings = false` during drive mode (flat in nav),
+  consider pitch 45°→~30° (tunable). We already use their native .follow — these are tunables.
+- **Status:** 🔴 fix dispatched (ios-engineer) → build 9.
+- **Lands in:** iOS (`ContentView.handleDriveModeAndCamera` ordering, MapViewRepresentable drive config).
+
 ### TF2-5 🔴 Parking lines drawn in the MIDDLE of the road, not on the curb — SYSTEMIC (geometry)
 - **Area:** Tile pipeline curb-offset geometry. `build/preprocess.js` `offsetPolyline`. Backend-data.
 - **Observed (Kevin, throughout the map):** parking-regulation lines render in the middle of the road,
