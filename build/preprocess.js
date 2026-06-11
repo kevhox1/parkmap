@@ -636,11 +636,96 @@ function extractSubSegment(blockGeo, startFt, endFt) {
 //   4. Select the normal whose dot product with the side's compass unit vector
 //      is positive: N→(0,+1), S→(0,−1), E→(+1,0), W→(−1,0).
 //      This robustly picks the curb-facing perpendicular for any street angle.
-//   5. Offset by CURB_OFFSET_METERS along the chosen normal, then unproject.
+//   5. Offset by the width-class-derived distance along the chosen normal, then
+//      unproject.  The distance is chosen by getStreetCurbOffset() below (TF2-10).
 //
 // Intersection setback (INTERSECTION_SETBACK_M) is handled separately by
 // trimIntersectionSetback() — this function handles only lateral curb offset.
-const CURB_OFFSET_METERS = 5;
+
+// ==== Width-aware curb offset (TF2-10) ====
+//
+// osm_data.json is geometry-only ({name: [[[lat,lng],...],...]}) — no highway class,
+// lanes, or width tags are stored.  The fallback is a name-pattern tier.
+//
+// WIDE class (~20-25 m curb-to-curb): numbered avenues, named avenues, Broadway,
+// Bowery, and the major crosstown streets whose curb-to-curb width is ≥ 20 m.
+// Offset target = ~10 m from centerline (parking lane sits ~9-11 m out on these).
+// Tuning note: raise CURB_OFFSET_WIDE_METERS toward 11 if avenue lines still look
+// mid-lane on very wide avenues (e.g. 5th Ave, Park Ave); lower toward 9 if they
+// overshoot the curb on narrower avenues (e.g. 1st Ave, Ave A).
+//
+// DEFAULT class (~12-16 m curb-to-curb): typical Manhattan cross-streets and
+// narrow N/S streets.  Offset target = ~6 m (was 5 m pre-TF2-10).
+// Tuning note: raise toward 7 if default-class lines still look mid-lane; 6 m
+// places the line comfortably inside the parking/parking-regulation strip on a
+// typical 40-50 ft (12-15 m) cross-street.
+
+// --- Tunable constants ---
+const CURB_OFFSET_WIDE_METERS    = 10; // avenue-class / wide crosstown streets (tunable)
+const CURB_OFFSET_DEFAULT_METERS =  6; // typical side streets (tunable)
+
+// Wide-street name patterns (applied to the NORMALIZED NYC name, e.g. "2ND AVENUE").
+// Pattern is tested against the uppercased, normalized street name.
+//
+// Numbered avenues (1ST … 12TH AVENUE) and named avenues:
+const WIDE_AVENUE_RE = /\bAVENUE\b/;
+// Specific named wide N/S corridors that don't carry "AVENUE":
+const WIDE_NS_NAMES = new Set([
+  'BROADWAY', 'BOWERY', 'WEST BROADWAY', 'LAFAYETTE STREET',
+  'ST NICHOLAS AVENUE', 'ADAM CLAYTON POWELL JR BOULEVARD',
+  'FREDERICK DOUGLASS BOULEVARD', 'LENOX AVENUE', 'MALCOLM X BOULEVARD',
+  'CONVENT AVENUE', 'AMSTERDAM AVENUE', 'RIVERSIDE DRIVE',
+  'CENTRAL PARK WEST', 'FORT WASHINGTON AVENUE', 'AUDUBON AVENUE',
+  'EDGECOMBE AVENUE',
+]);
+// Wide crosstown streets (measured curb-to-curb ≥ ~20 m, confirmed via NYC DOT
+// street-width records and street-view spot-checks):
+const WIDE_CROSSTOWN_NAMES = new Set([
+  'EAST HOUSTON STREET', 'WEST HOUSTON STREET',
+  'CANAL STREET', 'DELANCEY STREET',
+  'EAST 14TH STREET', 'WEST 14TH STREET',
+  'EAST 23RD STREET', 'WEST 23RD STREET',
+  'EAST 34TH STREET', 'WEST 34TH STREET',
+  'EAST 42ND STREET', 'WEST 42ND STREET',
+  'EAST 57TH STREET', 'WEST 57TH STREET',
+  'EAST 72ND STREET', 'WEST 72ND STREET',
+  'EAST 79TH STREET', 'WEST 79TH STREET',
+  'EAST 86TH STREET', 'WEST 86TH STREET',
+  'EAST 96TH STREET', 'WEST 96TH STREET',
+  'EAST 110TH STREET', 'WEST 110TH STREET',
+  'EAST 125TH STREET', 'WEST 125TH STREET',
+  // Downtown wide crosstown / diagonal corridors
+  'FULTON STREET', 'CHAMBERS STREET', 'VESEY STREET',
+  'RECTOR STREET', 'LIBERTY STREET',
+]);
+
+/**
+ * Return the appropriate curb offset in meters for a given street name.
+ * streetName is the normalized NYC name (e.g. "2ND AVENUE", "EAST 2ND STREET").
+ *
+ * Classification logic (TF2-10):
+ *   WIDE  → CURB_OFFSET_WIDE_METERS    (10 m)  — avenue-class, wide crosstowns
+ *   DEFAULT → CURB_OFFSET_DEFAULT_METERS (6 m)  — typical side streets
+ */
+function getStreetCurbOffset(streetName) {
+  if (!streetName) return CURB_OFFSET_DEFAULT_METERS;
+  const upper = streetName.toUpperCase().trim();
+
+  // 1. Any street containing "AVENUE" (numbered or named)
+  if (WIDE_AVENUE_RE.test(upper)) return CURB_OFFSET_WIDE_METERS;
+
+  // 2. Named wide N/S corridors (Broadway, Bowery, named boulevards, etc.)
+  if (WIDE_NS_NAMES.has(upper)) return CURB_OFFSET_WIDE_METERS;
+
+  // 3. Wide crosstown streets
+  if (WIDE_CROSSTOWN_NAMES.has(upper)) return CURB_OFFSET_WIDE_METERS;
+
+  // 4. PARKWAY or BOULEVARD suffix (FDR Drive handled if needed; rare in Manhattan)
+  if (/\bPARKWAY\b|\bBOULEVARD\b/.test(upper)) return CURB_OFFSET_WIDE_METERS;
+
+  return CURB_OFFSET_DEFAULT_METERS;
+}
+
 const DEG_TO_RAD = Math.PI / 180;
 const METERS_PER_DEG_LAT = 111320; // 1° lat ≈ 111,320 m (constant)
 
@@ -652,7 +737,11 @@ const SIDE_COMPASS = {
   W: { x: -1, y: 0 },
 };
 
-function offsetPolyline(points, side) {
+// offsetPolyline(points, side, offsetMeters)
+// offsetMeters defaults to CURB_OFFSET_DEFAULT_METERS; callers pass
+// getStreetCurbOffset(block.street) to get the width-class-appropriate value (TF2-10).
+function offsetPolyline(points, side, offsetMeters) {
+  if (offsetMeters === undefined) offsetMeters = CURB_OFFSET_DEFAULT_METERS;
   if (!points || points.length < 2) return points || [];
   const valid = points.filter(p => Array.isArray(p) && p.length >= 2 && isFinite(p[0]) && isFinite(p[1]));
   if (valid.length < 2) return valid;
@@ -689,7 +778,7 @@ function offsetPolyline(points, side) {
   });
 
   // Offset distance in degree-lat units (the unit of y in projected space)
-  const offsetDist = CURB_OFFSET_METERS / METERS_PER_DEG_LAT;
+  const offsetDist = offsetMeters / METERS_PER_DEG_LAT;
 
   const sv = SIDE_COMPASS[side] || { x: 0, y: 1 }; // default N if unrecognised
 
@@ -992,7 +1081,7 @@ async function main() {
 
       if (subSegments.length === 0) {
         // Whole block as unknown
-        const offsetLine = offsetPolyline(blockGeo.line, block.side);
+        const offsetLine = offsetPolyline(blockGeo.line, block.side, getStreetCurbOffset(block.street));
         if (!offsetLine || offsetLine.length < 2) continue;
 
         const segId = `${block.street}_${block.from}_${block.to}_${block.side}`.replace(/\s+/g, '_');
@@ -1023,7 +1112,7 @@ async function main() {
         } catch(e) { return; }
         if (!line || line.length < 2) return;
 
-        const offsetLine = offsetPolyline(line, block.side);
+        const offsetLine = offsetPolyline(line, block.side, getStreetCurbOffset(block.street));
         if (!offsetLine || offsetLine.length < 2) return;
         if (!offsetLine.every(p => isFinite(p[0]) && isFinite(p[1]))) return;
 

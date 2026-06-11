@@ -7987,7 +7987,7 @@ function clearParkedCar() {
 // 2. Force an update check (don't wait for the browser's 24h heuristic).
 // 3. When a new SW activates with a new version, automatically reload so users
 //    always run the latest code without ever needing to clear cache manually.
-const APP_VERSION = 'wepark-v33';
+const APP_VERSION = 'wepark-v34';
 let _swReloadGuard = false;
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('sw.js').then(reg => {
