@@ -32,6 +32,17 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
 
+### TF2-10 🔴 Polylines still look mid-road on WIDE streets (offset magnitude, not direction)
+- **Observed (Kevin, build 9):** center polylines still appear mid-street despite the TF2-5 rebuild.
+- **Diagnosis (measured in shipped tiles):** E 2nd N/S sides are exactly 10.1m apart (2×5m) — the
+  perpendicular offset IS applied and directionally correct. But CURB_OFFSET_METERS=5 from the
+  CENTERLINE only reaches the curb on narrow side streets; on avenue-class streets (~20-25m
+  curb-to-curb) 5m is still inside the traffic lanes → mid-road look. Magnitude, not direction.
+- **Fix:** width-aware offset — backend-data to check whether osm_data.json carries lanes/width tags
+  (preferred); else tier by street class (avenue/broadway/major-crosstown ≈ 9-10m, default ≈ 5-6m).
+  Regen tiles (third rebuild — mechanical now). PWA cache bump + iOS build 10.
+- **Status:** 🔴 dispatched (backend-data).
+
 ### TF2-9 🔴 Text overlay issue on the "Park here" sign-check sheet (build 9)
 - **Observed (Kevin, build 9):** text overlay problem when tapping Park here (SignCheckConfirmView).
   Screenshot didn't reach the agent; likely the .medium-detent sheet clipping/overlapping its 5-item
