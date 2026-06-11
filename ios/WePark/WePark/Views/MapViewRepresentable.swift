@@ -220,17 +220,19 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     /// Camera pitch applied during Drive Mode.
     ///
-    /// PR-2 value: 45° — empirically measured at the PR-2 tighter zoom (span ~0.005°,
-    /// centerCoordinateDistance ~2,000m). At this altitude MapKit allows steeper pitch without
-    /// clamping; 45° was verified to round-trip faithfully (camera.pitch ≈ 45° post-animation).
+    /// TF2-6 (Issue 2b): Lowered 45° → 30° to match Apple/Waze navigation behaviour.
+    /// At 30° the road ahead is clearly visible without the steep forward-lean that causes
+    /// 3D buildings to occlude lane markings and parking lines (the reported issue).
     ///
-    /// PR-3 shipped 30° at the wider Drive Mode span (~0.04°, altitude ~180,000m) where MapKit
-    /// clamps pitch at ~35°, making 30° the safe ceiling. At the PR-2 tighter altitude (~2,000m)
-    /// the ceiling rises to at least 45°, possibly higher. 45° is the measured faithful value.
+    /// PR-2 shipped 45° — measured faithful (not clamped) at the tighter zoom ~0.003° span.
+    /// 30° is also faithful at this altitude (~621m via altitudeForSpan); MapKit only clamps
+    /// pitch at wide altitudes (~180,000m where ceiling ≈ 35°). At ~621m the ceiling is 60°+.
+    ///
+    /// Kevin: tune on-device. Try 35° if more depth is wanted; use 25° for a flatter view.
     ///
     /// W8.5d note: `applyDriveCameraState` is reusable for final-approach pitch escalation
     /// without structural change — call it with a different pitch value in the last 500m.
-    static let driveModePitch: CGFloat = 45
+    static let driveModePitch: CGFloat = 30
 
     /// Target latitude span during Drive Mode.
     ///
@@ -401,6 +403,23 @@ struct MapViewRepresentable: UIViewRepresentable {
         ///   - `.followWithHeading` would use the compass (magnetometer) for rotation — exactly
         ///     the FT-7 bug (askew when phone is mounted at an angle). Explicitly rejected.
         var setDriveTrackingMode: ((Bool) -> Void)?
+
+        // MARK: TF2-6: 3D buildings toggle
+
+        /// Shows or hides 3D building extrusions on the map.
+        ///
+        /// TF2-6 (Issue 2a): `MKStandardMapConfiguration` does not expose a `showsBuildings`
+        /// property; the flag lives on `MKMapView` itself (`mapView.showsBuildings`).
+        /// Toggling it here (via CoordinatorActions, called from ContentView's
+        /// `.onChange(of: driveModeActive)` — OUTSIDE `updateUIView`) satisfies the #31
+        /// architectural invariant (no UIKit state mutation inside `updateUIView`).
+        ///
+        /// `false` → hide 3D buildings during Drive Mode (flat nav map, matching Apple/Waze).
+        /// `true`  → restore 3D buildings on Drive Mode exit.
+        ///
+        /// Kevin: change the `false` to `true` in ContentView's handleDriveCameraChange
+        /// if you prefer buildings visible during Drive Mode navigation.
+        var setShowsBuildings: ((Bool) -> Void)?
 
     }
 
@@ -646,6 +665,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         coordinatorActions.setDriveTrackingMode = { [weak mapView] active in
             guard let mapView = mapView else { return }
             mapView.userTrackingMode = active ? .follow : .none
+        }
+
+        // TF2-6 (Issue 2a): 3D buildings toggle.
+        // `mapView.showsBuildings` is NOT on MKStandardMapConfiguration — it lives on MKMapView.
+        // Called from ContentView's .onChange(of: driveModeActive) OUTSIDE updateUIView per #31.
+        coordinatorActions.setShowsBuildings = { [weak mapView] show in
+            mapView?.showsBuildings = show
         }
 
         return mapView

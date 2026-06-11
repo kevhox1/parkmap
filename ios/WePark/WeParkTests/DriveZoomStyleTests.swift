@@ -16,21 +16,22 @@
 //  unit tests that require a windowed MKMapView.
 //
 //  Test inventory:
-//    1.  testTargetSpan_onEntry_returnsDriveModeCameraSpan        — active=true  → 0.005°
-//    2.  testTargetSpan_onExit_returnsPriorSpan                   — active=false → priorSpan
-//    3.  testTargetSpan_onExit_zeroSpan_returnsZero               — edge: priorSpan=0 → 0
-//    4.  testAltitudeForSpan_driveMode_returnsPositiveAltitude     — 0.005° → positive meters
-//    5.  testAltitudeForSpan_zero_returnsZero                      — guard: 0° → 0m
-//    6.  testTargetMapConfiguration_onEntry_returnsMuted           — active=true → .muted style
-//    7.  testTargetMapConfiguration_onExit_returnsPriorConfig      — active=false → priorConfig
-//    8.  testTargetMapConfiguration_onExit_nilPrior_returnsDefault — nil prior → standard config
-//    9.  testDriveModePitchConstant_meetsMinimum                   — 30 ≤ pitch ≤ 60
-//   10.  testDriveModePitch_updatedFromPR3                         — pitch > 30 (re-evaluated at tighter zoom)
-//   11.  testDriveModeCameraSpan_isApproximatelyCorrect            — span ~0.005°
-//   12.  testAltitudeForSpan_driveMode_isApproximatelyTwoKm        — altitude ≈ 2,000m at 0.005°
-//   13.  testDirectionalPuckAnnotationView_initializesWithoutCrash  — puck smoke test
+//    1.  testTargetSpan_onEntry_returnsDriveModeCameraSpan         — active=true  → 0.005°
+//    2.  testTargetSpan_onExit_returnsPriorSpan                    — active=false → priorSpan
+//    3.  testTargetSpan_onExit_zeroSpan_returnsZero                — edge: priorSpan=0 → 0
+//    4.  testAltitudeForSpan_driveMode_returnsPositiveAltitude      — 0.005° → positive meters
+//    5.  testAltitudeForSpan_zero_returnsZero                       — guard: 0° → 0m
+//    6.  testTargetMapConfiguration_onEntry_returnsMutedNoBldgs     — active=true → .muted + buildings off
+//    7.  testTargetMapConfiguration_onExit_returnsPriorConfig       — active=false → priorConfig
+//    8.  testTargetMapConfiguration_onExit_nilPrior_returnsDefault  — nil prior → standard config
+//    9.  testDriveModePitchConstant_meetsMinimum                    — 25 ≤ pitch ≤ 60
+//   10.  testDriveModePitch_isTF2_6Value                            — pitch == 30 (TF2-6 Apple/Waze parity)
+//   11.  testDriveModeCameraSpan_isApproximatelyCorrect             — span ~0.005°
+//   12.  testAltitudeForSpan_driveMode_isApproximatelyTwoKm         — altitude ≈ 2,000m at 0.005°
+//   13.  testDirectionalPuckAnnotationView_initializesWithoutCrash   — puck smoke test
 //
-//  Baseline before PR-2: 214/0. Target: ~227/0 (+13 new tests).
+//  TF2-6: driveModePitch 45° → 30°; showsBuildings=false on drive config. Tests 6, 9, 10 updated.
+//  Baseline before TF2-6: 479/0.
 //
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens.
@@ -104,9 +105,14 @@ final class DriveZoomStyleTests: XCTestCase {
     /// Verifies `targetMapConfiguration(forDriveModeActive:priorConfiguration:)` returns
     /// `MKStandardMapConfiguration` with `emphasisStyle == .muted` on Drive Mode entry.
     ///
+    /// TF2-6 (Issue 2a) note: `showsBuildings` is NOT on `MKStandardMapConfiguration` — it is
+    /// a property of `MKMapView` itself. Building visibility is toggled separately via
+    /// `CoordinatorActions.setShowsBuildings`, called from ContentView's
+    /// `.onChange(of: driveModeActive)` outside `updateUIView` (satisfying #31).
+    ///
     /// `MKStandardMapConfiguration` has no public `==` conformance, so we cast the result
     /// and inspect `emphasisStyle` directly.
-    func testTargetMapConfiguration_onEntry_returnsMuted() {
+    func testTargetMapConfiguration_onEntry_returnsMutedNoBldgs() {
         let result = MapViewRepresentable.targetMapConfiguration(
             forDriveModeActive: true,
             priorConfiguration: nil
@@ -158,26 +164,29 @@ final class DriveZoomStyleTests: XCTestCase {
 
     // MARK: Test 9: driveModePitch constant is within documented valid range
 
-    /// Verifies that `driveModePitch` is in [30, 60] — the range documented in the spec.
-    /// Guards against silent constant changes outside the spec-approved window.
+    /// Verifies that `driveModePitch` is in [25, 60] — the range of Apple/Waze-class nav pitches.
+    /// Guards against silent constant changes outside the tunable window.
+    ///
+    /// TF2-6: lower bound relaxed from 30 to 25 to allow Kevin to tune down if wanted.
     func testDriveModePitchConstant_meetsMinimum() {
         let pitch = MapViewRepresentable.driveModePitch
-        XCTAssertGreaterThanOrEqual(pitch, 30,
-            "driveModePitch must be >= 30° (PR-3 baseline); got \(pitch)°")
+        XCTAssertGreaterThanOrEqual(pitch, 25,
+            "driveModePitch must be >= 25° (Apple/Waze nav minimum); got \(pitch)°")
         XCTAssertLessThanOrEqual(pitch, 60,
-            "driveModePitch must be <= 60° (MapKit clamping ceiling); got \(pitch)°")
+            "driveModePitch must be <= 60° (MapKit clamping ceiling at Drive Mode zoom); got \(pitch)°")
     }
 
-    // MARK: Test 10: driveModePitch was re-evaluated upward from PR-3's 30°
+    // MARK: Test 10: driveModePitch is the TF2-6 value (30°, Apple/Waze parity)
 
-    /// Verifies that PR-2's empirical measurement resulted in a higher pitch than PR-3's 30°.
-    /// At the tighter zoom (span ~0.005°, altitude ~2,000m) MapKit allows steeper pitch.
-    /// If this test fails, the constant was not updated from PR-3 — investigate.
-    func testDriveModePitch_updatedFromPR3() {
-        XCTAssertGreaterThan(MapViewRepresentable.driveModePitch, 30,
-            "PR-2 measured a higher pitch ceiling at the tighter zoom; " +
-            "driveModePitch should be > 30° (PR-3 value). Got \(MapViewRepresentable.driveModePitch)°. " +
-            "If 30° was the measured ceiling at the new zoom, remove this test and document in PR body.")
+    /// Verifies that `driveModePitch` equals 30° (TF2-6: Apple/Waze parity, buildings visible).
+    ///
+    /// TF2-6 (Issue 2b): lowered 45° → 30° to match Apple/Waze navigation pitch.
+    /// At 30°, 3D buildings do not occlude lane markings and parking lines at Drive Mode zoom.
+    ///
+    /// Kevin: tune on-device. Update this test if a different value is approved.
+    func testDriveModePitch_isTF2_6Value() {
+        XCTAssertEqual(MapViewRepresentable.driveModePitch, 30, accuracy: 0.001,
+            "driveModePitch must be 30° (TF2-6 Apple/Waze parity value); got \(MapViewRepresentable.driveModePitch)°.")
     }
 
     // MARK: Test 11: driveModeCameraSpan is approximately 0.003° (FT-8 tightened value)
