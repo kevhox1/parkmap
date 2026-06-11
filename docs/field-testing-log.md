@@ -32,6 +32,28 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
 
+### TF2-9 🔴 Text overlay issue on the "Park here" sign-check sheet (build 9)
+- **Observed (Kevin, build 9):** text overlay problem when tapping Park here (SignCheckConfirmView).
+  Screenshot didn't reach the agent; likely the .medium-detent sheet clipping/overlapping its 5-item
+  checklist + title + CTA, or drive-overlay text bleeding through the sheet material.
+- **Status:** 🔴 dispatched — engineer to reproduce in sim, fix layout (ScrollView / detent / spacing).
+- **Lands in:** iOS (`SignCheckConfirmView.swift`, ContentView sheet config).
+
+### TF2-8 🔴 Cruise/destination entry zoom STILL bounces out (TF2-6 fix insufficient — async race confirmed)
+- **Observed (Kevin, build 9, both modes incl. Penn Station destination):** zoom bounces IN then back
+  OUT and stays out on drive-mode entry.
+- **Root cause (now confirmed on-device):** MapKit `.follow` performs its zoom-to-default ASYNCHRONOUSLY
+  when it acquires the user location — after our synchronous pitch+zoom setCamera. The TF2-6 order swap
+  only fixed the synchronous sequence; the deferred follow animation still clobbers the tight zoom.
+  The "re-apply guard" skipped in TF2-6 ("not needed empirically") IS needed — headless sim couldn't
+  exercise the GPS-acquisition path.
+- **Fix:** re-apply the drive camera (pitch + FT-8 altitude) AFTER follow's own move — hook
+  `handleTrackingModeChanged(.follow)` and/or the first `regionDidChangeAnimated` post-engagement with
+  a one-shot pending-reapply flag (no loops; setCamera cancels MapKit's in-flight animation). Verify
+  with GPS-simulated motion in sim, not just launch.
+- **Status:** 🔴 dispatched → build 10.
+- **Lands in:** iOS (ContentView tracking-mode handler + MapViewRepresentable).
+
 ### TF2-7 🔵 Cruise guidance hard to comprehend — simplify voice/text + "Park here" sign-check flow (UX/FEATURE)
 - **Observed (Kevin, drive test):** zone-by-zone transitions (no-parking → metered → free along one
   block) make the free-parking callouts hard to follow while driving.
