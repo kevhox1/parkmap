@@ -89,22 +89,23 @@ enum CruiseVoicePolicy {
 
     /// Builds the voice utterance text for Cruise Mode.
     ///
-    /// Cruise Mode phrasing leads with the opportunity ("Free parking on left") rather
-    /// than the neutral destination-mode format ("Left side, free until..."). In Cruise
-    /// Mode the driver wants to know "can I park there?" immediately — the affirmative
-    /// lead is more actionable from a dashboard-mount.
+    /// TF2-7: Updated to "catch-all" template phrasing (spec §4.1).
     ///
-    /// Full restriction text (until when) is still shown visually in `DriveModeBottomCard`
-    /// chips; voice in Cruise Mode is the action cue, not the full data read-out.
+    /// The word "sections" does the work — it implies partial block coverage without
+    /// re-introducing zone-by-zone granularity. "— check signs" reinforces the posted
+    /// signs as the final word (consistent with FAQHelpView). Full restriction text
+    /// (until when) is still shown visually in `DriveModeBottomCard` chips; voice in
+    /// Cruise Mode is the action cue only.
     ///
-    /// Phrasing rules (spec §4.2):
-    ///   - Both free → "[Street]. Free parking on both sides."
-    ///   - Only left free → "[Street]. Free parking on the left."
-    ///   - Only right free → "[Street]. Free parking on the right."
+    /// Copy strings (exact — QA verifies against these, spec §4.1):
+    ///   - Both free → "[Street]. Free parking sections on both sides — check signs."
+    ///   - Left free only → "[Street]. Free parking sections on the left — check signs."
+    ///   - Right free only → "[Street]. Free parking sections on the right — check signs."
+    ///   - Left free + right metered → "[Street]. Free parking sections on the left — check signs."
+    ///     (free side is the actionable lead; metered detail visible on card chip)
     ///   - Neither free, left metered only → "[Street]. Metered on the left."
     ///   - Neither free, right metered only → "[Street]. Metered on the right."
     ///   - Neither free, both metered → "[Street]. Metered on both sides."
-    ///   - Any other combination that passes `shouldAnnounce` → fallback to both-metered phrasing.
     ///
     /// Note: this function is only called when `shouldAnnounce(context:)` returns `true`,
     /// so callers may assert at least one side is free or metered at this point.
@@ -120,17 +121,18 @@ enum CruiseVoicePolicy {
 
         let parkingClause: String
         if leftFree && rightFree {
-            parkingClause = "Free parking on both sides."
+            parkingClause = "Free parking sections on both sides — check signs."
         } else if leftFree {
-            parkingClause = "Free parking on the left."
+            // Free side is the actionable lead — metered right, if present, stays on card.
+            parkingClause = "Free parking sections on the left — check signs."
         } else if rightFree {
-            parkingClause = "Free parking on the right."
+            parkingClause = "Free parking sections on the right — check signs."
         } else if leftMetered && rightMetered {
             parkingClause = "Metered on both sides."
         } else if leftMetered {
             parkingClause = "Metered on the left."
         } else {
-            // rightMetered (or edge case)
+            // rightMetered (or edge case — shouldAnnounce guarantees at least one metered)
             parkingClause = "Metered on the right."
         }
 

@@ -345,7 +345,9 @@ final class DrivingContextServiceTests: XCTestCase {
         XCTAssertEqual(ctx?.rightLabel.severity, .free, "S side should be right when facing east")
     }
 
-    // Test 9: buildUtteranceText expands abbreviations.
+    // Test 9 (TF2-7 updated): buildUtteranceText expands abbreviations.
+    // TF2-7: left=free leads with "sections on the left — check signs"; right=metered is
+    // omitted from voice (free side is the actionable lead, metered detail goes on the card).
     func testBuildUtteranceText_bothSides_expandsAbbreviations() {
         let ctx = DrivingContext(
             street: "SPRING ST",
@@ -357,13 +359,18 @@ final class DrivingContextServiceTests: XCTestCase {
         let text = service.buildUtteranceText(ctx)
         XCTAssertTrue(text.contains("Spring Street."),
                       "Street abbreviation 'St' should expand to 'Street'. Got: \(text)")
-        XCTAssertTrue(text.contains("Left side, Free until 9 AM."),
-                      "Left side clause should be present. Got: \(text)")
-        XCTAssertTrue(text.contains("Right side, Metered."),
-                      "Right side clause should be present. Got: \(text)")
+        // TF2-7: free left → "sections on the left — check signs" (spec §4.1)
+        XCTAssertTrue(text.contains("sections on the left"),
+                      "TF2-7 left-free phrasing should say 'sections on the left'. Got: \(text)")
+        XCTAssertTrue(text.contains("check signs"),
+                      "TF2-7 left-free phrasing should include 'check signs'. Got: \(text)")
+        // Old "Left side," format is retired.
+        XCTAssertFalse(text.contains("Left side,"),
+                       "TF2-7 should NOT use 'Left side,' format. Got: \(text)")
     }
 
-    // Test 10: buildUtteranceText omits "No data" sides.
+    // Test 10 (TF2-7 updated): buildUtteranceText with unknown left, metered right.
+    // TF2-7: right=metered → "Metered on the right." (spec §4.1)
     func testBuildUtteranceText_noDataSide_omitsClause() {
         let ctx = DrivingContext(
             street: "BROADWAY",
@@ -373,10 +380,12 @@ final class DrivingContextServiceTests: XCTestCase {
             rightLabel: SafetyLabel(text: "Metered", severity: .metered)
         )
         let text = service.buildUtteranceText(ctx)
+        // TF2-7: "Left side," format is retired — no "Left side," for unknown.
         XCTAssertFalse(text.contains("Left side"),
-                       "Left side clause should be omitted when text is 'No data'. Got: \(text)")
-        XCTAssertTrue(text.contains("Right side, Metered."),
-                      "Right side clause should be present. Got: \(text)")
+                       "TF2-7 should NOT use 'Left side,' format. Got: \(text)")
+        // TF2-7: metered right → "Metered on the right." (spec §4.1)
+        XCTAssertTrue(text.contains("Metered on the right."),
+                      "TF2-7 right-metered should say 'Metered on the right.' Got: \(text)")
     }
 }
 

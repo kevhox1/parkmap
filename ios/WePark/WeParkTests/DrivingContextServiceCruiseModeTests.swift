@@ -105,7 +105,8 @@ final class DrivingContextServiceCruiseModeTests: XCTestCase {
         )
     }
 
-    // MARK: - Test 3: Cruise Mode + free block → uses "Free parking" phrasing (not "Left side,").
+    // MARK: - Test 3: Cruise Mode + free block → uses "sections...check signs" phrasing (not "Left side,").
+    // TF2-7: updated assertion from "Free parking" → "sections" + "check signs" (new mandated copy).
 
     func testCruiseMode_freeBlock_usesCruisePhrasing() {
         service.setCruiseMode(true)
@@ -114,8 +115,12 @@ final class DrivingContextServiceCruiseModeTests: XCTestCase {
 
         let spokenText = mockVoice.spokenTexts.first ?? ""
         XCTAssertTrue(
-            spokenText.contains("Free parking"),
-            "Cruise Mode phrasing should lead with 'Free parking'. Got: \(spokenText)"
+            spokenText.contains("sections"),
+            "TF2-7 Cruise Mode phrasing should contain 'sections'. Got: \(spokenText)"
+        )
+        XCTAssertTrue(
+            spokenText.contains("check signs"),
+            "TF2-7 Cruise Mode phrasing should contain 'check signs'. Got: \(spokenText)"
         )
         XCTAssertFalse(
             spokenText.contains("Left side,"),
@@ -123,16 +128,78 @@ final class DrivingContextServiceCruiseModeTests: XCTestCase {
         )
     }
 
-    // MARK: - Test 4: Destination Mode + restricted block → still speaks (regression guard).
+    // MARK: - Test 4: Destination Mode + one-restricted-one-unknown → silent (TF2-7 spec §4.3).
+    // Pre-TF2-7 this asserted speakCallCount == 1 (destination mode announced every block).
+    // TF2-7 spec §4.3: "If only one side is restricted (the other is unknown): no voice
+    // (same as Cruise Mode)." The makeRestrictedBlock() fixture has N=restricted, right=unknown.
+    // Updated to assert silence for this case; see testDestinationMode_bothRestricted_speaks()
+    // for the both-restricted case that DOES announce.
 
     func testDestinationMode_restrictedBlock_stillSpeaks() {
         // Default is destination mode (isCruiseMode = false).
-        // setCruiseMode is NOT called here — verifying the pre-CM-2 behavior is preserved.
+        // One side restricted (N), other side unknown (no data).
+        // TF2-7 §4.3: one restricted + one unknown → no voice.
         let segs = makeRestrictedBlock()
         service.update(coordinate: anchor, heading: 0, segments: segs, engine: engine, date: testDate)
         XCTAssertEqual(
-            mockVoice.speakCallCount, 1,
-            "Destination Mode should speak on every block change, including restricted blocks"
+            mockVoice.speakCallCount, 0,
+            "TF2-7: Destination Mode should NOT speak when only one side restricted and other is unknown (spec §4.3)"
+        )
+    }
+
+    // MARK: - Test 4b: Destination Mode + both restricted → speaks "No parking on either side."
+    //
+    // Heading 90 (east) is used so N maps unambiguously to left (dLeft=0, dRight=180)
+    // and S maps to right (dRight=0, dLeft=180). With heading 0 (north), both N and S
+    // produce dLeft==dRight==90, so both map to "left" — rightCardinalSide stays nil,
+    // buildUtteranceText sees restricted+unknown and returns "" (silent). Heading 90
+    // separates the sides correctly and triggers the both-restricted path.
+
+    func testDestinationMode_bothRestricted_speaks() {
+        // Two-sided restricted block, heading east so N=left, S=right.
+        let segs = [
+            w85cMakeSeg(street: "5 AVE", from: "34 ST", to: "35 ST",
+                        side: "N", category: .noParking, lat: 40.750, lng: -73.980),
+            w85cMakeSeg(street: "5 AVE", from: "34 ST", to: "35 ST",
+                        side: "S", category: .noParking, lat: 40.750, lng: -73.980)
+        ]
+        // heading: 90 (east) → N is on the left (90° CCW from east), S is on the right.
+        service.update(coordinate: anchor, heading: 90, segments: segs, engine: engine, date: testDate)
+        XCTAssertGreaterThan(
+            mockVoice.speakCallCount, 0,
+            "TF2-7: Destination Mode should speak when both sides are restricted (spec §4.3)"
+        )
+        let spokenText = mockVoice.spokenTexts.first ?? ""
+        XCTAssertTrue(
+            spokenText.contains("No parking on either side."),
+            "TF2-7: Both-restricted destination phrasing should be 'No parking on either side.' Got: \(spokenText)"
+        )
+    }
+
+    // MARK: - Test 4c: TF2-7 QA Finding #1 — heading-0 tie-break assigns BOTH sides.
+
+    /// Regression lock for the due-north tie-break: at heading 0 with N/S-labeled sides,
+    /// dLeft == dRight for both sides; the old `<=` tie-break sent BOTH to "left", leaving
+    /// the right side unassigned ("—"). The signed-angle tiebreaker must assign the two
+    /// opposite sides to OPPOSITE relative sides, so both-restricted still speaks
+    /// "No parking on either side." (it was silent before the fix — right side .unknown).
+    func testDestinationMode_headingZeroTieBreak_bothSidesAssigned() {
+        let segs = [
+            w85cMakeSeg(street: "5 AVE", from: "34 ST", to: "35 ST",
+                        side: "N", category: .noParking, lat: 40.750, lng: -73.980),
+            w85cMakeSeg(street: "5 AVE", from: "34 ST", to: "35 ST",
+                        side: "S", category: .noParking, lat: 40.750, lng: -73.980)
+        ]
+        // heading: 0 (due north) — the exact-tie case. Both sides must be assigned
+        // (one left, one right), so the both-restricted utterance fires.
+        service.update(coordinate: anchor, heading: 0, segments: segs, engine: engine, date: testDate)
+        XCTAssertGreaterThan(
+            mockVoice.speakCallCount, 0,
+            "TF2-7 QA #1: heading-0 must assign both sides (was: right side stuck at unknown → silent)"
+        )
+        XCTAssertTrue(
+            (mockVoice.spokenTexts.first ?? "").contains("No parking on either side."),
+            "TF2-7 QA #1: both-restricted phrasing must fire at heading 0"
         )
     }
 

@@ -140,6 +140,11 @@ enum ActiveSheet: Identifiable {
     /// Payload: user's GPS coordinate at the moment of arrival detection (NOT the destination).
     /// On "Park Here" confirm → drops W5 pin at this coordinate → W7.5 Park Until fires naturally.
     case arrivalPrompt(coord: CLLocationCoordinate2D)
+    /// TF2-7: Sign-check confirmation sheet — pre-step before ParkConfirmView.
+    /// Presented when the driver taps "Park here" in the Drive Mode overlay.
+    /// On "I checked — Park here" → transitions to ActiveSheet.parkConfirm(intent).
+    /// The W8.5d arrival prompt path BYPASSES this sheet (spec §5.4).
+    case signCheckConfirm(intent: PinDropIntent)
     /// Community 1.0 / Tier 1: read-only detail sheet for a community pin (filming / special_event).
     /// Presented when the user taps a `CommunityPinAnnotation` on the map.
     case pinDetail(CommunityPin)
@@ -167,6 +172,7 @@ enum ActiveSheet: Identifiable {
         case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
         case .reportPin(let coord, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
+        case .signCheckConfirm(let intent): return "signCheckConfirm-\(intent.id)"
         }
     }
 }
@@ -765,6 +771,27 @@ struct ContentView: View {
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
 
+        case .signCheckConfirm(let intent):
+            // TF2-7: Sign-check confirmation sheet — presented when the driver taps "Park here"
+            // in the Drive Mode overlay. Pre-step before ParkConfirmView.
+            //
+            // onConfirm: dismisses this sheet and opens ParkConfirmView with the same intent.
+            //   The intent passes through unchanged — no coordinate mutation (spec §5.3).
+            // onCancel: dismisses the sheet without proceeding to pin drop (swipe or Cancel).
+            SignCheckConfirmView(
+                intent: intent,
+                onConfirm: { confirmedIntent in
+                    activeSheet = .parkConfirm(confirmedIntent)
+                },
+                onCancel: {
+                    activeSheet = nil
+                }
+            )
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+
         case .arrivalPrompt(let coord):
             // W8.5d: Arrival prompt — fires once per Drive Mode session when driver reaches
             // within FinalApproachService.arrivalThresholdMeters of the destination.
@@ -1356,6 +1383,46 @@ struct ContentView: View {
                 .contentShape(Rectangle())
                 .accessibilityLabel("Report enforcement or sweeper")
                 .accessibilityHint("Drops a pin at your current location.")
+
+                // TF2-7: "Park here" button — visible whenever Drive Mode is active.
+                // Tapping opens SignCheckConfirmView (pre-step before ParkConfirmView).
+                // If GPS is unavailable, the tap is a no-op (same guard as Report button).
+                // No speed gate — consistent with the Report button and arrival prompt (OQ-2).
+                //
+                // Note on activeSheet interaction: if activeSheet is already set (e.g., arrival
+                // prompt is showing), this button tap produces a no-op because SwiftUI's single
+                // .sheet(item:) host only presents one sheet at a time; the guard below prevents
+                // an activeSheet overwrite while another sheet is already open.
+                Button {
+                    guard activeSheet == nil else { return }
+                    guard let loc = locationService.userLocation else { return }
+                    let candidates = findCandidateSegments(
+                        lat: loc.latitude,
+                        lng: loc.longitude,
+                        radius: pinDropRadiusMeters,
+                        max: 4
+                    )
+                    let detected = candidates.first?.segment
+                    let detectedDistance = candidates.first?.distanceMeters
+                    let alternatives = Array(candidates.dropFirst())
+                    let intent = PinDropIntent(
+                        pinLat: loc.latitude,
+                        pinLng: loc.longitude,
+                        detectedSegment: detected,
+                        detectedSegmentDistance: detectedDistance,
+                        alternativeCandidates: alternatives
+                    )
+                    activeSheet = .signCheckConfirm(intent: intent)
+                } label: {
+                    Label("Park here", systemImage: "mappin.and.ellipse")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .background(.regularMaterial, in: Capsule())
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityLabel("Park here")
+                .accessibilityHint("Opens a safety checklist before dropping your parked car pin.")
 
                 Spacer()
             }
