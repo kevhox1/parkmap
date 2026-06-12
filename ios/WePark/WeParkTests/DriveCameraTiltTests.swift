@@ -164,31 +164,29 @@ final class DriveCameraTiltTests: XCTestCase {
     }
 }
 
-// MARK: - Phase 2 camera ownership tests (replaces Phase 1 RegionSyncGuardTests)
+// MARK: - Option A camera ownership tests (replaces Phase 2 RegionSyncGuardTests)
 
-/// Tests for the Phase 2 (native follow) camera ownership model.
+/// Tests for the Option A (custom follow camera) ownership model.
 ///
-/// Phase 2 removes `shouldSyncDriveRegion`, `syncDriveRegion`, `driveFollowEnabled`, and
-/// `onDrivePanDetected`. MapKit's `.follow` tracking mode now owns Drive Mode position centering.
+/// Option A removes `setDriveTrackingMode`, `pendingDriveCameraReapply`,
+/// `pendingReapplyPriorPitch`, `setZoomRange`, and `onTrackingModeChanged`.
+/// Custom per-tick setCamera now owns Drive Mode position centering.
+///
 /// These tests verify:
-///
 ///   1. `shouldSyncDriveRegion` is gone (compile-time: any reference would not build).
 ///   2. `setRegion` closure is still the mechanism for browse-mode programmatic recenter.
-///   3. `setDriveTrackingMode` closure is the Phase 2 mechanism for Drive Mode follow.
-///   4. `onTrackingModeChanged` is a property on `MapViewRepresentable` (output closure).
+///   3. `setDriveCamera` closure is the Option A mechanism for Drive Mode follow.
+///   4. `onDrivePanDetected` is a property on `MapViewRepresentable` (Option A output closure).
 ///
-/// Tests 7–10 previously tested `shouldSyncDriveRegion`. Replacement tests here cover the
-/// Phase 2 camera contract with equivalent depth.
-///
-/// See map-rebuild-native-mapkit-spec.md §3 (Phase 2 architecture) and P2-AC-1 through
-/// P2-AC-8 for the design rationale.
+/// Tests 8–9 previously tested Phase 2 `setDriveTrackingMode` / `onTrackingModeChanged`.
+/// Replacement tests here cover the Option A camera contract with equivalent depth.
 final class RegionSyncGuardTests: XCTestCase {
 
-    // MARK: Test 7 (Phase 2 replacement): Browse mode — setRegion closure wired and callable
+    // MARK: Test 7 (Option A preserved): Browse mode — setRegion closure wired and callable
 
     /// Verifies that `CoordinatorActions.setRegion` can be wired to a closure and called.
     ///
-    /// In Phase 1+2, programmatic recenter (find-me, find-car, launch center, search result)
+    /// In browse mode, programmatic recenter (find-me, find-car, launch center, search result)
     /// fires `coordinatorActions.setRegion?(newRegion)` directly from ContentView action
     /// handlers — OUTSIDE `updateUIView`.
     func testCoordinatorActions_setRegion_isCallable() {
@@ -211,33 +209,37 @@ final class RegionSyncGuardTests: XCTestCase {
             "setRegion must receive the exact region passed by recenterMap")
     }
 
-    // MARK: Test 8 (Phase 2 replacement): Drive Mode — setDriveTrackingMode closure callable
+    // MARK: Test 8 (Option A replacement): Drive Mode — setDriveCamera closure callable
 
-    /// Verifies `CoordinatorActions.setDriveTrackingMode` exists and is callable.
-    /// This is the Phase 2 replacement for `shouldSyncDriveRegion` / `syncDriveRegion`.
-    /// In production, it calls `mapView.userTrackingMode = active ? .follow : .none`.
-    func testCoordinatorActions_setDriveTrackingMode_isCallable() {
+    /// Verifies `CoordinatorActions.setDriveCamera` exists and is callable.
+    /// This is the Option A replacement for Phase 2's `setDriveTrackingMode`.
+    /// In production, it builds an MKMapCamera with the GPS coord, pitch, and altitude
+    /// and calls mapView.setCamera(_:animated:true).
+    func testCoordinatorActions_setDriveCamera_isCallable() {
         let actions = MapViewRepresentable.CoordinatorActions()
 
-        var capturedActive: Bool? = nil
-        actions.setDriveTrackingMode = { active in
-            capturedActive = active
+        var capturedCoord: CLLocationCoordinate2D? = nil
+        var capturedAltitude: CLLocationDistance = 0
+        actions.setDriveCamera = { coord, _, altitude in
+            capturedCoord = coord
+            capturedAltitude = altitude
         }
 
-        actions.setDriveTrackingMode?(true)
-        XCTAssertEqual(capturedActive, true,
-            "setDriveTrackingMode must be callable with true (Drive Mode entry)")
+        let expected = CLLocationCoordinate2D(latitude: 40.758, longitude: -73.985)
+        actions.setDriveCamera?(expected, nil, 621)
 
-        actions.setDriveTrackingMode?(false)
-        XCTAssertEqual(capturedActive, false,
-            "setDriveTrackingMode must be callable with false (Drive Mode exit)")
+        XCTAssertNotNil(capturedCoord, "setDriveCamera must fire when called")
+        XCTAssertEqual(capturedCoord?.latitude ?? 0, expected.latitude, accuracy: 0.0001,
+            "setDriveCamera must receive the GPS coordinate (Option A entry)")
+        XCTAssertEqual(capturedAltitude, 621, accuracy: 1,
+            "setDriveCamera must receive the altitude (currentDriveAltitude from ContentView)")
     }
 
-    // MARK: Test 9 (Phase 2 replacement): onTrackingModeChanged is a MapViewRepresentable property
+    // MARK: Test 9 (Option A replacement): onDrivePanDetected is a MapViewRepresentable property
 
-    /// Verifies `onTrackingModeChanged` is a valid settable property on `MapViewRepresentable`.
-    /// This is the Phase 2 replacement for `onDrivePanDetected`.
-    func testMapViewRepresentable_onTrackingModeChanged_isSettable() {
+    /// Verifies `onDrivePanDetected` is a valid property on `MapViewRepresentable`.
+    /// This is the Option A replacement for Phase 2's `onTrackingModeChanged`.
+    func testMapViewRepresentable_onDrivePanDetected_isCallable() {
         let region = MKCoordinateRegion(
             center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
             span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
@@ -256,14 +258,14 @@ final class RegionSyncGuardTests: XCTestCase {
             coordinatorActions: .init()
         )
 
-        var modeReceived: MKUserTrackingMode? = nil
-        r.onTrackingModeChanged = { mode in
-            modeReceived = mode
+        var panFired = false
+        r.onDrivePanDetected = {
+            panFired = true
         }
 
-        r.onTrackingModeChanged?(MKUserTrackingMode.none)
-        XCTAssertEqual(modeReceived, MKUserTrackingMode.none,
-            "onTrackingModeChanged must be settable and callable on MapViewRepresentable")
+        r.onDrivePanDetected?()
+        XCTAssertTrue(panFired,
+            "onDrivePanDetected must be settable and callable on MapViewRepresentable (Option A)")
     }
 
     // MARK: Test 10 (Phase 2 replacement / TF2-2 non-regression): isUserInteracting still works

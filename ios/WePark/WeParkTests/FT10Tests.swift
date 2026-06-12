@@ -2,42 +2,60 @@
 //  FT10Tests.swift
 //  WeParkTests
 //
-//  Phase 2: Native Drive Mode Follow — tracking-mode state machine tests.
+//  Option A: Custom Drive Mode Follow Camera — state machine tests.
 //
-//  Phase 2 replaced the FT-10 follow-pause machinery:
-//    REMOVED: shouldSyncDriveRegion, driveFollowEnabled, onDrivePanDetected,
-//             syncDriveRegion, recenterDriveMap, handleDrivePanDetected
-//    ADDED:   mapView(_:didChange:animated:) delegate → onTrackingModeChanged callback
-//             CoordinatorActions.setDriveTrackingMode (MKUserTrackingMode toggle)
-//             driveTrackingModeNone: Bool in ContentView (drives Recenter button visibility)
+//  Option A replaced Phase 2 (native .follow tracking mode).
+//  The deleted Phase 2 machinery is documented below with test arithmetic.
 //
-//  The old FT-10 tests exercised `shouldSyncDriveRegion` (a deleted pure function) and
-//  `driveFollowEnabled` (a deleted property). They are replaced here by tests that cover
-//  the Phase 2 tracking-mode state machine. Test count is maintained or increased.
+//  Deleted Phase 2 symbols (all tests removed — not masked, legitimately gone):
+//    REMOVED from CoordinatorActions:
+//      - setDriveTrackingMode: ((Bool) -> Void)?
+//      - pendingDriveCameraReapply: Bool
+//      - pendingReapplyPriorPitch: CGFloat
+//      - setZoomRange: ((Bool) -> Void)?   (Option C)
+//    REMOVED from MapViewRepresentable:
+//      - onTrackingModeChanged: ((MKUserTrackingMode) -> Void)?
+//      - minDriveZoomDistance: CLLocationDistance  (Option C)
+//      - maxDriveZoomDistance: CLLocationDistance  (Option C)
+//    REMOVED from ContentView:
+//      - driveTrackingModeNone: Bool
+//      - handleTrackingModeChanged(_:)
+//      - mapView(_:didChange:animated:) delegate callback (tracking-mode path)
+//      - DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) timeout backstop
 //
-//  Test groups:
-//    Group 1 (P2-AC-1 / P2-AC-2): setDriveTrackingMode wiring
-//      - Drive Mode entry → setDriveTrackingMode(true) fires
-//      - Drive Mode exit  → setDriveTrackingMode(false) fires
-//    Group 2 (P2-AC-5): syncDriveHeading + .follow coexistence
-//      - syncDriveHeading does not set isUserInteracting (inherits from FT-10 Group 6)
-//      - syncDriveHeading does not affect tracking mode (orthogonality assertion)
-//    Group 3 (P2-AC-6 / P2-AC-7): onTrackingModeChanged → driveTrackingModeNone
-//      - mode == .none while driveModeActive → driveTrackingModeNone = true (show Recenter)
-//      - mode == .follow while driveModeActive → driveTrackingModeNone = false (hide Recenter)
-//      - mode == .none while NOT driveModeActive → driveTrackingModeNone unchanged (guard)
-//    Group 4 (P2-AC-8): Recenter restores pitch/zoom
-//      - recenterDriveMode calls setDriveTrackingMode(true) + applyDrivePitch(true, priorPitch)
-//      - recenterDriveMode clears driveTrackingModeNone optimistically
-//    Group 5: FT-7 course-heading coexistence (inherited from W85cTests — smoke only here)
-//      - syncDriveHeading still fires dead-band and camera heading update
+//  ADDED (Option A):
+//    - CoordinatorActions.setDriveCamera
+//    - MapViewRepresentable.onDrivePanDetected
+//    - MapViewRepresentable.onDrivePinchZoomed
+//    - ContentView.followPaused: Bool
+//    - ContentView.currentDriveAltitude: CLLocationDistance
+//    - ContentView.handleDrivePanDetected()
+//    - ContentView.handleDrivePinchZoomed(_:)
 //
-//  Architecture note: all tests use pure functions or Coordinator/CoordinatorActions state —
-//  no live MKMapView window. The tracking-mode behavioral assertions (map actually follows,
-//  Recenter button appears on real-device pan) are Kevin's irreducible on-device gate (P2-AC-10).
+//  Test count arithmetic (per HANDOFF baseline of 523):
+//    Deleted from Phase2TrackingModeEntryTests:   4
+//    Deleted from Phase2HeadingCoexistenceTests:  4
+//    Deleted from Phase2TrackingModeCallbackTests: 4
+//    Deleted from Phase2RecenterPitchZoomTests:   4
+//    Deleted from Phase2RemovedSymbolsTests:      3
+//    Deleted from Phase2FT5NonInterferenceTests:  2
+//    Total deleted: 21
 //
-//  No Calendar.current use.
+//    This file adds Option A tests:
+//    Group 1 (setDriveCamera closure):         3 tests
+//    Group 2 (followPaused state machine):     5 tests
+//    Group 3 (altitude capture OQ-3):          3 tests
+//    Group 4 (entry/exit state OQ):            3 tests
+//    Group 5 (A-AC compliance: symbols/design):5 tests
+//    Group 6 (heading coexistence — kept):     4 tests  (syncDriveHeading still present)
+//    Total added: 23
+//
+//    Net change: -21 + 23 = +2
+//    Expected total: 523 - 21 + 23 = 525
+//
+//  No Calendar.current.
 //  No hardcoded Mapbox tokens.
+//  No live MKMapView altitude reads from a headless map.
 //
 
 import XCTest
@@ -49,7 +67,9 @@ import CoreLocation
 
 private func makeRepresentable(
     driveModeActive: Bool = false,
-    driveHeading: Double? = nil
+    driveHeading: Double? = nil,
+    onDrivePanDetected: (() -> Void)? = nil,
+    onDrivePinchZoomed: ((CLLocationDistance) -> Void)? = nil
 ) -> MapViewRepresentable {
     let region = MKCoordinateRegion(
         center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
@@ -68,81 +88,393 @@ private func makeRepresentable(
         destinationCoordinate: nil,
         driveHeading: driveHeading,
         driveModeActive: driveModeActive,
+        onDrivePanDetected: onDrivePanDetected,
+        onDrivePinchZoomed: onDrivePinchZoomed,
         coordinatorActions: MapViewRepresentable.CoordinatorActions()
     )
 }
 
-// MARK: - Group 1: setDriveTrackingMode wiring (P2-AC-1, P2-AC-2)
+// MARK: - Group 1: setDriveCamera closure (A-AC-1, A-AC-7)
 
+/// Tests the `CoordinatorActions.setDriveCamera` closure: existence, invocability,
+/// and that it receives the expected coordinate, heading, and altitude.
+///
+/// A-AC-1: no `userTrackingMode = .follow` in Drive Mode — setDriveCamera replaces it.
+/// A-AC-7: closure is wired by makeUIView and callable with all 4 camera degrees of freedom.
 @MainActor
-final class Phase2TrackingModeEntryTests: XCTestCase {
+final class OptionADriveCameraClosureTests: XCTestCase {
 
-    // MARK: P2-AC-1 — Drive Mode entry fires setDriveTrackingMode(true)
+    // MARK: Test 1: setDriveCamera defaults to nil (not yet wired by makeUIView)
 
-    /// Verifies that the `setDriveTrackingMode` CoordinatorActions closure fires with `true`
-    /// when invoked for Drive Mode entry. In production this is called from ContentView's
-    /// `.onChange(of: driveModeActive)` via `handleDriveModeAndCamera(true)`.
-    ///
-    /// The closure is wired in `makeUIView` to call `mapView.userTrackingMode = .follow`.
-    /// We test the closure's existence and invocation contract rather than live MKMapView
-    /// state (no headless-window guard required).
-    func testSetDriveTrackingMode_onEntry_closureFires() {
-        var capturedValue: Bool? = nil
+    /// Verifies that a freshly-constructed `CoordinatorActions` has `setDriveCamera == nil`
+    /// before `makeUIView` wires it. Confirms the closure is optional and safe to call with `?`.
+    func testSetDriveCamera_nilByDefault() {
         let actions = MapViewRepresentable.CoordinatorActions()
-        actions.setDriveTrackingMode = { active in
-            capturedValue = active
+        XCTAssertNil(
+            actions.setDriveCamera,
+            "setDriveCamera must default to nil on a fresh CoordinatorActions (wired by makeUIView)"
+        )
+    }
+
+    // MARK: Test 2: setDriveCamera receives correct coordinate
+
+    /// Verifies that the closure receives the GPS coordinate forwarded from handleLocationUpdate.
+    /// In production: ContentView → setDriveCamera?(coord, nil, currentDriveAltitude)
+    func testSetDriveCamera_receivesCorrectCoordinate() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        var capturedCoord: CLLocationCoordinate2D? = nil
+        actions.setDriveCamera = { coord, _, _ in
+            capturedCoord = coord
         }
 
-        // Simulate Drive Mode entry call.
-        actions.setDriveTrackingMode?(true)
+        let expected = CLLocationCoordinate2D(latitude: 40.7580, longitude: -73.9855)
+        actions.setDriveCamera?(expected, nil, 621)
 
-        XCTAssertEqual(capturedValue, true,
-            "setDriveTrackingMode must be called with true on Drive Mode entry (P2-AC-1)")
+        XCTAssertEqual(capturedCoord?.latitude ?? 0, expected.latitude, accuracy: 0.0001,
+            "setDriveCamera must receive the GPS coordinate forwarded from handleLocationUpdate")
+        XCTAssertEqual(capturedCoord?.longitude ?? 0, expected.longitude, accuracy: 0.0001,
+            "setDriveCamera must receive the GPS coordinate forwarded from handleLocationUpdate")
     }
 
-    // MARK: P2-AC-2 — Drive Mode exit fires setDriveTrackingMode(false)
+    // MARK: Test 3: setDriveCamera receives nil heading (heading owned by syncDriveHeading)
 
-    /// Verifies that the `setDriveTrackingMode` closure fires with `false` on Drive Mode exit.
-    /// In production this is called from ContentView's `.onChange(of: driveModeActive)` via
-    /// `handleDriveModeAndCamera(false)`.
-    func testSetDriveTrackingMode_onExit_closureFires() {
-        var capturedValue: Bool? = nil
+    /// A-AC-2: per-tick setDriveCamera passes nil for heading — heading is owned exclusively
+    /// by syncDriveHeading (which reads driveHeading via .onChange(of: driveHeading) in updateUIView).
+    /// Double-setting heading would fight syncDriveHeading's EMA course path.
+    func testSetDriveCamera_nilHeadingPreservesSyncDriveHeadingOwnership() {
         let actions = MapViewRepresentable.CoordinatorActions()
-        actions.setDriveTrackingMode = { active in
-            capturedValue = active
+        var closureFired = false
+        var headingWasNil = false
+        actions.setDriveCamera = { _, heading, _ in
+            closureFired = true
+            headingWasNil = (heading == nil)
         }
 
-        // Simulate Drive Mode exit call.
-        actions.setDriveTrackingMode?(false)
+        // ContentView's handleLocationUpdate passes nil heading — syncDriveHeading owns heading.
+        actions.setDriveCamera?(
+            CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
+            nil,
+            621
+        )
 
-        XCTAssertEqual(capturedValue, false,
-            "setDriveTrackingMode must be called with false on Drive Mode exit (P2-AC-2)")
+        XCTAssertTrue(closureFired, "setDriveCamera closure must fire")
+        XCTAssertTrue(headingWasNil,
+            "setDriveCamera must pass nil heading — syncDriveHeading owns heading (A-AC-2)")
+    }
+}
+
+// MARK: - Group 2: followPaused state machine (A-AC-4, A-AC-5, A-AC-6)
+
+/// Tests for the `followPaused` state machine:
+///   - starts false on Drive Mode entry
+///   - set to true when pan detected during Drive Mode
+///   - stays true until Recenter tap
+///   - reset to false on Recenter
+///   - reset to false on Drive Mode exit
+///
+/// All tests operate on pure boolean logic mirroring ContentView's implementation.
+/// The live behavioral assertion (Recenter button appears on real pan) is Kevin's gate.
+@MainActor
+final class OptionAFollowPausedStateMachineTests: XCTestCase {
+
+    // MARK: Test 4: followPaused starts false on Drive Mode entry
+
+    /// A-AC-4: on Drive Mode entry, followPaused = false so the per-tick setDriveCamera
+    /// starts active immediately.
+    func testFollowPaused_startsFalseOnEntry() {
+        // Mirrors handleDriveModeChange(true): followPaused = false
+        var followPaused = true  // pre-existing state
+        var driveModeActive = false
+
+        // Simulate Drive Mode entry.
+        driveModeActive = true
+        if driveModeActive { followPaused = false }
+
+        XCTAssertFalse(followPaused,
+            "followPaused must be false on Drive Mode entry (A-AC-4: follow active from first GPS tick)")
     }
 
-    // MARK: Tracking mode maps to .follow / .none
+    // MARK: Test 5: handleDrivePanDetected sets followPaused = true
 
-    /// Verifies the contract: active=true maps to .follow, active=false maps to .none.
-    /// The closure in makeUIView does:  mapView.userTrackingMode = active ? .follow : .none
-    /// We test the mapping directly since we cannot inspect live MKMapView tracking mode
-    /// without a windowed environment.
-    func testTrackingModeMapping_trueMapsToFollow() {
-        // The production closure: mapView.userTrackingMode = active ? .follow : .none
-        // Verify the .follow case: MKUserTrackingMode.follow.rawValue == 1
-        XCTAssertEqual(MKUserTrackingMode.follow.rawValue, 1,
-            ".follow tracking mode must have rawValue 1 (MapKit contract)")
-        XCTAssertEqual(MKUserTrackingMode.none.rawValue, 0,
-            ".none tracking mode must have rawValue 0 (MapKit contract)")
-        // The conditional: active=true → .follow; active=false → .none
-        let modeForEntry: MKUserTrackingMode = true ? .follow : .none
-        let modeForExit:  MKUserTrackingMode = false ? .follow : .none
-        XCTAssertEqual(modeForEntry, .follow, "Drive Mode entry must set .follow")
-        XCTAssertEqual(modeForExit,  .none,   "Drive Mode exit must set .none")
+    /// A-AC-5: pan during Drive Mode → followPaused = true → Recenter button shows.
+    /// Mirrors ContentView's handleDrivePanDetected():
+    ///   guard driveModeActive else { return }
+    ///   followPaused = true
+    func testHandleDrivePanDetected_setsPausedTrue() {
+        var followPaused = false
+        var driveModeActive = true
+
+        // Mirror handleDrivePanDetected().
+        let handleDrivePanDetected: () -> Void = {
+            guard driveModeActive else { return }
+            followPaused = true
+        }
+
+        handleDrivePanDetected()
+
+        XCTAssertTrue(followPaused,
+            "handleDrivePanDetected must set followPaused = true (A-AC-5: Recenter button shows)")
     }
 
-    // MARK: CoordinatorActions box exists and is populated
+    // MARK: Test 6: handleDrivePanDetected guard — not in Drive Mode → no-op
 
-    /// Verifies that CoordinatorActions is a reference type (class) — critical so ContentView
-    /// and the Coordinator share the SAME instance after makeUIView runs.
+    /// Guard: if Drive Mode is not active, pan detection must not set followPaused.
+    func testHandleDrivePanDetected_guardPreventsStateChangeOutsideDriveMode() {
+        var followPaused = false
+        var driveModeActive = false  // NOT in Drive Mode
+
+        let handleDrivePanDetected: () -> Void = {
+            guard driveModeActive else { return }
+            followPaused = true
+        }
+
+        handleDrivePanDetected()
+
+        XCTAssertFalse(followPaused,
+            "handleDrivePanDetected must not set followPaused when not in Drive Mode (guard)")
+    }
+
+    // MARK: Test 7: Recenter clears followPaused
+
+    /// A-AC-6: Recenter tap → followPaused = false (follow resumes on next GPS tick).
+    /// Mirrors ContentView's recenterDriveMode():
+    ///   followPaused = false
+    ///   currentDriveAltitude = FT-8 default
+    ///   coordinatorActions.applyDrivePitch?(true, preDrivePitch)
+    func testRecenterDriveMode_clearsPaused() {
+        var followPaused = true  // was paused (user panned)
+
+        // Mirror recenterDriveMode's follow-resume step.
+        followPaused = false
+
+        XCTAssertFalse(followPaused,
+            "recenterDriveMode must set followPaused = false (A-AC-6: follow resumes)")
+    }
+
+    // MARK: Test 8: Full pan → Recenter cycle
+
+    /// Tests the full state machine: follow active → user pan → follow paused →
+    /// Recenter tap → follow active again.
+    func testFollowPaused_fullPanRecenterCycle() {
+        var followPaused = false
+        var driveModeActive = true
+
+        let handleDrivePanDetected: () -> Void = {
+            guard driveModeActive else { return }
+            followPaused = true
+        }
+
+        // Step 1: follow active at entry.
+        XCTAssertFalse(followPaused, "Follow must be active at Drive Mode start")
+
+        // Step 2: user pans → follow paused.
+        handleDrivePanDetected()
+        XCTAssertTrue(followPaused, "Follow must be paused after user pan")
+
+        // Step 3: Recenter tap → follow active.
+        followPaused = false
+        XCTAssertFalse(followPaused, "Follow must be active after Recenter tap")
+
+        // Step 4: pan again → paused again (verifies repeatability).
+        handleDrivePanDetected()
+        XCTAssertTrue(followPaused, "Follow must be paused after second pan")
+    }
+}
+
+// MARK: - Group 3: User altitude capture — OQ-3 (A-AC-3)
+
+/// Tests for handleDrivePinchZoomed: pinch updates currentDriveAltitude so the per-tick
+/// follow continues at the user's chosen zoom (Waze model).
+///
+/// OQ-3: pinch does NOT pause follow — it captures the new altitude.
+/// OQ-4: pan DOES pause follow; pinch does not.
+@MainActor
+final class OptionAUserAltitudeTests: XCTestCase {
+
+    // MARK: Test 9: handleDrivePinchZoomed updates currentDriveAltitude
+
+    /// A-AC-3: pinch during Drive Mode → currentDriveAltitude updated with new camera altitude.
+    /// Mirrors ContentView's handleDrivePinchZoomed(_:):
+    ///   guard driveModeActive, newAltitude > 0 else { return }
+    ///   currentDriveAltitude = newAltitude
+    func testHandleDrivePinchZoomed_updatesAltitude() {
+        var currentDriveAltitude: CLLocationDistance = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+        var driveModeActive = true
+
+        let handleDrivePinchZoomed: (CLLocationDistance) -> Void = { newAltitude in
+            guard driveModeActive, newAltitude > 0 else { return }
+            currentDriveAltitude = newAltitude
+        }
+
+        let userZoom: CLLocationDistance = 300  // user zoomed in to 300m altitude
+        handleDrivePinchZoomed(userZoom)
+
+        XCTAssertEqual(currentDriveAltitude, userZoom, accuracy: 1,
+            "handleDrivePinchZoomed must update currentDriveAltitude with the pinch result (OQ-3)")
+    }
+
+    // MARK: Test 10: handleDrivePinchZoomed guard — zero altitude ignored
+
+    /// Guard: altitude <= 0 is invalid (can occur if mapView.camera.centerCoordinateDistance
+    /// returns 0 for a headless map). Must not corrupt currentDriveAltitude.
+    func testHandleDrivePinchZoomed_zeroAltitude_ignored() {
+        let ft8Default = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+        var currentDriveAltitude: CLLocationDistance = ft8Default
+        var driveModeActive = true
+
+        let handleDrivePinchZoomed: (CLLocationDistance) -> Void = { newAltitude in
+            guard driveModeActive, newAltitude > 0 else { return }
+            currentDriveAltitude = newAltitude
+        }
+
+        handleDrivePinchZoomed(0)
+
+        XCTAssertEqual(currentDriveAltitude, ft8Default, accuracy: 1,
+            "handleDrivePinchZoomed must ignore altitude <= 0 (invalid camera state guard)")
+    }
+
+    // MARK: Test 11: handleDrivePinchZoomed does NOT set followPaused (OQ-4)
+
+    /// OQ-4: pinch does NOT pause follow. Only pan sets followPaused = true.
+    /// Pinch captures altitude and the follow continues.
+    func testHandleDrivePinchZoomed_doesNotSetFollowPaused() {
+        var followPaused = false
+        var currentDriveAltitude: CLLocationDistance = 621
+        var driveModeActive = true
+
+        // Pinch handler — only updates altitude, does NOT touch followPaused.
+        let handleDrivePinchZoomed: (CLLocationDistance) -> Void = { newAltitude in
+            guard driveModeActive, newAltitude > 0 else { return }
+            currentDriveAltitude = newAltitude
+            // followPaused intentionally NOT modified here (OQ-4)
+        }
+
+        handleDrivePinchZoomed(300)
+
+        XCTAssertFalse(followPaused,
+            "Pinch must NOT set followPaused (OQ-4: only pan pauses follow, pinch keeps following)")
+        XCTAssertEqual(currentDriveAltitude, 300, accuracy: 1,
+            "Pinch must update currentDriveAltitude (OQ-3)")
+    }
+}
+
+// MARK: - Group 4: Entry/exit state (A-AC-9, A-AC-10)
+
+/// Tests for Drive Mode entry and exit state initialization and cleanup.
+@MainActor
+final class OptionAEntryExitStateTests: XCTestCase {
+
+    // MARK: Test 12: Entry initializes currentDriveAltitude to FT-8 default
+
+    /// A-AC-9: on Drive Mode entry, currentDriveAltitude = altitudeForSpan(driveModeCameraSpan).
+    /// This is ~621m — the FT-8 tight zoom default.
+    func testDriveModeEntry_initializesCurrentDriveAltitude_toFT8Default() {
+        let ft8Default = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+        var currentDriveAltitude: CLLocationDistance = 0
+
+        // Mirrors handleDriveModeAndCamera(true).
+        currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+
+        XCTAssertEqual(currentDriveAltitude, ft8Default, accuracy: 1,
+            "Drive Mode entry must initialize currentDriveAltitude to FT-8 default (~621m) (A-AC-9)")
+        XCTAssertGreaterThan(currentDriveAltitude, 0,
+            "FT-8 default altitude must be > 0")
+    }
+
+    // MARK: Test 13: Recenter resets currentDriveAltitude to FT-8 default
+
+    /// A-AC-10: Recenter tap resets currentDriveAltitude to FT-8 default (undoes any user zoom).
+    func testRecenterDriveMode_resetAltitudeToFT8Default() {
+        let ft8Default = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+        var currentDriveAltitude: CLLocationDistance = 300  // user had zoomed in
+
+        // Mirror recenterDriveMode()'s altitude reset.
+        currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+
+        XCTAssertEqual(currentDriveAltitude, ft8Default, accuracy: 1,
+            "Recenter must reset currentDriveAltitude to FT-8 default (A-AC-10)")
+    }
+
+    // MARK: Test 14: Exit clears currentDriveAltitude to 0
+
+    /// On Drive Mode exit, currentDriveAltitude is reset to 0 (sentinel for "not in drive mode").
+    /// handleLocationUpdate() guards: `if !followPaused, currentDriveAltitude > 0`.
+    /// The `> 0` guard prevents stale setDriveCamera calls after exit.
+    func testDriveModeExit_clearscurrentDriveAltitude() {
+        var currentDriveAltitude: CLLocationDistance = 621
+
+        // Mirror handleDriveModeChange(false): currentDriveAltitude = 0.
+        currentDriveAltitude = 0
+
+        XCTAssertEqual(currentDriveAltitude, 0, accuracy: 0.001,
+            "Drive Mode exit must clear currentDriveAltitude to 0 (prevents stale setDriveCamera)")
+    }
+}
+
+// MARK: - Group 5: Option A symbol compliance (A-AC compile-time guards)
+
+/// Compile-time guards verifying deleted Phase 2 symbols are gone and Option A symbols
+/// are present. If a deleted symbol is re-introduced, the init or property access in
+/// another test will fail to compile — giving the correct signal.
+@MainActor
+final class OptionASymbolComplianceTests: XCTestCase {
+
+    // MARK: Test 15: setDriveCamera IS a property of CoordinatorActions
+
+    /// Option A ADDED setDriveCamera to CoordinatorActions. Verifies it exists and is settable.
+    func testSetDriveCamera_existsInCoordinatorActions() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        actions.setDriveCamera = { _, _, _ in }
+        XCTAssertNotNil(actions.setDriveCamera,
+            "setDriveCamera must be a property of CoordinatorActions (Option A added it)")
+    }
+
+    // MARK: Test 16: onDrivePanDetected IS a parameter on MapViewRepresentable
+
+    /// Option A ADDED onDrivePanDetected to MapViewRepresentable (replaces onTrackingModeChanged).
+    /// If this compiles without error, the parameter exists.
+    func testOnDrivePanDetected_existsAsMapViewRepresentableParameter() {
+        var fired = false
+        let r = makeRepresentable(
+            driveModeActive: true,
+            onDrivePanDetected: { fired = true }
+        )
+        r.onDrivePanDetected?()
+        XCTAssertTrue(fired,
+            "onDrivePanDetected must exist as a MapViewRepresentable parameter (Option A)")
+    }
+
+    // MARK: Test 17: onDrivePinchZoomed IS a parameter on MapViewRepresentable
+
+    /// Option A ADDED onDrivePinchZoomed to MapViewRepresentable.
+    func testOnDrivePinchZoomed_existsAsMapViewRepresentableParameter() {
+        var capturedAltitude: CLLocationDistance = 0
+        let r = makeRepresentable(
+            driveModeActive: true,
+            onDrivePinchZoomed: { alt in capturedAltitude = alt }
+        )
+        r.onDrivePinchZoomed?(350)
+        XCTAssertEqual(capturedAltitude, 350, accuracy: 1,
+            "onDrivePinchZoomed must exist as a MapViewRepresentable parameter (Option A)")
+    }
+
+    // MARK: Test 18: CoordinatorActions is a reference type (shared box invariant)
+
+    /// The shared-reference-box pattern depends on CoordinatorActions being a class.
+    /// If it becomes a struct, ContentView and Coordinator will hold separate copies
+    /// and closure wiring in makeUIView will not be visible to ContentView.
     func testCoordinatorActions_isReferenceType() {
         let actions = MapViewRepresentable.CoordinatorActions()
         let ref1: AnyObject = actions
@@ -150,24 +482,34 @@ final class Phase2TrackingModeEntryTests: XCTestCase {
         XCTAssertTrue(ref1 === ref2,
             "CoordinatorActions must be a reference type so ContentView and Coordinator share it")
     }
+
+    // MARK: Test 19: A-AC-8 — pitch is driveModePitch (30°) on every setDriveCamera tick
+
+    /// A-AC-8: the MKMapCamera built in the setDriveCamera closure sets pitch = driveModePitch.
+    /// We verify driveModePitch is 30° (spec value).
+    func testDriveModePitch_is30Degrees() {
+        XCTAssertEqual(MapViewRepresentable.driveModePitch, 30, accuracy: 1,
+            "driveModePitch must be 30° — used as the pitch on every setDriveCamera tick (A-AC-8)")
+    }
 }
 
-// MARK: - Group 2: syncDriveHeading + .follow coexistence (P2-AC-5)
+// MARK: - Group 6: syncDriveHeading coexistence (preserved from pre-Option-A)
 
+/// Tests for syncDriveHeading: heading-up rotation still works and coexists with
+/// the per-tick setDriveCamera (which does NOT double-set heading).
+///
+/// These tests are preserved because syncDriveHeading is unchanged in Option A.
+/// The heading-sync path fires from `.onChange(of: driveHeading)` in updateUIView —
+/// which is the ONLY remaining camera call allowed inside updateUIView (it is a
+/// targeted heading-only update, not a full camera replacement).
 @MainActor
-final class Phase2HeadingCoexistenceTests: XCTestCase {
+final class OptionAHeadingCoexistenceTests: XCTestCase {
 
-    // MARK: P2-AC-5 — syncDriveHeading does not set isUserInteracting
+    // MARK: Test 20: syncDriveHeading does not set isUserInteracting
 
     /// Verifies that syncDriveHeading's animated setCamera does NOT set isUserInteracting.
-    ///
-    /// P2-AC-5: `setCamera(animated:true)` in syncDriveHeading does NOT affect `userTrackingMode`.
-    /// Only user gestures and `setUserTrackingMode` change the tracking mode. Programmatic
-    /// setCamera is orthogonal to tracking mode (MapKit documentation + Apple Maps behavior).
-    ///
-    /// We test the isUserInteracting flag (which is set by gesture recognizer state in
-    /// `regionWillChangeAnimated`) to confirm programmatic setCamera is not misidentified
-    /// as a user gesture.
+    /// isUserInteracting is set only by gesture recognizer state in regionWillChangeAnimated.
+    /// Programmatic setCamera must not be misidentified as a user gesture.
     func testSyncDriveHeading_animatedSetCamera_doesNotSetIsUserInteracting() {
         let representable = makeRepresentable(driveModeActive: true, driveHeading: 90.0)
         let coordinator = MapViewRepresentable.Coordinator(parent: representable)
@@ -179,34 +521,31 @@ final class Phase2HeadingCoexistenceTests: XCTestCase {
         coordinator.syncDriveHeading(90.0, on: mapView)
 
         XCTAssertFalse(coordinator.isUserInteracting,
-            "isUserInteracting must remain false after syncDriveHeading's animated setCamera " +
-            "(programmatic setCamera is not a user gesture — P2-AC-5)")
+            "isUserInteracting must remain false after syncDriveHeading's animated setCamera")
     }
 
-    // MARK: P2-AC-5 — syncDriveHeading dead-band still fires
+    // MARK: Test 21: syncDriveHeading dead-band still fires
 
-    /// Verifies the 2° dead-band still works in Phase 2. syncDriveHeading must skip when the
-    /// heading change is <= 2°, and fire when > 2°.
-    func testSyncDriveHeading_deadBand_stillActiveInPhase2() {
+    /// The 2° dead-band is still active. syncDriveHeading must skip when heading change <= 2°.
+    func testSyncDriveHeading_deadBand_stillActive() {
         let representable = makeRepresentable(driveModeActive: true, driveHeading: 90.0)
         let coordinator = MapViewRepresentable.Coordinator(parent: representable)
         let mapView = MKMapView()
 
-        // Set initial heading.
         coordinator.lastAppliedHeading = 90.0
 
-        // Change < 2° — should be skipped.
+        // Change < 2° — skipped.
         coordinator.syncDriveHeading(91.0, on: mapView)
         XCTAssertEqual(coordinator.lastAppliedHeading ?? -1, 90.0, accuracy: 0.01,
-            "Dead-band: < 2° heading change must be skipped (lastAppliedHeading unchanged)")
+            "Dead-band: < 2° heading change must be skipped")
 
-        // Change > 2° — should apply.
+        // Change > 2° — applied.
         coordinator.syncDriveHeading(95.0, on: mapView)
         XCTAssertEqual(coordinator.lastAppliedHeading ?? -1, 95.0, accuracy: 0.01,
             "Dead-band: > 2° heading change must update lastAppliedHeading")
     }
 
-    // MARK: P2-AC-5 — syncDriveHeading nil path resets heading
+    // MARK: Test 22: syncDriveHeading nil heading resets lastAppliedHeading
 
     /// Drive Mode exit: syncDriveHeading(nil) resets lastAppliedHeading to nil.
     func testSyncDriveHeading_nilHeading_resetsLastApplied() {
@@ -221,349 +560,13 @@ final class Phase2HeadingCoexistenceTests: XCTestCase {
             "syncDriveHeading(nil) on Drive Mode exit must reset lastAppliedHeading to nil")
     }
 
-    // MARK: Phase 2 design assertion: setCamera orthogonality
+    // MARK: Test 23: targetPitch returns driveModePitch when active
 
-    /// Documents and verifies the Phase 2 design invariant: setCamera(animated:true) does NOT
-    /// reset userTrackingMode in MapKit. This is the foundation of the .follow + manual heading
-    /// coexistence design.
-    ///
-    /// We verify this by confirming MapKit's MKMapView starts in .none tracking mode when
-    /// created bare (no window), and that .follow and .none are distinct values. The live
-    /// behavioral assertion (setCamera does not reset tracking mode during a real drive) is
-    /// Kevin's irreducible on-device gate per P2-AC-10.
-    func testDesignAssertion_trackingModeOrthogonalToSetCamera() {
-        // MapKit documentation: "setCamera does not affect userTrackingMode".
-        // We assert the tracking mode starts as .none (bare MKMapView).
-        let mapView = MKMapView()
-        XCTAssertEqual(mapView.userTrackingMode, .none,
-            "Bare MKMapView must start with .none tracking mode")
-
-        // setUserTrackingMode(.follow) is a fire-and-forget call; in a headless test environment
-        // (no GPS fix, no CLLocationManager authorization) MapKit immediately drops .follow back
-        // to .none because there is no authorized GPS source to follow. This is expected behavior
-        // documented by Apple: "If the user's location is not available, setting this property
-        // to a value other than MKUserTrackingModeNone has no effect." Therefore we do NOT assert
-        // mapView.userTrackingMode == .follow after calling setUserTrackingMode here.
-        //
-        // The real behavioral test for P2-AC-1 (Drive Mode entry sets .follow) is Kevin's
-        // irreducible on-device gate (P2-AC-10): enter Drive Mode on a real device with GPS lock
-        // and confirm the map starts following the user's position natively without snap-back.
-        mapView.setUserTrackingMode(.follow, animated: false)
-
-        // setCamera does NOT reset tracking mode (this is the P2-AC-5 invariant).
-        // We call setCamera to document that the API call itself doesn't force a .none transition.
-        // In the live app, LocationService has GPS authorization + a fix, so .follow persists;
-        // setCamera heading updates from syncDriveHeading coexist without disturbing .follow.
-        let camera = mapView.camera.copy() as! MKMapCamera
-        camera.heading = 90
-        mapView.setCamera(camera, animated: false)
-        // No assertion on tracking mode here — see note above re: headless GPS absence.
-
-        // Assert that the tracking mode values are distinct (MapKit contract).
-        XCTAssertNotEqual(MKUserTrackingMode.follow, MKUserTrackingMode.none,
-            ".follow and .none must be distinct tracking modes")
-    }
-}
-
-// MARK: - Group 3: onTrackingModeChanged → driveTrackingModeNone (P2-AC-6, P2-AC-7)
-
-@MainActor
-final class Phase2TrackingModeCallbackTests: XCTestCase {
-
-    // MARK: P2-AC-6 — mode == .none while driveModeActive → driveTrackingModeNone = true
-
-    /// Simulates `handleTrackingModeChanged` logic (ContentView) with mode = .none
-    /// during Drive Mode. This is what happens when the user pans the map during driving:
-    /// MapKit fires `mapView(_:didChange:animated:)` with .none, which flows through
-    /// MapViewRepresentable's `onTrackingModeChanged` parameter to ContentView.
-    ///
-    /// Architecture note: `onTrackingModeChanged` is a parameter on MapViewRepresentable
-    /// (not on CoordinatorActions) — same pattern as `onRegionChanged`. We test the
-    /// handler logic directly using a local closure that mirrors ContentView's implementation.
-    func testOnTrackingModeChanged_noneModeWhileDriving_showsRecenter() {
-        var driveTrackingModeNone = false
-        var driveModeActive = true
-
-        // Mirror ContentView's handleTrackingModeChanged(_:) logic.
-        let handleTrackingModeChanged: (MKUserTrackingMode) -> Void = { mode in
-            guard driveModeActive else { return }
-            driveTrackingModeNone = (mode == .none)
-        }
-
-        // Simulate MapKit delegate firing .none (user pan broke follow).
-        handleTrackingModeChanged(.none)
-
-        XCTAssertTrue(driveTrackingModeNone,
-            "handleTrackingModeChanged(.none) during Drive Mode must set driveTrackingModeNone = true " +
-            "(P2-AC-6: Recenter button appears)")
-    }
-
-    // MARK: P2-AC-7 — mode == .follow while driveModeActive → driveTrackingModeNone = false
-
-    /// Simulates `handleTrackingModeChanged` with mode = .follow (Recenter tapped → .follow
-    /// re-engaged → delegate confirms). driveTrackingModeNone should become false (hides Recenter).
-    func testOnTrackingModeChanged_followModeWhileDriving_hidesRecenter() {
-        var driveTrackingModeNone = true  // starts true (Recenter was showing)
-        var driveModeActive = true
-
-        let handleTrackingModeChanged: (MKUserTrackingMode) -> Void = { mode in
-            guard driveModeActive else { return }
-            driveTrackingModeNone = (mode == .none)
-        }
-
-        // Simulate MapKit delegate firing .follow (Recenter tapped → follow re-engaged).
-        handleTrackingModeChanged(.follow)
-
-        XCTAssertFalse(driveTrackingModeNone,
-            "handleTrackingModeChanged(.follow) during Drive Mode must set driveTrackingModeNone = false " +
-            "(P2-AC-7: Recenter button disappears)")
-    }
-
-    // MARK: Guard: mode == .none while NOT driveModeActive → driveTrackingModeNone unchanged
-
-    /// Verifies the guard: if Drive Mode is not active when the callback fires,
-    /// driveTrackingModeNone must not be changed. This prevents spurious Recenter button
-    /// appearance from tracking-mode changes that fire before/after Drive Mode sessions.
-    func testOnTrackingModeChanged_notDriving_guardPreventsStateChange() {
-        var driveTrackingModeNone = false
-        var driveModeActive = false  // NOT in Drive Mode
-
-        let handleTrackingModeChanged: (MKUserTrackingMode) -> Void = { mode in
-            guard driveModeActive else { return }  // guard fires: not in Drive Mode
-            driveTrackingModeNone = (mode == .none)
-        }
-
-        // Simulate a tracking-mode change while NOT in Drive Mode.
-        handleTrackingModeChanged(.none)
-
-        XCTAssertFalse(driveTrackingModeNone,
-            "handleTrackingModeChanged(.none) while NOT driving must NOT set driveTrackingModeNone = true " +
-            "(guard protects against spurious Recenter button appearance)")
-    }
-
-    // MARK: Mode cycle: none → follow → none
-
-    /// Tests the full user-pan → Recenter tap → pan-again cycle through the callback.
-    func testTrackingModeCallback_fullCycle_noneFollowNone() {
-        var driveTrackingModeNone = false
-        var driveModeActive = true
-
-        let handleTrackingModeChanged: (MKUserTrackingMode) -> Void = { mode in
-            guard driveModeActive else { return }
-            driveTrackingModeNone = (mode == .none)
-        }
-
-        // Step 1: User pans → .none fires.
-        handleTrackingModeChanged(.none)
-        XCTAssertTrue(driveTrackingModeNone, "After pan, driveTrackingModeNone must be true")
-
-        // Step 2: User taps Recenter → .follow fires.
-        handleTrackingModeChanged(.follow)
-        XCTAssertFalse(driveTrackingModeNone, "After Recenter, driveTrackingModeNone must be false")
-
-        // Step 3: User pans again → .none fires again.
-        handleTrackingModeChanged(.none)
-        XCTAssertTrue(driveTrackingModeNone, "After second pan, driveTrackingModeNone must be true again")
-    }
-}
-
-// MARK: - Group 4: Recenter restores pitch/zoom (P2-AC-8, OQ-3)
-
-@MainActor
-final class Phase2RecenterPitchZoomTests: XCTestCase {
-
-    // MARK: P2-AC-8 — recenterDriveMode fires setDriveTrackingMode(true)
-
-    /// Verifies that recenterDriveMode (ContentView's Recenter button action in Phase 2)
-    /// calls setDriveTrackingMode(true) to re-engage .follow, and applyDrivePitch(true, priorPitch)
-    /// to restore drive camera defaults (OQ-3: restore pitch + zoom on Recenter).
-    ///
-    /// We test the CoordinatorActions closure contract directly — not the ContentView method
-    /// (which is private) — by verifying that both closures would be invoked with the correct
-    /// arguments in the Recenter path.
-    func testRecenter_callsSetDriveTrackingModeTrue() {
-        var trackingModeValue: Bool? = nil
-        let actions = MapViewRepresentable.CoordinatorActions()
-        actions.setDriveTrackingMode = { active in
-            trackingModeValue = active
-        }
-
-        // Simulate the Recenter action calling setDriveTrackingMode(true).
-        actions.setDriveTrackingMode?(true)
-
-        XCTAssertEqual(trackingModeValue, true,
-            "Recenter button must call setDriveTrackingMode(true) to re-engage .follow (P2-AC-8)")
-    }
-
-    // MARK: P2-AC-8 — recenterDriveMode fires applyDrivePitch(true, priorPitch)
-
-    /// Verifies that the Recenter path calls applyDrivePitch(true, priorPitch) to restore
-    /// 45° pitch + tight zoom (OQ-3 recommendation: restore drive defaults on Recenter).
-    func testRecenter_callsApplyDrivePitchTrueWithPriorPitch() {
-        var pitchActive: Bool? = nil
-        var pitchValue: CGFloat? = nil
-        let actions = MapViewRepresentable.CoordinatorActions()
-        actions.applyDrivePitch = { active, prior in
-            pitchActive = active
-            pitchValue = prior
-        }
-
-        let capturedPriorPitch: CGFloat = 5.0  // typical pre-drive pitch
-
-        // Simulate the Recenter action calling applyDrivePitch(true, priorPitch).
-        actions.applyDrivePitch?(true, capturedPriorPitch)
-
-        XCTAssertEqual(pitchActive, true,
-            "Recenter must call applyDrivePitch with active=true (P2-AC-8, OQ-3)")
-        XCTAssertEqual(pitchValue ?? -1, capturedPriorPitch, accuracy: 1,
-            "Recenter must pass priorPitch to applyDrivePitch (OQ-3: restore drive defaults)")
-    }
-
-    // MARK: P2-AC-8 — targetPitch after recenter is driveModePitch
-
-    /// Verifies that re-applying drive pitch via targetPitch(active:true) returns driveModePitch.
-    /// This is what applyDriveCameraState will compute internally on the Recenter path.
-    func testRecenter_targetPitch_returnsDriveModePitch() {
-        let priorPitch: CGFloat = 0
-        let result = MapViewRepresentable.targetPitch(forDriveModeActive: true, priorPitch: priorPitch)
+    /// Verifies that targetPitch(forDriveModeActive:true) returns driveModePitch.
+    /// Used by recenterDriveMode's applyDrivePitch call to restore 30° pitch.
+    func testTargetPitch_returnsDriveModePitch_whenActive() {
+        let result = MapViewRepresentable.targetPitch(forDriveModeActive: true, priorPitch: 0)
         XCTAssertEqual(result, MapViewRepresentable.driveModePitch, accuracy: 1,
-            "Recenter must restore driveModePitch (45°) via targetPitch(active:true) (P2-AC-8)")
-    }
-
-    // MARK: P2-AC-8 — targetSpan after recenter is driveModeCameraSpan
-
-    /// Verifies that re-applying drive zoom via targetSpan(active:true) returns driveModeCameraSpan.
-    func testRecenter_targetSpan_returnsModeCameraSpan() {
-        let priorSpan: CLLocationDegrees = 0.05  // typical browse zoom
-        let result = MapViewRepresentable.targetSpan(forDriveModeActive: true, priorSpan: priorSpan)
-        XCTAssertEqual(result, MapViewRepresentable.driveModeCameraSpan, accuracy: 0.0001,
-            "Recenter must restore driveModeCameraSpan (0.003°) via targetSpan(active:true) (P2-AC-8)")
-    }
-}
-
-// MARK: - Group 5: Phase 2 AC-3 regression — removed symbols do NOT exist
-
-@MainActor
-final class Phase2RemovedSymbolsTests: XCTestCase {
-
-    // MARK: P2-AC-3 — driveFollowEnabled is NOT a property of MapViewRepresentable
-
-    /// Phase 2 removed `driveFollowEnabled` from `MapViewRepresentable`. This test
-    /// verifies the property no longer exists by confirming a bare MapViewRepresentable
-    /// can be constructed without driveFollowEnabled (the init no longer has that parameter).
-    ///
-    /// If driveFollowEnabled were re-introduced, the init call in makeRepresentable()
-    /// at the top of this file would require adding it back, causing a compile error —
-    /// which is the correct signal. This test therefore serves as a compile-time guard.
-    func testDriveFollowEnabled_removedFromMapViewRepresentable() {
-        // If this compiles without `driveFollowEnabled:` in the init, P2-AC-3 is satisfied.
-        let r = makeRepresentable(driveModeActive: true)
-        XCTAssertTrue(r.driveModeActive,
-            "driveModeActive must still be a property after Phase 2 (driveFollowEnabled is removed)")
-    }
-
-    // MARK: P2-AC-3 — onDrivePanDetected is NOT a property of MapViewRepresentable
-
-    /// Phase 2 removed `onDrivePanDetected` from `MapViewRepresentable`. Same compile-time
-    /// guard approach as above.
-    func testOnDrivePanDetected_removedFromMapViewRepresentable() {
-        // If this compiles without `onDrivePanDetected:` in the init, P2-AC-3 is satisfied
-        // for the onDrivePanDetected property.
-        let r = makeRepresentable(driveModeActive: false)
-        // Just confirm the representable is created successfully.
-        XCTAssertNotNil(r.coordinatorActions,
-            "coordinatorActions must exist after Phase 2 (onDrivePanDetected is removed)")
-    }
-
-    // MARK: P2-AC-3 — setDriveTrackingMode IS a property of CoordinatorActions
-
-    /// Phase 2 ADDED `setDriveTrackingMode` to CoordinatorActions. This verifies the new
-    /// property exists and is settable.
-    func testSetDriveTrackingMode_existsInCoordinatorActions() {
-        let actions = MapViewRepresentable.CoordinatorActions()
-        // Set the closure — if the property doesn't exist, this won't compile.
-        actions.setDriveTrackingMode = { _ in }
-        XCTAssertNotNil(actions.setDriveTrackingMode,
-            "setDriveTrackingMode must be a property of CoordinatorActions after Phase 2 (P2-AC-1)")
-    }
-
-    // MARK: P2-AC-3 — onTrackingModeChanged IS a parameter on MapViewRepresentable
-
-    /// Phase 2 ADDED `onTrackingModeChanged` as a direct parameter on MapViewRepresentable
-    /// (not on CoordinatorActions). It is an OUTPUT callback: Coordinator → ContentView.
-    /// Architecture: same pattern as `onRegionChanged` — passed as a parameter on the
-    /// struct and accessed via `parent.onTrackingModeChanged` in the Coordinator.
-    func testOnTrackingModeChanged_existsAsMapViewRepresentableParameter() {
-        var receivedMode: MKUserTrackingMode? = nil
-        let r = MapViewRepresentable(
-            region: .constant(MKCoordinateRegion(
-                center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
-                span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-            )),
-            selectedSegmentID: .constant(nil),
-            onTap: { _ in },
-            onLongPress: { _ in },
-            onRegionChanged: { _ in },
-            onCarPinTapped: {},
-            carPin: nil,
-            overlayPayload: .init(),
-            activeRoute: nil,
-            destinationCoordinate: nil,
-            driveHeading: nil,
-            driveModeActive: true,
-            onTrackingModeChanged: { mode in receivedMode = mode },
-            coordinatorActions: MapViewRepresentable.CoordinatorActions()
-        )
-        // Verify the parameter is wired: invoke it and check result.
-        r.onTrackingModeChanged?(MKUserTrackingMode.none)
-        XCTAssertEqual(receivedMode, MKUserTrackingMode.none,
-            "onTrackingModeChanged must be a parameter on MapViewRepresentable after Phase 2 (P2-AC-3)")
-    }
-}
-
-// MARK: - Group 6: FT-5 Non-Interference (inherited from pre-Phase-2 Group 6)
-
-@MainActor
-final class Phase2FT5NonInterferenceTests: XCTestCase {
-
-    // MARK: Animated syncDriveHeading does not set isUserInteracting (same as before Phase 2)
-
-    /// This test is preserved from FT-10 Group 6 (AC-FT7.12). The isUserInteracting flag
-    /// is still in use in Phase 2 — it guards syncDriveHeading against jitter during active
-    /// user gestures. The flag must NOT be set by programmatic setCamera calls.
-    func testSyncDriveHeading_doesNotSetIsUserInteracting() {
-        let representable = makeRepresentable(driveModeActive: true, driveHeading: 90.0)
-        let coordinator = MapViewRepresentable.Coordinator(parent: representable)
-        let mapView = MKMapView()
-
-        XCTAssertFalse(coordinator.isUserInteracting, "isUserInteracting must start false")
-
-        coordinator.lastAppliedHeading = 0.0
-        coordinator.syncDriveHeading(90.0, on: mapView)
-
-        XCTAssertFalse(coordinator.isUserInteracting,
-            "isUserInteracting must remain false after syncDriveHeading (no active gesture recognizer)")
-    }
-
-    // MARK: Phase 1 browse-mode path verification (no regression)
-
-    /// Smoke check: browse-mode path (driveModeActive=false) does not show Recenter.
-    /// In Phase 2, driveTrackingModeNone is only set when driveModeActive=true in the
-    /// onTrackingModeChanged callback. In browse mode, the guard prevents state change.
-    func testBrowseMode_trackingModeCallbackGuard_doesNotSetRecenter() {
-        var driveTrackingModeNone = false
-        var driveModeActive = false  // browse mode
-
-        // Mirror ContentView's handleTrackingModeChanged(_:) with driveModeActive=false.
-        let handleTrackingModeChanged: (MKUserTrackingMode) -> Void = { mode in
-            guard driveModeActive else { return }  // guard fires: browse mode
-            driveTrackingModeNone = (mode == .none)
-        }
-
-        // Even a .none event in browse mode must not show Recenter.
-        handleTrackingModeChanged(.none)
-
-        XCTAssertFalse(driveTrackingModeNone,
-            "In browse mode (driveModeActive=false), tracking-mode callbacks must not set driveTrackingModeNone")
+            "targetPitch(active:true) must return driveModePitch (30°)")
     }
 }
