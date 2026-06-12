@@ -55,81 +55,106 @@ struct SignCheckConfirmView: View {
     // MARK: - Body
 
     var body: some View {
+        // TF2-9 fix: opaque background so Drive Mode overlay text cannot bleed through.
+        // `.regularMaterial` (set by the caller's .presentationBackground) may be
+        // translucent enough at .medium detent to show the bottom card text behind the
+        // sheet. Wrapping in a ZStack with Color(.systemBackground) at the back ensures
+        // the sheet body is fully opaque regardless of detent or blur transparency.
         NavigationStack {
-            VStack(alignment: .leading, spacing: 20) {
-                // Subtitle
-                Text("Take 10 seconds — the signs are the final word.")
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal)
-                    .padding(.top, 4)
+            ZStack(alignment: .bottom) {
+                // TF2-9: Opaque fill behind all content — blocks underlying Drive overlay text.
+                Color(.systemBackground)
+                    .ignoresSafeArea()
 
-                // Checklist
-                VStack(alignment: .leading, spacing: 12) {
-                    checklistRow(
-                        index: 0,
-                        icon: "signpost.right.fill",
-                        iconColor: .blue,
-                        text: "Read all posted signs on this side of the street — they stack top to bottom, all rules apply."
-                    )
-                    checklistRow(
-                        index: 1,
-                        icon: "flame.fill",
-                        iconColor: .red,
-                        text: "15 feet from a fire hydrant — no parking (NYC rule; hydrants are easy to miss at night)."
-                    )
-                    checklistRow(
-                        index: 2,
-                        icon: "curbcut.fill",
-                        iconColor: .orange,
-                        text: "Not blocking a driveway or curb cut."
-                    )
-                    checklistRow(
-                        index: 3,
-                        icon: "bus.fill",
-                        iconColor: .purple,
-                        text: "Not in a bus stop or no-standing zone (usually marked with a yellow curb or sign)."
-                    )
-                    checklistRow(
-                        index: 4,
-                        icon: "calendar.badge.clock",
-                        iconColor: .green,
-                        text: "Check today's ASP status — the banner at the top of the map shows it."
-                    )
-                }
-                .padding(.horizontal)
+                VStack(spacing: 0) {
+                    // TF2-9: ScrollView wraps the checklist so all 5 items are reachable at any
+                    // dynamic type size and at the .medium detent height. Without ScrollView the
+                    // checklist can clip at large accessibility type sizes.
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            // Subtitle
+                            Text("Take 10 seconds — the signs are the final word.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal)
+                                .padding(.top, 4)
+                                .padding(.bottom, 16)
 
-                Spacer()
-
-                // CTAs
-                VStack(spacing: 12) {
-                    // Primary: confirm and proceed to ParkConfirmView
-                    Button {
-                        confirmed = true
-                        onConfirm(intent)
-                    } label: {
-                        Text("I checked — Park here")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 14)
+                            // Checklist
+                            VStack(alignment: .leading, spacing: 14) {
+                                checklistRow(
+                                    index: 0,
+                                    icon: "signpost.right.fill",
+                                    iconColor: .blue,
+                                    text: "Read all posted signs on this side of the street — they stack top to bottom, all rules apply."
+                                )
+                                checklistRow(
+                                    index: 1,
+                                    icon: "flame.fill",
+                                    iconColor: .red,
+                                    text: "15 feet from a fire hydrant — no parking (NYC rule; hydrants are easy to miss at night)."
+                                )
+                                checklistRow(
+                                    index: 2,
+                                    icon: "curbcut.fill",
+                                    iconColor: .orange,
+                                    text: "Not blocking a driveway or curb cut."
+                                )
+                                checklistRow(
+                                    index: 3,
+                                    icon: "bus.fill",
+                                    iconColor: .purple,
+                                    text: "Not in a bus stop or no-standing zone (usually marked with a yellow curb or sign)."
+                                )
+                                checklistRow(
+                                    index: 4,
+                                    icon: "calendar.badge.clock",
+                                    iconColor: .green,
+                                    text: "Check today's ASP status — the banner at the top of the map shows it."
+                                )
+                            }
+                            .padding(.horizontal)
+                            // Bottom padding gives space so the last row isn't flush against
+                            // the sticky CTA block below.
+                            .padding(.bottom, 24)
+                        }
                     }
-                    .buttonStyle(.borderedProminent)
-                    .padding(.horizontal)
-                    .accessibilityLabel("I checked — Park here")
-                    .accessibilityHint("Proceeds to the pin drop confirmation screen.")
 
-                    // Secondary: cancel
-                    Button {
-                        confirmed = true  // mark so .onDisappear doesn't double-fire onCancel
-                        onCancel()
-                    } label: {
-                        Text("Cancel")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    // Sticky CTA block — pinned to the bottom of the sheet, NOT inside
+                    // the ScrollView, so it remains visible without scrolling. A Divider
+                    // separates it from the scrollable content.
+                    Divider()
+                    VStack(spacing: 12) {
+                        // Primary: confirm and proceed to ParkConfirmView
+                        Button {
+                            confirmed = true
+                            onConfirm(intent)
+                        } label: {
+                            Text("I checked — Park here")
+                                .font(.headline)
+                                .frame(maxWidth: .infinity)
+                                .padding(.vertical, 14)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .padding(.horizontal)
+                        .accessibilityLabel("I checked — Park here")
+                        .accessibilityHint("Proceeds to the pin drop confirmation screen.")
+
+                        // Secondary: cancel
+                        Button {
+                            confirmed = true  // mark so .onDisappear doesn't double-fire onCancel
+                            onCancel()
+                        } label: {
+                            Text("Cancel")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.bottom, 8)
+                        .accessibilityLabel("Cancel")
+                        .accessibilityHint("Dismisses this sheet without parking.")
                     }
-                    .padding(.bottom, 8)
-                    .accessibilityLabel("Cancel")
-                    .accessibilityHint("Dismisses this sheet without parking.")
+                    .padding(.top, 12)
+                    .background(Color(.systemBackground))
                 }
             }
             .navigationTitle("Check before you park")

@@ -775,6 +775,16 @@ struct ContentView: View {
             // TF2-7: Sign-check confirmation sheet — presented when the driver taps "Park here"
             // in the Drive Mode overlay. Pre-step before ParkConfirmView.
             //
+            // TF2-9 fix: [.medium, .large] detents + .ultraThickMaterial background.
+            //   - .medium alone can clip the 5-item checklist + title + subtitle + sticky CTAs
+            //     on smaller devices or at large dynamic type sizes. .large ensures the user
+            //     can always reach all content.
+            //   - .ultraThickMaterial replaces .regularMaterial to block the Drive Mode bottom
+            //     card and other overlay text from bleeding through the sheet background.
+            //     The checklist view adds its own Color(.systemBackground) fill as a second
+            //     layer of defence (the material alone may still be slightly translucent at the
+            //     fraction boundary of the .medium detent).
+            //
             // onConfirm: dismisses this sheet and opens ParkConfirmView with the same intent.
             //   The intent passes through unchanged — no coordinate mutation (spec §5.3).
             // onCancel: dismisses the sheet without proceeding to pin drop (swipe or Cancel).
@@ -787,9 +797,9 @@ struct ContentView: View {
                     activeSheet = nil
                 }
             )
-            .presentationDetents([.medium])
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
-            .presentationBackground(.regularMaterial)
+            .presentationBackground(.ultraThickMaterial)
             .presentationCornerRadius(20)
 
         case .arrivalPrompt(let coord):
@@ -2077,8 +2087,38 @@ struct ContentView: View {
             // This matches recenterDriveMode's order (which was always correct).
             coordinatorActions.setDriveTrackingMode?(true)
             handleDriveCameraChange(true)
+
+            // TF2-8: Set the one-shot pending re-apply flag.
+            //
+            // Even though we set the camera above, MapKit's `.follow` performs its own
+            // zoom-to-default ASYNCHRONOUSLY when it first acquires the user location —
+            // AFTER our synchronous setCamera. That async follow animation clobbers the
+            // tight FT-8 zoom, leaving the camera at MapKit's wide default altitude.
+            //
+            // The Coordinator's `regionDidChangeAnimated` hook reads this flag and
+            // re-applies `applyDrivePitch(true, priorPitch)` once after MapKit's animation
+            // settles. The flag is then cleared (one-shot) so the re-apply's own
+            // `regionDidChangeAnimated` does not loop.
+            //
+            // `pendingReapplyPriorPitch` is set here from `preDrivePitch` (captured just
+            // above in `handleDriveCameraChange(true)`) so the Coordinator has the correct
+            // prior pitch without a round-trip through ContentView state.
+            coordinatorActions.pendingReapplyPriorPitch = preDrivePitch
+            coordinatorActions.pendingDriveCameraReapply = true
+            // TF2-8 QA Finding #1 (timeout backstop): the flag now stays ARMED through
+            // altitude-neutral camera events (it is only consumed by an actual zoom-out
+            // correction, user takeover, or drive exit). Disarm after 6s so a stuck flag
+            // can never yank the camera long after entry. CoordinatorActions is a shared
+            // reference box, so this closure clears the same instance the Coordinator reads.
+            let actions = coordinatorActions
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+                actions.pendingDriveCameraReapply = false
+            }
         } else {
-            // EXIT — restore camera first, then disengage tracking.
+            // EXIT — clear the pending re-apply flag first, then restore camera + disengage.
+            // Clearing first ensures a quick entry/exit sequence cannot leave a stale flag
+            // that fires after the drive session ends.
+            coordinatorActions.pendingDriveCameraReapply = false
             // Camera restore (pitch+zoom back to pre-drive values) applies pitch/altitude —
             // MapKit's .follow does not override pitch/altitude, only center, so the restore
             // is not cancelled. Disengaging tracking immediately after stops follow.
