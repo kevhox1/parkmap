@@ -41,13 +41,15 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Fix:** width-aware offset — backend-data to check whether osm_data.json carries lanes/width tags
   (preferred); else tier by street class (avenue/broadway/major-crosstown ≈ 9-10m, default ≈ 5-6m).
   Regen tiles (third rebuild — mechanical now). PWA cache bump + iOS build 10.
-- **Status:** 🔴 dispatched (backend-data).
+- **Status:** 🟢 FIXED (035c00c) → PWA live (cache v35) + iOS build 10. Verified: 2nd Ave sides 19.9m
+  apart, E 2nd 11.4m. ⏳ Kevin visual confirm.
 
 ### TF2-9 🔴 Text overlay issue on the "Park here" sign-check sheet (build 9)
 - **Observed (Kevin, build 9):** text overlay problem when tapping Park here (SignCheckConfirmView).
   Screenshot didn't reach the agent; likely the .medium-detent sheet clipping/overlapping its 5-item
   checklist + title + CTA, or drive-overlay text bleeding through the sheet material.
-- **Status:** 🔴 dispatched — engineer to reproduce in sim, fix layout (ScrollView / detent / spacing).
+- **Status:** 🟢 MERGED #60 → build 10. ScrollView checklist + sticky CTA + opaque background +
+  [.medium,.large] detents. ⏳ Kevin visual confirm.
 - **Lands in:** iOS (`SignCheckConfirmView.swift`, ContentView sheet config).
 
 ### TF2-8 🔴 Cruise/destination entry zoom STILL bounces out (TF2-6 fix insufficient — async race confirmed)
@@ -62,7 +64,10 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   `handleTrackingModeChanged(.follow)` and/or the first `regionDidChangeAnimated` post-engagement with
   a one-shot pending-reapply flag (no loops; setCamera cancels MapKit's in-flight animation). Verify
   with GPS-simulated motion in sim, not just launch.
-- **Status:** 🔴 dispatched → build 10.
+- **Status:** 🟢 MERGED #60 → build 10. Re-apply hooked at regionDidChangeAnimated; per QA finding,
+  the pending flag stays ARMED through altitude-neutral events (heading setCamera) and is only
+  consumed by a real zoom-out; disarmed by user takeover/.none, exit, or 6s timeout. QA
+  (`docs/qa/tf2-8-9-qa.md`) findings fixed in-branch. 516/0. ⏳ Kevin: entry-while-moving must end TIGHT.
 - **Lands in:** iOS (ContentView tracking-mode handler + MapViewRepresentable).
 
 ### TF2-7 🔵 Cruise guidance hard to comprehend — simplify voice/text + "Park here" sign-check flow (UX/FEATURE)
