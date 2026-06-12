@@ -2105,6 +2105,15 @@ struct ContentView: View {
             // prior pitch without a round-trip through ContentView state.
             coordinatorActions.pendingReapplyPriorPitch = preDrivePitch
             coordinatorActions.pendingDriveCameraReapply = true
+            // TF2-8 QA Finding #1 (timeout backstop): the flag now stays ARMED through
+            // altitude-neutral camera events (it is only consumed by an actual zoom-out
+            // correction, user takeover, or drive exit). Disarm after 6s so a stuck flag
+            // can never yank the camera long after entry. CoordinatorActions is a shared
+            // reference box, so this closure clears the same instance the Coordinator reads.
+            let actions = coordinatorActions
+            DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
+                actions.pendingDriveCameraReapply = false
+            }
         } else {
             // EXIT — clear the pending re-apply flag first, then restore camera + disengage.
             // Clearing first ensures a quick entry/exit sequence cannot leave a stale flag

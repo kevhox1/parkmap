@@ -154,7 +154,10 @@ final class TF28PendingReapplyFlagTests: XCTestCase {
         XCTAssertLessThanOrEqual(deviationRatio, 0.25,
             "At exact target altitude, deviation must be <= 25% (no re-apply needed)")
 
-        // Simulate: flag is set, altitude within tolerance → clear only.
+        // TF2-8 QA Finding #1: within tolerance the flag must stay ARMED (not cleared).
+        // Altitude-neutral camera events (e.g. the course-heading setCamera) fire
+        // regionDidChangeAnimated without changing altitude; consuming the flag there
+        // would leave MapKit's later async follow-zoom uncaught (the on-device bounce).
         var applyCount = 0
         let actions = MapViewRepresentable.CoordinatorActions()
         actions.applyDrivePitch = { _, _ in applyCount += 1 }
@@ -163,14 +166,29 @@ final class TF28PendingReapplyFlagTests: XCTestCase {
         if deviationRatio > 0.25 {
             actions.pendingDriveCameraReapply = false
             actions.applyDrivePitch?(true, 0)
-        } else {
-            actions.pendingDriveCameraReapply = false  // clear only
         }
+        // else: keep the flag armed — wait for the real zoom-out.
 
-        XCTAssertFalse(actions.pendingDriveCameraReapply,
-            "Flag must be cleared even when altitude is within tolerance")
+        XCTAssertTrue(actions.pendingDriveCameraReapply,
+            "TF2-8 QA #1: flag must stay ARMED through altitude-neutral events (heading setCamera)")
         XCTAssertEqual(applyCount, 0,
             "applyDrivePitch must NOT be called when altitude is within 25% of target")
+    }
+
+    // MARK: Test 6b: user takeover (.none) disarms the pending flag
+
+    /// TF2-8 QA Finding #3: if the user pans/pinches during the pending window, tracking
+    /// drops to .none and the flag must disarm so a later re-apply can't yank the camera
+    /// out of the user's hands. Mirrors the didChange(.none) clear.
+    func testPendingReapplyFlag_userTakeover_disarms() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        actions.pendingDriveCameraReapply = true
+        let mode: MKUserTrackingMode = .none
+        if mode == .none {
+            actions.pendingDriveCameraReapply = false
+        }
+        XCTAssertFalse(actions.pendingDriveCameraReapply,
+            "TF2-8 QA #3: tracking → .none must disarm the pending re-apply flag")
     }
 
     // MARK: Test 7: Idempotence — altitude >25% deviation triggers re-apply

@@ -1537,23 +1537,29 @@ struct MapViewRepresentable: UIViewRepresentable {
             //
             // Drive Mode guard: `parent.driveModeActive` ensures the flag is a no-op if
             // Drive Mode was exited between entry and the first regionDidChangeAnimated.
-            if parent.coordinatorActions.pendingDriveCameraReapply && parent.driveModeActive {
+            if parent.coordinatorActions.pendingDriveCameraReapply && parent.driveModeActive
+                && !isUserInteracting {
                 let targetAltitude = MapViewRepresentable.altitudeForSpan(
                     MapViewRepresentable.driveModeCameraSpan
                 )
                 let currentAltitude = mapView.camera.centerCoordinateDistance
                 let deviationRatio = abs(currentAltitude - targetAltitude) / targetAltitude
-                // Idempotence guard: only re-apply if altitude deviates > 25% from target.
+                // TF2-8 QA Finding #1: only CONSUME the flag when an actual zoom-out is
+                // detected (deviation > 25%). Altitude-neutral camera events — notably the
+                // course-heading setCamera, which fires regionDidChangeAnimated WITHOUT
+                // changing altitude — must NOT consume the flag, or MapKit's later async
+                // follow-zoom would go uncaught (the exact on-device bounce being fixed).
+                // The flag therefore stays ARMED until: a real zoom-out is corrected here,
+                // the user takes over (tracking drops to .none → cleared in didChange),
+                // Drive Mode exits, or the entry timeout fires (ContentView, 6s).
                 if deviationRatio > 0.25 {
-                    // Clear the flag BEFORE re-applying to prevent the re-apply's own
-                    // regionDidChangeAnimated from firing this block again (one-shot).
+                    // Clear BEFORE re-applying so the re-apply's own
+                    // regionDidChangeAnimated does not re-enter this block (one-shot).
                     parent.coordinatorActions.pendingDriveCameraReapply = false
                     let priorPitch = parent.coordinatorActions.pendingReapplyPriorPitch
                     parent.coordinatorActions.applyDrivePitch?(true, priorPitch)
-                } else {
-                    // Already close enough — just clear the flag without re-applying.
-                    parent.coordinatorActions.pendingDriveCameraReapply = false
                 }
+                // else: still at/near target — keep the flag armed and keep waiting.
             }
 
             // Defer the SwiftUI state write to the next run loop cycle.
@@ -1586,6 +1592,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// reset `userTrackingMode` — only user gestures and `setUserTrackingMode` do. This
         /// callback will NOT fire spuriously from `syncDriveHeading`'s camera updates.
         func mapView(_ mapView: MKMapView, didChange mode: MKUserTrackingMode, animated: Bool) {
+            // TF2-8 QA Finding #1/#3: if the user takes over (pan/pinch breaks .follow →
+            // .none) while the entry re-apply flag is still armed, disarm it — a later
+            // re-apply would yank the camera out of the user's hands.
+            if mode == .none {
+                parent.coordinatorActions.pendingDriveCameraReapply = false
+            }
             DispatchQueue.main.async { [weak self] in
                 self?.parent.onTrackingModeChanged?(mode)
             }
