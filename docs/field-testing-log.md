@@ -42,7 +42,9 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   center/heading/pitch/altitude — full control, Waze-style; safe now that the region-binding
   architecture is gone). C) setCameraZoomRange clamp during drive (~1 line; MapKit can't zoom past
   max; trade-off: caps pinch-out). Recommend: spec A, try C as quick experiment first.
-- **Status:** 🟡 tech-lead spec dispatched. NO engineering until Kevin approves the spec.
+- **Status:** 🟡 Option C (zoom-range clamp 150-900m) MERGED #61 → build 11 as the approved EXPERIMENT.
+  TF2-8 machinery kept as belt-and-suspenders. 523/0. Kevin runs the 5-question protocol on-device;
+  fail Q1/Q2 → Option A (custom follow camera, spec'd and ready). Spec: docs/tf2-11-drive-camera-ownership-spec.md
 
 ### TF2-12 🔴 Bowery lines mid-road — side-lines CONVERGE to 0m on curved stretches + width ceiling
 - **Measured:** Bowery median E/W separation 20.5m (wide offset IS applied), BUT around
@@ -51,7 +53,10 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Direction:** name-tier guessing has hit its ceiling. Use NYC CSCL/LION per-segment street WIDTH
   for the offset (real width/2 − ~2m) + fix the converging-side anomaly (consistent normal selection
   per block face). Backend-data spec dispatched.
-- **Status:** 🟡 spec'd before any fourth regen.
+- **Status:** 🟢 regen 4 SHIPPED (76fecb3) → PWA (cache v36) + build 11. Block-level hemisphere lock +
+  zero-length stub filter (the actual 0.0m culprits). Validated: Bowery min E/W separation 0.0→19.9m,
+  median 20.4m. CSCL widths deferred. ⚠️ South-of-Delancey Bowery has a center median — may still read
+  slightly in-lane; CSCL/calibration is the next lever if Kevin's eyes say so.
 
 ### TF2-13 🟡 Elizabeth St north end shows "No Parking" though block is free — sign-zone EXTENT (not offset)
 - **Verified by diff:** the W-side Houston→Bleecker NO_PARKING dominance exists in BOTH the previous
@@ -60,7 +65,9 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Fix candidates:** zone-extent capping for curb-cut-class signs in the pipeline; and/or Tier 2
   community sign-corrections (the product answer for per-curb source errors). Folded into the
   backend-data geometry/data spec.
-- **Status:** 🟡 in spec. (Kevin positive note: Park-here sheet (TF2-9) confirmed better on-device.)
+- **Status:** 🟢 regen 4 SHIPPED — zone cap implemented (isolated towards-arrow NO PARKING ANYTIME,
+  ~50ft cap, 4 guards). Validated: Elizabeth W now ASP everywhere except the ~21m garage pocket.
+  Blast radius ~614 faces citywide improved. (Park-here sheet TF2-9 confirmed better on-device.)
 
 ### TF2-10 🔴 Polylines still look mid-road on WIDE streets (offset magnitude, not direction)
 - **Observed (Kevin, build 9):** center polylines still appear mid-street despite the TF2-5 rebuild.
