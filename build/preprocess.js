@@ -707,6 +707,18 @@ const WIDE_CROSSTOWN_NAMES = new Set([
  *   WIDE  → CURB_OFFSET_WIDE_METERS    (10 m)  — avenue-class, wide crosstowns
  *   DEFAULT → CURB_OFFSET_DEFAULT_METERS (6 m)  — typical side streets
  */
+
+// TF2-12 follow-up: zero-length / sub-2m "stub" segments (identical or nearly identical
+// endpoints) render as junk dots near the centerline and contaminated the curb-offset
+// validation (0.0m side separations). Drop them from tile output entirely.
+function isDegenerateLine(line) {
+  if (!line || line.length < 2) return true;
+  const a = line[0], b = line[line.length - 1];
+  const latM = (b[0] - a[0]) * 111320;
+  const lngM = (b[1] - a[1]) * 111320 * Math.cos(a[0] * Math.PI / 180);
+  return Math.sqrt(latM * latM + lngM * lngM) < 2;
+}
+
 function getStreetCurbOffset(streetName) {
   if (!streetName) return CURB_OFFSET_DEFAULT_METERS;
   const upper = streetName.toUpperCase().trim();
@@ -782,18 +794,44 @@ function offsetPolyline(points, side, offsetMeters) {
 
   const sv = SIDE_COMPASS[side] || { x: 0, y: 1 }; // default N if unrecognised
 
+  // TF2-12 P1: Block-level normal hemisphere selection (Option A).
+  //
+  // The old code picked which perpendicular hemisphere to offset toward by
+  // computing a dot product against the side's compass vector at EACH vertex.
+  // On streets running NNW (e.g. Bowery, bearing ~330°), both candidate normals
+  // have near-equal dot products with the E or W compass vector.  At bend
+  // vertices the averaged direction straddles the ambiguity zone and the
+  // hemisphere selection flips, causing W-side points to land on the wrong
+  // (road-interior) side and the two sides to visually converge to near zero.
+  //
+  // Fix: determine which hemisphere is "outward" ONCE using the block face's
+  // overall line[0]→line[last] direction vector.  This direction is stable and
+  // unambiguous even for bent blocks.  Per-vertex tangent directions are still
+  // used for curve smoothness; only the left/right side choice is anchored
+  // block-level.
+  //
+  // signChoice = +1 means n1 (90° CW from direction) is the outward normal;
+  // signChoice = -1 means n2 (90° CCW from direction) is the outward normal.
+  const overallDx = proj[proj.length - 1][0] - proj[0][0];
+  const overallDy = proj[proj.length - 1][1] - proj[0][1];
+  const overallLen = Math.sqrt(overallDx * overallDx + overallDy * overallDy);
+  const odx = overallLen > 1e-10 ? overallDx / overallLen : 1;
+  const ody = overallLen > 1e-10 ? overallDy / overallLen : 0;
+  // Candidate normals from the overall direction
+  const blockN1x = ody, blockN1y = -odx;   // 90° CW
+  const blockN2x = -ody, blockN2y = odx;   // 90° CCW
+  const blockDot1 = blockN1x * sv.x + blockN1y * sv.y;
+  const blockDot2 = blockN2x * sv.x + blockN2y * sv.y;
+  const signChoice = blockDot1 >= blockDot2 ? +1 : -1;
+
   return proj.map(([px, py], i) => {
     const [dx, dy] = dirs[i];
 
-    // Two candidate perpendicular normals
-    const n1x = dy, n1y = -dx;   // rotate direction 90° CW in projected space
-    const n2x = -dy, n2y = dx;   // rotate direction 90° CCW
-
-    // Pick the one pointing toward the side's compass direction
-    const dot1 = n1x * sv.x + n1y * sv.y;
-    const dot2 = n2x * sv.x + n2y * sv.y;
-    const nx = dot1 >= dot2 ? n1x : n2x;
-    const ny = dot1 >= dot2 ? n1y : n2y;
+    // Per-vertex n1 normal (90° CW of local tangent).  Apply the block-level
+    // sign to select the correct outward hemisphere at every vertex.
+    const n1x = dy, n1y = -dx;
+    const nx = signChoice * n1x;
+    const ny = signChoice * n1y;
 
     // Offset in projected space, then unproject (lng = x / cosLat, lat = y)
     const newX = px + nx * offsetDist;
@@ -871,10 +909,52 @@ function createSubSegments(block) {
       const zoneAtIdx = zones.findIndex(z => z.distStart === d || (d >= z.distStart && d < z.distEnd));
 
       if (coversAfter) {
-        // Cover from this sign's position forward to the next sign (or end)
+        // TF2-13: Isolated "NO PARKING ANYTIME -->" towards-arrow cap.
+        //
+        // A driveway/garage marker (plate SP-854CA or similar) whose description
+        // matches /NO PARKING ANYTIME/i and whose arrow is "towards" physically
+        // covers only the driveway apron (~10–15m / ~50ft).  Without capping,
+        // the coversAfter loop runs to the block end when no closing sign follows,
+        // causing NO_PARKING to dominate the dominant category for all remaining
+        // zones.  The fix: when the sign is an isolated towards-NO_PARKING sign
+        // with no subsequent closing sign within ~50ft, cap the extension at the
+        // zone immediately following the sign position (approx ≤ 50ft) rather
+        // than continuing to the block end.
+        //
+        // A "closing sign" is defined as any other sign position that appears
+        // after d in uniqueDists AND within CAP_DIST_FT feet — i.e., the normal
+        // break condition (uniqueDists.includes(zones[i].distStart)) would trigger
+        // within the cap window.
+        //
+        // Guard conditions (do NOT cap when any of these hold):
+        //   1. The sign's category is not NO_PARKING — only cap NO_PARKING.
+        //   2. The sign description is NOT /NO PARKING ANYTIME/i — leave timed
+        //      NO PARKING signs (e.g. "NO PARKING 8AM-6PM -->") uncapped because
+        //      they legitimately cover longer spans (e.g. school zones).
+        //   3. A subsequent sign position exists within CAP_DIST_FT feet — that
+        //      means a legitimate zone boundary closes the span naturally, and the
+        //      ordinary break condition handles it correctly.
+        //   4. The sign has arrow "both" or arrow null — both-direction signs
+        //      cover the whole face by design (e.g. "NO PARKING ANYTIME <->").
+        //
+        // The cap distance (~50ft / 15m) matches the physical footprint of a
+        // curb-cut driveway.  Zones beyond that distance fall back to whatever
+        // other rules (e.g. ASP_MON_THU) cover those positions.
+        const CAP_DIST_FT = 50;
+        const isIsolatedNPAnytime =
+          sd.category === 'NO_PARKING' &&
+          sd.arrow === 'towards' &&
+          /NO PARKING ANYTIME/i.test(sd.sign ? sd.sign.sign_description : '') &&
+          !uniqueDists.some(otherD => otherD > d && otherD <= d + CAP_DIST_FT);
+
+        // Cover from this sign's position forward to the next sign (or end);
+        // for isolated NO_PARKING ANYTIME --> signs, stop after one zone (~≤ 50ft).
         for (let i = zoneAtIdx; i < zones.length; i++) {
           // Stop at the next sign position (if there's a sign there with its own rule)
           if (i > zoneAtIdx && uniqueDists.includes(zones[i].distStart)) break;
+          // TF2-13 cap: stop after the immediately adjacent zone for isolated
+          // driveway NO_PARKING ANYTIME --> signs (no closing sign within 50ft).
+          if (isIsolatedNPAnytime && i > zoneAtIdx) break;
           if (i >= 0) zones[i].rules.push(sd);
         }
       }
@@ -1083,6 +1163,7 @@ async function main() {
         // Whole block as unknown
         const offsetLine = offsetPolyline(blockGeo.line, block.side, getStreetCurbOffset(block.street));
         if (!offsetLine || offsetLine.length < 2) continue;
+        if (isDegenerateLine(offsetLine)) continue;  // TF2-12: drop zero-length stubs
 
         const segId = `${block.street}_${block.from}_${block.to}_${block.side}`.replace(/\s+/g, '_');
         const onewayFields0 = getOnewayFields(block, blockGeo);
@@ -1115,6 +1196,7 @@ async function main() {
         const offsetLine = offsetPolyline(line, block.side, getStreetCurbOffset(block.street));
         if (!offsetLine || offsetLine.length < 2) return;
         if (!offsetLine.every(p => isFinite(p[0]) && isFinite(p[1]))) return;
+        if (isDegenerateLine(offsetLine)) return;  // TF2-12: drop zero-length stubs
 
         const rules = zone.rules.map(r => ({
           category: r.category,
