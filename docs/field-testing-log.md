@@ -32,6 +32,36 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Labeled TF2-N.
 
+## TF2 Round 2 — build 10 findings (2026-06-12) — SPEC-FIRST per Kevin
+
+### TF2-11 🔴 Zoom: bounces TWICE, still ends zoomed out — .follow re-asserts; one-shot can't win
+- **Observed (Kevin, build 10):** two bounces (our entry zoom + our re-apply both visible) then MapKit
+  zooms out again and wins. Conclusion: `.follow` re-asserts its preferred altitude on subsequent
+  location updates — any one-shot correction loses; repeating correction = camera war.
+- **Options:** A) custom follow camera in drive mode (drop .follow; per-fix animated setCamera with
+  center/heading/pitch/altitude — full control, Waze-style; safe now that the region-binding
+  architecture is gone). C) setCameraZoomRange clamp during drive (~1 line; MapKit can't zoom past
+  max; trade-off: caps pinch-out). Recommend: spec A, try C as quick experiment first.
+- **Status:** 🟡 tech-lead spec dispatched. NO engineering until Kevin approves the spec.
+
+### TF2-12 🔴 Bowery lines mid-road — side-lines CONVERGE to 0m on curved stretches + width ceiling
+- **Measured:** Bowery median E/W separation 20.5m (wide offset IS applied), BUT around
+  Grand→Broome/Hester the sides converge to 0.0-12m (side-selection flips on a curved/ambiguous
+  stretch → both lines at centerline = Kevin's screenshot), and southern Bowery is wider than 20m.
+- **Direction:** name-tier guessing has hit its ceiling. Use NYC CSCL/LION per-segment street WIDTH
+  for the offset (real width/2 − ~2m) + fix the converging-side anomaly (consistent normal selection
+  per block face). Backend-data spec dispatched.
+- **Status:** 🟡 spec'd before any fourth regen.
+
+### TF2-13 🟡 Elizabeth St north end shows "No Parking" though block is free — sign-zone EXTENT (not offset)
+- **Verified by diff:** the W-side Houston→Bleecker NO_PARKING dominance exists in BOTH the previous
+  and current tile builds — NOT caused by the TF2-10 offset change. Likely a garage curb-cut "No
+  Parking" sign whose zone stretches to the block end (sign-zone extends until next sign).
+- **Fix candidates:** zone-extent capping for curb-cut-class signs in the pipeline; and/or Tier 2
+  community sign-corrections (the product answer for per-curb source errors). Folded into the
+  backend-data geometry/data spec.
+- **Status:** 🟡 in spec. (Kevin positive note: Park-here sheet (TF2-9) confirmed better on-device.)
+
 ### TF2-10 🔴 Polylines still look mid-road on WIDE streets (offset magnitude, not direction)
 - **Observed (Kevin, build 9):** center polylines still appear mid-street despite the TF2-5 rebuild.
 - **Diagnosis (measured in shipped tiles):** E 2nd N/S sides are exactly 10.1m apart (2×5m) — the
