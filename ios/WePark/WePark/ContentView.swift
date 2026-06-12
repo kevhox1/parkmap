@@ -2081,7 +2081,11 @@ struct ContentView: View {
         handleDriveModeChange(active)
 
         if active {
-            // TF2-6: ENTRY — engage tracking FIRST, then apply camera (pitch+zoom).
+            // TF2-11 Option C: Apply zoom range clamp FIRST — before .follow engages —
+            // so the constraint is in place before MapKit can re-assert its preferred altitude.
+            coordinatorActions.setZoomRange?(true)
+
+            // TF2-6: ENTRY — engage tracking NEXT, then apply camera (pitch+zoom).
             // Tracking first lets MapKit know to follow the user; our setCamera then fires
             // AFTER MapKit's initial .follow camera placement and wins as the last writer.
             // This matches recenterDriveMode's order (which was always correct).
@@ -2089,6 +2093,12 @@ struct ContentView: View {
             handleDriveCameraChange(true)
 
             // TF2-8: Set the one-shot pending re-apply flag.
+            //
+            // Belt-and-suspenders with TF2-11 Option C: the clamp prevents the zoom-out,
+            // and the re-apply corrects pitch if the first .follow acquisition still drifts
+            // within the clamped range. The machinery is kept per the spec recommendation
+            // (§3 Option C: "Keep the existing pendingDriveCameraReapply machinery as a
+            // belt-and-suspenders layer for the initial entry zoom").
             //
             // Even though we set the camera above, MapKit's `.follow` performs its own
             // zoom-to-default ASYNCHRONOUSLY when it first acquires the user location —
@@ -2124,6 +2134,10 @@ struct ContentView: View {
             // is not cancelled. Disengaging tracking immediately after stops follow.
             handleDriveCameraChange(false)
             coordinatorActions.setDriveTrackingMode?(false)
+
+            // TF2-11 Option C: Remove zoom range clamp AFTER .follow is disengaged —
+            // so the constraint is held until tracking is fully released.
+            coordinatorActions.setZoomRange?(false)
         }
     }
 

@@ -254,6 +254,39 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Kevin: tune on-device — try 0.5s if 0.3s feels abrupt on a real-device drive-test.
     static let driveAnimationDuration: TimeInterval = 0.3
 
+    // MARK: - TF2-11 Option C: Drive Mode camera zoom range clamp constants
+
+    /// Minimum `centerCoordinateDistance` (altitude in meters) enforced during Drive Mode.
+    ///
+    /// Prevents the user from zooming tighter than ~150m during Drive Mode navigation.
+    /// Our target altitude (~621m via altitudeForSpan(driveModeCameraSpan)) is well above
+    /// this floor, so the clamp does not affect our entry setCamera or Recenter transitions.
+    ///
+    /// Kevin: tune on-device — 100m if tighter is acceptable, 200m if 150m feels too tight.
+    ///
+    /// C-AC-3: minDriveZoomDistance ≤ altitudeForSpan(driveModeCameraSpan) ≈ 621m. ✓
+    static let minDriveZoomDistance: CLLocationDistance = 150
+
+    /// Maximum `centerCoordinateDistance` (altitude in meters) enforced during Drive Mode.
+    ///
+    /// TF2-11 clamp: prevents MapKit's `.follow` from re-asserting its wide default altitude
+    /// on each GPS update. By capping at 900m (just above our ~621m target), `.follow`'s
+    /// zoom-to-default is blocked at the ceiling — the camera stays near the FT-8 tight zoom.
+    ///
+    /// Per Apple docs: `setCameraZoomRange` constrains "both programmatic and user-initiated"
+    /// zooming. Whether "programmatic" covers MapKit's own tracking-mode re-assert is the
+    /// experiment question (§5 / §6.1). If it does, TF2-11 closes here. If it doesn't, fall
+    /// through to Option A.
+    ///
+    /// OQ-2 resolution: Kevin approved the experiment with the spec-recommended 900m value.
+    ///
+    /// Kevin: tune on-device — lower this if you want a tighter ceiling; raise (e.g. 1500m)
+    /// if you want more zoom freedom while driving. Note: reducing the gap between target
+    /// (~621m) and ceiling narrows the buffer against .follow's re-assert.
+    ///
+    /// C-AC-3: altitudeForSpan(driveModeCameraSpan) ≈ 621m ≤ maxDriveZoomDistance = 900m. ✓
+    static let maxDriveZoomDistance: CLLocationDistance = 900
+
     /// Pure pitch-decision function: no MKMapView dependency, directly unit-testable.
     ///
     /// Returns the target camera pitch given the Drive Mode state and the pitch that was
@@ -452,6 +485,25 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// to `applyDrivePitch` during the re-apply (without needing to round-trip through
         /// ContentView state, which would require a dispatch or a binding).
         var pendingReapplyPriorPitch: CGFloat = 0
+
+        // MARK: TF2-11 Option C: Camera zoom range clamp
+
+        /// Engages or removes the Drive Mode camera zoom range clamp.
+        ///
+        /// `true`  (entry) → applies `setCameraZoomRange(minCenterCoordinateDistance:
+        ///                   minDriveZoomDistance, maxCenterCoordinateDistance:
+        ///                   maxDriveZoomDistance)` to block MapKit's `.follow` re-assert.
+        /// `false` (exit)  → restores the unrestricted range via `setCameraZoomRange(nil)`.
+        ///
+        /// Called from ContentView's `handleDriveModeAndCamera(_:)` — OUTSIDE `updateUIView`
+        /// — so the range constraint never races SwiftUI's view-update cycle (#31 invariant).
+        ///
+        /// Placement in handleDriveModeAndCamera:
+        ///   ENTRY: setZoomRange(true) BEFORE setDriveTrackingMode(true) so the clamp is in
+        ///          place before `.follow` can re-assert.
+        ///   EXIT:  setZoomRange(false) AFTER setDriveTrackingMode(false) so the clamp is
+        ///          held until tracking is fully released.
+        var setZoomRange: ((Bool) -> Void)?
 
     }
 
@@ -704,6 +756,33 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Called from ContentView's .onChange(of: driveModeActive) OUTSIDE updateUIView per #31.
         coordinatorActions.setShowsBuildings = { [weak mapView] show in
             mapView?.showsBuildings = show
+        }
+
+        // TF2-11 Option C: Camera zoom range clamp.
+        // Constrains `centerCoordinateDistance` during Drive Mode so MapKit's `.follow`
+        // re-assert cannot zoom past maxDriveZoomDistance (900m). Our FT-8 target (~621m)
+        // is within the 150–900m clamped range, so setCamera in applyDrivePitch is unaffected.
+        //
+        // MUST be called from ContentView's handleDriveModeAndCamera (via .onChange) — OUTSIDE
+        // updateUIView — to satisfy the #31 invariant: no UIKit state mutation during SwiftUI's
+        // view-update cycle.
+        //
+        // Per Apple docs: setCameraZoomRange constrains "both programmatic and user-initiated"
+        // zooming. The experiment (§5, §6.1) determines whether MapKit's own .follow tracking-mode
+        // re-asserts are treated as "programmatic" and therefore also constrained.
+        coordinatorActions.setZoomRange = { [weak mapView] active in
+            guard let mapView = mapView else { return }
+            if active {
+                mapView.setCameraZoomRange(
+                    MKMapView.CameraZoomRange(
+                        minCenterCoordinateDistance: MapViewRepresentable.minDriveZoomDistance,
+                        maxCenterCoordinateDistance: MapViewRepresentable.maxDriveZoomDistance
+                    ),
+                    animated: false
+                )
+            } else {
+                mapView.setCameraZoomRange(nil, animated: false)
+            }
         }
 
         return mapView
