@@ -42,9 +42,12 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   center/heading/pitch/altitude — full control, Waze-style; safe now that the region-binding
   architecture is gone). C) setCameraZoomRange clamp during drive (~1 line; MapKit can't zoom past
   max; trade-off: caps pinch-out). Recommend: spec A, try C as quick experiment first.
-- **Status:** 🟡 Option C (zoom-range clamp 150-900m) MERGED #61 → build 11 as the approved EXPERIMENT.
-  TF2-8 machinery kept as belt-and-suspenders. 523/0. Kevin runs the 5-question protocol on-device;
-  fail Q1/Q2 → Option A (custom follow camera, spec'd and ready). Spec: docs/tf2-11-drive-camera-ownership-spec.md
+- **EXPERIMENT VERDICT (Kevin, build 11): FAIL — WORSE.** "Bouncing around and unsettled": the clamp
+  turns .follow's one-time zoom-out into a continuous fight (MapKit retries past the ceiling every GPS
+  tick, gets blocked, retries). Option C dead.
+- **Status:** 🔴 → OPTION A executing per Kevin's pre-approved decision: custom follow camera in drive
+  mode (drop .follow; per-fix animated setCamera center+course+pitch+altitude). Deletes the clamp,
+  the TF2-8 re-apply machinery, and drive-mode tracking-mode usage per the spec's inventory.
 
 ### TF2-12 🔴 Bowery lines mid-road — side-lines CONVERGE to 0m on curved stretches + width ceiling
 - **Measured:** Bowery median E/W separation 20.5m (wide offset IS applied), BUT around
