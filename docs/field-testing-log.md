@@ -34,6 +34,23 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 
 ## TF2 Round 2 — build 10 findings (2026-06-12) — SPEC-FIRST per Kevin
 
+### TF2-14 🔴 Houston (widest streets) lines still mid-road — width-tier ceiling → CSCL real widths (regen 5)
+- **Observed (Kevin, build 11):** Houston north-side green line should sit on the NORTHERN CURB; it's
+  mid-road. Houston is ~35m+ curb-to-curb w/ median — the wide-tier 10m offset can't reach the curb.
+- **Decision:** un-defer the CSCL/LION real-width ingestion (spec'd in docs/tf2-12-13-curb-geometry-spec.md)
+  as regen 5. Validate specifically on HOUSTON north curb + BOWERY. Handle divided/median streets
+  (CSCL models carriageways separately — join carefully).
+- **Status:** 🔴 dispatched (backend-data, regen 5).
+
+### TF2-15 🔵 Bowery curb is metered + UNDER CONSTRUCTION — temporary conditions layer (ROADMAP)
+- **Observed (Kevin):** the Bowery stretch isn't parkable at all right now (construction), regardless of
+  the metered signage the tiles describe. Kevin correctly notes this is future scope.
+- **Direction:** static sign tiles = legal signage only. Temporary reality = the construction layer:
+  ingest NYC street-construction permits as Tier 1 `construction` pins (pin type already in schema
+  02-pins) + crowd reports for what permits miss. Roadmap item for the community/data milestone —
+  not a tile-pipeline fix.
+- **Status:** 🔵 logged for roadmap.
+
 ### TF2-11 🔴 Zoom: bounces TWICE, still ends zoomed out — .follow re-asserts; one-shot can't win
 - **Observed (Kevin, build 10):** two bounces (our entry zoom + our re-apply both visible) then MapKit
   zooms out again and wins. Conclusion: `.follow` re-asserts its preferred altitude on subsequent
