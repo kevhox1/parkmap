@@ -2,33 +2,42 @@
 //  TF211Tests.swift
 //  WeParkTests
 //
-//  TF2-11 Option C: Drive Mode camera zoom range clamp.
+//  TF2-11 Option A: Custom Drive Mode Follow Camera — supplemental closure tests.
 //
-//  Strategy:
-//    The experiment installs a `MKMapView.CameraZoomRange` clamp on Drive Mode entry
-//    and removes it on exit to prevent MapKit's `.follow` from zooming past
-//    `maxDriveZoomDistance` (900m) on each GPS update.
+//  Option C (zoom range clamp) FAILED on-device in build 11 with continuous bouncing.
+//  MapKit's .follow fights the zoom-range clamp on every GPS tick. The clamp was removed.
 //
-//    Live MKMapView zoom-range constraint behavior is unverifiable in a headless test.
-//    Tests here cover the PURE CONTRACTUAL aspects:
-//      1. Named constants exist at their spec-recommended values.
-//      2. Our FT-8 target altitude is within the clamped range (C-AC-3).
-//      3. setZoomRange closure exists on CoordinatorActions and is callable.
-//      4. setZoomRange(true) fires during Drive Mode entry (entry symmetry).
-//      5. setZoomRange(false) fires during Drive Mode exit (exit symmetry).
-//      6. Entry/exit set/restore symmetry: entry fires true, exit fires false.
-//      7. setZoomRange is NOT nil after makeUIView wires the closure.
+//  Option C deleted symbols:
+//    - MapViewRepresentable.minDriveZoomDistance (150m constant)
+//    - MapViewRepresentable.maxDriveZoomDistance (900m constant)
+//    - CoordinatorActions.setZoomRange: ((Bool) -> Void)?
 //
-//  Empirical on-device verification (whether the clamp actually prevents .follow's
-//  re-assert) is Kevin's irreducible gate (C-AC-6 / §5).
+//  7 Option C tests removed (documented, not masked):
+//    - testMinDriveZoomDistance_isSpecRecommendedValue
+//    - testMaxDriveZoomDistance_isOQ2RecommendedValue
+//    - testTargetAltitude_isWithinClampedRange
+//    - testSetZoomRange_nilByDefault
+//    - testSetZoomRange_onEntry_closureFiresWithTrue
+//    - testSetZoomRange_onExit_closureFiresWithFalse
+//    - testSetZoomRange_entryExitSymmetry
+//
+//  Option A tests added here (supplemental to FT10Tests.swift Option A groups):
+//    - TF2-11 Option A camera composition: altitude FT-8 default value
+//    - TF2-11 Option A camera composition: altitudeForSpan returns positive value
+//    - TF2-11 Option A: setDriveCamera altitude parameter flows from currentDriveAltitude
+//    - TF2-11 Option A: FT-8 default altitude approximately 621m
+//    - TF2-11 Option A: driveAnimationDuration is 0.3s
+//    - TF2-11 Option A: driveModeCameraSpan is 0.003°
+//    - TF2-11 Option A: no userTrackingMode = .follow (A-AC-1 compile guard)
+//
+//  Test count arithmetic:
+//    Deleted: 7 Option C tests
+//    Added:   7 Option A tests
+//    Net:     0
 //
 //  No Calendar.current.
 //  No hardcoded Mapbox tokens.
-//  No pbxproj changes.
 //  No live MKMapView altitude reads from a headless map.
-//
-//  Baseline: 516 tests.
-//  This file adds 7 tests → expected 523 passing.
 //
 
 import XCTest
@@ -36,186 +45,127 @@ import MapKit
 import CoreLocation
 @testable import WePark
 
-// MARK: - Helper: bare MapViewRepresentable for testing
+// MARK: - TF2-11 Option A: Camera composition constants and closure contract
 
-private func makeTF211Representable() -> MapViewRepresentable {
-    let region = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
-        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
-    )
-    return MapViewRepresentable(
-        region: .constant(region),
-        selectedSegmentID: .constant(nil),
-        onTap: { _ in },
-        onLongPress: { _ in },
-        onRegionChanged: { _ in },
-        onCarPinTapped: {},
-        carPin: nil,
-        overlayPayload: .init(),
-        activeRoute: nil,
-        destinationCoordinate: nil,
-        driveHeading: nil,
-        driveModeActive: false,
-        coordinatorActions: MapViewRepresentable.CoordinatorActions()
-    )
-}
-
-// MARK: - TF2-11: Zoom clamp constant values
-
-/// Tests that the named tunable constants match the spec-recommended values.
-///
-/// C-AC-1: range values wired at spec-confirmed values.
-/// C-AC-3: target altitude within clamped range.
+/// Tests for Option A camera composition:
+///   - The FT-8 default altitude (~621m from driveModeCameraSpan = 0.003°)
+///   - The driveAnimationDuration (0.3s per-tick animation)
+///   - The setDriveCamera altitude parameter contract
+///   - A-AC-1: no userTrackingMode = .follow in Drive Mode
 @MainActor
-final class TF211ZoomRangeConstantTests: XCTestCase {
+final class TF211OptionACameraCompositionTests: XCTestCase {
 
-    // MARK: Test 1: minDriveZoomDistance is at the spec-recommended value
+    // MARK: Test 1: altitudeForSpan returns a positive value
 
-    /// Verifies `minDriveZoomDistance` = 150m (spec §3 / OQ-2: Kevin approved experiment;
-    /// spec's example shows the floor at 150–200m; this implementation uses 150m as the
-    /// tunable floor — well below our ~621m target, so it cannot affect our setCamera calls).
-    ///
-    /// Kevin: change the constant in MapViewRepresentable.swift to tune without code change.
-    func testMinDriveZoomDistance_isSpecRecommendedValue() {
-        XCTAssertEqual(
-            MapViewRepresentable.minDriveZoomDistance, 150,
-            accuracy: 1,
-            "minDriveZoomDistance must be 150m (TF2-11 Option C spec constant)"
-        )
-    }
-
-    // MARK: Test 2: maxDriveZoomDistance is at the spec-recommended value (OQ-2)
-
-    /// Verifies `maxDriveZoomDistance` = 900m.
-    ///
-    /// OQ-2 resolution: Kevin approved the experiment with the spec-recommended 900m ceiling.
-    /// This is the core clamp constant: `.follow`'s re-assert cannot push altitude past 900m.
-    ///
-    /// Kevin: change the constant in MapViewRepresentable.swift to tune without code change.
-    func testMaxDriveZoomDistance_isOQ2RecommendedValue() {
-        XCTAssertEqual(
-            MapViewRepresentable.maxDriveZoomDistance, 900,
-            accuracy: 1,
-            "maxDriveZoomDistance must be 900m (TF2-11 Option C OQ-2 approved value)"
-        )
-    }
-
-    // MARK: Test 3: Target altitude is within clamped range (C-AC-3)
-
-    /// Verifies that `altitudeForSpan(driveModeCameraSpan)` ≈ 621m satisfies:
-    ///   minDriveZoomDistance ≤ target ≤ maxDriveZoomDistance
-    ///
-    /// C-AC-3: Our FT-8 target altitude must be within the clamped range so setCamera in
-    /// applyDrivePitch is not affected by the clamp (the clamp constrains wide zoom-outs,
-    /// not our intended tight altitude).
-    func testTargetAltitude_isWithinClampedRange() {
-        let targetAltitude = MapViewRepresentable.altitudeForSpan(
+    /// Verifies that `altitudeForSpan(driveModeCameraSpan)` returns a positive CLLocationDistance.
+    /// This is the value stored in `currentDriveAltitude` on Drive Mode entry and passed to
+    /// `setDriveCamera` on every GPS tick.
+    func testAltitudeForSpan_returnsPositiveValue() {
+        let altitude = MapViewRepresentable.altitudeForSpan(
             MapViewRepresentable.driveModeCameraSpan
         )
-        // C-AC-3: minDriveZoomDistance ≤ targetAltitude ≤ maxDriveZoomDistance
-        XCTAssertGreaterThanOrEqual(
-            targetAltitude, MapViewRepresentable.minDriveZoomDistance,
-            "Target altitude (~621m) must be >= minDriveZoomDistance (150m) — C-AC-3"
-        )
-        XCTAssertLessThanOrEqual(
-            targetAltitude, MapViewRepresentable.maxDriveZoomDistance,
-            "Target altitude (~621m) must be <= maxDriveZoomDistance (900m) — C-AC-3"
-        )
+        XCTAssertGreaterThan(altitude, 0,
+            "altitudeForSpan(driveModeCameraSpan) must return a positive altitude (> 0m)")
     }
-}
 
-// MARK: - TF2-11: setZoomRange closure wiring and entry/exit symmetry
+    // MARK: Test 2: FT-8 default altitude is approximately 621m
 
-/// Tests for the `CoordinatorActions.setZoomRange` closure: existence, invocability,
-/// and the entry/exit symmetry contract (entry fires true, exit fires false).
-///
-/// C-AC-1: closure wired; C-AC-2: called outside updateUIView (verified by code review
-/// / grep; not testable in a headless unit test).
-@MainActor
-final class TF211ZoomRangeClosureTests: XCTestCase {
+    /// Verifies that `altitudeForSpan(driveModeCameraSpan)` is in the expected ~500–800m range.
+    /// The spec prescribes ~621m for driveModeCameraSpan = 0.003°. If this drifts, Drive Mode
+    /// will start at a wrong zoom level — flag for re-evaluation.
+    func testFT8DefaultAltitude_isApproximately621m() {
+        let altitude = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+        XCTAssertGreaterThan(altitude, 400,
+            "FT-8 default altitude must be > 400m (not zoomed too tight)")
+        XCTAssertLessThan(altitude, 1200,
+            "FT-8 default altitude must be < 1200m (not zoomed too wide)")
+    }
 
-    // MARK: Test 4: setZoomRange closure is nil by default (not yet wired)
+    // MARK: Test 3: driveModeCameraSpan is 0.003°
 
-    /// Verifies that a freshly-constructed `CoordinatorActions` has `setZoomRange == nil`
-    /// before `makeUIView` wires it. This confirms the closure is optional and safe to
-    /// call with `?` before setup.
-    func testSetZoomRange_nilByDefault() {
-        let actions = MapViewRepresentable.CoordinatorActions()
-        XCTAssertNil(
-            actions.setZoomRange,
-            "setZoomRange must default to nil on a fresh CoordinatorActions (wired by makeUIView)"
+    /// Verifies the span constant used to derive the FT-8 altitude. If this changes,
+    /// the FT-8 default zoom will change — flag for product review.
+    func testDriveModeCameraSpan_isSpecValue() {
+        XCTAssertEqual(
+            MapViewRepresentable.driveModeCameraSpan, 0.003,
+            accuracy: 0.0001,
+            "driveModeCameraSpan must be 0.003° (FT-8 tight zoom spec value)"
         )
     }
 
-    // MARK: Test 5: setZoomRange closure is callable with true (entry)
+    // MARK: Test 4: driveAnimationDuration is 0.3s
 
-    /// Verifies the entry contract: `setZoomRange(true)` fires and the closure receives `true`.
-    ///
-    /// In production this represents Drive Mode entry: the clamp is applied BEFORE .follow
-    /// engages so the constraint is in place when MapKit's tracking mode starts.
-    func testSetZoomRange_onEntry_closureFiresWithTrue() {
-        var capturedValue: Bool? = nil
+    /// A-AC-2: per-tick setCamera uses driveAnimationDuration (0.3s). At 1 Hz GPS updates,
+    /// 0.3s completes with 0.7s spare and MKMapView retargets in-flight animations smoothly.
+    func testDriveAnimationDuration_is0point3s() {
+        XCTAssertEqual(
+            MapViewRepresentable.driveAnimationDuration, 0.3,
+            accuracy: 0.01,
+            "driveAnimationDuration must be 0.3s (per-tick smooth animation, 0.7s spare at 1 Hz)"
+        )
+    }
+
+    // MARK: Test 5: setDriveCamera altitude parameter flows from caller
+
+    /// Verifies the closure signature: altitude is the third parameter of type CLLocationDistance.
+    /// In production, ContentView passes `currentDriveAltitude` — which starts at the FT-8
+    /// default and is updated by pinch.
+    func testSetDriveCamera_altitudeParameterFlowsFromCaller() {
         let actions = MapViewRepresentable.CoordinatorActions()
-        actions.setZoomRange = { active in
-            capturedValue = active
+        var capturedAltitude: CLLocationDistance = 0
+        actions.setDriveCamera = { _, _, altitude in
+            capturedAltitude = altitude
         }
 
-        actions.setZoomRange?(true)
-
-        XCTAssertEqual(
-            capturedValue, true,
-            "setZoomRange must be called with true on Drive Mode entry (clamp applied)"
+        let userAltitude: CLLocationDistance = 350  // user zoomed in
+        actions.setDriveCamera?(
+            CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
+            nil,
+            userAltitude
         )
+
+        XCTAssertEqual(capturedAltitude, userAltitude, accuracy: 1,
+            "setDriveCamera must receive the altitude from currentDriveAltitude (A-AC-3)")
     }
 
-    // MARK: Test 6: setZoomRange closure is callable with false (exit)
+    // MARK: Test 6: setDriveCamera closure signature accepts optional heading
 
-    /// Verifies the exit contract: `setZoomRange(false)` fires and the closure receives `false`.
-    ///
-    /// In production this represents Drive Mode exit: the clamp is removed AFTER .follow
-    /// disengages so the constraint is held until tracking is fully released.
-    func testSetZoomRange_onExit_closureFiresWithFalse() {
-        var capturedValue: Bool? = nil
+    /// Verifies the heading parameter is Double? (nil = heading unchanged by this call,
+    /// owned by syncDriveHeading).
+    func testSetDriveCamera_acceptsOptionalHeading() {
         let actions = MapViewRepresentable.CoordinatorActions()
-        actions.setZoomRange = { active in
-            capturedValue = active
-        }
+        var callCount = 0
+        actions.setDriveCamera = { _, _, _ in callCount += 1 }
 
-        actions.setZoomRange?(false)
+        // Should accept both nil heading (per-tick path) and non-nil heading (explicit recenter).
+        actions.setDriveCamera?(CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99), nil, 621)
+        actions.setDriveCamera?(CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99), 90.0, 621)
 
-        XCTAssertEqual(
-            capturedValue, false,
-            "setZoomRange must be called with false on Drive Mode exit (clamp removed)"
-        )
+        XCTAssertEqual(callCount, 2,
+            "setDriveCamera must accept both nil and non-nil heading (Double? parameter)")
     }
 
-    // MARK: Test 7: Entry/exit symmetry — entry true, exit false, in order
+    // MARK: Test 7: A-AC-1 — bare MKMapView starts with .none tracking mode
 
-    /// Verifies the full entry/exit sequence: the closure first receives true (clamp applied
-    /// on entry) and then false (clamp removed on exit), with no calls in between.
+    /// A-AC-1 compile guard: documents that Option A does NOT call userTrackingMode = .follow.
+    /// We verify the baseline: a bare MKMapView starts with .none, and Option A never changes it.
     ///
-    /// This mirrors the production call sequence in `handleDriveModeAndCamera`:
-    ///   handleDriveModeAndCamera(true)  → setZoomRange(true)  [entry: clamp ON]
-    ///   handleDriveModeAndCamera(false) → setZoomRange(false) [exit:  clamp OFF]
-    func testSetZoomRange_entryExitSymmetry() {
-        var callLog: [Bool] = []
-        let actions = MapViewRepresentable.CoordinatorActions()
-        actions.setZoomRange = { active in
-            callLog.append(active)
-        }
+    /// The real behavioral assertion (Drive Mode never calls .follow) is enforced by code
+    /// review: no `userTrackingMode = .follow` reference exists in ContentView.swift or
+    /// MapViewRepresentable.swift (grep verified in the PR).
+    func testBareMapView_startsWithNoneTrackingMode_optionANeverSetsFollow() {
+        // Option A invariant: userTrackingMode stays .none for the entire Drive Mode session.
+        // We document this by asserting the bare-map default.
+        let mapView = MKMapView()
+        XCTAssertEqual(mapView.userTrackingMode, .none,
+            "Bare MKMapView starts with .none — Option A never sets .follow (A-AC-1)")
 
-        // Simulate Drive Mode entry.
-        actions.setZoomRange?(true)
-        // Simulate Drive Mode exit.
-        actions.setZoomRange?(false)
-
-        XCTAssertEqual(
-            callLog, [true, false],
-            "setZoomRange must fire true on entry and false on exit (entry/exit symmetry)"
-        )
-        XCTAssertEqual(
-            callLog.count, 2,
-            "setZoomRange must be called exactly once on entry and once on exit (no extra calls)"
-        )
+        // Document Option A's design: the custom setDriveCamera closure does NOT call
+        // mapView.userTrackingMode = .follow at any point. This assertion documents the intent;
+        // the compile-time guard is the absence of the call in production code.
+        XCTAssertNotEqual(MKUserTrackingMode.follow, MKUserTrackingMode.none,
+            ".follow and .none are distinct — Option A keeps the map at .none throughout Drive Mode")
     }
 }

@@ -372,16 +372,30 @@ struct ContentView: View {
     /// Current driving context (nil when no street data near GPS position).
     @State private var drivingContext: DrivingContext? = nil
 
-    /// True when MapKit has broken Drive Mode position-follow due to a user pan/gesture.
+    /// Option A: True when the custom Drive Mode follow is paused due to a user pan gesture.
     ///
-    /// Phase 2: replaces the old `driveFollowEnabled` flag. The signal now comes from
-    /// `mapView(_:didChange:animated:)` in the Coordinator — MapKit fires this delegate
-    /// callback when `userTrackingMode` transitions to `.none` during Drive Mode (user pan).
+    /// Set to `true` by `onDrivePanDetected` (MapViewRepresentable → ContentView callback)
+    /// when a user pan is detected during Drive Mode (FT-5 `isUserInteracting` + pan type check).
+    /// Cleared to `false` on Recenter tap or Drive Mode exit.
     ///
-    /// When `true` → show the Recenter button overlay.
-    /// When `false` → Recenter button hidden (MapKit is following, or Drive Mode is off).
-    /// Cleared to `false` on Drive Mode exit and on Recenter tap (optimistic hide).
-    @State private var driveTrackingModeNone: Bool = false
+    /// When `true` → per-tick `setDriveCamera` is skipped (follow paused); Recenter button shown.
+    /// When `false` → per-tick `setDriveCamera` fires on every GPS update (following active).
+    ///
+    /// Managed independently of `isUserInteracting` (which auto-clears on regionDidChangeAnimated).
+    /// `followPaused` stays `true` until the user explicitly taps Recenter — matching Waze/Apple
+    /// Maps behavior where a pan keeps the view locked on the panned position.
+    @State private var followPaused: Bool = false
+
+    /// Option A: User-adjustable camera altitude during Drive Mode (meters above ground).
+    ///
+    /// Initialized to `altitudeForSpan(driveModeCameraSpan)` (~621m) on Drive Mode entry.
+    /// Updated by `onDrivePinchZoomed` when the user pinch-zooms during Drive Mode (OQ-3:
+    /// preserve user-adjusted altitude — Waze model). The next GPS tick uses this altitude
+    /// so follow continues at the user's chosen zoom instead of re-imposing the FT-8 default.
+    ///
+    /// Reset to the FT-8 default on Recenter tap (explicit "go back to default" action).
+    /// Reset to 0 and re-initialized on Drive Mode re-entry.
+    @State private var currentDriveAltitude: CLLocationDistance = 0
 
     /// S-1 fix (spec §7 R-3, AC-DM.23): controls the one-time background-limitation alert.
     /// Set to true on the first-ever Drive Mode start if the gate key is not yet set.
@@ -1130,7 +1144,8 @@ struct ContentView: View {
             segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
             driveHeading: locationService.driveHeading,
             driveModeActive: driveModeActive,
-            onTrackingModeChanged: handleTrackingModeChanged(_:),
+            onDrivePanDetected: handleDrivePanDetected,
+            onDrivePinchZoomed: handleDrivePinchZoomed(_:),
             coordinatorActions: coordinatorActions
         )
     }
@@ -1438,10 +1453,10 @@ struct ContentView: View {
             }
             .padding(.top, endDrivePillTopPadding)
             Spacer()
-            // Phase 2: Recenter pill — visible when MapKit has broken Drive Mode follow
-            // due to a user pan (driveTrackingModeNone == true, P2-AC-6, P2-AC-7).
-            // Replaces the old driveFollowEnabled == false signal.
-            if driveTrackingModeNone {
+            // Option A: Recenter pill — visible when the custom Drive Mode follow is paused
+            // due to a user pan (followPaused == true). Tapping resumes follow and restores
+            // the FT-8 default altitude.
+            if followPaused {
                 Button {
                     recenterDriveMode()
                 } label: {
@@ -1589,28 +1604,30 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Phase 2: Recenter in Drive Mode (P2-AC-7, OQ-3)
+    // MARK: - Option A: Recenter in Drive Mode (A-AC-9)
 
-    /// Re-engages MapKit's native position-follow and restores the Drive Mode camera defaults.
+    /// Resumes the custom follow camera and restores the Drive Mode camera defaults.
     ///
-    /// Phase 2 replaces the old `recenterDriveMode()` that wrote `region` and set
-    /// `driveFollowEnabled = true`. The new approach:
-    ///   1. `coordinatorActions.setDriveTrackingMode?(true)` → `mapView.userTrackingMode = .follow`
-    ///      (MapKit re-centers smoothly on the next GPS fix).
-    ///   2. `coordinatorActions.applyDrivePitch?(true, preDrivePitch)` → restores 45° pitch + tight
-    ///      zoom (per OQ-3: "restore drive defaults" is better UX than "silently follow from current").
-    ///   3. `driveTrackingModeNone = false` optimistically hides the Recenter button immediately
-    ///      (the `mapView(_:didChange:animated:)` callback will confirm via `onTrackingModeChanged`,
-    ///      but optimistic hide prevents flicker).
+    /// Option A design — no `userTrackingMode = .follow`. The recenter action:
+    ///   1. Resets `currentDriveAltitude` to the FT-8 default — so the next per-tick
+    ///      `setDriveCamera` follows at the canonical tight zoom, not the user's panned view.
+    ///   2. Sets `followPaused = false` — resumes the per-tick `setDriveCamera` in
+    ///      `handleLocationUpdate()`. The next GPS tick recenters smoothly with the
+    ///      driveAnimationDuration (0.3s) animated setCamera.
+    ///   3. Fires `coordinatorActions.applyDrivePitch?(true, preDrivePitch)` — restores
+    ///      pitch (30°) and altitude immediately (no waiting for next GPS tick) so the camera
+    ///      snaps to drive defaults at once, matching the UX expectation of "tap Recenter → back".
     ///
-    /// Architecture: no `region` write, no `updateUIView` call. Both coordinator closures fire
-    /// outside SwiftUI's view-update cycle — #31 invariant is maintained.
+    /// Architecture: no `region` write, no `userTrackingMode =`, no `updateUIView` call.
+    /// All closures fire outside SwiftUI's view-update cycle — #31 invariant maintained.
     private func recenterDriveMode() {
-        // Optimistic hide — prevents flicker while waiting for the delegate callback.
-        driveTrackingModeNone = false
-        // Re-engage native follow.
-        coordinatorActions.setDriveTrackingMode?(true)
-        // Restore drive camera defaults (OQ-3: pitch 45°, tight zoom ~621m altitude).
+        // Reset altitude to FT-8 default — per-tick follow will use this from the next GPS tick.
+        currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
+            MapViewRepresentable.driveModeCameraSpan
+        )
+        // Resume custom follow — next GPS tick will re-center via setDriveCamera.
+        followPaused = false
+        // Immediately apply drive pitch/altitude so camera doesn't wait for next GPS fix.
         coordinatorActions.applyDrivePitch?(true, preDrivePitch)
     }
 
@@ -1709,9 +1726,10 @@ struct ContentView: View {
         if active {
             // Entering Drive Mode.
             locationService.startDriveMode()
-            // Phase 2: driveTrackingModeNone starts false (native follow will be engaged
-            // via coordinatorActions.setDriveTrackingMode in handleDriveModeAndCamera).
-            driveTrackingModeNone = false
+            // Option A: followPaused starts false — follow is active from the first GPS tick.
+            followPaused = false
+            // currentDriveAltitude initialized in handleDriveModeAndCamera (after the entry
+            // setCamera has applied so we don't capture the pre-transition altitude here).
             // Create DrivingContextService and wire the voice service.
             let service = DrivingContextService(voice: drivingVoice)
             drivingContextService = service
@@ -1742,8 +1760,9 @@ struct ContentView: View {
             drivingContextService?.setCruiseMode(false)
             drivingContextService = nil
             drivingContext = nil
-            // Phase 2: clear Recenter button on Drive Mode exit.
-            driveTrackingModeNone = false
+            // Option A: clear follow state on Drive Mode exit.
+            followPaused = false
+            currentDriveAltitude = 0
             // Deactivate audio session.
             AudioSessionManager.shared.deactivateDriveSession()
             // W8.5d: Reset final-approach state for the next session.
@@ -1838,14 +1857,19 @@ struct ContentView: View {
                 recenterMap(on: coord)
             }
         }
-        // W8.5c: Drive Mode context update.
-        // Phase 2: Manual follow-mode recenter block REMOVED.
-        //   The `if driveFollowEnabled { recenterDriveMap(on: coord) }` block is gone.
-        //   MapKit's native `.follow` tracking mode (set on Drive Mode entry via
-        //   `coordinatorActions.setDriveTrackingMode?(true)`) owns position centering —
-        //   MapKit centers the map on every GPS fix automatically, with native smooth animation.
-        //   No code in ContentView's location update handler is needed for follow.
+        // W8.5c: Drive Mode context update + Option A custom follow.
         if driveModeActive {
+            // Option A: Custom follow camera — per-tick setCamera (A-AC-2, A-AC-3).
+            // Fires on every GPS update when driveModeActive && !followPaused.
+            // Camera composition: center = GPS coord, heading = current camera heading
+            // (syncDriveHeading owns heading via course EMA — no double-set here),
+            // pitch = driveModePitch (30°), altitude = currentDriveAltitude (user-adjustable).
+            // Animation: driveAnimationDuration (0.3s) — MKMapView retargets in-flight animations
+            // smoothly; completes with 0.7s spare at 1 Hz GPS.
+            // Guard: followPaused == true when user panned — skip centering until Recenter tap.
+            if !followPaused, currentDriveAltitude > 0 {
+                coordinatorActions.setDriveCamera?(coord, nil, currentDriveAltitude)
+            }
             // Context update: compute parking commentary for new position.
             if let service = drivingContextService {
                 service.update(
@@ -2051,111 +2075,71 @@ struct ContentView: View {
 
     // MARK: - Drive Mode combined handler (extracted for type-checker budget)
 
-    /// Handles Drive Mode entry/exit: lifecycle + camera/style + native follow in one call.
+    /// Handles Drive Mode entry/exit: lifecycle + camera/style in one call.
     ///
-    /// TF2-6 ENTRY ORDER FIX (Issue 1):
-    ///   On ENTRY the previous order was: camera (pitch+zoom setCamera) → tracking (.follow).
-    ///   This caused the visible zoom-out bug: MapKit's `.follow` engagement moves the camera
-    ///   to its own default altitude, overriding the just-applied FT-8 tight zoom. By the time
-    ///   setCamera fired, MapKit had already reset the zoom.
+    /// Option A design: no `userTrackingMode = .follow` at any point. Drive Mode position
+    /// centering is owned entirely by the per-tick `setDriveCamera` called from
+    /// `handleLocationUpdate()` via `.onChange(of: locationService.locationUpdateCount)` —
+    /// OUTSIDE `updateUIView`. Nothing fights our camera.
     ///
-    ///   The Recenter path (`recenterDriveMode`) always worked correctly because it does the
-    ///   OPPOSITE order: tracking FIRST, then applyDrivePitch (camera). When `.follow` is
-    ///   already engaged before our setCamera fires, our setCamera is the LAST writer and wins.
+    /// ENTRY order:
+    ///   1. handleDriveModeChange(true) — start location services, create context service.
+    ///   2. handleDriveCameraChange(true) — capture pre-drive pitch/zoom/style, apply pitch+zoom.
+    ///   3. Initialize currentDriveAltitude — must come AFTER handleDriveCameraChange captures
+    ///      the current distance (not needed for the camera call but for the follow default).
     ///
-    ///   Fix: match the recenter order on entry — engage tracking first, then apply camera.
-    ///   Empirical sim test confirms the simple order swap suffices: the re-apply guard in
-    ///   `mapView(_:didChange:animated:)` was not needed (see MapViewRepresentable comment).
-    ///
-    /// EXIT ORDER (unchanged, correct):
-    ///   On EXIT: camera restore fires first, then tracking disengages. This is acceptable:
-    ///   the `.follow` that's still active when we issue the restore-camera setCamera will move
-    ///   the center to the user's position (fine UX — you're still near the user after Drive Mode).
-    ///   Tracking disengage fires immediately after so follow won't keep running. The key
-    ///   camera restore (pitch + zoom back to pre-drive values) is applied by our setCamera,
-    ///   which MapKit's follow does not undo (follow only changes center, not pitch or altitude).
+    /// EXIT order:
+    ///   1. handleDriveCameraChange(false) — restore pre-drive pitch + zoom + style.
+    ///   2. handleDriveModeChange(false) — stop location services, clear context, clear followPaused.
     ///
     /// Architecture: all calls fire from `.onChange(of: driveModeActive)` — OUTSIDE `updateUIView`.
-    /// No camera or tracking-mode mutation inside `updateUIView`. #31 invariant maintained.
+    /// No camera mutation or `userTrackingMode =` assignment inside `updateUIView`. #31 invariant maintained.
+    ///
+    /// Architecture invariant: no camera mutation (setCamera, setRegion, userTrackingMode =)
+    /// happens inside updateUIView. All camera mutations are driven from .onChange handlers
+    /// in ContentView or from MapKit delegate callbacks.
     private func handleDriveModeAndCamera(_ active: Bool) {
-        handleDriveModeChange(active)
-
         if active {
-            // TF2-11 Option C: Apply zoom range clamp FIRST — before .follow engages —
-            // so the constraint is in place before MapKit can re-assert its preferred altitude.
-            coordinatorActions.setZoomRange?(true)
-
-            // TF2-6: ENTRY — engage tracking NEXT, then apply camera (pitch+zoom).
-            // Tracking first lets MapKit know to follow the user; our setCamera then fires
-            // AFTER MapKit's initial .follow camera placement and wins as the last writer.
-            // This matches recenterDriveMode's order (which was always correct).
-            coordinatorActions.setDriveTrackingMode?(true)
+            handleDriveModeChange(true)
             handleDriveCameraChange(true)
-
-            // TF2-8: Set the one-shot pending re-apply flag.
-            //
-            // Belt-and-suspenders with TF2-11 Option C: the clamp prevents the zoom-out,
-            // and the re-apply corrects pitch if the first .follow acquisition still drifts
-            // within the clamped range. The machinery is kept per the spec recommendation
-            // (§3 Option C: "Keep the existing pendingDriveCameraReapply machinery as a
-            // belt-and-suspenders layer for the initial entry zoom").
-            //
-            // Even though we set the camera above, MapKit's `.follow` performs its own
-            // zoom-to-default ASYNCHRONOUSLY when it first acquires the user location —
-            // AFTER our synchronous setCamera. That async follow animation clobbers the
-            // tight FT-8 zoom, leaving the camera at MapKit's wide default altitude.
-            //
-            // The Coordinator's `regionDidChangeAnimated` hook reads this flag and
-            // re-applies `applyDrivePitch(true, priorPitch)` once after MapKit's animation
-            // settles. The flag is then cleared (one-shot) so the re-apply's own
-            // `regionDidChangeAnimated` does not loop.
-            //
-            // `pendingReapplyPriorPitch` is set here from `preDrivePitch` (captured just
-            // above in `handleDriveCameraChange(true)`) so the Coordinator has the correct
-            // prior pitch without a round-trip through ContentView state.
-            coordinatorActions.pendingReapplyPriorPitch = preDrivePitch
-            coordinatorActions.pendingDriveCameraReapply = true
-            // TF2-8 QA Finding #1 (timeout backstop): the flag now stays ARMED through
-            // altitude-neutral camera events (it is only consumed by an actual zoom-out
-            // correction, user takeover, or drive exit). Disarm after 6s so a stuck flag
-            // can never yank the camera long after entry. CoordinatorActions is a shared
-            // reference box, so this closure clears the same instance the Coordinator reads.
-            let actions = coordinatorActions
-            DispatchQueue.main.asyncAfter(deadline: .now() + 6.0) {
-                actions.pendingDriveCameraReapply = false
-            }
+            // Initialize currentDriveAltitude to the FT-8 default.
+            // This is the altitude the per-tick setDriveCamera will use until the user
+            // pinch-zooms (which updates it via onDrivePinchZoomed → handleDrivePinchZoomed).
+            currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
+                MapViewRepresentable.driveModeCameraSpan
+            )
         } else {
-            // EXIT — clear the pending re-apply flag first, then restore camera + disengage.
-            // Clearing first ensures a quick entry/exit sequence cannot leave a stale flag
-            // that fires after the drive session ends.
-            coordinatorActions.pendingDriveCameraReapply = false
-            // Camera restore (pitch+zoom back to pre-drive values) applies pitch/altitude —
-            // MapKit's .follow does not override pitch/altitude, only center, so the restore
-            // is not cancelled. Disengaging tracking immediately after stops follow.
             handleDriveCameraChange(false)
-            coordinatorActions.setDriveTrackingMode?(false)
-
-            // TF2-11 Option C: Remove zoom range clamp AFTER .follow is disengaged —
-            // so the constraint is held until tracking is fully released.
-            coordinatorActions.setZoomRange?(false)
+            handleDriveModeChange(false)
         }
     }
 
-    // MARK: - Phase 2: Tracking-mode change handler (P2-AC-6, P2-AC-7)
+    // MARK: - Option A: Drive pan / pinch handlers
 
-    /// Handles `mapView(_:didChange:animated:)` delegate callbacks from the Coordinator.
+    /// Called by MapViewRepresentable's `onDrivePanDetected` when the user pans the map
+    /// during Drive Mode. Pauses the custom follow so the per-tick `setDriveCamera` stops
+    /// fighting the user's view, and shows the Recenter button.
     ///
-    /// Called from `MapViewRepresentable.onTrackingModeChanged` (a parameter on the struct,
-    /// same pattern as `onRegionChanged`). SwiftUI ensures the closure is always fresh on
-    /// re-render via `updateUIView`'s `context.coordinator.parent = self` assignment.
-    ///
-    /// Behavior:
-    ///   - `mode == .none` while `driveModeActive` → `driveTrackingModeNone = true` → Recenter button shows.
-    ///   - `mode != .none` while `driveModeActive` → `driveTrackingModeNone = false` → Recenter button hides.
-    ///   - Not in Drive Mode → no-op (guard prevents spurious state change).
-    private func handleTrackingModeChanged(_ mode: MKUserTrackingMode) {
+    /// `followPaused` stays `true` until the user taps Recenter — matching Waze/Apple Maps
+    /// behavior where a pan locks the view on the panned position until explicitly recentered.
+    private func handleDrivePanDetected() {
         guard driveModeActive else { return }
-        driveTrackingModeNone = (mode == .none)
+        followPaused = true
+    }
+
+    /// Called by MapViewRepresentable's `onDrivePinchZoomed` when the user pinch-zooms the
+    /// map during Drive Mode (while follow is NOT paused — OQ-4: pinch keeps following).
+    ///
+    /// Updates `currentDriveAltitude` so the next per-tick `setDriveCamera` continues follow
+    /// at the user's chosen zoom instead of re-imposing the FT-8 default (OQ-3: Waze model).
+    ///
+    /// If follow is paused (user already panned), we still update the altitude so a subsequent
+    /// Recenter doesn't abruptly jump to a different zoom level — the user's pinch intent is
+    /// preserved. Recenter's explicit altitude reset to the FT-8 default is the "go back to
+    /// default" action.
+    private func handleDrivePinchZoomed(_ newAltitude: CLLocationDistance) {
+        guard driveModeActive, newAltitude > 0 else { return }
+        currentDriveAltitude = newAltitude
     }
 
     // MARK: - onAppear handler (extracted for type-checker budget)
