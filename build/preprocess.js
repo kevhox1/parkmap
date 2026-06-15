@@ -14,6 +14,9 @@ const path = require('path');
 const ROOT = path.resolve(__dirname, '..');
 const OSM_DATA_PATH = path.join(ROOT, 'osm_data.json');
 const OSM_ONEWAY_PATH = path.join(ROOT, 'osm_oneway.json');
+// TF2-14: CSCL real-street-width artifact (built by scripts/build-street-widths.js).
+// Optional — if absent, falls back to name-tier offsets (getStreetCurbOffset).
+const STREET_WIDTHS_PATH = path.join(ROOT, 'street_widths.json');
 const TILES_DIR = path.join(ROOT, 'tiles');
 // iOS app bundle reads tiles from this Resources path (see HANDOFF.md
 // "iOS app: Resources land flat at app bundle root at build time").
@@ -175,6 +178,10 @@ let OSM_STREETS = {};
 // Keyed by canonical uppercase abbreviated street name (e.g. "2 AVE", "SPRING ST")
 // as produced by build-oneway-data.js canonicalStreetName().
 let OSM_ONEWAY = {};
+// TF2-14: CSCL street-width lookup.  Same key format as OSM_ONEWAY.
+// Built by scripts/build-street-widths.js → street_widths.json.
+// Each entry: [{ polyline: [[lat,lng],...], stWidthFt: <number|null> }, ...]
+let OSM_WIDTHS = {};
 
 // Name mapping: NYC uppercase -> OSM title case
 const NYC_TO_OSM = {
@@ -668,7 +675,7 @@ const CURB_OFFSET_DEFAULT_METERS =  6; // typical side streets (tunable)
 // Pattern is tested against the uppercased, normalized street name.
 //
 // Numbered avenues (1ST … 12TH AVENUE) and named avenues:
-const WIDE_AVENUE_RE = /\bAVENUE\b/;
+const WIDE_AVENUE_RE = /\bAVE(NUE)?\b/;  // matches "AVENUE" AND canonical "AVE" (TF2-14: floor must catch "2 AVE" keys)
 // Specific named wide N/S corridors that don't carry "AVENUE":
 const WIDE_NS_NAMES = new Set([
   'BROADWAY', 'BOWERY', 'WEST BROADWAY', 'LAFAYETTE STREET',
@@ -738,6 +745,165 @@ function getStreetCurbOffset(streetName) {
   return CURB_OFFSET_DEFAULT_METERS;
 }
 
+// ==== TF2-14 regen-6: CSCL real-street-width offset (REDESIGNED) ====
+//
+// REDESIGN RATIONALE (replaces the per-segment divided-carriageway detection from regen-5):
+//
+// PROBLEM: The old code ran divided-street detection on every getCurbOffsetFromWidth() call,
+// using the block midpoint to find nearby CSCL ways within a 40m radius.  Different block
+// midpoints along the same street found different subsets of CSCL ways, so the divided
+// branch fired for some blocks but not others → offsets ranged 10–18m across one street,
+// producing a visible zigzag of parking-line positions along the curb.
+//
+// ROOT FIX: PRE-COMPUTE one offset per canonical street name in initWidths(), applied
+// uniformly to every block on that street.  getCurbOffsetFromWidth() is now a simple
+// map lookup — coordinates are ignored (kept in signature for backward compat with callers).
+//
+// PER-STREET OFFSET ALGORITHM (computed in initWidths()):
+//   1. Collect all stWidthFt values for the street's CSCL ways.
+//   2. Compute the MEDIAN stWidthFt (robust to outlier short segments with atypical widths).
+//   3. Is this street on the DIVIDED_STREET_ALLOW_LIST?
+//      YES (Houston, Bowery, Allen, Forsyth, Delancey):
+//        These streets have OSM centerlines placed at the full-street center (median
+//        center), equidistant from both outer curbs.  CSCL st_width for each carriageway
+//        is the paved width of that carriageway alone (median edge → outer curb).
+//        The median st_width therefore represents ONE carriageway only.
+//        Offset = median_carriageway_half_width + DIVIDED_MEDIAN_ALLOWANCE_M
+//        where DIVIDED_MEDIAN_ALLOWANCE_M ≈ 7m accounts for the distance from the
+//        OSM centerline to the far carriageway's center.
+//        Formula: (medianWidthFt × 0.3048 / 2) + DIVIDED_MEDIAN_ALLOWANCE_M
+//        Calibration (E Houston, each carriageway ~41–50 ft ≈ 12.5–15.2m, median ≈ 13.8m):
+//          half-carriageway = 13.8/2 = 6.9m; + 7m = 13.9m → target 14m ✓
+//        Calibration (Bowery, each carriageway ~28–35 ft ≈ 8.5–10.7m, median ≈ 9.6m):
+//          half-carriageway = 9.6/2 = 4.8m; + 7m = 11.8m → target 12–13m ✓
+//      NO (2nd Ave, E 2nd St, Mott St, Prince St, most streets):
+//        Single-carriageway treatment.
+//        Offset = (medianWidthFt × 0.3048 / 2) × CSCL_OFFSET_FRACTION
+//        then max with the name-tier floor (CURB_OFFSET_WIDE_METERS / _DEFAULT_METERS)
+//        so avenues never regress below the validated 10m name-tier floor.
+//   4. Clamp to [CSCL_OFFSET_MIN_M, CSCL_OFFSET_MAX_M].
+//
+// FALLBACK: streets absent from street_widths.json fall back to getStreetCurbOffset()
+// (the name-tier logic); this is stored as the pre-computed value so getCurbOffsetFromWidth
+// behaves identically to getStreetCurbOffset for unmatched streets.
+
+const CSCL_OFFSET_FRACTION        = 0.88;  // fraction of single-carriageway half-width
+const CSCL_OFFSET_MIN_M           =  4.0;  // minimum offset (very narrow/alley)
+const CSCL_OFFSET_MAX_M           = 14.0;  // maximum offset — 18m overshot the curb; 14m
+                                            // is the outer bound of a realistic half-width
+                                            // (e.g. a 92 ft wide undivided street × 0.3048/2
+                                            // × 0.88 ≈ 12.3m, well within 14m)
+// For divided/median streets: distance from the OSM full-street centerline (median center)
+// to the near carriageway's center.  Houston and Bowery have median widths of ~3–5m,
+// so the OSM centerline sits ~7m from the centerline of each carriageway.
+const DIVIDED_MEDIAN_ALLOWANCE_M  =  7.0;
+
+// Allow-list of canonical CSCL key names for streets that are genuinely divided
+// (OSM centerline at median center, CSCL records each carriageway separately).
+// Keep this list small and explicit.  Adding a street here means its CSCL
+// median st_width is treated as a single-carriageway width, and
+// DIVIDED_MEDIAN_ALLOWANCE_M is added to reach the far curb.
+const DIVIDED_STREET_ALLOW_LIST = new Set([
+  'E HOUSTON ST',   // East Houston Street (divided east of 6th Ave; also OK for single section)
+  'W HOUSTON ST',   // West Houston Street (same physical road)
+  'BOWERY',         // Bowery south of Canal: median strip
+  'ALLEN ST',       // Allen Street: wide median
+  'FORSYTH ST',     // Forsyth Street: paired one-way with Allen
+  'DELANCEY ST',    // Delancey: divided around bridge approach
+]);
+
+// Pre-computed per-street offset map.  Populated by initWidths().
+// Key: canonical street name (same as OSM_WIDTHS key, e.g. "E HOUSTON ST").
+// Value: offset in metres (number).
+let _perStreetOffset = {};
+
+// Compute median of a numeric array (sorted ascending).
+function _median(arr) {
+  if (!arr.length) return null;
+  const sorted = arr.slice().sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 1 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+}
+
+// Find ALL CSCL width ways within maxDistM of (midLat, midLng).
+// Returns array of { way, dist } sorted by ascending distance.
+// Kept for diagnostic use / export; not called by getCurbOffsetFromWidth in regen-6.
+function findNearbyWidthWays(ways, midLat, midLng, maxDistM) {
+  const results = [];
+  for (const way of ways) {
+    const poly = way.polyline;
+    if (!poly || poly.length < 2) continue;
+    let minDist = Infinity;
+    for (let i = 0; i < poly.length - 1; i++) {
+      const [aLat, aLng] = poly[i];
+      const [bLat, bLng] = poly[i + 1];
+      const abLat = bLat - aLat, abLng = bLng - aLng;
+      const apLat = midLat - aLat, apLng = midLng - aLng;
+      const ab2 = abLat * abLat + abLng * abLng;
+      let t = ab2 > 0 ? (apLat * abLat + apLng * abLng) / ab2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const pLat = aLat + t * abLat;
+      const pLng = aLng + t * abLng;
+      const dLat = (midLat - pLat) * 111320;
+      const dLng = (midLng - pLng) * 111320 * Math.cos(midLat * Math.PI / 180);
+      const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+      if (dist < minDist) minDist = dist;
+    }
+    if (minDist <= maxDistM) results.push({ way, dist: minDist });
+  }
+  results.sort((a, b) => a.dist - b.dist);
+  return results;
+}
+
+// Kept for export / diagnostic use; no longer called by the main offset path.
+function polylineCentroidDist(polyline, refLat, refLng) {
+  const cosLat = Math.cos(refLat * Math.PI / 180);
+  let minDist = Infinity;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const [aLat, aLng] = polyline[i];
+    const [bLat, bLng] = polyline[i + 1];
+    const abLat = bLat - aLat, abLng = bLng - aLng;
+    const apLat = refLat - aLat, apLng = refLng - aLng;
+    const ab2 = abLat * abLat + abLng * abLng;
+    let t = ab2 > 0 ? (apLat * abLat + apLng * abLng) / ab2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const pLat = aLat + t * abLat;
+    const pLng = aLng + t * abLng;
+    const dLat = (refLat - pLat) * 111320;
+    const dLng = (refLng - pLng) * 111320 * cosLat;
+    const dist = Math.sqrt(dLat * dLat + dLng * dLng);
+    if (dist < minDist) minDist = dist;
+  }
+  return minDist === Infinity ? 0 : minDist;
+}
+
+/**
+ * getCurbOffsetFromWidth(streetName, midLat, midLng)
+ *
+ * TF2-14 regen-6: Returns the pre-computed per-street offset in metres.
+ * Coordinates (midLat, midLng) are accepted for signature compatibility but
+ * are NOT used — the offset is determined solely by the street name, ensuring
+ * every block face on a given street gets the SAME offset (no zigzag).
+ *
+ * Pre-computation happens in initWidths(); the fallback for unmatched streets
+ * is getStreetCurbOffset(streetName) (name-tier logic).
+ *
+ * @param {string} streetName  - NYC-style name ("EAST HOUSTON STREET")
+ * @param {number} midLat      - latitude of block midpoint (unused, compat only)
+ * @param {number} midLng      - longitude of block midpoint (unused, compat only)
+ * @returns {number}           - offset in metres
+ */
+function getCurbOffsetFromWidth(streetName, midLat, midLng) {
+  const canonKey = canonicalNameForOneway(streetName);
+  if (!canonKey) return getStreetCurbOffset(streetName);
+
+  // Return pre-computed value if present (covers both CSCL-matched and fallback streets)
+  if (_perStreetOffset[canonKey] !== undefined) return _perStreetOffset[canonKey];
+
+  // No entry at all (initWidths not called, or street not in either lookup) → name-tier
+  return getStreetCurbOffset(streetName);
+}
+
 const DEG_TO_RAD = Math.PI / 180;
 const METERS_PER_DEG_LAT = 111320; // 1° lat ≈ 111,320 m (constant)
 
@@ -751,7 +917,8 @@ const SIDE_COMPASS = {
 
 // offsetPolyline(points, side, offsetMeters)
 // offsetMeters defaults to CURB_OFFSET_DEFAULT_METERS; callers pass
-// getStreetCurbOffset(block.street) to get the width-class-appropriate value (TF2-10).
+// getCurbOffsetFromWidth(block.street, midLat, midLng) (TF2-14) which falls back
+// to getStreetCurbOffset(block.street) (TF2-10) when no CSCL width data is available.
 function offsetPolyline(points, side, offsetMeters) {
   if (offsetMeters === undefined) offsetMeters = CURB_OFFSET_DEFAULT_METERS;
   if (!points || points.length < 2) return points || [];
@@ -1027,6 +1194,19 @@ async function main() {
     console.warn('   WARNING: osm_oneway.json not found — oneway fields will be false for all segments\n');
   }
 
+  // 1c. Load CSCL street-width data (TF2-14)
+  // Built by: node scripts/build-street-widths.js
+  // Optional — falls back to name-tier offsets when absent.
+  if (fs.existsSync(STREET_WIDTHS_PATH)) {
+    OSM_WIDTHS = JSON.parse(fs.readFileSync(STREET_WIDTHS_PATH, 'utf8'));
+    const widthStreetCount = Object.keys(OSM_WIDTHS).length;
+    const widthWayCount = Object.values(OSM_WIDTHS).reduce((n, arr) => n + arr.length, 0);
+    console.log(`   Loaded ${widthStreetCount} streets (${widthWayCount} ways) from street_widths.json (TF2-14)\n`);
+  } else {
+    console.warn('   WARNING: street_widths.json not found — curb offsets will use name-tier fallback only\n');
+    console.warn('   Run: node scripts/build-street-widths.js\n');
+  }
+
   // 2. Fetch signs from both Socrata datasets
   console.log('🔄 Fetching parking signs from NYC Socrata API...');
   let allSigns = [];
@@ -1159,9 +1339,17 @@ async function main() {
     if (blockGeo) {
       osmHits++;
 
+      // TF2-14: compute block midpoint once for width lookup (shared by all sub-segments).
+      // Use the raw (un-offset) block centerline midpoint so the CSCL proximity
+      // search stays at the road center rather than the parking-lane offset.
+      const blockMid = Math.floor(blockGeo.line.length / 2);
+      const blockMidLat = blockGeo.line[blockMid][0];
+      const blockMidLng = blockGeo.line[blockMid][1];
+      const blockCurbOffset = getCurbOffsetFromWidth(block.street, blockMidLat, blockMidLng);
+
       if (subSegments.length === 0) {
         // Whole block as unknown
-        const offsetLine = offsetPolyline(blockGeo.line, block.side, getStreetCurbOffset(block.street));
+        const offsetLine = offsetPolyline(blockGeo.line, block.side, blockCurbOffset);
         if (!offsetLine || offsetLine.length < 2) continue;
         if (isDegenerateLine(offsetLine)) continue;  // TF2-12: drop zero-length stubs
 
@@ -1193,7 +1381,7 @@ async function main() {
         } catch(e) { return; }
         if (!line || line.length < 2) return;
 
-        const offsetLine = offsetPolyline(line, block.side, getStreetCurbOffset(block.street));
+        const offsetLine = offsetPolyline(line, block.side, blockCurbOffset);
         if (!offsetLine || offsetLine.length < 2) return;
         if (!offsetLine.every(p => isFinite(p[0]) && isFinite(p[1]))) return;
         if (isDegenerateLine(offsetLine)) return;  // TF2-12: drop zero-length stubs
@@ -1326,7 +1514,90 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+// ==== Probe / test export surface (TF2-14 validation) ====
+// Exposed so scripts/validate-widths.js can share the EXACT same code path
+// without duplicating logic.  Not used by the main() pipeline.
+//
+// initWidths(data): inject the parsed street_widths.json into OSM_WIDTHS and
+//   pre-compute the per-street offset map (_perStreetOffset) used by
+//   getCurbOffsetFromWidth().  Must be called before getCurbOffsetFromWidth().
+//
+// Per-street offset algorithm (TF2-14 regen-6):
+//   For each canonical street key in data:
+//     1. Collect all non-null stWidthFt values from its ways.
+//     2. Compute the median stWidthFt.
+//     3. If on DIVIDED_STREET_ALLOW_LIST:
+//          offset = (medianWidthFt × 0.3048 / 2) + DIVIDED_MEDIAN_ALLOWANCE_M
+//        Else (single carriageway):
+//          offset = max((medianWidthFt × 0.3048 / 2) × CSCL_OFFSET_FRACTION,
+//                       getStreetCurbOffset(nycName))
+//     4. Clamp to [CSCL_OFFSET_MIN_M, CSCL_OFFSET_MAX_M].
+//   Streets absent from data fall back to getStreetCurbOffset() at query time.
+function initWidths(data) {
+  OSM_WIDTHS = data;
+  _perStreetOffset = {};
+
+  for (const [canonKey, ways] of Object.entries(data)) {
+    const widths = ways.map(w => w.stWidthFt).filter(v => v !== null && v > 0);
+    if (widths.length === 0) {
+      // No usable width data: store name-tier fallback.
+      // We need to reverse-map the canonical key to a NYC name for getStreetCurbOffset.
+      // The simplest approach: call getStreetCurbOffset with the canonical key itself
+      // (it uses .toUpperCase() which matches the WIDE_NS_NAMES / WIDE_CROSSTOWN_NAMES
+      // sets that hold full NYC names).  For the common case (avenues, Bowery) both
+      // the canonical key and the NYC name contain "AVE" / "BOWERY" / etc., so this
+      // is correct.  For streets that don't match any tier (e.g. "E 2 ST") the
+      // function returns CURB_OFFSET_DEFAULT_METERS, which is also correct.
+      _perStreetOffset[canonKey] = getStreetCurbOffset(canonKey);
+      continue;
+    }
+
+    const medianWidthFt = _median(widths);
+    const medianWidthM  = medianWidthFt * 0.3048;
+
+    let rawOffset;
+    if (DIVIDED_STREET_ALLOW_LIST.has(canonKey)) {
+      // Divided / dual-carriageway: OSM centerline at median center.
+      // medianWidthM is the paved width of ONE carriageway (median edge → outer curb).
+      // The carriageway center sits at medianWidthM/2 from the median edge.
+      // The OSM centerline sits ~DIVIDED_MEDIAN_ALLOWANCE_M from the carriageway center.
+      // Offset to outer curb = DIVIDED_MEDIAN_ALLOWANCE_M + medianWidthM/2.
+      rawOffset = DIVIDED_MEDIAN_ALLOWANCE_M + medianWidthM / 2;
+    } else {
+      // Single carriageway: offset = half-width × fraction, floored by name-tier.
+      const csclOffset = (medianWidthM / 2) * CSCL_OFFSET_FRACTION;
+      // Name-tier floor: CSCL can raise but never lower below the validated tier offset.
+      // Use canonKey as the streetName arg — getStreetCurbOffset checks for AVENUE,
+      // BOWERY, BROADWAY etc. patterns which are present in the canonical key.
+      const tierOffset = getStreetCurbOffset(canonKey);
+      rawOffset = Math.max(csclOffset, tierOffset);
+    }
+
+    _perStreetOffset[canonKey] = Math.min(Math.max(rawOffset, CSCL_OFFSET_MIN_M), CSCL_OFFSET_MAX_M);
+  }
+}
+
+if (require.main !== module) {
+  // Required as a module (by validate-widths.js or tests) — export the probe surface.
+  module.exports = {
+    canonicalNameForOneway,
+    getStreetCurbOffset,
+    getCurbOffsetFromWidth,
+    findNearbyWidthWays,
+    polylineCentroidDist,
+    initWidths,
+    // Constants exposed for diagnostic printing in the probe
+    _CSCL_OFFSET_FRACTION:          CSCL_OFFSET_FRACTION,
+    _CSCL_OFFSET_MIN_M:             CSCL_OFFSET_MIN_M,
+    _CSCL_OFFSET_MAX_M:             CSCL_OFFSET_MAX_M,
+    _DIVIDED_MEDIAN_ALLOWANCE_M:    DIVIDED_MEDIAN_ALLOWANCE_M,
+    _DIVIDED_STREET_ALLOW_LIST:     DIVIDED_STREET_ALLOW_LIST,
+    // Expose pre-computed map for diagnostics (read-only after initWidths())
+    get _perStreetOffset() { return _perStreetOffset; },
+  };
+} else {
+  main().catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
+}
