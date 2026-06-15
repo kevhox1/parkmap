@@ -43,10 +43,14 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Decision:** un-defer the CSCL/LION real-width ingestion (spec'd in docs/tf2-12-13-curb-geometry-spec.md)
   as regen 5. Validate specifically on HOUSTON north curb + BOWERY. Handle divided/median streets
   (CSCL models carriageways separately — join carefully).
-- **Status:** 🟡 DECOUPLED from build 12 (don't block the zoom fix). Fetch fixed (field=streetwidth),
-  but validate-widths.js = NO-GO: E HOUSTON 'nearby ways: 0' → 10m not ~15m (likely GeoJSON [lng,lat]
-  vs pipeline [lat,lng] join bug). WIP preserved on branch data/cscl-widths-wip with resume notes;
-  fix the join → re-run validate-widths.js until Houston PASSes → regen → build 13.
+- **Status:** 🟢 SHIPPED → build 13 (PWA cache v37). Root cause was NOT the join (name canon matches +
+  real midpoints find ways; the probe's NO-GO was a bad hand-typed coord). Real issue: per-SEGMENT
+  divided detection fired inconsistently (Houston 10-18 ragged; 2nd Ave false 18s; overshoot). FIX:
+  PER-STREET uniform offset (median CSCL streetwidth, computed once → spread 0, no zigzag), divided
+  allow-list (Houston/Bowery/Allen/Forsyth/Delancey)=7m+width/2, others=max(width/2*0.88, tier floor),
+  clamp 4-14m; avenue floor fixed (WIDE regex matches canonical 'AVE'). Validated tiles: Houston/Bowery
+  ~12.7m parking lane (was 10m mid-road), 2nd Ave 10m (no regression), side streets 6m, Elizabeth W free.
+  ⏳ Kevin on-device confirm Houston now reads on-curb.
 
 ### TF2-15 🔵 Bowery curb is metered + UNDER CONSTRUCTION — temporary conditions layer (ROADMAP)
 - **Observed (Kevin):** the Bowery stretch isn't parkable at all right now (construction), regardless of
