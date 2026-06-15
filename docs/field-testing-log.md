@@ -27,6 +27,9 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   - Phase 2 stale comments: `isUserInteracting` doc + `syncDriveHeading` comments still name deleted
     symbols (shouldSyncDriveRegion/onDrivePanDetected/driveFollowEnabled). Comment-only.
   - Missing test: assert `recenterMap` (ContentView) actually calls `coordinatorActions.setRegion?`.
+  - Option A nits (PR #62): onDrivePinchZoomed doc says !followPaused (fires regardless); FT10Tests
+    header test-count arithmetic wrong (says 525, actual 514); stale isUserInteracting comment refs
+    deleted shouldSyncDriveRegion.
 
 ## TF2 Round 1 — on-device testing of build 1.0(2) (2026-06-08 evening)
 
@@ -40,7 +43,10 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Decision:** un-defer the CSCL/LION real-width ingestion (spec'd in docs/tf2-12-13-curb-geometry-spec.md)
   as regen 5. Validate specifically on HOUSTON north curb + BOWERY. Handle divided/median streets
   (CSCL models carriageways separately — join carefully).
-- **Status:** 🔴 dispatched (backend-data, regen 5).
+- **Status:** 🟡 DECOUPLED from build 12 (don't block the zoom fix). Fetch fixed (field=streetwidth),
+  but validate-widths.js = NO-GO: E HOUSTON 'nearby ways: 0' → 10m not ~15m (likely GeoJSON [lng,lat]
+  vs pipeline [lat,lng] join bug). WIP preserved on branch data/cscl-widths-wip with resume notes;
+  fix the join → re-run validate-widths.js until Houston PASSes → regen → build 13.
 
 ### TF2-15 🔵 Bowery curb is metered + UNDER CONSTRUCTION — temporary conditions layer (ROADMAP)
 - **Observed (Kevin):** the Bowery stretch isn't parkable at all right now (construction), regardless of
@@ -62,9 +68,10 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **EXPERIMENT VERDICT (Kevin, build 11): FAIL — WORSE.** "Bouncing around and unsettled": the clamp
   turns .follow's one-time zoom-out into a continuous fight (MapKit retries past the ceiling every GPS
   tick, gets blocked, retries). Option C dead.
-- **Status:** 🔴 → OPTION A executing per Kevin's pre-approved decision: custom follow camera in drive
-  mode (drop .follow; per-fix animated setCamera center+course+pitch+altitude). Deletes the clamp,
-  the TF2-8 re-apply machinery, and drive-mode tracking-mode usage per the spec's inventory.
+- **Status:** 🟢 OPTION A MERGED #62 → build 12. Custom follow camera: per-GPS-tick animated setCamera
+  (center+pitch30+our altitude; heading owned by course-EMA), NO .follow → nothing fights the camera.
+  Deleted clamp + TF2-8 re-apply + all tracking-mode machinery. QA PASS-WITH-NOTES
+  (docs/qa/tf2-11-option-a-qa.md), 514/0, both adversarial traces pass. ⏳ Kevin on-device drive = gate.
 
 ### TF2-12 🔴 Bowery lines mid-road — side-lines CONVERGE to 0m on curved stretches + width ceiling
 - **Measured:** Bowery median E/W separation 20.5m (wide offset IS applied), BUT around
