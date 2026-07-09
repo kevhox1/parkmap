@@ -10,8 +10,29 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 ## TF2 Round 3 — build 13 drive-test feedback (2026-07-09)
 
 Kevin drove build 13. **TF2-11 Option A zoom VERIFIED on-device** ("zoom is working better") — the
-4-round zoom saga is closed. TF2-14 Houston/Bowery on-curb read: ⏳ not yet explicitly confirmed.
-New findings below, all proceeding through the proper flow (spec → build → QA → merge), no expedite.
+4-round zoom saga is closed. **TF2-14 curb offsets: improved on-device** ("mostly went over closer" —
+accepted; residual lever = `DIVIDED_MEDIAN_ALLOWANCE_M` if ever needed). New findings below, all
+proceeding through the proper flow (spec → build → QA → merge), no expedite.
+
+**Approvals (Kevin, 2026-07-09):** TF2-16 spec approved → engineering started. TF2-17 + TF2-18 ship
+as ONE bundled PR (queued behind TF2-16 — file overlap on DrivingContextService/ContentView).
+FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, runs in parallel).
+
+### TF2-19 🔴 Houston/Bowery (major roadways) show FREE — should be metered / no-standing daytime
+- **Area:** Tile data correctness and/or rules-engine display mapping. Backend-data first.
+- **Observed (Kevin, build 13, 2026-07-09):** "parking appears as free on those blocks, but this
+  cannot be right. Parking is metered during the day with 'no standing' signs on most of the major
+  roadways in NYC." Same streets regen 5 (TF2-14) gave special divided-street width handling.
+- **History:** FT-9 déjà vu (Bowery/2nd Ave shown free) — BUT FT-9's root cause was safetyLabel
+  branch-ordering; the map polyline color was verified CORRECT then. If the map itself now reads
+  free, it's a different failure. Prime suspects: (a) regen 5's per-street divided handling dropped
+  or misassigned rules on the allow-list streets (Houston/Bowery/Allen/Forsyth/Delancey); (b) side
+  gap — rules on one curb, opposite-side segment empty → renders free; (c) zone-cap / stub-filter
+  over-trim from regens 4–5; (d) engine daytime mapping regression (less likely — FT-9 verified it).
+- **Status:** 🔴 investigation dispatched (backend-data, read-only) 2026-07-09 — diff Houston/Bowery
+  segment rules in shipped tiles pre- vs post-regen-5, check both curbs, verify engine daytime
+  states. Report → docs/qa/.
+- **Lands in:** tiles pipeline regen 6 and/or iOS rules engine — TBD by investigation.
 
 ### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
 - **Area:** Drive Mode heading source. `LocationService` heading stabilizer + `MapViewRepresentable.syncDriveHeading`.
@@ -126,7 +147,8 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   allow-list (Houston/Bowery/Allen/Forsyth/Delancey)=7m+width/2, others=max(width/2*0.88, tier floor),
   clamp 4-14m; avenue floor fixed (WIDE regex matches canonical 'AVE'). Validated tiles: Houston/Bowery
   ~12.7m parking lane (was 10m mid-road), 2nd Ave 10m (no regression), side streets 6m, Elizabeth W free.
-  ⏳ Kevin on-device confirm Houston now reads on-curb.
+  ✅ Kevin on-device 2026-07-09 (build 13): "mostly went over closer" — accepted. BUT surfaced
+  NEW TF2-19: those same blocks now read FREE (should be metered/no-standing daytime) — see Round 3.
 
 ### TF2-15 🔵 Bowery curb is metered + UNDER CONSTRUCTION — temporary conditions layer (ROADMAP)
 - **Observed (Kevin):** the Bowery stretch isn't parkable at all right now (construction), regardless of
