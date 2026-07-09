@@ -318,6 +318,17 @@ final class LocationService: NSObject {
         authorizationStatus = status
         isAuthorized = [.authorizedWhenInUse, .authorizedAlways].contains(status)
     }
+
+    /// TF2-16 test-only: flips `driveModeActiveInternal` directly, bypassing the real
+    /// `CLLocationManager.startUpdatingLocation()`/`stopUpdatingLocation()` calls in
+    /// `startDriveMode()`/`endDriveMode()`. Lets tests drive
+    /// `locationManager(_:didUpdateLocations:)`'s Drive Mode branch (in particular the
+    /// `driveCourseAccuracy` sentinel parsing, AC-2) deterministically, without a live
+    /// CLLocationManager session that can race with Simulator-synthesized location fixes.
+    /// Mirrors `setAuthorizationStatusForTesting` above.
+    internal func setDriveModeActiveForTesting(_ active: Bool) {
+        driveModeActiveInternal = active
+    }
 #endif
 
     /// Compass bearing from (lat1, lng1) to (lat2, lng2), in [0, 360).
