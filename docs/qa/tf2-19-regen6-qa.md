@@ -74,3 +74,47 @@ None.
 - The gate design (retry-before-give-up, throw-before-write, count-before-page) is architecturally correct and in the right order relative to the tile-write stage — a failure here truly cannot ship partial tiles.
 - The builder's own PR body numbers are trustworthy: every single claimed count in the table, the corridor recovery claims, and the offset values checked out exactly against independent, from-scratch recomputation — no inflation or cherry-picking found.
 - Good self-awareness in the PR: explicitly calling out the anomalies (8 new tile files, no NO_STOPPING category, segment ID churn) rather than hiding them, and explicitly asking QA to do the duplication-vs-recovery discrimination rather than asserting it away.
+
+---
+
+## Pass 2 (2026-07-09)
+
+**Reviewed:** commit `139f738` (`fix(data): fail-closed completeness probe per QA finding #1`) on `data/tf2-19-socrata-fix-regen6`, on top of the `851d5d8` state reviewed in Pass 1. Scope: re-verify Finding #1 (Significant, fail-open completeness probe) and Finding #3 (nit, undocumented `SOCRATA_APP_TOKEN` status) only — tile data was not re-verified since this commit touches no tile files (confirmed below), and AC4–AC7 from Pass 1 stand unchanged.
+
+**Verdict: SHIP CLEAN.**
+
+### Claim-by-claim verification
+
+1. **Probe now retries + fails closed; no null-`expectedCount` path survives.** Read the full new hunk in `build/preprocess.js` (`fetchSocrataDataset()`, lines ~1240–1291 in the worktree) directly, not the PR description. Confirmed:
+   - The count(*) probe now runs inside the exact same `for (attempt = 1; attempt <= totalAttempts; attempt++)` retry loop, reusing the same `RETRY_BACKOFF_MS = [2000, 4000, 8000, 16000, 32000]` array and `sleep()` helper as the paged fetch — not a separate/divergent schedule.
+   - **Checked the specific subtle case the task called out — malformed/NaN count parsing.** The old code's `if (Number.isFinite(parsed)) expectedCount = parsed;` (silently falls through with `expectedCount` still `null` on non-finite, no retry) is gone. New code: `if (!Number.isFinite(parsed)) { lastError = new Error('malformed count(*) response'); continue; }` — a malformed/NaN response is now treated as a retryable failure identically to an HTTP error, consuming a retry attempt rather than silently short-circuiting.
+   - The old `try { ... } catch (e) { console.log('WARNING...') }` wrapper that let the function fall through to the paging loop with `expectedCount === null` is gone entirely. The only path out of the probe block with `expectedCount === null` now hits `throw new Error('FATAL: ... count(*) probe failed after 6 attempts...')` — unconditional, no remaining warn-and-skip branch anywhere in the probe.
+   - Downstream: the old `if (expectedCount !== null) { ...gate... }` conditional (which was the actual mechanism of the fail-open bug — it let the gate be *skipped* rather than failing) is now an unconditional `{ ...gate... }` block with a comment explaining `expectedCount` is guaranteed non-null by construction. Confirmed by reading the code that no path reaches this block with a null value — the only way to get here is via `break` on a validated `Number.isFinite` count.
+   - **Empirically exercised both failure modes in a scratch-only harness** (`/private/tmp/.../scratchpad/failclosed_test/`, not run against the real worktree or committed anywhere): (a) a harness reproducing the exact retry/backoff/throw control flow, pointed at an unreachable host (`http://127.0.0.1:1/...`) — correctly made all 6 attempts, then threw `FATAL: ... probe failed after 6 attempts`, process exited 1, and a "tile write" sentinel variable was never reached; (b) a second harness mocking `global.fetch` to return HTTP 200 with a body containing no `count` field on every call (the malformed-response path, not a network error) — also correctly consumed all 6 attempts before throwing, proving the malformed-body case is not treated as a silent success. Both harnesses left the real worktree and branch untouched.
+   - **Verdict: Finding #1 is fully resolved.** No remaining path — network error, HTTP error, or malformed/NaN response — can leave the gate silently disabled.
+
+2. **Diff confinement.** `git diff-tree --no-commit-id --name-only -r 139f738` → `build/preprocess.js` only, reproduced independently. Zero tile files, zero `sw.js`, matching the builder's claim and the commit message's statement that no regen was re-run (correctly deferred to Pass 1's already-complete byte-for-byte data verification, since this commit is fetch-layer code only).
+
+3. **`node --check`.** Ran directly against the worktree's `build/preprocess.js` (which is synced to `139f738`): `SYNTAX OK`.
+
+4. **`SOCRATA_APP_TOKEN` status documented.** Confirmed via `gh pr view 63 --json body,comments`: the PR body now states "`SOCRATA_APP_TOKEN` was **not set** for the regen 6 run (env var unset)," and the builder's PR comment reiterates the same, additionally documenting the exact `expected == fetched` counts (MAIN 75,684/75,684, ASP 20,346/20,346) achieved without the token. Finding #3 (nit) resolved.
+
+### Findings
+
+**🔴 Blocking:** none.
+**🟡 Significant:** none — Finding #1 from Pass 1 is closed by this commit.
+**🟢 Minor / nit:** Finding #3 from Pass 1 is closed by this commit. Finding #2 (`APP_VERSION`/`CACHE_VERSION` drift, `index.html` vs `sw.js`) remains open — it was correctly out of scope for this fetch-layer-only follow-up commit (no `sw.js` touched, per the diff-tree confinement check above) and continues to be a pre-existing, not-this-PR issue for `@pwa-maintainer` to pick up separately.
+**💡 Out of scope:** unchanged from Pass 1 — live on-device signage re-verification still not performed (requires a physical drive-test, outside sandbox scope).
+
+### Smoke tests run (Pass 2)
+
+- Read the full new diff hunk in `build/preprocess.js` line-by-line against the specific gap identified in Pass 1, including the malformed/NaN-parsing sub-case explicitly.
+- `git diff-tree --no-commit-id --name-only -r 139f738` → confirmed `build/preprocess.js` only.
+- `node --check build/preprocess.js` (worktree, synced to `139f738`) → `SYNTAX OK`.
+- Built two standalone scratch-only Node harnesses reproducing the exact retry/backoff/fail-closed control flow from the diff, to empirically exercise (a) exhausted-retries-on-network-error and (b) exhausted-retries-on-malformed-response — both correctly threw after 6 attempts and never reached a simulated "tile write" point. Harnesses live only under `/private/tmp/claude-501/.../scratchpad/failclosed_test/`; the worktree and branch were not modified.
+- `gh pr view 63 --json body,comments` → confirmed both the PR body and the builder's follow-up comment document the `SOCRATA_APP_TOKEN`-unset status and the Finding #1 fix.
+- Did not re-run tile-data verification (AC4–AC7) — correctly out of scope per the diff-tree confinement result (zero tile files changed) and the coordinator's instruction; Pass 1's byte-for-byte verification stands unchanged.
+
+### Verdict
+
+**SHIP CLEAN.** Both Pass 1 findings (#1 Significant, #3 nit) are verifiably closed by commit `139f738`, confirmed by direct code reading plus empirical scratch-harness reproduction of the fail-closed path (including the specific malformed/NaN-parsing edge case), not just by trusting the commit message. No new findings introduced by this commit — it is precisely scoped to the two lines of defense requested (probe retry schedule + fail-closed semantics) and touches nothing else. The one remaining open item (Finding #2, `APP_VERSION`/`CACHE_VERSION` drift) is pre-existing, unrelated to TF2-19, and does not block this PR. Recommend merge.
