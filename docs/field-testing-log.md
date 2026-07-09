@@ -68,10 +68,18 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   streets: segment bearing in whichever direction is closer to last good course. Hysteresis so the
   source doesn't flip-flop. ⚠️ #31-sensitive camera path → tech-lead spec + worktree engineer + QA +
   live-UI smoke gate + Kevin drive-test.
-- **Status:** 🟡 SPEC FILED (`docs/tf2-16-heading-snap-spec.md`, 2026-07-09) — all OQs resolved,
-  awaiting Kevin approval → ios-engineer. Design keeps zero diff to MapViewRepresentable
-  (syncDriveHeading stays the sole #31 exception); hysteresis gates on speed+courseAccuracy only
-  (NOT course/EMA disagreement — that's the signature of a real turn, would fight it).
+- **Status:** 🟢 MERGED #64 (`329647d`, 2026-07-09) → build 14. Pure hysteresis state machine in
+  new `Services/DriveHeadingSnap.swift` (speed+courseAccuracy gating only — course/EMA disagreement
+  deliberately excluded as it's the signature of a real turn); wiring confined to
+  `ContentView.handleLocationUpdate`; ZERO diff to MapViewRepresentable (verified by builder + QA
+  independently). 533/0 tests (+18), deterministic across runs; hysteresis boundaries hand-traced
+  by QA (wraparound, at-threshold, turn-recovery) — clean. QA SHIP WITH CAVEATS
+  (`docs/qa/tf2-16-heading-snap-qa.md`): the only Significant is that live Drive-Mode-entry
+  screenshot is unexercisable in sandbox (no gesture injection) — covered by the stronger gate.
+  ⏳ Kevin on-device drive-test (build 14) = the gate: heading locks to street at intersection
+  approaches, no spin/hunt, hands back to GPS course through turns.
+- **Nits → tech-debt batch:** `snappedHeading` `lastGoodHeading` doc comment overstates
+  ("last trustworthy EMA before confidence dropped" vs actual live current-tick EMA); cosmetic.
 - **Lands in:** iOS (new `Services/DriveHeadingSnap.swift`, `LocationService.swift`,
   `ContentView.handleLocationUpdate`, `DrivingContextService.matchedSegment` exposure).
 
@@ -147,6 +155,12 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   - Option A nits (PR #62): onDrivePinchZoomed doc says !followPaused (fires regardless); FT10Tests
     header test-count arithmetic wrong (says 525, actual 514); stale isUserInteracting comment refs
     deleted shouldSyncDriveRegion.
+  - TF2-16 nit (PR #64): `DriveHeadingSnap.snappedHeading` `lastGoodHeading` doc comment overstates
+    trustworthiness (actual value is live current-tick EMA in the 0.5–1.5 m/s band). Comment-only.
+  - Polyline non-render at cold launch in SIM (fixed-location conditions): reproduced identically on
+    main pre-TF2-16 by QA — pre-existing, likely the launch-recenter vs rebuildOverlays timing gap
+    (only re-triggered by 60s timer/segment/selection change). Sim-observed; Kevin has NOT reported
+    it on-device. Own ticket if it shows up in the field.
 
 ## TF2 Round 1 — on-device testing of build 1.0(2) (2026-06-08 evening)
 
