@@ -90,6 +90,14 @@ final class DrivingContextService {
     /// Current driving context. Nil when no segment is within range.
     private(set) var currentContext: DrivingContext?
 
+    /// TF2-16: The segment closest to the driver's GPS position, as found by `update()`'s
+    /// existing closest-segment lookup (`findClosestSegment`). Nil when `update()` finds no
+    /// segment (mirrors `currentContext == nil`). Purely additive — exposes the same result
+    /// `update()` already computes internally; no second matcher/distance-search is introduced.
+    /// Consumed by `ContentView.handleLocationUpdate()` as the `hasBlockMatch` / snap-target
+    /// input to `DriveHeadingSnap`.
+    private(set) var matchedSegment: Segment?
+
     // MARK: - Block change detection (index.html:5905–5908)
 
     /// Block key from the most recent call. Nil on first call.
@@ -210,14 +218,20 @@ final class DrivingContextService {
     ) {
         guard !segments.isEmpty else {
             currentContext = nil
+            matchedSegment = nil
             return
         }
 
         // Step 1: Find closest segment overall (port of findClosestSegment, index.html:5560).
         guard let closest = findClosestSegment(to: coordinate, in: segments) else {
             currentContext = nil
+            matchedSegment = nil
             return
         }
+
+        // TF2-16: publish the same closest-segment result as a side-channel property —
+        // no second matcher/distance-search, purely additive to the existing control flow.
+        matchedSegment = closest
 
         // Step 2: Block identity — street + from + to of the closest segment.
         let block = (street: closest.street, from: closest.fromStreet, to: closest.to)
