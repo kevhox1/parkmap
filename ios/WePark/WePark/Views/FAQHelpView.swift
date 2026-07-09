@@ -88,10 +88,32 @@ struct FAQHelpView: View {
         .padding(.bottom, 28)
     }
 
+    // MARK: - FT-12 (OQ-6): Parking 101 cross-link
+
+    private var parkingGuideCrossLink: some View {
+        NavigationLink {
+            ParkingGuideView()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "signpost.right.and.left")
+                    .imageScale(.small)
+                Text("New here? Read the full Parking 101 guide")
+                    .font(.subheadline)
+                    .multilineTextAlignment(.leading)
+            }
+            .foregroundStyle(.tint)
+        }
+        .accessibilityLabel("New here? Read the full Parking 101 guide")
+        .padding(.bottom, 8)
+    }
+
     // MARK: - Section 1 content
 
     @ViewBuilder
     private var section1Content: some View {
+        // FT-12 (OQ-6): cross-link to the Parking 101 guide — a narrative, illustrated
+        // onboarding companion to this flat Q&A list.
+        parkingGuideCrossLink
         faqItem(
             question: "What is \"alternate side parking\" (ASP)?",
             answer: "On most NYC streets you must move your car off one side at posted days and times so the street sweeper can clean. A sign like \"No Parking — Mon & Thu, 9–10:30 AM\" means: don't park on that side during those hours that day. Move your car before the window starts."
