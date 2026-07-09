@@ -29,10 +29,22 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   or misassigned rules on the allow-list streets (Houston/Bowery/Allen/Forsyth/Delancey); (b) side
   gap — rules on one curb, opposite-side segment empty → renders free; (c) zone-cap / stub-filter
   over-trim from regens 4–5; (d) engine daytime mapping regression (less likely — FT-9 verified it).
-- **Status:** 🔴 investigation dispatched (backend-data, read-only) 2026-07-09 — diff Houston/Bowery
-  segment rules in shipped tiles pre- vs post-regen-5, check both curbs, verify engine daytime
-  states. Report → docs/qa/.
-- **Lands in:** tiles pipeline regen 6 and/or iOS rules engine — TBD by investigation.
+- **ROOT CAUSE FOUND (backend-data, `docs/qa/tf2-19-houston-bowery-free-investigation.md`):** regen 5
+  silently shipped an INCOMPLETE pull of the MAIN Socrata sign dataset (`nfid-uabd`) — unrelated to
+  the TF2-14 code (curb-offset diff never touches the fetch/rule path). Evidence: citywide pre/post
+  diff across ~988 tiles shows METERED −48.1%, NO_PARKING −46.6%, NO_STANDING −42.0%, TRUCK_LOADING
+  −37.7% while every ASP_* category (separate fetch) held flat (≤0.5%); geometry-identical segments
+  lost rule content outright. `fetchSocrataDataset()` is fragile: no retry (bare `break` on error),
+  no `$order`, no app token, no completeness validation — MAIN is ~16 pages vs ASP ~5, far more
+  exposed to a mid-pull failure. Engine EXONERATED (correctly renders the defective data — the
+  opposite failure mode from FT-9). iOS bundle tiles byte-identical to `tiles/` (not packaging).
+- **⚠️ BUILD-13 IMPLICATION: tiles in build 13 are defective citywide** — restricted curbs render
+  free block-by-block unpredictably. Do NOT upload 13 to TestFlight; regen 6 → build 14.
+- **Status:** 🟡 FIX IN FLIGHT (backend-data, 2026-07-09): harden `fetchSocrataDataset()` (retry+
+  backoff, `$order`, app token support, post-fetch count(*) completeness gate that ABORTS the build
+  on shortfall), then regen 6 with measured output (validate Houston/Bowery/2nd Ave restored + all
+  category counts vs the pre-regen-5 baseline), sw.js CACHE_VERSION v37→v38. QA before merge.
+- **Lands in:** `build/preprocess.js` + tiles regen 6 (PWA + iOS Resources) + sw.js. No engine change.
 
 ### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
 - **Area:** Drive Mode heading source. `LocationService` heading stabilizer + `MapViewRepresentable.syncDriveHeading`.
