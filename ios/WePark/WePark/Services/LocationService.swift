@@ -115,6 +115,12 @@ final class LocationService: NSObject {
     /// Most-recent speed reading from Drive Mode location updates, in m/s.
     private(set) var driveSpeed: CLLocationSpeed?
 
+    /// TF2-16: Most-recent `CLLocation.courseAccuracy` reading from Drive Mode location
+    /// updates, in degrees. `nil` when CoreLocation reports an invalid (negative) value —
+    /// matches the existing `course >= 0 ? course : nil` pattern used for `courseHeading`
+    /// below. Consumed by `DriveHeadingSnap.nextHeadingSource` as a low-confidence signal.
+    private(set) var driveCourseAccuracy: CLLocationDirection?
+
     /// True while Drive Mode is actively running.
     private var driveModeActiveInternal: Bool = false
 
@@ -214,6 +220,7 @@ final class LocationService: NSObject {
         // Clear drive-specific state.
         driveHeading = nil
         driveSpeed = nil
+        driveCourseAccuracy = nil
         headingEMA = nil
         prevDriveCoordinate = nil
 
@@ -360,11 +367,14 @@ extension LocationService: CLLocationManagerDelegate {
                 speed: max(0, speed),
                 current: coordinate
             )
+            // TF2-16: capture courseAccuracy from the same tick as driveSpeed/driveHeading.
+            let courseAccuracy: CLLocationDirection? = loc.courseAccuracy >= 0 ? loc.courseAccuracy : nil
             DispatchQueue.main.async { [weak self] in
                 self?.userLocation = coordinate
                 self?.locationUpdateCount += 1
                 self?.driveSpeed = speed >= 0 ? speed : 0
                 self?.driveHeading = stabilized
+                self?.driveCourseAccuracy = courseAccuracy
             }
         } else {
             // Single-shot / recenter mode (unchanged W5.1 behavior).
