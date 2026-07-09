@@ -27,8 +27,12 @@ New findings below, all proceeding through the proper flow (spec → build → Q
   streets: segment bearing in whichever direction is closer to last good course. Hysteresis so the
   source doesn't flip-flop. ⚠️ #31-sensitive camera path → tech-lead spec + worktree engineer + QA +
   live-UI smoke gate + Kevin drive-test.
-- **Status:** 🟡 spec dispatched (tech-lead) 2026-07-09.
-- **Lands in:** iOS (`LocationService.swift`, `MapViewRepresentable.swift`, block-match plumbing).
+- **Status:** 🟡 SPEC FILED (`docs/tf2-16-heading-snap-spec.md`, 2026-07-09) — all OQs resolved,
+  awaiting Kevin approval → ios-engineer. Design keeps zero diff to MapViewRepresentable
+  (syncDriveHeading stays the sole #31 exception); hysteresis gates on speed+courseAccuracy only
+  (NOT course/EMA disagreement — that's the signature of a real turn, would fight it).
+- **Lands in:** iOS (new `Services/DriveHeadingSnap.swift`, `LocationService.swift`,
+  `ContentView.handleLocationUpdate`, `DrivingContextService.matchedSegment` exposure).
 
 ### TF2-17 🟡 Bottom-card Left/Right chips should read "Free until X"
 - **Area:** Drive Mode bottom card copy. `DrivingContextService.aggregateSide` → `SafetyLabel`.
@@ -39,8 +43,11 @@ New findings below, all proceeding through the proper flow (spec → build → Q
 - **Fix direction:** when a side aggregates to free, surface the **earliest** upcoming restriction
   across that side's free segments (conservative min) → chip reads "Free until Thu 9:30am". Keep
   severity colors. Mostly `DrivingContextService` + tests.
-- **Status:** 🟡 spec dispatched (tech-lead) 2026-07-09.
-- **Lands in:** iOS (`DrivingContextService.swift`, `DriveModeBottomCard.swift` if layout needs room).
+- **Status:** 🟡 SPEC FILED (`docs/tf2-17-chip-free-until-spec.md`, 2026-07-09) — awaiting Kevin
+  approval. Additive `SideAggregation` + `aggregateSideDetail`; existing 9-case decision table +
+  voice untouched (locked by regression test); explicit FT-9-class regression test included. Zero
+  bottom-card layout footprint → can land standalone or bundle with TF2-18 engineering pass.
+- **Lands in:** iOS (`DrivingContextService.swift`, `SafetyLabel.swift`).
 
 ### TF2-18 🟡 Drive Mode UI layout clunky + color scheme visibility — holistic design pass
 - **Area:** Drive Mode surface: bottom card, chips, End Drive pill, approaching strip, arrival
@@ -50,7 +57,15 @@ New findings below, all proceeding through the proper flow (spec → build → Q
   palette was tuned for map polylines, not glanceable in-car reading in sunlight.
 - **Direction:** designer end-to-end review vs Apple Maps/Waze glanceability conventions → findings
   doc → one engineer pass (may bundle TF2-17 since both touch the bottom card).
-- **Status:** 🟡 designer review dispatched 2026-07-09.
+- **Status:** 🟡 REVIEW FILED (`docs/design/drive-mode-ui-review-2026-07-09.md`, 2026-07-09).
+  P1s: chip contrast FAILS WCAG in Light Mode (~1.4–2.6:1 — full-saturation severity text on
+  15%-tint of same color; fine in Dark ~9.8:1 → palette was tuned on dark backdrops; this is the
+  daylight-visibility complaint); drive chips DROP the orange "restriction soon" tier the map has;
+  Recenter pill hardcodes bottom offset, unaware of bottom-card height (same class as the fixed
+  top-banner clearance, never mirrored at bottom). P2s: inconsistent button anatomy, mismatched
+  toolbar-cluster offsets (44 vs 100pt), 3 uncoordinated bottom card systems, amber collision
+  (ASP banner vs metered chips), chip capacity vs TF2-17's longer copy. Suggested single engineer
+  PR bundling TF2-17. Awaiting Kevin approval of scope.
 - **Lands in:** iOS views (post-review).
 
 ### FT-12 🟡 Beginner's manual — "free parking in NYC 101" education (FEATURE)
@@ -62,7 +77,10 @@ New findings below, all proceeding through the proper flow (spec → build → Q
   from Settings) — text-only, no sign visuals, no savings pitch. Spec to decide: extend FAQ vs new
   "Parking 101" surface; first-launch entry point vs Settings-only; sign-image asset strategy
   (rendered sign replicas vs photos); savings framing (garage $/mo vs free-with-effort).
-- **Status:** 🟡 spec dispatched (tech-lead) 2026-07-09.
+- **Status:** 🟡 SPEC FILED (`docs/ft12-beginners-manual-spec.md`, 2026-07-09) — 7 OQs with
+  recommendations NEED KEVIN (surface = new ParkingGuideView; first-launch = non-blocking dismissible
+  banner, not modal; SwiftUI vector sign replicas, no raster; conservative sourced money figures in
+  one `MoneyMathConstants` struct). ~2 sessions + fix-pass; file-disjoint from all TF2 streams.
 - **Lands in:** iOS UI + bundled content/assets; no backend.
 
 ## Map rebuild (native MapKit) — `docs/map-rebuild-native-mapkit-spec.md`
