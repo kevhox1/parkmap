@@ -1239,22 +1239,55 @@ async function main() {
 
     // Completeness gate — fetch the authoritative row count BEFORE paging so we
     // have something to validate the pull against once paging is done.
+    //
+    // QA finding #1 (docs/qa/tf2-19-regen6-qa.md): this probe must get the SAME
+    // retry-with-backoff treatment as the paged requests, and must FAIL CLOSED
+    // (abort the build) if it can't get a count after exhausting retries — a
+    // probe that silently disables itself on a transient network blip defeats
+    // the entire point of the completeness gate. No path may proceed with
+    // expectedCount left null.
     let expectedCount = null;
-    try {
+    {
       const countUrl = `${baseUrl}?$select=count(*)&borough=Manhattan`;
-      const countResp = await fetch(countUrl, { headers: SOCRATA_HEADERS });
-      if (countResp.ok) {
-        const countData = await countResp.json();
-        const parsed = parseInt(countData && countData[0] && countData[0].count, 10);
-        if (Number.isFinite(parsed)) expectedCount = parsed;
+      let lastError = null;
+      const totalAttempts = RETRY_BACKOFF_MS.length + 1; // 1 initial try + 5 retries
+
+      for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+        if (attempt > 1) {
+          const backoffMs = RETRY_BACKOFF_MS[attempt - 2];
+          console.log(`   ${label}: count(*) probe retrying in ${backoffMs / 1000}s (attempt ${attempt}/${totalAttempts})...`);
+          await sleep(backoffMs);
+        }
+        try {
+          const countResp = await fetch(countUrl, { headers: SOCRATA_HEADERS });
+          if (!countResp.ok) {
+            lastError = new Error(`HTTP ${countResp.status}`);
+            continue;
+          }
+          const countData = await countResp.json();
+          const parsed = parseInt(countData && countData[0] && countData[0].count, 10);
+          if (!Number.isFinite(parsed)) {
+            lastError = new Error('malformed count(*) response');
+            continue;
+          }
+          expectedCount = parsed;
+          break;
+        } catch (e) {
+          lastError = e;
+        }
       }
+
       if (expectedCount === null) {
-        console.log(`   WARNING: could not determine expected row count for ${label} (bad response) — completeness gate will be skipped for this dataset`);
-      } else {
-        console.log(`   ${label}: expected ${expectedCount} rows (per $select=count(*))`);
+        // Fail closed: never proceed to paging without a validated expected
+        // count. Aborts the whole build (main().catch() at the bottom of this
+        // file exits non-zero before any tile is written).
+        throw new Error(
+          `FATAL: ${label} count(*) probe failed after ${totalAttempts} attempts. ` +
+          `Last error: ${lastError ? lastError.message : 'unknown'}. ` +
+          `Aborting build — refusing to run the completeness gate blind.`
+        );
       }
-    } catch (e) {
-      console.log(`   WARNING: count(*) probe for ${label} failed (${e.message}) — completeness gate will be skipped for this dataset`);
+      console.log(`   ${label}: expected ${expectedCount} rows (per $select=count(*))`);
     }
 
     const signs = [];
@@ -1323,8 +1356,10 @@ async function main() {
     console.log(`   ${label}: fetched ${signs.length} rows total`);
 
     // Completeness gate — abort loudly rather than silently shipping a truncated
-    // pull (this is exactly the regen-5 / TF2-19 failure mode).
-    if (expectedCount !== null) {
+    // pull (this is exactly the regen-5 / TF2-19 failure mode). expectedCount is
+    // guaranteed non-null here — the probe above throws (fail closed) rather
+    // than returning if it can't establish a validated count.
+    {
       const tolerance = Math.ceil(expectedCount * COMPLETENESS_TOLERANCE_FRACTION);
       const shortfall = expectedCount - signs.length;
       if (shortfall > tolerance) {
