@@ -87,6 +87,105 @@ enum AppConstants {
     /// Guards the one-time informational alert on first Drive Mode start explaining that
     /// parking commentary pauses when the app is backgrounded (spec §7 R-3, AC-DM.23).
     static let driveModeBackgroundNoteShownKey = "wepark_dm_bg_note_shown"
+
+    // MARK: - FT-12: Parking 101 guide
+
+    /// UserDefaults key: set to true after the first-launch "Parking 101" prompt banner
+    /// has been shown/dismissed once per install (spec §7).
+    static let parkingGuidePromptShownKey = "wepark_parking101_prompt_shown"
+}
+
+// MARK: - MoneyMathConstants (FT-12 §6)
+
+/// Named, sourced dollar figures for the Parking 101 guide's Pitch section.
+///
+/// Rationale (spec §6 / OQ-4): these are private-market aggregator figures, not an
+/// official DOT price list, and garage pricing drifts. Storing them as named constants
+/// with a doc-commented source + pull date makes a future refresh a one-line diff
+/// instead of a grep through view files — the same discipline this repo already wants
+/// for the ASP-calendar annual refresh (`HANDOFF.md`).
+///
+/// If any of these figures change, update `docs/parking-101-content.md` in the same PR
+/// — that doc is the copy source of truth and must not drift from these values.
+enum MoneyMathConstants {
+
+    // MARK: Monthly garage parking (market data)
+
+    /// Citywide average monthly garage parking, low end.
+    /// Source: SpotAngels, "The 2026 Ultimate Guide to Cheap Monthly Parking in NYC"
+    /// (https://www.spotangels.com/blog/the-ultimate-nyc-monthly-parking-guide/).
+    /// Pulled 2026-07-09.
+    static let garageMonthlyCitywideLow: Double = 400
+
+    /// Citywide average monthly garage parking, high end. Same source/date as above.
+    static let garageMonthlyCitywideHigh: Double = 600
+
+    /// Manhattan monthly garage parking, low end.
+    /// Source: SpotAngels, "Manhattan Monthly Parking — Best Rates & Deals"
+    /// (https://www.spotangels.com/nyc/manhattan-monthly-parking); SpotHero, "New York, NY
+    /// Monthly Parking" (https://spothero.com/city/monthly/nyc-parking). Pulled 2026-07-09.
+    static let garageMonthlyManhattanLow: Double = 500
+
+    /// Manhattan monthly garage parking, high end ("$1,000+" in copy — this is the
+    /// conservative floor of the "+" range). Same source/date as above.
+    static let garageMonthlyManhattanHigh: Double = 1000
+
+    // MARK: Street-cleaning ticket
+
+    /// Approximate NYC street-cleaning (ASP) ticket cost. MUST match the figure already
+    /// shipped in the Help & FAQ screen (`docs/in-app-faq-content.md` line 18,
+    /// `FAQHelpView.swift`) — do not introduce a second, drifted figure for the same thing.
+    static let streetCleaningTicketCost: Double = 65
+
+    // MARK: Annual savings (computed, not separately sourced — spec §6 auditability requirement)
+
+    /// Low end of the "money back in your pocket per year" framing.
+    /// Computed as 12 × `garageMonthlyCitywideLow`, per spec §6 — never hand-edit this
+    /// independently of the monthly constant above.
+    static var annualSavingsLow: Double { garageMonthlyCitywideLow * 12 }
+
+    /// High end of the annual-savings framing.
+    /// Computed as 12 × `garageMonthlyManhattanHigh`, per spec §6.
+    static var annualSavingsHigh: Double { garageMonthlyManhattanHigh * 12 }
+}
+
+// MARK: - ParkingGuidePromptGate (FT-12 §7)
+
+/// One-time gate for the Parking 101 first-launch prompt banner (spec §7, OQ-2).
+///
+/// Mirrors `BackgroundNoteGate` exactly, but governs a dismissible bottom banner rather
+/// than a blocking alert (see OQ-2 rationale: promotional/educational content at cold
+/// launch should never compete with system permission dialogs the way a blocking sheet
+/// would). `markShown()` fires on any of: tapping the banner to open the guide, tapping
+/// the dismiss (X) control, or the ~8s auto-hide timer — all three count as "shown."
+///
+/// Usage:
+///   let gate = ParkingGuidePromptGate()  // uses UserDefaults.standard
+///   if gate.shouldShow() {
+///       // present the banner
+///       gate.markShown()
+///   }
+struct ParkingGuidePromptGate {
+    private let defaults: UserDefaults
+    private let key: String
+
+    /// Designated init — accepts any `UserDefaults` instance so tests can inject an
+    /// ephemeral suite instead of polluting `UserDefaults.standard`.
+    init(defaults: UserDefaults = .standard,
+         key: String = AppConstants.parkingGuidePromptShownKey) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    /// Returns `true` if the banner has never been shown on this device.
+    func shouldShow() -> Bool {
+        !defaults.bool(forKey: key)
+    }
+
+    /// Persists that the banner has been shown. Subsequent `shouldShow()` calls return `false`.
+    func markShown() {
+        defaults.set(true, forKey: key)
+    }
 }
 
 // MARK: - BackgroundNoteGate
