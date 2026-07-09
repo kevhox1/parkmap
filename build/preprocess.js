@@ -1210,10 +1210,86 @@ async function main() {
   // 2. Fetch signs from both Socrata datasets
   console.log('🔄 Fetching parking signs from NYC Socrata API...');
   let allSigns = [];
-  
+
+  // TF2-19: Socrata app token (optional). Raises rate limits, reduces the odds of a
+  // throttle-induced page failure. Works fine without it.
+  const SOCRATA_HEADERS = {};
+  if (process.env.SOCRATA_APP_TOKEN) {
+    SOCRATA_HEADERS['X-App-Token'] = process.env.SOCRATA_APP_TOKEN;
+    console.log('   Using SOCRATA_APP_TOKEN for API requests\n');
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // TF2-19: completeness gate. 0.5% tolerance allows for normal live-dataset churn
+  // mid-pull; anything beyond that means the pull was truncated (regen-5's failure
+  // mode: ~40-48% of MAIN dataset rules silently dropped) and the build must abort
+  // rather than ship partial tile data.
+  const COMPLETENESS_TOLERANCE_FRACTION = 0.005;
+  // TF2-19: retry-with-backoff. Up to 5 retries (6 attempts total) per page,
+  // exponential backoff, before the build fails loudly instead of silently
+  // truncating the pull.
+  const RETRY_BACKOFF_MS = [2000, 4000, 8000, 16000, 32000];
+
   // Helper to fetch paginated dataset
   async function fetchSocrataDataset(baseUrl, label) {
     console.log(`   Fetching ${label}...`);
+
+    // Completeness gate — fetch the authoritative row count BEFORE paging so we
+    // have something to validate the pull against once paging is done.
+    //
+    // QA finding #1 (docs/qa/tf2-19-regen6-qa.md): this probe must get the SAME
+    // retry-with-backoff treatment as the paged requests, and must FAIL CLOSED
+    // (abort the build) if it can't get a count after exhausting retries — a
+    // probe that silently disables itself on a transient network blip defeats
+    // the entire point of the completeness gate. No path may proceed with
+    // expectedCount left null.
+    let expectedCount = null;
+    {
+      const countUrl = `${baseUrl}?$select=count(*)&borough=Manhattan`;
+      let lastError = null;
+      const totalAttempts = RETRY_BACKOFF_MS.length + 1; // 1 initial try + 5 retries
+
+      for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+        if (attempt > 1) {
+          const backoffMs = RETRY_BACKOFF_MS[attempt - 2];
+          console.log(`   ${label}: count(*) probe retrying in ${backoffMs / 1000}s (attempt ${attempt}/${totalAttempts})...`);
+          await sleep(backoffMs);
+        }
+        try {
+          const countResp = await fetch(countUrl, { headers: SOCRATA_HEADERS });
+          if (!countResp.ok) {
+            lastError = new Error(`HTTP ${countResp.status}`);
+            continue;
+          }
+          const countData = await countResp.json();
+          const parsed = parseInt(countData && countData[0] && countData[0].count, 10);
+          if (!Number.isFinite(parsed)) {
+            lastError = new Error('malformed count(*) response');
+            continue;
+          }
+          expectedCount = parsed;
+          break;
+        } catch (e) {
+          lastError = e;
+        }
+      }
+
+      if (expectedCount === null) {
+        // Fail closed: never proceed to paging without a validated expected
+        // count. Aborts the whole build (main().catch() at the bottom of this
+        // file exits non-zero before any tile is written).
+        throw new Error(
+          `FATAL: ${label} count(*) probe failed after ${totalAttempts} attempts. ` +
+          `Last error: ${lastError ? lastError.message : 'unknown'}. ` +
+          `Aborting build — refusing to run the completeness gate blind.`
+        );
+      }
+      console.log(`   ${label}: expected ${expectedCount} rows (per $select=count(*))`);
+    }
+
     const signs = [];
     let offset = 0;
     let pageNum = 0;
@@ -1221,30 +1297,80 @@ async function main() {
 
     while (keepFetching) {
       pageNum++;
-      const url = `${baseUrl}?$limit=${PAGE_SIZE}&$offset=${offset}&borough=Manhattan`;
-      process.stdout.write(`     Page ${pageNum}: offset ${offset}...`);
+      // $order=:id gives stable, deterministic pagination across sequential page
+      // requests even against a live dataset receiving concurrent writes.
+      const url = `${baseUrl}?$limit=${PAGE_SIZE}&$offset=${offset}&$order=:id&borough=Manhattan`;
 
-      try {
-        const resp = await fetch(url);
-        if (!resp.ok) {
-          console.log(` HTTP ${resp.status} - stopping`);
-          break;
+      let pageData = null;
+      let lastError = null;
+      const totalAttempts = RETRY_BACKOFF_MS.length + 1; // 1 initial try + 5 retries
+
+      for (let attempt = 1; attempt <= totalAttempts; attempt++) {
+        if (attempt > 1) {
+          const backoffMs = RETRY_BACKOFF_MS[attempt - 2];
+          console.log(`     Page ${pageNum}: retrying in ${backoffMs / 1000}s (attempt ${attempt}/${totalAttempts})...`);
+          await sleep(backoffMs);
         }
-        const data = await resp.json();
-        if (!Array.isArray(data) || data.length === 0) {
-          console.log(' done');
-          keepFetching = false;
+        process.stdout.write(`     Page ${pageNum}: offset ${offset} (attempt ${attempt}/${totalAttempts})...`);
+        try {
+          const resp = await fetch(url, { headers: SOCRATA_HEADERS });
+          if (!resp.ok) {
+            lastError = new Error(`HTTP ${resp.status}`);
+            console.log(` HTTP ${resp.status}`);
+            continue;
+          }
+          const data = await resp.json();
+          if (!Array.isArray(data)) {
+            lastError = new Error('malformed response (not an array)');
+            console.log(' malformed response');
+            continue;
+          }
+          pageData = data;
+          console.log(` +${data.length}`);
           break;
+        } catch (e) {
+          lastError = e;
+          console.log(` ERROR: ${e.message}`);
         }
-        signs.push(...data);
-        console.log(` +${data.length} (total: ${signs.length})`);
-        if (data.length < PAGE_SIZE) keepFetching = false;
+      }
+
+      if (pageData === null) {
+        // Exhausted all retries — never silently ship a partial pull. Abort the
+        // whole build (main().catch() at the bottom of this file exits non-zero
+        // before any tile is written).
+        throw new Error(
+          `FATAL: ${label} fetch failed at offset ${offset} (page ${pageNum}) after ${totalAttempts} attempts. ` +
+          `Last error: ${lastError ? lastError.message : 'unknown'}. Aborting build — refusing to ship partial tile data.`
+        );
+      }
+
+      if (pageData.length === 0) {
+        keepFetching = false;
+      } else {
+        signs.push(...pageData);
+        if (pageData.length < PAGE_SIZE) keepFetching = false;
         else offset += PAGE_SIZE;
-      } catch (e) {
-        console.log(` ERROR: ${e.message}`);
-        break;
       }
     }
+
+    console.log(`   ${label}: fetched ${signs.length} rows total`);
+
+    // Completeness gate — abort loudly rather than silently shipping a truncated
+    // pull (this is exactly the regen-5 / TF2-19 failure mode). expectedCount is
+    // guaranteed non-null here — the probe above throws (fail closed) rather
+    // than returning if it can't establish a validated count.
+    {
+      const tolerance = Math.ceil(expectedCount * COMPLETENESS_TOLERANCE_FRACTION);
+      const shortfall = expectedCount - signs.length;
+      if (shortfall > tolerance) {
+        throw new Error(
+          `FATAL: ${label} completeness check failed — expected ~${expectedCount} rows (±${tolerance} tolerance), ` +
+          `only fetched ${signs.length} (shortfall ${shortfall}). Aborting build — refusing to ship partial tile data.`
+        );
+      }
+      console.log(`   ${label}: completeness OK (expected ${expectedCount}, fetched ${signs.length}, shortfall ${shortfall <= 0 ? 0 : shortfall} within tolerance ${tolerance})`);
+    }
+
     return signs;
   }
 
