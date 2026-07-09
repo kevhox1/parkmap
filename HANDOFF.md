@@ -182,6 +182,59 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-06-15 — TF2 field-testing marathon: builds 1.0(2) → 1.0(13), native-MapKit MAP REBUILD, 5 tile regens
+
+**WHERE WE ARE:** main clean @ `b6307d4`, **build 1.0 (13)** cold-built and PUSHED, **ready for Kevin to archive**
+(not yet uploaded). ~514 iOS tests. PWA live at cache v37. This was a long hands-on TestFlight field-testing
+loop; **`docs/field-testing-log.md` is the running record** (NOTE: trust the `**Status:**` line inside each
+entry — the header 🔴/🟡 emojis are stale; most are actually 🟢 shipped).
+
+**Immediate next action (Kevin):** ⚠️ **QUIT XCODE FIRST** (⌘Q — recurring gotcha: Xcode caches project.pbxproj
+and archives a stale build number; happened on builds 8 & 12), reopen, verify `= 13`, then Product → Archive →
+Distribute → Upload **1.0 (13)**. Then **drive-test** the two headline fixes below.
+
+**Build 13 headline fixes (Kevin's on-device gate — sim can't move GPS):**
+- **Zoom saga FINALLY fixed (TF2-11 Option A, PR #62):** after 4 failed patch rounds, we DROPPED MapKit's
+  `.follow` in Drive Mode entirely and drive the camera ourselves — one animated `setCamera` per GPS tick
+  (center+pitch30+our altitude; heading owned by the course-EMA `syncDriveHeading` path). Nothing fights the
+  camera now. Deleted all prior machinery (zoom clamp, TF2-8 re-apply, tracking-mode plumbing). Gate: enter
+  Find Parking/destination WHILE MOVING → camera follows smooth + STAYS tight (no bounce), heading-up, Recenter
+  on pan, pinch-zoom persists.
+- **Curb widths (TF2-14 regen 5):** parking lines now use NYC CSCL `streetwidth` data, computed ONCE PER STREET
+  (uniform → no zigzag). Houston/Bowery ~12.7m offset (parking lane, was 10m mid-road), avenues 10m (no
+  regression), side streets 6m. Gate: Houston/Bowery read on-curb + consistent. Tuning knob if still not far
+  enough: `DIVIDED_MEDIAN_ALLOWANCE_M` in build/preprocess.js (one constant).
+
+**The big arc shipped this stretch (all merged, in build ≤13):**
+- **MAP REBUILD → native MapKit** (docs/map-rebuild-native-mapkit-spec.md): Phase 1 browse liberation
+  (rotate/tilt, MapKit owns browse camera — VERIFIED on-device "just like Apple Maps"), Phase 2 native drive
+  follow (later replaced by Option A above). This killed the whole snap-back/fighting-the-camera class.
+- **FT-1..FT-11 + TF2-1..TF2-14** — see field-testing-log. Highlights: FT-5 pan snap-back, FT-6 customizable
+  reminders (15m/30m/1h/2h/night-before), FT-7 course-heading, FT-9 **metered-shown-as-free citywide fix**,
+  FT-11 sweeper/agent direction picker + marker chevron (+ oneway tile fields), TF2-3 heading-up puck,
+  TF2-6 cruise camera, TF2-7 side-level voice + "Park here" sign-check sheet, TF2-9 sheet layout, TF2-10/12
+  perpendicular curb offset + block-normal fix + stub filter, TF2-13 Elizabeth garage zone-cap (~614 faces).
+- **Privacy policy PUBLISHED** at https://kevhox1.github.io/parkmap/privacy.html (unblocks external TestFlight).
+
+**OPEN / NEXT (nothing in flight — clean board):**
+- **FT-2 delete-own-pin** — SPEC'D (docs/ft2-delete-own-pin-spec.md), NOT built. RLS likely already in schema
+  (verify), then iOS delete UI on own pins. Good next feature.
+- **TF2-15 (roadmap):** construction/temporary-conditions layer (NYC permit data → `construction` pins) — Bowery
+  is metered-but-under-construction; static sign tiles can't know that.
+- **Concept docs for later:** docs/smart-parking-route-2.0-concept.md (parking-hunt route optimizer, 2.0),
+  docs/nyc-neighbors-incentives-concept.md (community rewards / brand partnerships).
+- **Tech-debt cleanup batch** (field-testing-log top): Swift concurrency warnings, FT-7 selectDriveHeadingSource
+  wiring, FT-9 string-match→boolean, Option A doc nits.
+- **Still pending from before:** supabase-swift SDK (real-time, hard TF2 req), external TestFlight group setup
+  (privacy URL now ready), Mapbox token bundle-ID restriction, Tier 2 (sign corrections/reputation).
+
+**PROCESS THAT WORKED (keep doing):** field-testing-log = source of truth; spec-first for anything non-trivial
+(tech-lead); QA-verifier ≠ builder before every merge/build; isolated worktrees for git-touching engineers;
+cold `xcodebuild clean build -configuration Release` before each archive; tile regen = `node build/preprocess.js`
+(runs on Kevin's machine, fetches NYC Socrata, ~5-15min, writes tiles/ + ios Resources/tiles/ — bump sw.js
+CACHE_VERSION for PWA); measure tile output before committing a regen; decouple tile regens from iOS-code builds
+when one is blocked. Kevin drive-tests on real device = the irreducible gate for all camera/GPS behavior.
+
 ### 2026-06-06 (🚀 TF1 SHIPPED) — WePark 1.0(1) is LIVE on TestFlight
 
 **The Phase 5 goal is achieved: a real signed build is on TestFlight and installs on Kevin's iPhone.** The full archive → upload happened via Xcode GUI (orchestrator guided Kevin step-by-step, Supabase-style). Key facts for the future:
