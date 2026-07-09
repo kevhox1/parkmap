@@ -7,6 +7,64 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ---
 
+## TF2 Round 3 — build 13 drive-test feedback (2026-07-09)
+
+Kevin drove build 13. **TF2-11 Option A zoom VERIFIED on-device** ("zoom is working better") — the
+4-round zoom saga is closed. TF2-14 Houston/Bowery on-curb read: ⏳ not yet explicitly confirmed.
+New findings below, all proceeding through the proper flow (spec → build → QA → merge), no expedite.
+
+### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
+- **Area:** Drive Mode heading source. `LocationService` heading stabilizer + `MapViewRepresentable.syncDriveHeading`.
+- **Observed (Kevin, build 13):** heading not synced properly all the time; "sometimes it will spin
+  and look for its direction" — **at low speed when approaching an intersection or turn.**
+- **Diagnosis:** heading is GPS course + EMA with speed gate `DRIVING_HEADING_MIN_SPEED_MPS = 0.5`
+  (lowered from 1.8 in TF2-3 so cruise-crawl wouldn't freeze the arrow). Below ~2–3 m/s GPS course is
+  noisy; at 0.5 the noise passes the gate and the EMA turns it into a slow visible swing — exactly at
+  intersection-approach speeds.
+- **Direction (Kevin):** when matched to a **one-way** segment and course confidence is low (slow /
+  poor accuracy), snap heading to the segment's bearing in the one-way direction (`oneway` /
+  `onewayToward` shipped on segments in the FT-11 regen). Fast + clean course still wins. Two-way
+  streets: segment bearing in whichever direction is closer to last good course. Hysteresis so the
+  source doesn't flip-flop. ⚠️ #31-sensitive camera path → tech-lead spec + worktree engineer + QA +
+  live-UI smoke gate + Kevin drive-test.
+- **Status:** 🟡 spec dispatched (tech-lead) 2026-07-09.
+- **Lands in:** iOS (`LocationService.swift`, `MapViewRepresentable.swift`, block-match plumbing).
+
+### TF2-17 🟡 Bottom-card Left/Right chips should read "Free until X"
+- **Area:** Drive Mode bottom card copy. `DrivingContextService.aggregateSide` → `SafetyLabel`.
+- **Observed (Kevin, build 13):** wants the left/right readings to say "Free until X".
+- **Diagnosis:** pre-TF2-7 the chips carried the engine's full per-segment label ("Free until Thu
+  9:30am"); TF2-7's side-aggregation replaced chip text with generic category copy ("Free parking
+  sections — check signs"). The engine still computes "Free until X" per segment.
+- **Fix direction:** when a side aggregates to free, surface the **earliest** upcoming restriction
+  across that side's free segments (conservative min) → chip reads "Free until Thu 9:30am". Keep
+  severity colors. Mostly `DrivingContextService` + tests.
+- **Status:** 🟡 spec dispatched (tech-lead) 2026-07-09.
+- **Lands in:** iOS (`DrivingContextService.swift`, `DriveModeBottomCard.swift` if layout needs room).
+
+### TF2-18 🟡 Drive Mode UI layout clunky + color scheme visibility — holistic design pass
+- **Area:** Drive Mode surface: bottom card, chips, End Drive pill, approaching strip, arrival
+  prompt, sign-check sheet; W4.5 palette as used in the drive context.
+- **Observed (Kevin, build 13):** "layout is still a bit clunky and the color scheme can be improved
+  for visibility." The drive surface grew feature-by-feature across ~8 PRs without a holistic pass;
+  palette was tuned for map polylines, not glanceable in-car reading in sunlight.
+- **Direction:** designer end-to-end review vs Apple Maps/Waze glanceability conventions → findings
+  doc → one engineer pass (may bundle TF2-17 since both touch the bottom card).
+- **Status:** 🟡 designer review dispatched 2026-07-09.
+- **Lands in:** iOS views (post-review).
+
+### FT-12 🟡 Beginner's manual — "free parking in NYC 101" education (FEATURE)
+- **Area:** Onboarding / education content. iOS (extends or sits beside the PR #45 Help & FAQ).
+- **Request (Kevin, 2026-07-09):** a beginner's manual for new users: free parking in NYC — why it's
+  doable and easy, how much money it saves, **with images of what signs say and how to interpret
+  them.**
+- **Notes:** Help & FAQ screen exists (PR #45, content at `docs/in-app-faq-content.md`, reachable
+  from Settings) — text-only, no sign visuals, no savings pitch. Spec to decide: extend FAQ vs new
+  "Parking 101" surface; first-launch entry point vs Settings-only; sign-image asset strategy
+  (rendered sign replicas vs photos); savings framing (garage $/mo vs free-with-effort).
+- **Status:** 🟡 spec dispatched (tech-lead) 2026-07-09.
+- **Lands in:** iOS UI + bundled content/assets; no backend.
+
 ## Map rebuild (native MapKit) — `docs/map-rebuild-native-mapkit-spec.md`
 
 - **Phase 1 (browse liberation) 🟢 MERGED #54, build 1.0(5), VERIFIED ON-DEVICE (Kevin):** "much cleaner,
@@ -75,7 +133,8 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Status:** 🟢 OPTION A MERGED #62 → build 12. Custom follow camera: per-GPS-tick animated setCamera
   (center+pitch30+our altitude; heading owned by course-EMA), NO .follow → nothing fights the camera.
   Deleted clamp + TF2-8 re-apply + all tracking-mode machinery. QA PASS-WITH-NOTES
-  (docs/qa/tf2-11-option-a-qa.md), 514/0, both adversarial traces pass. ⏳ Kevin on-device drive = gate.
+  (docs/qa/tf2-11-option-a-qa.md), 514/0, both adversarial traces pass. ✅ **VERIFIED ON-DEVICE
+  (Kevin, 2026-07-09, build 13): "zoom is working better" — follows and stays tight. Saga closed.**
 
 ### TF2-12 🔴 Bowery lines mid-road — side-lines CONVERGE to 0m on curved stretches + width ceiling
 - **Measured:** Bowery median E/W separation 20.5m (wide offset IS applied), BUT around
