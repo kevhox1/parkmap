@@ -40,10 +40,18 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   opposite failure mode from FT-9). iOS bundle tiles byte-identical to `tiles/` (not packaging).
 - **⚠️ BUILD-13 IMPLICATION: tiles in build 13 are defective citywide** — restricted curbs render
   free block-by-block unpredictably. Do NOT upload 13 to TestFlight; regen 6 → build 14.
-- **Status:** 🟡 FIX IN FLIGHT (backend-data, 2026-07-09): harden `fetchSocrataDataset()` (retry+
-  backoff, `$order`, app token support, post-fetch count(*) completeness gate that ABORTS the build
-  on shortfall), then regen 6 with measured output (validate Houston/Bowery/2nd Ave restored + all
-  category counts vs the pre-regen-5 baseline), sw.js CACHE_VERSION v37→v38. QA before merge.
+- **Status:** 🟢 MERGED #63 (`5f76b6b`, 2026-07-09) → **PWA HEALED (cache v38 live)**; iOS fix rides
+  build 14. Hardened fetch: retry+backoff, `$order=:id` stable pagination, optional app token,
+  fail-CLOSED count(*) completeness gate (aborts build before any tile write — QA pass-2 verified
+  incl. NaN-parse edge). Regen 6 measured + independently recounted by QA byte-for-byte: METERED
+  6,673→15,153, NO_STANDING 9,373→18,978, ASP flat, corridors recovered on identical geometry,
+  TF2-14 offsets unchanged. Duplication-vs-recovery adversarial check → benign recovery (dup-rule
+  ratio flat ~32-33% across snapshots); regen 6 is likely the first genuinely COMPLETE pull ever
+  (old fetch had no `$order` → every prior regen plausibly missed rows). QA: pass 1 SHIP WITH
+  CAVEATS → fail-closed fix `139f738` → pass 2 SHIP CLEAN (`docs/qa/tf2-19-regen6-qa.md`).
+  ⏳ Kevin on-device: Houston/Bowery should read metered/no-standing daytime (build 14 / PWA now).
+- **Follow-up (pwa-maintainer, minor):** `index.html` `APP_VERSION` stuck at v36 vs sw.js v38 —
+  cosmetic debug-chip drift, QA pass-1 Finding #2.
 - **Lands in:** `build/preprocess.js` + tiles regen 6 (PWA + iOS Resources) + sw.js. No engine change.
 
 ### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
