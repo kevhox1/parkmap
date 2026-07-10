@@ -126,10 +126,18 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   from Settings) — text-only, no sign visuals, no savings pitch. Spec to decide: extend FAQ vs new
   "Parking 101" surface; first-launch entry point vs Settings-only; sign-image asset strategy
   (rendered sign replicas vs photos); savings framing (garage $/mo vs free-with-effort).
-- **Status:** 🟡 SPEC FILED (`docs/ft12-beginners-manual-spec.md`, 2026-07-09) — 7 OQs with
-  recommendations NEED KEVIN (surface = new ParkingGuideView; first-launch = non-blocking dismissible
-  banner, not modal; SwiftUI vector sign replicas, no raster; conservative sourced money figures in
-  one `MoneyMathConstants` struct). ~2 sessions + fix-pass; file-disjoint from all TF2 streams.
+- **Status:** 🟢 MERGED #65 (`eb6af94`, 2026-07-09) → build 14. All 7 OQs approved as recommended.
+  New `Views/ParkingGuide/` (guide screen + 4 sections + `SignPlateView` vector replicas +
+  first-launch `ParkingGuidePromptBanner`), `docs/parking-101-content.md` source-of-truth,
+  `MoneyMathConstants` + `ParkingGuidePromptGate`, Settings row + FAQ cross-link. QA pass 1 SHIP
+  WITH CAVEATS → content fix `ef3969d` (ladder now teaches No Parking = merchandise+passengers OK
+  vs No Standing = passengers only vs No Stopping = nothing — QA-caught gap inherited from the
+  SPEC, not engineering) → pass 2 SHIP CLEAN (`docs/qa/ft12-parking-guide-qa.md`). Merge conflict
+  vs TF2-16 on ContentView @State blocks resolved keep-both by orchestrator; combined state
+  verified 549/0 before push.
+  ⏳ **Kevin on-device pass items (nobody could tap-through in sandbox):** (1) Settings →
+  "Parking 101" row opens the guide; (2) FAQ cross-link; (3) ladder plates at large Dynamic Type;
+  (4) fresh-install banner shows once, non-blocking, ~8s auto-hide.
 - **Lands in:** iOS UI + bundled content/assets; no backend.
 
 ## Map rebuild (native MapKit) — `docs/map-rebuild-native-mapkit-spec.md`
