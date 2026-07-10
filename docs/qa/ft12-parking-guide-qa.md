@@ -85,3 +85,61 @@ The build compiles clean, the full suite passes with zero regressions (532/0, up
 - `SignPlateView`'s no-invented-icons rule is honestly followed — I read every plate instantiation in `SignSchoolSectionView.swift` and confirmed the broom/hydrant SF Symbols are all on section headers, never on a plate face, and every plate carries a non-empty, content-accurate `.accessibilityLabel`.
 - The first-launch banner is a genuinely pleasant, non-intrusive implementation — the map is never obstructed, even at accessibility-XXL Dynamic Type in Dark Mode, and the mutual-exclusivity logic with the Drive Mode card / Park Until pill is structurally sound (same three-state `bottomSafeAreaContent` branch that already exists for those two).
 - Test coverage is well-targeted for a static-content feature — the gate tests mirror `BackgroundNoteGate` faithfully, the money-math tests actually guard the auditability claim (not just "value is positive"), and the `ActiveSheet` id-collision test is a nice touch that would have caught a real bug if one existed.
+
+## Pass 2 (2026-07-09)
+
+**Reviewed:** PR #65, branch `ios/ft12-parking-guide` at `ef3969d` (fix commit on top of pass-1's `1ec4f05`), scoped to the fix for pass-1 Finding #1 only.
+**Verdict:** ✅ SHIP CLEAN (Finding #1 closed; pass-1's #2/#4/#5 remain open, correctly deferred to Kevin's on-device pass)
+
+### Finding #1 — verified closed
+
+Read `git show ef3969d` directly (not the PR narrative). The commit touches exactly two files — `docs/parking-101-content.md` and `SignSchoolSectionView.swift` — and nothing else; confirmed via `git diff --stat 893cf51..ef3969d` that the branch's full 13-file footprint from pass-1 is unchanged (the fix commit adds zero new files, touches zero other files).
+
+The corrected 3-tier ladder now reads:
+
+| Sign | You may... | You may NOT... |
+|---|---|---|
+| **NO PARKING** | Stop to actively load or unload passengers **or merchandise** | Leave the car parked, or idle with no active loading/unloading happening |
+| **NO STANDING** | Stop to actively pick up or drop off **passengers only** — no merchandise | Load or unload cargo, or remain in the car for any other reason |
+| **NO STOPPING** | Nothing, except to obey a traffic signal, sign, or a police officer | Stop for any other reason, not even to drop someone off |
+
+Checked against real VTL semantics (§129-a "Parking" vs §129-b "Standing" vs §129-c "Stopping"):
+- **No Parking** — passengers or merchandise loading/unloading, correctly stated as the distinguishing allowance vs. No Standing. The "leave the car parked, or idle with no active loading/unloading happening" framing for the NOT-allowed side is slightly stricter-sounding than the letter of the law (the statute's actual test is temporary/expeditious loading-or-unloading activity, not continuous physical motion every second), but for a beginner's guide this is a safe, non-misleading simplification — it correctly steers a novice away from the old bug (thinking "driver stays in car" alone was sufficient) without introducing a new misconception. No residual inaccuracy that would cause a ticket if followed.
+- **No Standing** — passengers only, no merchandise, correctly stated and now explicitly parallel to the No Parking row (same "Stop to actively..." verb structure), which is exactly the pass-1 ask: make the two rows legible as a matched pair differing only in cargo eligibility.
+- **No Stopping** — "nothing, except to obey a traffic signal, sign, or a police officer" is the correct VTL §129-c framing (this row wasn't part of Finding #1, but the fix commit tightened its wording too, in the same spirit — checked it for regressions and found none; it remains accurate).
+
+The new intro paragraph (both in the doc and the SwiftUI `Text`) now states the actual legal test up front — "the actual legal test between the first two tiers is what you're allowed to load: No Parking permits passengers or merchandise; No Standing permits passengers only, never cargo. That's the real difference, not whether the driver stays in the car" — which directly names and corrects the exact misconception pass-1 flagged. No ambiguity or residual ladder-copy issue found. Finding #1 is closed.
+
+### Doc/view consistency and scope check
+
+- `docs/parking-101-content.md` (lines 56-66) and `SignSchoolSectionView.swift` (lines 66-96, both the intro `Text` and all three `ladderRow` calls) carry matching language — same three-part legal-test framing, same "actively load/unload" verb, same "no merchandise"/"or merchandise" parallel structure in both places. No doc-vs-view drift.
+- Diffed the fix commit line-by-line (`git show ef3969d`): confirmed no other section (Pitch, Metered, Hydrant, Arrows, Combined Stacks, ASP) was touched, no test file was touched, no `ContentView.swift`/`Constants.swift`/`SettingsView.swift`/`FAQHelpView.swift` touched. Scope is exactly Finding #1 (plus the Finding #3 test-count fix, done separately in the PR body, not this commit).
+
+### Plate faces — untouched, confirmed by direct read
+
+Read the full current `SignSchoolSectionView.swift` (not just the diff). Every `SignPlateView` instance across all six subsections (ASP, ladder, Metered, Hydrant [no plate], Arrows, Combined Stacks) still renders only real sign wording on the plate `lines:` — "NO PARKING," "NO STANDING," "NO STOPPING," "PAY TO PARK," dates/times, "STREET CLEANING," a directional arrow glyph. None of the new merchandise/passenger caption language leaked onto a plate face; it lives exclusively in the `allowed`/`notAllowed` caption strings and the intro paragraph, both of which render outside `SignPlateView`. AC-4 (plate-face purity) remains intact after the fix.
+
+### Tests
+
+Ran on my own dedicated simulator (`qa-ft12-p2`, freshly created, deleted at end of session — never touched the shared `F0820726-...` sim, which I confirmed stayed `Shutdown` throughout):
+
+- `xcodebuild test -only-testing:` the four FT-12 test suites (`ParkingGuidePromptGateTests`, `MoneyMathConstantsTests`, `ParkingGuideSectionTests`, `ParkingGuideActiveSheetTests`) — **17/17 passed**, matching the builder's claimed FT-12 target exactly.
+- `xcodebuild test` full suite — **533 passed / 0 failed** (`xcresulttool get test-results summary` gives an authoritative `"totalTestCount": 533, "failedTests": 0, "result": "Passed"`). This is **one higher** than the builder's claimed 532 in both the fix commit message and the PR body. Not investigated further — it does not change the verdict (more passing tests, zero failures, no regression signal), and this repo has a documented history of off-by-one test-count arithmetic in PR descriptions (pass-1 Finding #3, and the pre-existing FT10Tests note in `docs/field-testing-log.md`). Flagging as a fresh minor nit rather than blocking: **the builder should recount programmatically rather than trusting the prior PR description's math**, since 532 was itself a "corrected" figure from pass-1 and drifted again.
+
+### PR body
+
+`gh pr view 65` confirms: Test plan section states "532 passed, 0 failed... 17 new FT-12 test methods" (matches pass-1 Finding #3's correction) and a dedicated `## QA pass 1 fix (2026-07-09)` section exists, correctly summarizing Finding #1's fix, Finding #3's fix, and explicitly acknowledging Findings #2/#4/#5 as deferred to Kevin's on-device pass (not silently dropped). Body is accurate against what the fix commit actually contains — no narrative drift found.
+
+### New findings this pass
+
+- 🟢 **#6 (nit): full-suite count drifted again — 533 actual vs. 532 claimed in both the commit message and the PR body.** Same class of issue as pass-1 Finding #3. Not blocking. Owner: `@ios-engineer` — recount programmatically before writing commit messages/PR bodies, don't carry forward a prior pass's number without re-verifying.
+
+### Verdict
+
+**SHIP CLEAN.** Finding #1 (the only blocking-for-content-accuracy item from pass-1) is correctly and precisely fixed in both the doc and the view, in sync, with no scope creep and no plate-face regression. FT-12 tests 17/17, full suite 533/0 (builder said 532/0 — trivial, non-blocking recount nit, logged as #6). Pass-1's remaining open items are unchanged and correctly still owned by Kevin's on-device pass, not this fix:
+
+- **#2** — interactive Settings → Parking 101 tap-through, still not live-verified (same sandbox limitation as pass-1; not re-attempted this pass since it's out of scope for a Finding-#1-only re-review).
+- **#4** — `SignPlateView` 120pt fixed-width frame at `.accessibility3` Dynamic Type, still not live-verified.
+- **#5** — AC-12 screenshot artifacts still not embedded in the PR body (cosmetic, future-PR habit fix).
+
+None of these three block ship; they were already correctly scoped to Kevin's on-device pass in pass-1 and remain so.
