@@ -160,6 +160,11 @@ enum ActiveSheet: Identifiable {
     /// FT-11: segment added so ReportSheet can show the direction picker with real
     /// cross-street labels and block bearing. Nil when the long-press is off-segment (OD-1).
     case reportPin(coord: CLLocationCoordinate2D, streetName: String?, segment: Segment? = nil)
+    /// FT-12: Parking 101 guide, opened from the first-launch prompt banner tap.
+    /// (Settings' own entry point uses a plain NavigationLink inside its own
+    /// NavigationStack, not this case — this case exists only for the banner, which
+    /// lives outside any NavigationStack context.)
+    case parkingGuide
 
     var id: String {
         switch self {
@@ -173,6 +178,7 @@ enum ActiveSheet: Identifiable {
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
         case .reportPin(let coord, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
         case .signCheckConfirm(let intent): return "signCheckConfirm-\(intent.id)"
+        case .parkingGuide:               return "parkingGuide"
         }
     }
 }
@@ -401,6 +407,14 @@ struct ContentView: View {
     /// Set to true on the first-ever Drive Mode start if the gate key is not yet set.
     /// The gate itself is evaluated via BackgroundNoteGate; this bool drives the .alert.
     @State private var showDriveModeBackgroundNote: Bool = false
+
+    // MARK: - FT-12: Parking 101 first-launch banner
+
+    /// Controls visibility of `ParkingGuidePromptBanner` in `bottomSafeAreaContent`.
+    /// Set to true once at launch (in `performLaunchSetup`) if `ParkingGuidePromptGate`
+    /// says it hasn't been shown yet. Set back to false — and the gate marked shown —
+    /// on tap-to-open, X-dismiss, or the banner's own ~8s auto-hide timer.
+    @State private var showParkingGuideBanner: Bool = false
 
     // MARK: - TF2-16: Drive Mode heading snap-to-street
 
@@ -888,6 +902,20 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+
+        case .parkingGuide:
+            // FT-12: opened from the first-launch prompt banner tap. The banner's
+            // tap/dismiss handlers already call ParkingGuidePromptGate().markShown()
+            // and clear showParkingGuideBanner before this sheet presents.
+            NavigationStack {
+                ParkingGuideView()
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) {
+                            Button("Done") { activeSheet = nil }
+                        }
+                    }
+            }
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -1193,6 +1221,26 @@ struct ContentView: View {
                     clearParkUntilFilter()
                 }
             }
+            // FT-12: Parking 101 first-launch prompt banner. Never shown alongside
+            // the Drive Mode bottom card or the Park Until pill (AC-7) — both of the
+            // guards above already make those branches mutually exclusive with this one.
+            if showParkingGuideBanner && !driveModeActive && !parkUntilMode {
+                ParkingGuidePromptBanner(
+                    onOpenGuide: { dismissParkingGuideBanner(openGuide: true) },
+                    onDismiss: { dismissParkingGuideBanner(openGuide: false) }
+                )
+            }
+        }
+    }
+
+    /// Marks the FT-12 first-launch banner as shown (one-shot gate) and hides it.
+    /// Optionally opens `ParkingGuideView` via `ActiveSheet.parkingGuide`.
+    private func dismissParkingGuideBanner(openGuide: Bool) {
+        guard showParkingGuideBanner else { return }
+        ParkingGuidePromptGate().markShown()
+        showParkingGuideBanner = false
+        if openGuide {
+            activeSheet = .parkingGuide
         }
     }
 
@@ -1960,6 +2008,9 @@ struct ContentView: View {
         // W7: Initialize banner state.
         bannerState = aspService.suspensionState(at: .nowET)
 
+        // FT-12: Show the Parking 101 first-launch prompt banner at most once per install.
+        showParkingGuideBanner = ParkingGuidePromptGate().shouldShow()
+
         // Community 1.0 / Tier 1: wire Realtime subscription stub (no-op until prod schema live).
         pinService.startRealtime()
 
@@ -2045,6 +2096,12 @@ struct ContentView: View {
     // MARK: - Tap handling (unchanged from W4 — only gesture source changed)
 
     private func handleMapTap(at coordinate: CLLocationCoordinate2D) {
+        // FT-12: a tap anywhere on the map counts as "first interaction" — auto-hide
+        // the Parking 101 banner (spec §7 OQ-2) without opening the guide.
+        if showParkingGuideBanner {
+            dismissParkingGuideBanner(openGuide: false)
+        }
+
         guard !tileLoader.segments.isEmpty else {
             dismissBlockDetail()
             return

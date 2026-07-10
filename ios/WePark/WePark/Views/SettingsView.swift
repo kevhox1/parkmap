@@ -9,8 +9,11 @@
 //
 //  Content — four sections:
 //    Section 1 — Help:
+//      "Parking 101" row (FT-12) — NavigationLink to ParkingGuideView (beginner's
+//      manual: money math, sign-reading school, color legend, rookie mistakes).
 //      "Help & FAQ" row — NavigationLink to FAQHelpView (beginner NYC parking guide).
-//      Placed first so new users find it immediately without scrolling.
+//      "Parking 101" is placed above "Help & FAQ" (FT-12 spec §4) — the more
+//      welcoming/introductory surface for a first-time visitor to Settings.
 //
 //    Section 2 — Notifications:
 //      Toggle "Park-reminder notifications" — logical inverse of notificationsMutedKey.
@@ -72,6 +75,14 @@ struct SettingsView: View {
                 // MARK: Section 1 — Help
 
                 Section("Help") {
+                    // FT-12: "Parking 101" placed above "Help & FAQ" — the more
+                    // welcoming/introductory surface for a first-time visitor to Settings.
+                    NavigationLink {
+                        ParkingGuideView()
+                    } label: {
+                        Label("Parking 101", systemImage: "signpost.right.and.left")
+                    }
+
                     NavigationLink {
                         FAQHelpView()
                     } label: {
