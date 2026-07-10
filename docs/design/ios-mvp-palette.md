@@ -213,7 +213,7 @@ All interactive elements on the map — polyline tap areas, "Park here" button, 
 ## 6. Out of scope (future)
 
 - **Dark Mode custom palette tuning.** The system semantic colors handle the basics. If Kevin ships the app and runs it on a dark device and something looks off, that's a follow-up polish pass — not MVP.
-- **Drive Mode palette.** Drive Mode is explicitly deferred (§2.2 of `docs/ios-mvp-spec.md`). When it ports, the side-of-street highlight overlay will need its own stroke + opacity spec for a heading-up interface. Separate doc at that time.
+- **Drive Mode palette.** Drive Mode chip badges are now specified (§8, TF2-18). Still out of scope: a side-of-street highlight overlay directly ON the map itself for a heading-up interface — that remains deferred, separate doc at that time.
 - **Pro tier color theming.** `docs/business-model.md` describes a WePark Pro tier landing post-MVP. If Pro introduces a custom map theme, the palette extension should be handled then.
 - **Color legend UI.** A map legend ("what do the colors mean?") is useful but not MVP-blocking; first-time users will discover via tap. Add in v1.1 onboarding pass.
 
@@ -226,3 +226,49 @@ All interactive elements on the map — polyline tap areas, "Park here" button, 
 | 2026-05-10 (original) | Produced initial palette spec. Open questions: (1) severity-spectrum vs arbitrary color assignment, (2) banner state-3 wording, (3) unknown opacity. | Created doc. Proposed red/blue/orange/green. |
 | 2026-05-10 (this revision) | Severity-spectrum reframe (Kevin's direction). Open questions #2 and #3 closed. | Replaced blue (metered) with amber-yellow; replaced orange (ASP) to remain orange; reordered so red > orange > yellow > green encodes severity worst-to-best. Banner state-3 wording locked to "ASP in Effect Today". Unknown opacity locked to 0.35. Added §2.3 legibility mitigations for yellow. Updated accessibility section with honest colorblind analysis. |
 | 2026-05-11 | `nearFutureWindow` lowered from 24h to 6h. Dual-persona analysis surfaced during W4 verification; 6h chosen to serve the short-stay visitor as the primary map-color persona. Overnight resident served by text label + W6 notification. See `docs/ios-color-threshold-spec.md`. |  |
+| 2026-07-10 (TF2-18) | Drive Mode bottom-card chip badges specified — solid-fill severity background + dark text (§8), replacing the WCAG-failing `opacity(0.15)` tint pattern. Restores the orange "restriction coming soon" tier to Drive Mode via the same `ParkingColors.restrictionComingSoon`. See `docs/design/drive-mode-ui-review-2026-07-09.md` (P1-1/P1-2) for the full review this section implements. | Added §8. |
+
+---
+
+## 8. Drive Mode chip badges (TF2-18)
+
+`ios/WePark/WePark/Views/DriveModeBottomCard.swift` renders two "Left"/"Right" severity
+chips in the Drive Mode bottom card. Pre-TF2-18 these used the same `opacity(0.15)`
+tinted-background-with-saturated-text pattern as an early map-legend sketch — that
+pattern computes to roughly 1.4–2.6:1 contrast in Light Mode (fails WCAG AA's 3:1
+large-text floor at every severity) while the same pattern computes to ~9.8:1 in Dark
+Mode. TF2-18 (design review `docs/design/drive-mode-ui-review-2026-07-09.md`, finding
+P1-1) replaced this with a solid-fill badge, matching the `ASPBanner` pattern that was
+already correct:
+
+| Severity | Background | Text | Computed contrast (Light) | Computed contrast (Dark) |
+|---|---|---|---|---|
+| `.free` | `ParkingColors.freeComfortably` (`Color.green`) | `Color.black` | 9.46:1 | 10.39:1 |
+| `.comingSoon` (new, TF2-18 P1-2) | `ParkingColors.restrictionComingSoon` (`Color.orange`) | `Color.black` | 9.55:1 | 10.22:1 |
+| `.metered` | `ParkingColors.meteredActive` (amber `0.92, 0.76, 0.0`) | `Color(red: 0.15, green: 0.10, blue: 0.0)` (same near-black `ASPBanner` already uses for `.aspInEffect`) | 9.93:1 | 9.93:1 (fixed hex, doesn't adapt — see §5.2) |
+| `.restricted` | `ParkingColors.restricted` (`Color.red`) | `Color.black` | 5.92:1 | 6.16:1 |
+| `.unknown` | `Color(.secondarySystemGroupedBackground)` (unchanged) | `Color.secondary` (unchanged) | n/a — system colors, not severity-tinted | n/a |
+
+**Deviation from the design review's literal suggestion:** the review recommended white
+text for the red/green chips ("both dark enough"). Computed contrast against the actual
+solid-fill backgrounds shows this is wrong — white-on-`Color.green` is 2.22:1 (fails even
+the 3:1 large-text floor) and white-on-`Color.red` is 3.55:1 (fails the 4.5:1 normal-text
+floor the chip's `.subheadline`/`.medium` text needs, since it isn't reliably "large text"
+per WCAG's bold/size thresholds). Dark text clears AA normal-text on every severity in
+both appearances instead. The review's underlying INTENT (WCAG-passing solid-fill chips,
+matching `ASPBanner`) is preserved — only the specific text-color choice for red/green
+changed. Flagged explicitly in the TF2-17/TF2-18 PR description per the spec-fidelity
+norm.
+
+**`.comingSoon` (TF2-18 P1-2):** a new `SafetyLabel.Severity` / `SideOpportunity` case,
+orthogonal to this doc's existing `CurrentState.freeButRestrictionSoon` (§2.1 row 2) but
+computed at the Drive Mode SIDE-AGGREGATION layer (`DrivingContextService.aggregateSideDetail`)
+rather than the per-segment map layer (`ParkingRulesEngine.currentState`) — it restores the
+same orange warning tier to the one surface (Drive Mode) where it had been silently
+collapsing into green `.free`. Same `ParkingColors.restrictionComingSoon` color, same 6h
+`ParkingRulesEngine.nearFutureWindowHours` threshold (exposed `internal` specifically so
+this call site can reuse the exact constant — no second hardcoded "6h" literal).
+
+Chip text now also carries TF2-17's detailed "Free until X" string (e.g. "Free until
+Wednesday 9:30 AM") instead of the generic "Free — check signs" whenever the engine has a
+specific upcoming restriction to report — see `docs/tf2-17-chip-free-until-spec.md`.

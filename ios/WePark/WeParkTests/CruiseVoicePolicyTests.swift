@@ -52,6 +52,7 @@ final class CruiseVoicePolicyTests: XCTestCase {
     private func labelText(for severity: SafetyLabel.Severity) -> String {
         switch severity {
         case .free:       return "Free until 9 AM"
+        case .comingSoon: return "Free until 9 AM"  // TF2-18: comingSoon is voice-equivalent to free
         case .metered:    return "Metered"
         case .restricted: return "No parking"
         case .unknown:    return "No data"

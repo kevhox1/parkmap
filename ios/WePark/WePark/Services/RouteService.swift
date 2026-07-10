@@ -291,6 +291,14 @@ extension RouteService {
                     score += 1
                 case .restricted, .unknown:
                     break
+                case .comingSoon:
+                    // TF2-18: unreachable in practice — `ParkingRulesEngine.safetyLabel(for:at:)`
+                    // (called above) still only ever returns free/metered/restricted/unknown;
+                    // `.comingSoon` is produced exclusively by
+                    // `DrivingContextService.aggregateSideDetail`'s side-aggregation layer,
+                    // which this route-scoring code never touches. Branch exists only because
+                    // `SafetyLabel.Severity` gained a case and Swift requires exhaustiveness.
+                    break
                 }
             }
 

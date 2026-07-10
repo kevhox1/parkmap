@@ -5,13 +5,27 @@
 //  W8.5c: Drive Mode bottom card UI.
 //  W8.5c-polish PR-1: Distance-to-destination indicator added (Feature A).
 //  W8.5d: Final-approach escalation strip wired (showApproachStrip parameter).
+//  TF2-17: chips now render the detailed "Free until X" text (via
+//    `SafetyLabel(for: SideAggregation)` upstream) instead of the generic
+//    "Free — check signs" — no view-code change needed for that part, `chipView` already
+//    renders `safetyLabel.text` verbatim.
+//  TF2-18 design pass (2026-07-09 review):
+//    P1-1: chips switched from tinted-background/saturated-text (WCAG-failing in Light
+//      Mode, ~1.4–2.6:1) to solid-fill severity background + dark text (~4.9–12:1 in both
+//      appearances — see `chipTextColor`/`chipBackgroundColor` for exact values and the PR
+//      description for computed ratios). Matches the already-correct `ASPBanner` pattern.
+//    P1-2: chips gained a `.comingSoon` (orange) tier — see `SafetyLabel.Severity.comingSoon`.
+//    P2-5: Left/Right chips changed from side-by-side to stacked (full card width each) to
+//      give TF2-17's longer "Free until X" copy room to render on one line without shrinking
+//      to the 0.75 minimumScaleFactor floor.
 //
 //  Port of `renderDrivingContext` (index.html:5863–5910) adapted to SwiftUI.
 //
 //  Layout (OQ-1: full-width, pinned to bottom safe area via .safeAreaInset(edge: .bottom)):
 //    - (W8.5d) Final-approach strip at top of card when showApproachStrip == true
 //    - Street name row (headline) with optional distance-to-destination indicator (top-right)
-//    - Two chips side-by-side: Left / Right, color-coded by severity
+//    - Two chips STACKED (TF2-18 P2-5): Left row, then Right row, each full card width,
+//      color-coded by severity (solid-fill, TF2-18 P1-1)
 //    - Mute toggle button (speaker.wave.2.fill / speaker.slash.fill)
 //
 //  Font sizes use system defaults. Calibration deferred to W8.5c-follow post-drive-test.
@@ -26,7 +40,7 @@
 //      Shown at Drive Mode start before DrivingContextService has a fix, or when driving
 //      in a gap between tile coverage areas.
 //    - context != nil: GPS matched to a block → street name + left/right severity chips.
-//      Chips color-code parking severity per the W4.5 palette.
+//      Chips color-code parking severity per the W4.5 palette (TF2-18: solid-fill, see above).
 //
 
 import SwiftUI
@@ -122,8 +136,12 @@ struct DriveModeBottomCard: View {
                 }
                 .padding(.horizontal, 16)
 
-                // Left / Right chips
-                HStack(spacing: 12) {
+                // TF2-18 P2-5: Left / Right chips STACKED (was HStack side-by-side).
+                // Each chip gets the full card width (~358pt after padding on a 390pt phone),
+                // comfortably fitting TF2-17's longer "Free until Wednesday 9:30 AM" copy on
+                // one line — side-by-side gave each chip only ~149pt, which routinely wrapped
+                // to 2 lines and hit the 0.75 minimumScaleFactor floor (review §P2-5).
+                VStack(spacing: 8) {
                     chipView(label: "Left", safetyLabel: ctx.leftLabel)
                     chipView(label: "Right", safetyLabel: ctx.rightLabel)
                 }
@@ -163,7 +181,7 @@ struct DriveModeBottomCard: View {
                 .font(.subheadline)
                 .fontWeight(.medium)
                 .lineLimit(2)
-                .minimumScaleFactor(0.75)
+                .minimumScaleFactor(0.9)
                 .foregroundStyle(chipTextColor(for: safetyLabel.severity))
         }
         .padding(.horizontal, 12)
@@ -172,25 +190,57 @@ struct DriveModeBottomCard: View {
         .background(chipBackgroundColor(for: safetyLabel.severity), in: RoundedRectangle(cornerRadius: 10))
     }
 
-    // MARK: - Severity palette (port of W4.5 / ParkingColors)
+    // MARK: - Severity palette (TF2-18 P1-1: solid-fill, WCAG-fixed)
 
-    /// Chip background color per severity (W4.5 palette).
+    /// TF2-18 P1-1: near-black text color reused verbatim from `ASPBanner.swift`'s
+    /// `.aspInEffect` amber-in-effect pairing (`Color(red: 0.15, green: 0.10, blue: 0.0)`).
+    /// Computes ~9.9:1 against the amber chip background — see PR description for the full
+    /// contrast table. Kept as its own named constant here (not moved into `ParkingColors`)
+    /// because it's a TEXT color, not a severity color — `ParkingColors` is documented as
+    /// severity-background-only (see that file's header comment).
+    private static let chipDarkText = Color(red: 0.15, green: 0.10, blue: 0.0)
+
+    /// Chip background color per severity.
+    ///
+    /// TF2-18 P1-1: solid-fill (no `.opacity()`) — the pre-existing `.opacity(0.15)` tint
+    /// under full-saturation text computed to ~1.4–2.6:1 in Light Mode (WCAG AA fail at
+    /// every severity). Matches the `ASPBanner` pattern, which was already solid-fill +
+    /// dark/light text and already computed ~9.9:1.
+    ///
+    /// P1-2: added `.comingSoon` → `ParkingColors.restrictionComingSoon` (orange), restoring
+    /// the map's "restriction coming soon" warning tier to Drive Mode.
+    ///
+    /// `.unknown` is unchanged (review: "already uses a system color, not a tinted-self
+    /// color, and is fine").
     private func chipBackgroundColor(for severity: SafetyLabel.Severity) -> Color {
         switch severity {
-        case .free:       return ParkingColors.freeComfortably.opacity(0.15)
-        case .metered:    return ParkingColors.meteredActive.opacity(0.15)
-        case .restricted: return ParkingColors.restricted.opacity(0.15)
+        case .free:       return ParkingColors.freeComfortably
+        case .comingSoon: return ParkingColors.restrictionComingSoon
+        case .metered:    return ParkingColors.meteredActive
+        case .restricted: return ParkingColors.restricted
         case .unknown:    return Color(.secondarySystemGroupedBackground)
         }
     }
 
     /// Chip foreground text color per severity.
+    ///
+    /// TF2-18 P1-1 override (review said "white for red/green"; computed contrast against
+    /// the actual solid-fill backgrounds shows white fails badly — 2.22:1 on green,
+    /// 3.55:1 on red, both below WCAG AA's 3:1 large-text floor, and red is below the 4.5:1
+    /// normal-text floor too). Using dark text everywhere clears AA normal-text on all four
+    /// severities in BOTH Light and Dark Mode (system Red/Green/Orange shift slightly
+    /// brighter in Dark Mode, which only increases contrast against a dark foreground).
+    /// See PR description for the full before/after ratio table. This is a flagged deviation
+    /// from the review's literal text-color suggestion — the review's own INTENT (WCAG-passing
+    /// solid-fill chips) is preserved; only the specific "white" choice for red/green changes.
     private func chipTextColor(for severity: SafetyLabel.Severity) -> Color {
         switch severity {
-        case .free:       return ParkingColors.freeComfortably
-        case .metered:    return ParkingColors.meteredActive
-        case .restricted: return ParkingColors.restricted
-        case .unknown:    return Color.secondary
+        case .free, .comingSoon, .restricted:
+            return .black
+        case .metered:
+            return DriveModeBottomCard.chipDarkText
+        case .unknown:
+            return Color.secondary
         }
     }
 
@@ -247,7 +297,10 @@ struct DriveModeBottomCard: View {
     }
 }
 
-#Preview {
+// TF2-17 AC-14: preview literal updated from the stale hand-typed "Free until Thu 9:30am"
+// to a realistic engine-formatted example matching `nextRestrictionTimeLabel`'s actual
+// "\(dayLabel) \(h:mm a)" format — full weekday name, space before AM/PM.
+#Preview("Light Mode") {
     let voice = DrivingVoice()
     VStack {
         Spacer()
@@ -256,11 +309,34 @@ struct DriveModeBottomCard: View {
                 street: "W 34 ST",
                 from: "7 AVE",
                 to: "8 AVE",
-                leftLabel: SafetyLabel(text: "Free until Thu 9:30am", severity: .free),
+                leftLabel: SafetyLabel(text: "Free until Wednesday 9:30 AM", severity: .free),
                 rightLabel: SafetyLabel(text: "No parking", severity: .restricted)
             ),
             voiceService: voice
         )
     }
     .background(Color(.systemGroupedBackground))
+    .preferredColorScheme(.light)
+}
+
+// TF2-18 P1-2 preview: .comingSoon (orange) tier + worst-case text-length fixture
+// (TF2-17 spec §6.3 / AC-12 — "Free until Wednesday 11:45 PM", 30 chars).
+#Preview("Dark Mode — comingSoon + worst-case text") {
+    let voice = DrivingVoice()
+    VStack {
+        Spacer()
+        DriveModeBottomCard(
+            context: DrivingContext(
+                street: "FREDERICK DOUGLASS BLVD",
+                from: "W 145 ST",
+                to: "W 146 ST",
+                leftLabel: SafetyLabel(text: "Free until Wednesday 11:45 PM", severity: .comingSoon),
+                rightLabel: SafetyLabel(text: "Metered (paid until 7pm)", severity: .metered)
+            ),
+            voiceService: voice,
+            destinationDistance: 482
+        )
+    }
+    .background(Color(.systemGroupedBackground))
+    .preferredColorScheme(.dark)
 }
