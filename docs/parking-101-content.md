@@ -54,13 +54,16 @@ There's no broom icon on the actual sign — just the restriction, the days, and
 window. Outside that window, or on a suspended day, you're free to park there.
 
 **The 3-tier restriction ladder.** The single most-misunderstood distinction for new
-drivers — what's actually allowed depends on which of the three you're reading:
+drivers — and the actual legal test between the first two tiers is *what* you're
+allowed to load: No Parking permits passengers **or merchandise**; No Standing
+permits passengers **only**, never cargo. That's the real difference, not whether the
+driver stays in the car:
 
 | Sign says | You may... | You may NOT... |
 |---|---|---|
-| **NO PARKING** | Stop briefly to load/unload with the driver present | Leave the car unattended |
-| **NO STANDING** | Actively pick up or drop off passengers only | Remain in the car, even briefly, for anything else |
-| **NO STOPPING** | Nothing — keep moving | Stop at all, not even to drop someone off |
+| **NO PARKING** | Stop to actively load or unload passengers **or merchandise** | Leave the car parked, or idle with no active loading/unloading happening |
+| **NO STANDING** | Stop to actively pick up or drop off **passengers only** — no merchandise | Load or unload cargo, or remain in the car for any other reason |
+| **NO STOPPING** | Nothing, except to obey a traffic signal, sign, or a police officer | Stop for any other reason, not even to drop someone off |
 
 **Metered / Muni-Meter signs.**
 A plate reading **"PAY TO PARK 8AM-7PM"** (or similar) means: pay during those posted

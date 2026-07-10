@@ -63,7 +63,7 @@ struct SignSchoolSectionView: View {
                 .font(.subheadline)
                 .fontWeight(.semibold)
 
-            Text("The single most-misunderstood distinction for new drivers — what's actually allowed depends on which of the three you're reading.")
+            Text("The single most-misunderstood distinction for new drivers — and the actual legal test between the first two tiers is what you're allowed to load: No Parking permits passengers or merchandise; No Standing permits passengers only, never cargo. That's the real difference, not whether the driver stays in the car.")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
 
@@ -74,8 +74,8 @@ struct SignSchoolSectionView: View {
                         borderColor: .black,
                         accessibilityDescription: "Sign reads: No Parking"
                     ),
-                    allowed: "Stop briefly to load/unload with the driver present",
-                    notAllowed: "Leave the car unattended"
+                    allowed: "Stop to actively load or unload passengers or merchandise",
+                    notAllowed: "Leave the car parked, or idle with no active loading/unloading happening"
                 )
                 ladderRow(
                     plate: SignPlateView(
@@ -83,8 +83,8 @@ struct SignSchoolSectionView: View {
                         borderColor: .red,
                         accessibilityDescription: "Sign reads: No Standing"
                     ),
-                    allowed: "Actively pick up or drop off passengers only",
-                    notAllowed: "Remain in the car, even briefly, for anything else"
+                    allowed: "Stop to actively pick up or drop off passengers only — no merchandise",
+                    notAllowed: "Load or unload cargo, or remain in the car for any other reason"
                 )
                 ladderRow(
                     plate: SignPlateView(
@@ -92,8 +92,8 @@ struct SignSchoolSectionView: View {
                         borderColor: .red,
                         accessibilityDescription: "Sign reads: No Stopping"
                     ),
-                    allowed: "Nothing — keep moving",
-                    notAllowed: "Stop at all, not even to drop someone off"
+                    allowed: "Nothing, except to obey a traffic signal, sign, or a police officer",
+                    notAllowed: "Stop for any other reason, not even to drop someone off"
                 )
             }
         }
