@@ -416,6 +416,22 @@ struct ContentView: View {
     /// on tap-to-open, X-dismiss, or the banner's own ~8s auto-hide timer.
     @State private var showParkingGuideBanner: Bool = false
 
+    // MARK: - TF2-16: Drive Mode heading snap-to-street
+
+    /// Which heading source currently drives the camera/puck: raw GPS course, or the
+    /// matched street segment's own travel-direction bearing (low-confidence snap).
+    /// Updated per-tick in `handleLocationUpdate()` via `DriveHeadingSnap.nextHeadingSource`.
+    /// Reset to `.course` on Drive Mode entry and exit (same reset pattern as `followPaused`
+    /// / `currentDriveAltitude`).
+    @State private var driveHeadingSource: HeadingSourceKind = .course
+
+    /// The heading value actually fed to `MapViewRepresentable(driveHeading:)`. Equal to
+    /// `locationService.driveHeading` when `driveHeadingSource == .course`, or the
+    /// street-snap bearing from `DriveHeadingSnap.snappedHeading` when `.streetSnap`.
+    /// Reset to `nil` on Drive Mode exit (mirrors `locationService.driveHeading` resetting
+    /// to `nil` in `endDriveMode()`).
+    @State private var effectiveDriveHeading: Double? = nil
+
     // MARK: - CM-3: Drive Mode style (destination / cruise / inactive)
 
     /// Explicit mode discriminant for Drive Mode variants.
@@ -1170,7 +1186,7 @@ struct ContentView: View {
             communityPins: communityPins,
             onCommunityPinTapped: handleCommunityPinTapped(_:),
             segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
-            driveHeading: locationService.driveHeading,
+            driveHeading: effectiveDriveHeading,  // TF2-16: course, or street-snap at low confidence
             driveModeActive: driveModeActive,
             onDrivePanDetected: handleDrivePanDetected,
             onDrivePinchZoomed: handleDrivePinchZoomed(_:),
@@ -1776,6 +1792,9 @@ struct ContentView: View {
             locationService.startDriveMode()
             // Option A: followPaused starts false — follow is active from the first GPS tick.
             followPaused = false
+            // TF2-16: reset heading-snap state for the new session.
+            driveHeadingSource = .course
+            effectiveDriveHeading = nil
             // currentDriveAltitude initialized in handleDriveModeAndCamera (after the entry
             // setCamera has applied so we don't capture the pre-transition altitude here).
             // Create DrivingContextService and wire the voice service.
@@ -1811,6 +1830,9 @@ struct ContentView: View {
             // Option A: clear follow state on Drive Mode exit.
             followPaused = false
             currentDriveAltitude = 0
+            // TF2-16: reset heading-snap state on exit.
+            driveHeadingSource = .course
+            effectiveDriveHeading = nil
             // Deactivate audio session.
             AudioSessionManager.shared.deactivateDriveSession()
             // W8.5d: Reset final-approach state for the next session.
@@ -1927,6 +1949,34 @@ struct ContentView: View {
                     engine: engine
                 )
                 drivingContext = service.currentContext
+
+                // TF2-16: heading-source selection (hysteresis) + street-snap bearing.
+                // Runs here — inside the existing .onChange(of: locationUpdateCount)-driven,
+                // outside-updateUIView location Option A already uses for setDriveCamera —
+                // NOT inside MapViewRepresentable.updateUIView (spec §6.2 / #31 discipline).
+                let nextSource = DriveHeadingSnap.nextHeadingSource(
+                    current: driveHeadingSource,
+                    hasBlockMatch: service.matchedSegment != nil,
+                    speed: max(0, locationService.driveSpeed ?? 0),
+                    courseAccuracy: locationService.driveCourseAccuracy
+                )
+                driveHeadingSource = nextSource
+                switch nextSource {
+                case .course:
+                    effectiveDriveHeading = locationService.driveHeading
+                case .streetSnap:
+                    if let segment = service.matchedSegment {
+                        effectiveDriveHeading = DriveHeadingSnap.snappedHeading(
+                            segment: segment,
+                            lastGoodHeading: locationService.driveHeading
+                        )
+                    } else {
+                        // Defensive fallback — nextHeadingSource only returns .streetSnap
+                        // when hasBlockMatch was true, so this branch is unreachable in
+                        // practice; kept to avoid a force-unwrap.
+                        effectiveDriveHeading = locationService.driveHeading
+                    }
+                }
             }
             // W8.5c-polish PR-1 (Feature A): update distance to destination.
             let clLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)

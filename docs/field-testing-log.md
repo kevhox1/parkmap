@@ -29,10 +29,30 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   or misassigned rules on the allow-list streets (Houston/Bowery/Allen/Forsyth/Delancey); (b) side
   gap — rules on one curb, opposite-side segment empty → renders free; (c) zone-cap / stub-filter
   over-trim from regens 4–5; (d) engine daytime mapping regression (less likely — FT-9 verified it).
-- **Status:** 🔴 investigation dispatched (backend-data, read-only) 2026-07-09 — diff Houston/Bowery
-  segment rules in shipped tiles pre- vs post-regen-5, check both curbs, verify engine daytime
-  states. Report → docs/qa/.
-- **Lands in:** tiles pipeline regen 6 and/or iOS rules engine — TBD by investigation.
+- **ROOT CAUSE FOUND (backend-data, `docs/qa/tf2-19-houston-bowery-free-investigation.md`):** regen 5
+  silently shipped an INCOMPLETE pull of the MAIN Socrata sign dataset (`nfid-uabd`) — unrelated to
+  the TF2-14 code (curb-offset diff never touches the fetch/rule path). Evidence: citywide pre/post
+  diff across ~988 tiles shows METERED −48.1%, NO_PARKING −46.6%, NO_STANDING −42.0%, TRUCK_LOADING
+  −37.7% while every ASP_* category (separate fetch) held flat (≤0.5%); geometry-identical segments
+  lost rule content outright. `fetchSocrataDataset()` is fragile: no retry (bare `break` on error),
+  no `$order`, no app token, no completeness validation — MAIN is ~16 pages vs ASP ~5, far more
+  exposed to a mid-pull failure. Engine EXONERATED (correctly renders the defective data — the
+  opposite failure mode from FT-9). iOS bundle tiles byte-identical to `tiles/` (not packaging).
+- **⚠️ BUILD-13 IMPLICATION: tiles in build 13 are defective citywide** — restricted curbs render
+  free block-by-block unpredictably. Do NOT upload 13 to TestFlight; regen 6 → build 14.
+- **Status:** 🟢 MERGED #63 (`5f76b6b`, 2026-07-09) → **PWA HEALED (cache v38 live)**; iOS fix rides
+  build 14. Hardened fetch: retry+backoff, `$order=:id` stable pagination, optional app token,
+  fail-CLOSED count(*) completeness gate (aborts build before any tile write — QA pass-2 verified
+  incl. NaN-parse edge). Regen 6 measured + independently recounted by QA byte-for-byte: METERED
+  6,673→15,153, NO_STANDING 9,373→18,978, ASP flat, corridors recovered on identical geometry,
+  TF2-14 offsets unchanged. Duplication-vs-recovery adversarial check → benign recovery (dup-rule
+  ratio flat ~32-33% across snapshots); regen 6 is likely the first genuinely COMPLETE pull ever
+  (old fetch had no `$order` → every prior regen plausibly missed rows). QA: pass 1 SHIP WITH
+  CAVEATS → fail-closed fix `139f738` → pass 2 SHIP CLEAN (`docs/qa/tf2-19-regen6-qa.md`).
+  ⏳ Kevin on-device: Houston/Bowery should read metered/no-standing daytime (build 14 / PWA now).
+- **Follow-up (pwa-maintainer, minor):** `index.html` `APP_VERSION` stuck at v36 vs sw.js v38 —
+  cosmetic debug-chip drift, QA pass-1 Finding #2.
+- **Lands in:** `build/preprocess.js` + tiles regen 6 (PWA + iOS Resources) + sw.js. No engine change.
 
 ### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
 - **Area:** Drive Mode heading source. `LocationService` heading stabilizer + `MapViewRepresentable.syncDriveHeading`.
@@ -48,10 +68,18 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   streets: segment bearing in whichever direction is closer to last good course. Hysteresis so the
   source doesn't flip-flop. ⚠️ #31-sensitive camera path → tech-lead spec + worktree engineer + QA +
   live-UI smoke gate + Kevin drive-test.
-- **Status:** 🟡 SPEC FILED (`docs/tf2-16-heading-snap-spec.md`, 2026-07-09) — all OQs resolved,
-  awaiting Kevin approval → ios-engineer. Design keeps zero diff to MapViewRepresentable
-  (syncDriveHeading stays the sole #31 exception); hysteresis gates on speed+courseAccuracy only
-  (NOT course/EMA disagreement — that's the signature of a real turn, would fight it).
+- **Status:** 🟢 MERGED #64 (`329647d`, 2026-07-09) → build 14. Pure hysteresis state machine in
+  new `Services/DriveHeadingSnap.swift` (speed+courseAccuracy gating only — course/EMA disagreement
+  deliberately excluded as it's the signature of a real turn); wiring confined to
+  `ContentView.handleLocationUpdate`; ZERO diff to MapViewRepresentable (verified by builder + QA
+  independently). 533/0 tests (+18), deterministic across runs; hysteresis boundaries hand-traced
+  by QA (wraparound, at-threshold, turn-recovery) — clean. QA SHIP WITH CAVEATS
+  (`docs/qa/tf2-16-heading-snap-qa.md`): the only Significant is that live Drive-Mode-entry
+  screenshot is unexercisable in sandbox (no gesture injection) — covered by the stronger gate.
+  ⏳ Kevin on-device drive-test (build 14) = the gate: heading locks to street at intersection
+  approaches, no spin/hunt, hands back to GPS course through turns.
+- **Nits → tech-debt batch:** `snappedHeading` `lastGoodHeading` doc comment overstates
+  ("last trustworthy EMA before confidence dropped" vs actual live current-tick EMA); cosmetic.
 - **Lands in:** iOS (new `Services/DriveHeadingSnap.swift`, `LocationService.swift`,
   `ContentView.handleLocationUpdate`, `DrivingContextService.matchedSegment` exposure).
 
@@ -127,6 +155,12 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   - Option A nits (PR #62): onDrivePinchZoomed doc says !followPaused (fires regardless); FT10Tests
     header test-count arithmetic wrong (says 525, actual 514); stale isUserInteracting comment refs
     deleted shouldSyncDriveRegion.
+  - TF2-16 nit (PR #64): `DriveHeadingSnap.snappedHeading` `lastGoodHeading` doc comment overstates
+    trustworthiness (actual value is live current-tick EMA in the 0.5–1.5 m/s band). Comment-only.
+  - Polyline non-render at cold launch in SIM (fixed-location conditions): reproduced identically on
+    main pre-TF2-16 by QA — pre-existing, likely the launch-recenter vs rebuildOverlays timing gap
+    (only re-triggered by 60s timer/segment/selection change). Sim-observed; Kevin has NOT reported
+    it on-device. Own ticket if it shows up in the field.
 
 ## TF2 Round 1 — on-device testing of build 1.0(2) (2026-06-08 evening)
 
