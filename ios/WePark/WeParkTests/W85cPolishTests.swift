@@ -145,20 +145,26 @@ final class EndDrivePillZOrderTests: XCTestCase {
     /// This is a pure logic test against `paddingForBannerState(_:)` — the actual view
     /// layout is verified by live-UI smoke (documented in the PR description). Live-UI smoke
     /// is mandatory per the merge gate established after the W8.5c-polish revert.
+    ///
+    /// TF2-18 P2-2: value raised from 44 to 100 to align the two Drive Mode toolbar
+    /// clusters (top-left End Drive/Report/Park Here vs. top-right Find me/Find car/Park
+    /// Until/Drive, which has always used a hardcoded 100pt offset) — see
+    /// `paddingForBannerState`'s doc comment for the full rationale. The `> 0` clearance
+    /// invariant this test group exists to guard is unaffected.
     func testEndDrivePillOffset_aspInEffect_clearsBanner() {
         let padding = paddingForBannerState(.aspInEffect)
         XCTAssertGreaterThan(padding, 0, "End Drive pill must have non-zero top padding when ASP is in effect — the amber banner is visible and the pill must clear it")
-        XCTAssertEqual(padding, 44, "End Drive pill should have 44pt top padding for .aspInEffect")
+        XCTAssertEqual(padding, 100, "End Drive pill should have 100pt top padding for .aspInEffect (TF2-18 P2-2 — matches recenterButtonStack's offset)")
     }
 
     func testEndDrivePillOffset_todaySuspended_is44() {
         let padding = paddingForBannerState(.todaySuspended(reason: "Memorial Day"))
-        XCTAssertEqual(padding, 44, "End Drive pill should have 44pt top padding when ASP is suspended today")
+        XCTAssertEqual(padding, 100, "End Drive pill should have 100pt top padding when ASP is suspended today (TF2-18 P2-2)")
     }
 
     func testEndDrivePillOffset_tomorrowSuspended_is44() {
         let padding = paddingForBannerState(.tomorrowSuspended(reason: "Independence Day"))
-        XCTAssertEqual(padding, 44, "End Drive pill should have 44pt top padding when ASP is suspended tomorrow")
+        XCTAssertEqual(padding, 100, "End Drive pill should have 100pt top padding when ASP is suspended tomorrow (TF2-18 P2-2)")
     }
 
     // MARK: - Test 10: All visible-banner states return non-zero clearance
@@ -181,5 +187,50 @@ final class EndDrivePillZOrderTests: XCTestCase {
                 "paddingForBannerState(\(state)) must return non-zero clearance — banner is visible in this state"
             )
         }
+    }
+}
+
+// MARK: - TF2-18 P1-3: Recenter Pill Bottom Clearance Tests
+
+final class RecenterPillBottomPaddingTests: XCTestCase {
+
+    /// Base case: no approach strip, no Park Until pill — just the bottom card.
+    func testRecenterPillBottomPadding_cardOnly() {
+        let padding = recenterPillBottomPadding(showApproachStrip: false, parkUntilVisible: false)
+        XCTAssertEqual(padding, 148, "Base card clearance should be 140 + 8pt gap = 148")
+    }
+
+    /// Card + approach strip.
+    func testRecenterPillBottomPadding_cardPlusApproachStrip() {
+        let padding = recenterPillBottomPadding(showApproachStrip: true, parkUntilVisible: false)
+        XCTAssertEqual(padding, 178, "Card + strip clearance should be 140 + 30 + 8pt gap = 178")
+    }
+
+    /// Card + Park Until pill.
+    func testRecenterPillBottomPadding_cardPlusParkUntilPill() {
+        let padding = recenterPillBottomPadding(showApproachStrip: false, parkUntilVisible: true)
+        XCTAssertEqual(padding, 206, "Card + Park Until pill clearance should be 140 + 58 + 8pt gap = 206")
+    }
+
+    /// Card + approach strip + Park Until pill (the tallest combination).
+    func testRecenterPillBottomPadding_cardPlusStripPlusParkUntilPill() {
+        let padding = recenterPillBottomPadding(showApproachStrip: true, parkUntilVisible: true)
+        XCTAssertEqual(padding, 236, "Card + strip + Park Until pill clearance should be 140 + 30 + 58 + 8pt gap = 236")
+    }
+
+    /// Invariant: clearance is always positive and monotonically non-decreasing as more
+    /// stack elements are added — the pill should never get LESS clearance when more UI
+    /// is on screen below it.
+    func testRecenterPillBottomPadding_monotonicAcrossCombinations() {
+        let cardOnly = recenterPillBottomPadding(showApproachStrip: false, parkUntilVisible: false)
+        let plusStrip = recenterPillBottomPadding(showApproachStrip: true, parkUntilVisible: false)
+        let plusPill = recenterPillBottomPadding(showApproachStrip: false, parkUntilVisible: true)
+        let plusBoth = recenterPillBottomPadding(showApproachStrip: true, parkUntilVisible: true)
+
+        XCTAssertGreaterThan(cardOnly, 0, "Base clearance must be positive")
+        XCTAssertGreaterThanOrEqual(plusStrip, cardOnly, "Adding the approach strip must not shrink clearance")
+        XCTAssertGreaterThanOrEqual(plusPill, cardOnly, "Adding the Park Until pill must not shrink clearance")
+        XCTAssertGreaterThanOrEqual(plusBoth, plusStrip, "Adding both must be >= adding either alone")
+        XCTAssertGreaterThanOrEqual(plusBoth, plusPill, "Adding both must be >= adding either alone")
     }
 }

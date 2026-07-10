@@ -193,16 +193,22 @@ struct SignCheckConfirmView: View {
 
             Spacer()
 
-            // Optional checkbox (educational affordance — does not gate confirm button)
-            Image(systemName: checked[index] ? "checkmark.circle.fill" : "circle")
-                .font(.system(size: 22))
-                .foregroundStyle(checked[index] ? Color.accentColor : Color.secondary)
-                .onTapGesture {
-                    checked[index].toggle()
-                }
-                .accessibilityLabel(checked[index] ? "Checked" : "Unchecked")
-                .accessibilityHint("Optional — tap to mark as reviewed.")
-                .accessibilityAddTraits(.isButton)
+            // Optional checkbox (educational affordance — does not gate confirm button).
+            // TF2-18 P2-6: wrapped in a Button with an explicit 44×44 frame — the previous
+            // `onTapGesture` on a bare 22pt glyph gave an effective ~22×22pt hit area, below
+            // the HIG 44×44pt interactive-element minimum (review finding P2-6). `Button`
+            // also picks up standard accessibility behavior for free.
+            Button {
+                checked[index].toggle()
+            } label: {
+                Image(systemName: checked[index] ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 22))
+                    .foregroundStyle(checked[index] ? Color.accentColor : Color.secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel(checked[index] ? "Checked" : "Unchecked")
+            .accessibilityHint("Optional — tap to mark as reviewed.")
         }
     }
 }

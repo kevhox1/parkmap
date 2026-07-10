@@ -1348,7 +1348,12 @@ struct ContentView: View {
             // is shown inline to the right of the pill (AC-CM.11).
             // W8.5c-polish PR-1 (Feature B): extra top padding clears the ASP banner
             // when the banner is visible (see endDrivePillTopPadding computed property).
-            HStack(spacing: 8) {
+            // TF2-18 P2-1: all four buttons share one anatomy (capsule + Label(icon+text),
+            // explicit .frame(minHeight: 44)) except the icon-only mute toggle, which keeps
+            // its square glyph (a persistent toggle, not an action button) but now shares the
+            // same explicit 44pt minimum height. Spacing standardized to 10 (review finding
+            // P2-1 — "four buttons, three visual shapes... doesn't read as one toolbar").
+            HStack(spacing: 10) {
                 Button {
                     endDriveMode()
                 } label: {
@@ -1359,6 +1364,7 @@ struct ContentView: View {
                     .font(.subheadline.weight(.semibold))
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
+                    .frame(minHeight: 44)
                     .background(.regularMaterial, in: Capsule())
                     .foregroundStyle(.red)
                 }
@@ -1374,7 +1380,7 @@ struct ContentView: View {
                     } label: {
                         Image(systemName: drivingVoice.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
                             .font(.system(size: 17, weight: .medium))
-                            .frame(width: 44, height: 44)
+                            .frame(minWidth: 44, minHeight: 44)
                             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                             .foregroundStyle(drivingVoice.isMuted ? Color.secondary : Color.accentColor)
                     }
@@ -1386,8 +1392,10 @@ struct ContentView: View {
                 // Visible whenever driveModeActive == true (both .destination and .cruise).
                 // Tapping drops a pin at the user's CURRENT GPS — no map-picking while driving.
                 // If GPS is unavailable, the button silently no-ops (guard let loc).
-                // Design note §4: icon-only fails glanceability bar — add .caption2 "Report" label
-                // beneath the flag icon, matching the End pill's text label for HStack consistency.
+                //
+                // TF2-18 P2-1: converted from a vertical icon-over-caption2 stack to the same
+                // capsule + Label(icon+text) anatomy as End Drive / Park Here (review finding
+                // P2-1 — this was one of the three inconsistent shapes in the row).
                 //
                 // Bug #4: Pass drivingContext?.street so ReportSheet can show
                 // "Reporting on <street>" — reuses the name already resolved by
@@ -1409,19 +1417,14 @@ struct ContentView: View {
                         segment: driveSegment
                     )
                 } label: {
-                    VStack(spacing: 2) {
-                        Image(systemName: "flag.fill")
-                            .font(.system(size: 17, weight: .medium))
-                        Text("Report")
-                            .font(.caption2)
-                            .fontWeight(.medium)
-                    }
-                    .foregroundStyle(Color.orange)
-                    .frame(minWidth: 44, minHeight: 44)
-                    .padding(.horizontal, 8)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                    Label("Report", systemImage: "flag.fill")
+                        .font(.subheadline.weight(.semibold))
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 10)
+                        .frame(minHeight: 44)
+                        .background(.regularMaterial, in: Capsule())
+                        .foregroundStyle(Color.orange)
                 }
-                .contentShape(Rectangle())
                 .accessibilityLabel("Report enforcement or sweeper")
                 .accessibilityHint("Drops a pin at your current location.")
 
@@ -1459,6 +1462,7 @@ struct ContentView: View {
                         .font(.subheadline.weight(.semibold))
                         .padding(.horizontal, 14)
                         .padding(.vertical, 10)
+                        .frame(minHeight: 44)
                         .background(.regularMaterial, in: Capsule())
                         .foregroundStyle(Color.accentColor)
                 }
@@ -1472,6 +1476,9 @@ struct ContentView: View {
             // Option A: Recenter pill — visible when the custom Drive Mode follow is paused
             // due to a user pan (followPaused == true). Tapping resumes follow and restores
             // the FT-8 default altitude.
+            // TF2-18 P1-3: bottom padding is now a function of the actual bottom-card stack
+            // state (approach strip / Park Until pill) instead of a flat hardcoded 8pt —
+            // mirrors `paddingForBannerState` at the top of the screen (review finding P1-3).
             if followPaused {
                 Button {
                     recenterDriveMode()
@@ -1484,7 +1491,10 @@ struct ContentView: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 .accessibilityLabel("Recenter map on my location")
-                .padding(.bottom, 8)
+                .padding(.bottom, recenterPillBottomPadding(
+                    showApproachStrip: finalApproachState == .approaching,
+                    parkUntilVisible: parkUntilMode && parkUntilTarget != nil
+                ))
             }
         }
     }
@@ -2527,15 +2537,55 @@ func resolvedBannerState(
 /// function always returns a non-zero value. The invariant: **if a banner is visible, the
 /// pill must clear it.**
 ///
+/// TF2-18 P2-2: raised from `44` to `100` to match `recenterButtonStack`'s existing hardcoded
+/// `.padding(.top, 100)` — the two floating toolbar clusters (End Drive/Report/Park Here on
+/// the left, Find me/Find car/Park Until/Drive on the right) previously sat at different
+/// vertical offsets (44pt vs 100pt), reading as two unrelated toolbars instead of one row of
+/// peer controls (review finding P2-2). `100` already accounts for status bar + banner
+/// clearance in practice — it's been live and correct for `recenterButtonStack` since W5.1.
+/// The `44 > 0` clearance invariant this function exists to guarantee is unaffected by the
+/// literal value change; `100 > 44 > 0` still clears the banner with more margin than before.
+///
 /// Extracted as an `internal` pure function so tests can assert the invariant directly
 /// without instantiating a full `ContentView`.
 func paddingForBannerState(_ state: SuspensionBannerState) -> CGFloat {
-    // The ASP banner is approximately 44pt tall (subheadline font + 12pt vertical padding × 2).
-    // All three states (.aspInEffect, .todaySuspended, .tomorrowSuspended) show a visible banner.
+    // All three states (.aspInEffect, .todaySuspended, .tomorrowSuspended) show a visible
+    // banner (~44pt tall) — 100pt clears the status bar + banner with room to spare,
+    // matching recenterButtonStack's existing offset (TF2-18 P2-2).
     switch state {
     case .aspInEffect, .todaySuspended, .tomorrowSuspended:
-        return 44
+        return 100
     }
+}
+
+// MARK: - TF2-18 P1-3: Recenter pill bottom clearance
+
+/// Returns the bottom padding (in points) the floating "Recenter" pill needs to clear the
+/// Drive Mode bottom-card stack, instead of the pre-TF2-18 hardcoded `.padding(.bottom, 8)`
+/// (which had zero awareness of the stack's actual height and could render the pill
+/// overlapping the card — review finding P1-3).
+///
+/// Mirrors the `paddingForBannerState` pattern already validated for the top pill
+/// (W8.5c-polish PR-1): hardcode the known component heights, verify the sum via live-UI
+/// smoke across the real combinations, rather than measuring at runtime with
+/// `GeometryReader` (which would risk the exact "mutate layout during the SwiftUI update
+/// cycle" class of bug documented in `MapViewRepresentable`'s update-cycle invariant).
+///
+/// Component heights (approximate, system fonts — verified via smoke, TF2-18 PR):
+///   - Base bottom card: ~140pt (TF2-18 P2-5 stacked the Left/Right chips into two full-width
+///     rows instead of one side-by-side row, adding ~1 chip-row height vs. the pre-TF2-18 card).
+///   - `+ 30pt` when the final-approach strip is showing (`DriveModeBottomCard`'s
+///     `showApproachStrip` row).
+///   - `+ 58pt` when the `ParkUntilPill` is also showing below the card.
+///   - `+ 8pt` clearance gap above whichever element is topmost.
+///
+/// Extracted as an `internal` pure function so tests can assert all four combinations
+/// directly without instantiating a full `ContentView`.
+func recenterPillBottomPadding(showApproachStrip: Bool, parkUntilVisible: Bool) -> CGFloat {
+    var height: CGFloat = 140
+    if showApproachStrip { height += 30 }
+    if parkUntilVisible { height += 58 }
+    return height + 8
 }
 
 #Preview {
