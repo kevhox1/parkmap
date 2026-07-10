@@ -11,12 +11,24 @@
 //         replaces single-segment `safetyLabel` calls in `update(...)`.
 //         Voice copy updated to use catch-all templates (§4.1) — "Free parking sections on
 //         the [side] — check signs." / "Metered on the [side]." / "No parking on either side."
+//  TF2-17: `SideAggregation` + `aggregateSideDetail(...)` — same traversal as `aggregateSide`,
+//         plus `earliestFreeUntilText`: the exact "Free until X" text from the qualifying free
+//         segment with the soonest upcoming restriction (conservative min). `aggregateSide` is
+//         now a thin wrapper over `aggregateSideDetail(...).opportunity` — unchanged public
+//         contract. `update(...)` now builds `leftLabel`/`rightLabel` via
+//         `SafetyLabel(for: SideAggregation)` instead of `SafetyLabel(for: SideOpportunity)`.
+//  TF2-18 (P1-2, bundled): `SideOpportunity` gained a `.comingSoon` case — a side aggregates to
+//         `.comingSoon` instead of `.free` when the winning (displayed) restriction starts within
+//         `ParkingRulesEngine.nearFutureWindow` (6h), restoring the map's orange "restriction
+//         coming soon" tier to Drive Mode chips (previously collapsed into `.free`). `.comingSoon`
+//         is treated as free-equivalent for voice purposes via `isFreeForVoice(_:)` — voice copy
+//         is unaffected (OQ-4 still holds, extended to cover the new case).
 //
 //  Responsibilities:
 //    - Find the closest block to the driver's GPS position.
 //    - Classify N/S/E/W sides as "left" or "right" relative to the driver's heading.
-//    - Aggregate ALL segments on each cardinal side via aggregateSide → SideOpportunity.
-//    - Compute safety label for each side (wrapped from SideOpportunity for downstream use).
+//    - Aggregate ALL segments on each cardinal side via aggregateSideDetail → SideAggregation.
+//    - Compute safety label for each side (wrapped from SideAggregation for downstream use).
 //    - Detect block changes and trigger voice cues via DrivingVoice.
 //    - In Cruise Mode: gate announcements via CruiseVoicePolicy.shouldAnnounce, and
 //      use CruiseVoicePolicy.utteranceText for Cruise-specific phrasing.
@@ -57,18 +69,48 @@ struct DrivingContext: Equatable {
 ///
 /// Mapping to voice + card (spec §3.2):
 ///   `.free`       → "Free parking sections on the [left/right] — check signs."
+///   `.comingSoon` → same voice copy as `.free` (TF2-18 P1-2 — voice-equivalent, see
+///                   `isFreeForVoice(_:)`); card chip renders orange instead of green.
 ///   `.metered`    → "Metered on the [left/right]."
 ///   `.restricted` → (silent in Cruise Mode; "No parking on either side." in destination mode when both restricted)
 ///   `.unknown`    → (silent)
 enum SideOpportunity: Equatable {
-    /// At least one qualifying free-now stretch ≥ minimumFreeLength exists on this side.
+    /// At least one qualifying free-now stretch ≥ minimumFreeLength exists on this side,
+    /// and no restriction on the winning (displayed) segment starts within 6h.
     case free
+    /// TF2-18 P1-2: Same as `.free`, but the winning qualifying free segment's next
+    /// restriction starts within `ParkingRulesEngine.nearFutureWindow` (6h) — mirrors
+    /// `CurrentState.freeButRestrictionSoon` at the side-aggregation level. Restores the
+    /// map's orange warning tier to Drive Mode, which previously collapsed this case into
+    /// `.free` with no visual distinction.
+    case comingSoon
     /// No qualifying free stretch; at least one metered segment exists.
     case metered
     /// No free or metered segments — entire side is restricted or no-standing.
     case restricted
     /// No segments found for this side (data gap).
     case unknown
+}
+
+// MARK: - TF2-17: SideAggregation
+
+/// Detail-preserving aggregation result for one side of the current block.
+///
+/// `aggregateSideDetail(segments:side:engine:date:minimumFreeLength:)` returns this;
+/// `aggregateSide(...)` is a thin wrapper returning just `.opportunity` (unchanged public
+/// contract, spec §3 "New flow").
+struct SideAggregation: Equatable {
+    /// Same classification `aggregateSide` has always returned — precedence
+    /// (free/comingSoon > metered > restricted > unknown) is unchanged from TF2-7.
+    let opportunity: SideOpportunity
+
+    /// The exact `SafetyLabel.text` (e.g. "Free until Wednesday 9:30 AM") from whichever
+    /// qualifying free segment has the SOONEST upcoming restriction (conservative min —
+    /// spec §5.1). `nil` when `opportunity` is `.free` and no qualifying segment has any
+    /// restriction within the 14-day window (falls back to "Free — check signs" at the
+    /// `SafetyLabel(for: SideAggregation)` bridge), or when `opportunity` is not
+    /// `.free`/`.comingSoon`.
+    let earliestFreeUntilText: String?
 }
 
 // MARK: - Side bearing constants
@@ -269,17 +311,20 @@ final class DrivingContextService {
         }
 
         // Step 6: TF2-7 — side-level aggregation replaces single-segment safetyLabel calls.
-        // aggregateSide reduces ALL segments on the cardinal side to one SideOpportunity.
-        // Pre-filter to the current block (street + from + to) so aggregateSide only sees
+        // TF2-17: aggregateSideDetail reduces ALL segments on the cardinal side to one
+        // SideAggregation (opportunity classification + optional "Free until X" text).
+        // Pre-filter to the current block (street + from + to) so aggregation only sees
         // segments for this block, not other blocks on the same cardinal side.
         // (spec §3.5: "segments: [Segment] — all segments for the current street/from/to combination")
         let blockSegments = segments.filter {
             $0.street == block.street && $0.fromStreet == block.from && $0.to == block.to
         }
-        let leftOpp  = leftCardinalSide.map  { DrivingContextService.aggregateSide(segments: blockSegments, side: $0, engine: engine, date: date) } ?? .unknown
-        let rightOpp = rightCardinalSide.map { DrivingContextService.aggregateSide(segments: blockSegments, side: $0, engine: engine, date: date) } ?? .unknown
-        let leftLabel  = SafetyLabel(for: leftOpp)
-        let rightLabel = SafetyLabel(for: rightOpp)
+        let leftAgg  = leftCardinalSide.map  { DrivingContextService.aggregateSideDetail(segments: blockSegments, side: $0, engine: engine, date: date) }
+            ?? SideAggregation(opportunity: .unknown, earliestFreeUntilText: nil)
+        let rightAgg = rightCardinalSide.map { DrivingContextService.aggregateSideDetail(segments: blockSegments, side: $0, engine: engine, date: date) }
+            ?? SideAggregation(opportunity: .unknown, earliestFreeUntilText: nil)
+        let leftLabel  = SafetyLabel(for: leftAgg)
+        let rightLabel = SafetyLabel(for: rightAgg)
 
         let context = DrivingContext(
             street: block.street,
@@ -355,10 +400,14 @@ final class DrivingContextService {
     ///   - No free, both metered       → "[Street]. Metered on both sides."
     ///   - Both restricted → "[Street]. No parking on either side."
     ///   - One restricted + one unknown → (no announcement — consistent with Cruise Mode)
+    ///
+    /// TF2-18 note: `leftFree`/`rightFree` use `isFreeForVoice(_:)` so a side classified
+    /// `.comingSoon` (P1-2) still reads as "free" for voice purposes — the new severity case
+    /// only changes chip color/text, never spoken copy (OQ-4, locked by Test Inventory #10/#15).
     func buildUtteranceText(_ context: DrivingContext) -> String {
         let street = expandAbbreviations(titleCase(context.street))
-        let leftFree     = context.leftLabel.severity == .free
-        let rightFree    = context.rightLabel.severity == .free
+        let leftFree     = DrivingContextService.isFreeForVoice(context.leftLabel.severity)
+        let rightFree    = DrivingContextService.isFreeForVoice(context.rightLabel.severity)
         let leftMetered  = context.leftLabel.severity == .metered
         let rightMetered = context.rightLabel.severity == .metered
         let leftRestricted  = context.leftLabel.severity == .restricted
@@ -389,32 +438,29 @@ final class DrivingContextService {
         return "\(street). \(clause)"
     }
 
-    // MARK: - TF2-7: Side-level aggregation
+    // MARK: - TF2-18: Voice free-equivalence helper
 
-    /// Reduces all segments on one cardinal side of the current block to a single
-    /// `SideOpportunity` — answers "is there any free stretch, metered zone, or nothing
-    /// usable on this side?" rather than exposing zone-by-zone granularity.
+    /// Returns `true` if `severity` should be treated as "free" for voice-cadence and
+    /// voice-phrasing purposes.
     ///
-    /// Pure static function contract: no side effects, no stored state, no framework imports.
-    /// Testable at zero cost. Mirrors the `CruiseVoicePolicy` / `FinalApproachService` pattern.
+    /// TF2-18 P1-2 added `SafetyLabel.Severity.comingSoon` (a side that's free right now but
+    /// whose winning restriction starts within 6h). A `.comingSoon` side is still, in fact,
+    /// free right now — the driver can park there — so voice must treat it exactly like
+    /// `.free`: same cadence gating (`CruiseVoicePolicy.shouldAnnounce`) and same phrasing
+    /// (`CruiseVoicePolicy.utteranceText`, `buildUtteranceText`). Only the chip color/text
+    /// changes for `.comingSoon`; this helper is what keeps voice output byte-identical
+    /// before/after the P1-2 severity split (OQ-4, Test Inventory #10/#15 extended).
+    static func isFreeForVoice(_ severity: SafetyLabel.Severity) -> Bool {
+        severity == .free || severity == .comingSoon
+    }
+
+    // MARK: - TF2-7 / TF2-17: Side-level aggregation
+
+    /// Public wrapper preserving the pre-TF2-17 signature and return type.
     ///
-    /// Algorithm (spec §3.5):
-    ///   1. Filter `segments` to those matching the given cardinal `side`.
-    ///   2. For each matching segment, call `engine.safetyLabel(for: segment, at: date)`.
-    ///   3. If any segment has severity `.free` AND its haversine length ≥ `minimumFreeLength`
-    ///      → return `.free` immediately (short-circuit — "any free stretch ≥ one car length").
-    ///   4. If no `.free` found but any segment has severity `.metered` → return `.metered`.
-    ///   5. If segments were found but none were free or metered → return `.restricted`.
-    ///   6. If no segments matched the side → return `.unknown`.
-    ///
-    /// - Parameters:
-    ///   - segments: All segments for the current tile region (not pre-filtered to block).
-    ///   - side: Cardinal side string — "N", "S", "E", or "W".
-    ///   - engine: ParkingRulesEngine for safetyLabel evaluation.
-    ///   - date: Evaluation date. Pass `.nowET` in production; inject a fixed date in tests.
-    ///   - minimumFreeLength: Minimum free-stretch length in meters to count as qualifying.
-    ///     Defaults to 6.0m (one car length — same as the tile-geometry intersection-clip
-    ///     setback constant from PR #21, spec §3.3). Injectable for unit tests.
+    /// TF2-17 §3: `aggregateSide` is now a thin wrapper over
+    /// `aggregateSideDetail(...).opportunity` — pure refactor for reuse, not a behavior
+    /// change. All 9 pre-existing `TF27Tests` decision-table outcomes are preserved exactly.
     ///
     /// - Returns: `SideOpportunity` classification for the given side.
     static func aggregateSide(
@@ -424,15 +470,81 @@ final class DrivingContextService {
         date: Date,
         minimumFreeLength: Double = 6.0
     ) -> SideOpportunity {
+        aggregateSideDetail(
+            segments: segments, side: side, engine: engine, date: date,
+            minimumFreeLength: minimumFreeLength
+        ).opportunity
+    }
+
+    /// Reduces all segments on one cardinal side of the current block to a single
+    /// `SideAggregation` — answers "is there any free stretch, metered zone, or nothing
+    /// usable on this side?" (the `.opportunity` field, unchanged from TF2-7's
+    /// `aggregateSide` algorithm) AND, when the side is free/comingSoon, which exact
+    /// "Free until X" text to show (TF2-17 §5.1 — the earliest-restriction ranking, "earliest"
+    /// meaning smallest `nextRestriction.hours`, a conservative-min policy).
+    ///
+    /// Pure static function contract: no side effects, no stored state, no framework imports.
+    /// Testable at zero cost. Mirrors the `CruiseVoicePolicy` / `FinalApproachService` pattern.
+    ///
+    /// Algorithm:
+    ///   1. Filter `segments` to those matching the given cardinal `side`.
+    ///   2. For each matching segment, call `engine.safetyLabel(for: segment, at: date)`.
+    ///   3. Segments with severity `.free` AND haversine length ≥ `minimumFreeLength` are
+    ///      "qualifying free" — collected (not short-circuited, unlike pre-TF2-17
+    ///      `aggregateSide`) so every qualifying segment's upcoming restriction can be ranked.
+    ///      A sub-`minimumFreeLength` free sliver beside a restricted zone is not actionable
+    ///      and is excluded, same as before.
+    ///   4. If `qualifyingFree` is non-empty → `.opportunity` is `.free` or `.comingSoon`
+    ///      (never `.metered`/`.restricted`/`.unknown` — free takes priority, TF2-7 precedence
+    ///      unchanged). For each qualifying segment, call `engine.nextRestriction(for:at:)`.
+    ///      OQ-3: this intentionally skips METERED rules (they're not a move-your-car
+    ///      restriction, `ParkingRulesEngine.swift` `nextRestriction` already excludes them) —
+    ///      a "free until 9am" driven purely by an upcoming meter start does not supply the
+    ///      ranking text. Segments with `hours >= 168` (no restriction within the 14-day
+    ///      window) are excluded from the ranking. Among the remainder, the segment with the
+    ///      SMALLEST `hours` wins; its `SafetyLabel.text` becomes `earliestFreeUntilText`.
+    ///      TF2-18 P1-2: if the winning segment's `hours < nearFutureWindow` (6h) AND its
+    ///      restriction category isn't metered, `.opportunity` is `.comingSoon` instead of
+    ///      `.free` (mirrors `ParkingRulesEngine.currentState`'s `.freeButRestrictionSoon`
+    ///      classification for that same segment). If no qualifying segment has any
+    ///      restriction within 14 days, `earliestFreeUntilText` is `nil` and `.opportunity`
+    ///      stays `.free` — no fabricated "until" (OQ-1).
+    ///   5. If `qualifyingFree` is empty but any segment has severity `.metered` →
+    ///      `.opportunity` is `.metered`, `earliestFreeUntilText` is `nil`.
+    ///   6. If segments were found but none were free or metered → `.opportunity` is
+    ///      `.restricted`, `earliestFreeUntilText` is `nil`.
+    ///   7. If no segments matched the side → `.opportunity` is `.unknown`,
+    ///      `earliestFreeUntilText` is `nil`.
+    ///
+    /// - Parameters:
+    ///   - segments: All segments for the current tile region (not pre-filtered to block).
+    ///   - side: Cardinal side string — "N", "S", "E", or "W".
+    ///   - engine: ParkingRulesEngine for safetyLabel/nextRestriction evaluation.
+    ///   - date: Evaluation date. Pass `.nowET` in production; inject a fixed date in tests.
+    ///   - minimumFreeLength: Minimum free-stretch length in meters to count as qualifying.
+    ///     Defaults to 6.0m (one car length — same as the tile-geometry intersection-clip
+    ///     setback constant from PR #21, spec §3.3). Injectable for unit tests.
+    ///
+    /// - Returns: `SideAggregation` for the given side.
+    static func aggregateSideDetail(
+        segments: [Segment],
+        side: String,
+        engine: ParkingRulesEngine,
+        date: Date,
+        minimumFreeLength: Double = 6.0
+    ) -> SideAggregation {
         // Step 1: Filter to segments matching the given cardinal side.
         let sideSegments = segments.filter { $0.side == side }
 
-        // Step 6 (early): no segments found for this side → unknown (data gap).
-        guard !sideSegments.isEmpty else { return .unknown }
+        // Step 7 (early): no segments found for this side → unknown (data gap).
+        guard !sideSegments.isEmpty else {
+            return SideAggregation(opportunity: .unknown, earliestFreeUntilText: nil)
+        }
 
         var hasMetered = false
+        var qualifyingFree: [(seg: Segment, label: SafetyLabel)] = []
 
-        // Steps 2–4: classify each segment.
+        // Steps 2–3: classify each segment.
         for seg in sideSegments {
             let label = engine.safetyLabel(for: seg, at: date)
             switch label.severity {
@@ -440,22 +552,52 @@ final class DrivingContextService {
                 // Step 3: check minimum free-stretch length via haversine.
                 let length = segmentLengthMeters(seg)
                 if length >= minimumFreeLength {
-                    return .free  // Short-circuit: qualifying free stretch found.
+                    qualifyingFree.append((seg, label))
                 }
-                // Free segment too short — fall through. Does not count as qualifying.
-                // A sub-6m free sliver beside a restricted zone is not actionable.
+                // Free segment too short — excluded. Not actionable, same as before.
             case .metered:
                 hasMetered = true
-            case .restricted, .unknown:
+            case .restricted, .unknown, .comingSoon:
+                // `.comingSoon` never comes from `engine.safetyLabel` (that engine method's
+                // severity space is unchanged — free/metered/restricted/unknown only). Listed
+                // here only so the switch stays exhaustive against `SafetyLabel.Severity`.
                 break
             }
         }
 
-        // Step 4: no qualifying free, but at least one metered.
-        if hasMetered { return .metered }
+        // Step 4: at least one qualifying free segment → rank by earliest upcoming restriction.
+        if !qualifyingFree.isEmpty {
+            var best: (hours: Double, category: Category?, text: String)? = nil
+            for (seg, label) in qualifyingFree {
+                let restriction = engine.nextRestriction(for: seg, at: date)
+                guard restriction.hours < 168 else { continue }  // no restriction within 14 days
+                if best == nil || restriction.hours < best!.hours {
+                    best = (restriction.hours, restriction.category, label.text)
+                }
+            }
+            guard let winner = best else {
+                // OQ-1: no qualifying segment has any restriction within 14 days.
+                return SideAggregation(opportunity: .free, earliestFreeUntilText: nil)
+            }
+            // TF2-18 P1-2: mirror ParkingRulesEngine.currentState's freeButRestrictionSoon
+            // classification for the WINNING segment — same 6h window (single source of
+            // truth: ParkingRulesEngine.nearFutureWindowHours), same "metered doesn't count"
+            // exclusion (a metered category never reaches here anyway per OQ-3, but the check
+            // is kept for symmetry with currentState's own guard).
+            let isComingSoon = winner.hours < ParkingRulesEngine.nearFutureWindowHours && winner.category != .metered
+            return SideAggregation(
+                opportunity: isComingSoon ? .comingSoon : .free,
+                earliestFreeUntilText: winner.text
+            )
+        }
 
-        // Step 5: segments found but none free or metered.
-        return .restricted
+        // Step 5: no qualifying free, but at least one metered.
+        if hasMetered {
+            return SideAggregation(opportunity: .metered, earliestFreeUntilText: nil)
+        }
+
+        // Step 6: segments found but none free or metered.
+        return SideAggregation(opportunity: .restricted, earliestFreeUntilText: nil)
     }
 
     /// Computes the haversine length of a segment's polyline in meters.

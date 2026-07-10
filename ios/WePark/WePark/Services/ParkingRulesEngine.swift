@@ -42,6 +42,13 @@ final class ParkingRulesEngine {
     /// short-stay visitor as the primary map-color persona. See docs/ios-color-threshold-spec.md.
     private static let nearFutureWindow: TimeInterval = 6 * 3600   // 6 hours
 
+    /// TF2-18 (P1-2): internal (not private) hours-denominated view of `nearFutureWindow`,
+    /// so `DrivingContextService.aggregateSideDetail` can classify a side `.comingSoon`
+    /// using the SAME threshold `currentState(for:at:)` uses for `.freeButRestrictionSoon`
+    /// — one source of truth instead of a second hardcoded "6.0" literal that could drift
+    /// if this threshold changes again (it has once already, 24h → 6h, W4.5).
+    static var nearFutureWindowHours: Double { nearFutureWindow / 3600.0 }
+
     // MARK: - Init
 
     init(aspService: ASPSuspensionService = ASPSuspensionService()) {

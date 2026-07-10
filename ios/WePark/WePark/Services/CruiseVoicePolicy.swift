@@ -66,6 +66,8 @@ enum CruiseVoicePolicy {
     /// |----------------|----------------|--------|
     /// | `.free`        | any            | `true` |
     /// | any            | `.free`        | `true` |
+    /// | `.comingSoon`  | any            | `true` | (TF2-18 P1-2 — free-equivalent for voice)
+    /// | any            | `.comingSoon`  | `true` |
     /// | `.metered`     | any            | `true` |
     /// | any            | `.metered`     | `true` |
     /// | `.restricted`  | `.restricted`  | `false`|
@@ -76,13 +78,17 @@ enum CruiseVoicePolicy {
     /// Rationale: if both sides are restricted or unknown, announcing them adds noise
     /// without value — the driver cannot park on either side regardless.
     ///
+    /// TF2-18: uses `DrivingContextService.isFreeForVoice(_:)` so `.comingSoon` (P1-2)
+    /// announces exactly like `.free` — the new severity only changes chip color/text,
+    /// never voice cadence (OQ-4).
+    ///
     /// - Parameter context: The current driving context.
-    /// - Returns: `true` if at least one side is free or metered.
+    /// - Returns: `true` if at least one side is free (or coming-soon) or metered.
     static func shouldAnnounce(context: DrivingContext) -> Bool {
         let left = context.leftLabel.severity
         let right = context.rightLabel.severity
-        return left == .free || left == .metered
-            || right == .free || right == .metered
+        return DrivingContextService.isFreeForVoice(left) || left == .metered
+            || DrivingContextService.isFreeForVoice(right) || right == .metered
     }
 
     // MARK: - Utterance text
@@ -108,14 +114,18 @@ enum CruiseVoicePolicy {
     ///   - Neither free, both metered → "[Street]. Metered on both sides."
     ///
     /// Note: this function is only called when `shouldAnnounce(context:)` returns `true`,
-    /// so callers may assert at least one side is free or metered at this point.
+    /// so callers may assert at least one side is free (or coming-soon) or metered here.
+    ///
+    /// TF2-18: `leftFree`/`rightFree` use `DrivingContextService.isFreeForVoice(_:)` so a
+    /// `.comingSoon` side (P1-2) still reads as "free" for phrasing purposes — no change to
+    /// spoken copy (OQ-4).
     ///
     /// - Parameter context: The current driving context.
     /// - Returns: The utterance text for TTS.
     static func utteranceText(for context: DrivingContext) -> String {
         let street = expandAbbreviations(titleCase(context.street))
-        let leftFree  = context.leftLabel.severity == .free
-        let rightFree = context.rightLabel.severity == .free
+        let leftFree  = DrivingContextService.isFreeForVoice(context.leftLabel.severity)
+        let rightFree = DrivingContextService.isFreeForVoice(context.rightLabel.severity)
         let leftMetered  = context.leftLabel.severity == .metered
         let rightMetered = context.rightLabel.severity == .metered
 
