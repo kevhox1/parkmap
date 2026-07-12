@@ -73,6 +73,15 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
 - **Status:** 🔴 diagnostic dispatched (ios-engineer, 2026-07-12).
 - **Lands in:** TBD by diagnosis (bundle/TileLoader/overlay path — NOT the tile data, which is right).
 
+### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
+- **Request (Kevin, 2026-07-12):** loves the Parking 101 guide ("very good"), wants it accessible
+  all the time — approved a `?` (questionmark.circle) button on the main map toolbar.
+- **Scope:** one button in the existing ContentView toolbar stack → `activeSheet = .parkingGuide`
+  (case exists since FT-12). Follow the button anatomy standardized in the TF2-18 pass; 44×44 tap
+  target; accessibility label. No spec needed (single-file tweak per TEAM.md sizing).
+- **Status:** 🟡 dispatched (ios-engineer) 2026-07-12.
+- **Lands in:** iOS (`ContentView.swift` toolbar stack only).
+
 ### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
 - **Area:** Drive Mode heading source. `LocationService` heading stabilizer + `MapViewRepresentable.syncDriveHeading`.
 - **Observed (Kevin, build 13):** heading not synced properly all the time; "sometimes it will spin
