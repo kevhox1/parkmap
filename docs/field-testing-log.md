@@ -70,8 +70,18 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   computed at an earlier time and not refreshed); (d) Category decode failure dropping rules
   silently; (e) a Park Until filter accidentally active. Kevin asked to tap a green Bowery block —
   sheet rule list distinguishes rules-loaded-but-mis-evaluated vs rules-missing-on-device.
-- **Status:** 🔴 diagnostic dispatched (ios-engineer, 2026-07-12).
-- **Lands in:** TBD by diagnosis (bundle/TileLoader/overlay path — NOT the tile data, which is right).
+- **Status:** ⚪️ **CLOSED — NOT A BUG** (diagnosis `docs/qa/tf2-20-bowery-green-diagnosis.md`,
+  2026-07-12). **2026-07-12 is a SUNDAY** — the orchestrator's analysis above mislabeled it
+  Saturday (Kevin never said Saturday). Bowery's dominant signs are "EXCEPT SUNDAY" → green at
+  Sun 5pm is CORRECT. Real-decoder+engine harness on the actual bundle: Sat Jul 11 17:00 ET =
+  67 RED / 22 AMBER / 14 GREEN (matches the sim above); Sun Jul 12 17:00 ET = 18 RED / 0 AMBER /
+  85 GREEN (matches Kevin's observation exactly). Bundle audit clean (all 1032 tiles incl. the 8
+  regen-6-new ones, byte-identical); recolor path recomputes fresh every 60s (no staleness);
+  parkUntilMode defaults off. Every layer correct — regen 6 fix IS effective.
+  **Process lesson: verify day-of-week against a calendar before diagnosing schedule-dependent
+  behavior.** Residual real-world check for a WEEKDAY/Saturday drive: Bowery should read red/amber
+  during those windows.
+- **Lands in:** nothing — working as intended.
 
 ### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
 - **Request (Kevin, 2026-07-12):** loves the Parking 101 guide ("very good"), wants it accessible
