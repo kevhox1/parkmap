@@ -54,6 +54,25 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   cosmetic debug-chip drift, QA pass-1 Finding #2.
 - **Lands in:** `build/preprocess.js` + tiles regen 6 (PWA + iOS Resources) + sw.js. No engine change.
 
+### TF2-20 🔴 Bowery still mostly GREEN on build 14 at Sat 5pm — data says RED/AMBER (engine/render discrepancy)
+- **Observed (Kevin, build 1.0(14) confirmed via Settings footer, 2026-07-12 ~5pm ET Sat):** almost all
+  of Bowery renders green.
+- **Data analysis (orchestrator, regen 6 tiles on main):** Bowery carries dense correct rules —
+  `NO STANDING 4PM-7PM EXCEPT SUNDAY` (ACTIVE at Sat 5pm), `2 HMP 10AM-7PM EXCEPT SUNDAY` meters
+  (paid until 7pm Sat), bus stops, truck loading. Faithful engine simulation at Sat 17:00 ET over
+  all street=BOWERY segments: **67 RED / 22 AMBER / 14 GREEN.** (Same sim over build-13's regen-5
+  tiles: 33 GREEN / 29 RED / 17 AMBER — matches what a build-13 install would show, but Kevin
+  confirmed 14.) Verified correct: tile data, ParkingRule decode shape, isScheduleActive semantics,
+  day convention (0=Sun..6=Sat both sides), Date+ET (minuteOfDayET/dayOfWeekET genuinely ET).
+- **Hypothesis space:** (a) bundled Resources tiles in the built .app ≠ repo tiles (regen 6 added 8
+  NEW tile files — are they in the target? did Bowery segments resegment into them?); (b) TileLoader
+  loads stale/wrong tiles at runtime; (c) overlay recolor staleness (rebuildOverlays timing — colors
+  computed at an earlier time and not refreshed); (d) Category decode failure dropping rules
+  silently; (e) a Park Until filter accidentally active. Kevin asked to tap a green Bowery block —
+  sheet rule list distinguishes rules-loaded-but-mis-evaluated vs rules-missing-on-device.
+- **Status:** 🔴 diagnostic dispatched (ios-engineer, 2026-07-12).
+- **Lands in:** TBD by diagnosis (bundle/TileLoader/overlay path — NOT the tile data, which is right).
+
 ### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
 - **Area:** Drive Mode heading source. `LocationService` heading stabilizer + `MapViewRepresentable.syncDriveHeading`.
 - **Observed (Kevin, build 13):** heading not synced properly all the time; "sometimes it will spin
