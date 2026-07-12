@@ -92,10 +92,12 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
 - **Fix direction:** when a side aggregates to free, surface the **earliest** upcoming restriction
   across that side's free segments (conservative min) → chip reads "Free until Thu 9:30am". Keep
   severity colors. Mostly `DrivingContextService` + tests.
-- **Status:** 🟡 SPEC FILED (`docs/tf2-17-chip-free-until-spec.md`, 2026-07-09) — awaiting Kevin
-  approval. Additive `SideAggregation` + `aggregateSideDetail`; existing 9-case decision table +
-  voice untouched (locked by regression test); explicit FT-9-class regression test included. Zero
-  bottom-card layout footprint → can land standalone or bundle with TF2-18 engineering pass.
+- **Status:** 🟢 MERGED #66 (`08a0233`, 2026-07-10, bundled with TF2-18) → build 14. Chips now read
+  "Free until Thu 9:30am"-style (earliest restriction across the side's free segments, conservative
+  min); new `.comingSoon` severity restores the orange tier in chips (was silently collapsed to
+  green). Voice locked unchanged by regression test (`.comingSoon` still voices as free — QA
+  hand-traced). FT-9-class regression test in. QA SHIP WITH CAVEATS, 0 blocking
+  (`docs/qa/tf2-17-18-chips-design-qa.md`). ⏳ Kevin drive-test: chips show "Free until X".
 - **Lands in:** iOS (`DrivingContextService.swift`, `SafetyLabel.swift`).
 
 ### TF2-18 🟡 Drive Mode UI layout clunky + color scheme visibility — holistic design pass
@@ -106,7 +108,15 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   palette was tuned for map polylines, not glanceable in-car reading in sunlight.
 - **Direction:** designer end-to-end review vs Apple Maps/Waze glanceability conventions → findings
   doc → one engineer pass (may bundle TF2-17 since both touch the bottom card).
-- **Status:** 🟡 REVIEW FILED (`docs/design/drive-mode-ui-review-2026-07-09.md`, 2026-07-09).
+- **Status:** 🟢 MERGED #66 (`08a0233`, 2026-07-10, bundled with TF2-17) → build 14. Shipped from
+  the review: solid-fill chips w/ black text — WCAG contrast now 5.92–10.39:1 in BOTH modes (was
+  1.4–2.6:1 failing in Light; the review's own white-text rec failed the math at 2.22:1, engineer
+  overrode with justification, QA recomputed + confirmed); orange `.comingSoon` tier restored in
+  chips; Recenter pill clearance coordinated with bottom-card height; End Drive pill offset
+  44→100pt; 44×44 tap targets (SignCheckConfirmView); button-anatomy pass; palette doc §8 added.
+  565/0 tests. QA SHIP WITH CAVEATS, 0 blocking, 3 nits routed to drive-test
+  (`docs/qa/tf2-17-18-chips-design-qa.md`). ⏳ Kevin drive-test: sunlight legibility = the gate.
+  Review filed at `docs/design/drive-mode-ui-review-2026-07-09.md`:
   P1s: chip contrast FAILS WCAG in Light Mode (~1.4–2.6:1 — full-saturation severity text on
   15%-tint of same color; fine in Dark ~9.8:1 → palette was tuned on dark backdrops; this is the
   daylight-visibility complaint); drive chips DROP the orange "restriction soon" tier the map has;
