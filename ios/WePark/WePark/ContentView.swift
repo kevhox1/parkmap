@@ -1124,17 +1124,41 @@ struct ContentView: View {
 
     /// Gear button (top-left, same vertical offset as recenter buttons).
     /// Extracted from `body` ZStack to reduce type-checker expression complexity.
+    ///
+    /// FT-13: also hosts the Parking 101 guide ("?") button, placed immediately to the
+    /// gear's right. Same anatomy (44x44, .regularMaterial RoundedRectangle, .secondary
+    /// tint) so the pair reads as one utility cluster per the TF2-18 button-anatomy pass.
     @ViewBuilder
     private var gearButtonOverlay: some View {
         VStack {
-            Button { activeSheet = .settings } label: {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 44, height: 44)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                Button { activeSheet = .settings } label: {
+                    Image(systemName: "gearshape.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(.secondary)
+                }
+                .accessibilityLabel("Open settings")
+
+                // FT-13: Parking 101 guide entry point, always reachable from the map
+                // toolbar (not just the FT-12 first-launch banner). Hidden during Drive
+                // Mode — the drive overlay layer (End Drive / Report / Park Here pill
+                // row, see `driveModeOverlayLayer`) owns this same top-left corner then.
+                // Visibility gated through `parkingGuideButtonVisible(driveModeActive:)`
+                // so the rule is unit-testable independent of view rendering (mirrors
+                // `paddingForBannerState` / `recenterPillBottomPadding`).
+                if parkingGuideButtonVisible(driveModeActive: driveModeActive) {
+                    Button { activeSheet = .parkingGuide } label: {
+                        Image(systemName: "questionmark.circle")
+                            .font(.system(size: 17, weight: .medium))
+                            .frame(width: 44, height: 44)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                            .foregroundStyle(.secondary)
+                    }
+                    .accessibilityLabel("Parking 101 guide")
+                }
             }
-            .accessibilityLabel("Open settings")
             Spacer()
         }
         .padding(.top, 100)
@@ -2613,6 +2637,23 @@ func paddingForBannerState(_ state: SuspensionBannerState) -> CGFloat {
     case .aspInEffect, .todaySuspended, .tomorrowSuspended:
         return 100
     }
+}
+
+// MARK: - FT-13: Parking 101 guide toolbar button visibility
+
+/// Returns whether the Parking 101 guide ("?") toolbar button should render.
+///
+/// Hidden while Drive Mode is active: the drive overlay layer (`driveModeOverlayLayer`'s
+/// End Drive / Report / Park Here pill row) claims the same top-left corner the guide
+/// button shares with the gear button (`gearButtonOverlay`), matching the existing
+/// occlusion pattern for that corner rather than leaving a stray tappable control behind
+/// the drive controls.
+///
+/// Extracted as an `internal` pure function — same testability rationale as
+/// `paddingForBannerState` / `recenterPillBottomPadding` — so the visibility rule is
+/// covered without instantiating a full `ContentView`.
+func parkingGuideButtonVisible(driveModeActive: Bool) -> Bool {
+    !driveModeActive
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance
