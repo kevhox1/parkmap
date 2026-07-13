@@ -89,7 +89,14 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
 - **Scope:** one button in the existing ContentView toolbar stack → `activeSheet = .parkingGuide`
   (case exists since FT-12). Follow the button anatomy standardized in the TF2-18 pass; 44×44 tap
   target; accessibility label. No spec needed (single-file tweak per TEAM.md sizing).
-- **Status:** 🟡 dispatched (ios-engineer) 2026-07-12.
+- **Status:** 🟢 MERGED #67 (`5c825bb`, 2026-07-13) → next build (15, whenever cut). `?` button in
+  the gear cluster (HStack, identical 44×44 anatomy), opens `.parkingGuide` sheet, hidden during
+  Drive Mode via explicit tested gate `parkingGuideButtonVisible(driveModeActive:)`. 585/0 tests
+  (+3 FT13Tests, 0 flakes across 3 runs). QA SHIP CLEAN (`docs/qa/ft13-toolbar-button-qa.md`).
+  ⏳ Kevin: tap-through on device (sandbox couldn't gesture).
+- **Infra note (QA, out of scope):** a passcode-locked physical iPhone paired to this Mac makes
+  Xcode's test diagnostics collector time out (600s), inflating local test runs to 30+ min —
+  disconnect/unpair it to speed up every future suite run.
 - **Lands in:** iOS (`ContentView.swift` toolbar stack only).
 
 ### TF2-16 🟡 Drive Mode heading spins/hunts at low speed — default to one-way street direction
