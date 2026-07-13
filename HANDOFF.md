@@ -182,6 +182,50 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-07-13 — Build 14 SHIPPED to TestFlight; regen 6 (the real data fix); TF2-16..20 + FT-12/13; drive-test pending
+
+**WHERE WE ARE:** main clean @ `ac82021`, **build 1.0 (14) uploaded to TestFlight and on Kevin's phone**
+(archive hit a PLA-agreement + distribution-cert error first — fixed by accepting the updated Program
+License Agreement at developer.apple.com; the cert auto-created after). ~585 iOS tests. PWA cache v38
+(incidental — Kevin is iOS-only focused; don't lead with PWA).
+
+**The headline: TF2-19.** Kevin's build-13 report "Bowery shows free but it's metered/no-standing" →
+investigation found **regen 5 had silently shipped an incomplete Socrata pull** (~40-48% of ALL non-ASP
+rules missing citywide; ASP unaffected — separate fetch). Fix (#63): hardened `fetchSocrataDataset()`
+(`$order=:id` stable pagination, retry+backoff, fail-CLOSED count(*) completeness gate that aborts the
+build before any tile write) + **regen 6**, QA'd to SHIP CLEAN with independent byte-level recount.
+Regen 6 is plausibly the first genuinely complete pull ever (old fetch had no `$order` → every prior
+regen likely dropped rows). Build 13 should NOT be distributed (defective tiles).
+
+**Also in build 14:** TF2-16 heading snap-to-street (#64 — one-way bearing at low course confidence,
+hysteresis, zero MapViewRepresentable diff); TF2-17 "Free until X" chips + TF2-18 drive design pass
+(#66 — solid chips, WCAG-passing contrast both modes, orange `.comingSoon` tier restored, Recenter/End
+Drive clearances, palette doc §8); FT-12 Parking 101 guide (#65 — Views/ParkingGuide/, sign replicas,
+one-shot launch banner, docs/parking-101-content.md; QA caught + fixed a spec-inherited No-Parking-vs-
+No-Standing teaching error). Post-14 on main: FT-13 `?` toolbar button (#67) — rides the next build.
+
+**TF2-20 (the great Sunday scare): NOT A BUG.** Kevin saw Bowery all-green at 5pm Jul 12 on build 14 →
+Jul 12 is a SUNDAY; Bowery signs are "EXCEPT SUNDAY" → green correct. Real-engine-on-real-bundle
+harness: Sun 5pm = 85 green (matches observation), Sat 5pm = 67 red/22 amber. Regen 6 verified
+effective end-to-end. **Process lesson: check the calendar before diagnosing schedule-dependent
+behavior.**
+
+**OPEN / NEXT:**
+- **Kevin's drive-test gates (build 14, on a WEEKDAY/Saturday):** heading locks at intersection
+  approaches (TF2-16); chips "Free until X" + sunlight legibility (TF2-17/18); Bowery/Houston read
+  metered/no-standing in-window (TF2-19); Parking 101 taps — Settings row, `?` button (next build),
+  large Dynamic Type plates, fresh-install banner.
+- Then the standing backlog: supabase-swift real-time (hard TF2 req), external TestFlight group,
+  Mapbox token restriction, FT-2 delete-own-pin (spec'd), TF2-15 construction layer, tech-debt batch
+  (now incl. TF2-16 doc-comment nit + sim-only cold-launch polyline note).
+- **Infra:** unpair the passcode-locked physical iPhone from this Mac (Xcode diagnostics collector
+  times out against it, inflating every local test run).
+
+**PROCESS NOTES:** concurrent agents each get their own simctl-created simulator (shared-sim collisions
+bit us); QA reports must be WRITTEN to docs/qa/ by the agent (two returned text without writing);
+ContentView @State-block merge conflicts between parallel iOS PRs are the known cheap kind (keep-both);
+one agent misread harness system-reminders in a tool result as prompt injection (benign, investigated).
+
 ### 2026-06-15 — TF2 field-testing marathon: builds 1.0(2) → 1.0(13), native-MapKit MAP REBUILD, 5 tile regens
 
 **WHERE WE ARE:** main clean @ `b6307d4`, **build 1.0 (13)** cold-built and PUSHED, **ready for Kevin to archive**
