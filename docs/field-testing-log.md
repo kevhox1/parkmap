@@ -97,10 +97,20 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   inconsistent and our cross-street normalizer only bridges one variant → rows silently dropped at
   the join. Likely a citywide CLASS (spacing variants, ST/SAINT, etc.) worth a chunk of the
   uncovered 57%.
-- **Status:** 🟡 citywide join-drop quantification dispatched (backend-data, read-only) — measure
-  what % of sign rows fail the join, categorize causes, size the recoverable coverage. Fix +
-  regen 7 pending Kevin approval after the numbers come back.
-- **Lands in:** `build/preprocess.js` normalizer + regen 7 (pending investigation).
+- **INVESTIGATION COMPLETE (`docs/qa/ft14-join-drop-investigation.md`):** 6,044 of 54,987 sign rows
+  (11.0%) drop at the name-join. Buckets: alias/co-names ~2,900 (Lenox/Malcolm X, ACP Jr Blvd ×3
+  spellings, Fred/Frederick Douglass, Ave of the Americas, Cathedral Pkwy), SAINT↔ST 1,109
+  (St Nicholas Ave!), spacing variants 103 (LaGuardia/MacDougal/F D R), genuinely-absent-from-OSM
+  ~800 (dead ends/ramps/plazas — not fixable by renaming). Bleecker's 12 rows verified in the drop
+  log (SPACING_VARIANT). Candidate 3-part fix (SAINT/ST swap + collision-checked spacing fallback +
+  8 hand-verified aliases, confined to `osmName()`/`NYC_TO_OSM`) tested in scratch: **recovers
+  4,204 rows (69.6%) → +31 curb-miles, citywide 43%→47%, HARLEM 38%→64% (+26 pts)**. Low-risk
+  (exact-match-gated vs the finite 2,813-street OSM key set; 3 collisions found, all same-street
+  duplicates). Separate follow-ups flagged, NOT bundled: 1,528-row zone-construction loss;
+  dead-end/ramp handling. Caveat: recovers ~4 of the ~57 uncovered points — the bulk of the gap is
+  likely blocks where NYC posts no signs at all (bigger, different problem).
+- **Status:** 🟡 numbers in hand — fix + regen 7 awaiting Kevin go/no-go.
+- **Lands in:** `build/preprocess.js` normalizer + regen 7.
 
 ### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
 - **Request (Kevin, 2026-07-12):** loves the Parking 101 guide ("very good"), wants it accessible
