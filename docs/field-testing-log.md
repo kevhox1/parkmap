@@ -83,6 +83,25 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   during those windows.
 - **Lands in:** nothing — working as intended.
 
+### FT-14 🔴 Coverage gaps — sign data missing for ~half of street-miles; root cause on Kevin's block = cross-street name-join failure
+- **Observed (Kevin, driving east on Bleecker near LaGuardia Pl):** streets with no data at all in the
+  app (no polylines — absence, not gray).
+- **Coverage analysis (orchestrator; `scripts/coverage-report.js`, run after any regen):** vs CSCL
+  centerline miles, Manhattan overall **43% covered** (undercounts ~10-15pts due to intersection
+  setbacks + one-sided streets — ranking is the signal). Weakest: FiDi 34%, East Harlem 36%,
+  Harlem 38%, **LES 40%**. Strongest: Greenwich Village 70%, SoHo 65%, Nolita/Noho 63%.
+- **Kevin's exact gap root-caused:** Bleecker LAGUARDIA PLACE→MERCER has ZERO faces (both sides) in
+  tiles, and Thompson→LaGuardia is south-side-only. Socrata HAS the signs (12 rows LA GUARDIA
+  PLACE→MERCER N+S; 2 rows THOMPSON→LA GUARDIA PLACE N). **The dropped rows spell it "LA GUARDIA
+  PLACE" (space); the surviving rows "LAGUARDIA PLACE" (no space)** — NYC's dataset is internally
+  inconsistent and our cross-street normalizer only bridges one variant → rows silently dropped at
+  the join. Likely a citywide CLASS (spacing variants, ST/SAINT, etc.) worth a chunk of the
+  uncovered 57%.
+- **Status:** 🟡 citywide join-drop quantification dispatched (backend-data, read-only) — measure
+  what % of sign rows fail the join, categorize causes, size the recoverable coverage. Fix +
+  regen 7 pending Kevin approval after the numbers come back.
+- **Lands in:** `build/preprocess.js` normalizer + regen 7 (pending investigation).
+
 ### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
 - **Request (Kevin, 2026-07-12):** loves the Parking 101 guide ("very good"), wants it accessible
   all the time — approved a `?` (questionmark.circle) button on the main map toolbar.
