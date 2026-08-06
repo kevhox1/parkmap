@@ -206,9 +206,34 @@ const NYC_TO_OSM = {
   'GRAND STREET': 'Grand Street', 'GREENE STREET': 'Greene Street',
   'WEST BROADWAY': 'West Broadway', 'WOOSTER STREET': 'Wooster Street',
   'THOMPSON STREET': 'Thompson Street', 'HOWARD STREET': 'Howard Street',
+  // FT-14 join-drop fix (docs/qa/ft14-join-drop-investigation.md): 8 hand-verified
+  // alias/co-name entries. Each confirmed 1:1 against the real osm_data.json key list.
+  'LENOX AVENUE': 'Malcolm X Boulevard',
+  'ADAM C POWELL BOULEVARD': 'Adam Clayton Powell Jr. Boulevard',
+  'ADAM CLAYTON POWELL JR BOULEVARD': 'Adam Clayton Powell Jr. Boulevard',
+  'ADAM CLAYTON POWELL BOULEVARD': 'Adam Clayton Powell Jr. Boulevard',
+  'FRED DOUGLASS BOULEVARD': 'Frederick Douglass Boulevard',
+  'AVENUE OF THE AMERICAS': '6th Avenue',
+  'AVENUE OF AMERICAS': '6th Avenue',
+  'N D PERLMAN PLACE': 'Nathan D. Perlman Place',
+  'CATHEDRAL PARKWAY': 'West 110th Street',
 };
 
 const osmNameCache = {};
+// FT-14 join-drop fix: lazily-built compact-form (spaces stripped, lowercased) index of
+// OSM_STREETS keys, used by osmName()'s collision-checked spacing-variant fallback.
+// Built lazily because OSM_STREETS is populated after this module's functions are
+// defined (see loadData()).
+let compactStreetIndex = null;
+function buildCompactStreetIndex() {
+  const idx = {};
+  for (const k of Object.keys(OSM_STREETS)) {
+    const compact = k.replace(/\s+/g, '').toLowerCase();
+    if (!idx[compact]) idx[compact] = [];
+    idx[compact].push(k);
+  }
+  return idx;
+}
 // Normalize NYC's weird street names: "EAST    4 STREET" → "EAST 4TH STREET", "2 AVENUE" → "2ND AVENUE"
 function normalizeNYCName(name) {
   if (!name) return name;
@@ -273,9 +298,32 @@ function osmName(nycName) {
     titled.replace(/ Ave$/, ' Avenue'),
     titled.replace(/ Place$/, ' Pl'),
     titled.replace(/ Pl$/, ' Place'),
+    // FT-14 join-drop fix: SAINT <-> ST bidirectional swap (e.g. NYC "St Nicholas
+    // Avenue" <-> OSM "Saint Nicholas Avenue"). Candidates still must exact-match a
+    // real OSM key below, and OSM has exactly 3 "Saint"-prefixed streets citywide, so
+    // there's no room for an accidental wrong-street match.
+    titled.replace(/\bSt\b/g, 'Saint'),
+    titled.replace(/\bSaint\b/g, 'St'),
   ];
   for (const v of variations) {
     if (OSM_STREETS[v]) { osmNameCache[upper] = v; return v; }
+  }
+
+  // FT-14 join-drop fix: collision-checked compact-spacing fallback. Strips all
+  // internal spaces from the candidate and compares against a precomputed compact-form
+  // index of OSM street names (e.g. NYC "LA GUARDIA PLACE" / OSM "LaGuardia Place" both
+  // compact to "laguardiaplace"). Only accepted when the compact form uniquely
+  // identifies exactly one OSM street -- citywide there are only 3 compact-form
+  // collisions, and all 3 are pre-existing OSM duplicate spellings of the SAME physical
+  // street (Vandam St / Van Dam St, two spellings each of the Williamsburg Bridge
+  // Bikepath and the Manhattan Bridge lower level), so an unambiguous match can never
+  // misroute a sign onto a different street.
+  if (!compactStreetIndex) compactStreetIndex = buildCompactStreetIndex();
+  const compactCandidate = upper.replace(/\s+/g, '').toLowerCase();
+  const compactMatches = compactStreetIndex[compactCandidate];
+  if (compactMatches && compactMatches.length === 1) {
+    osmNameCache[upper] = compactMatches[0];
+    return compactMatches[0];
   }
 
   osmNameCache[upper] = null;
