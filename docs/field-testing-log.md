@@ -109,7 +109,7 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   duplicates). Separate follow-ups flagged, NOT bundled: 1,528-row zone-construction loss;
   dead-end/ramp handling. Caveat: recovers ~4 of the ~57 uncovered points — the bulk of the gap is
   likely blocks where NYC posts no signs at all (bigger, different problem).
-- **Status:** 🟡 numbers in hand — fix + regen 7 awaiting Kevin go/no-go.
+- **Status:** 🟡 Kevin approved → fix implemented + regen 7 run → **PR #68 open, in QA** (2026-08-01). Verified pre-PR: coverage 43%→47%, Harlem 38%→64%, Kevin block recovered both sides, zero category regressions, 39 new Harlem-row tiles. Merge → build 15 (with FT-13 ? button).
 - **Lands in:** `build/preprocess.js` normalizer + regen 7.
 
 ### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
