@@ -9,9 +9,9 @@
   "lngMax": -73.907,
   "rowSize": 0.002274999999999938,
   "colSize": 0.0022599999999999907,
-  "totalSegments": 39289,
-  "totalTiles": 1032,
-  "generatedAt": "2026-07-09T19:51:03.350Z",
+  "totalSegments": 43062,
+  "totalTiles": 1070,
+  "generatedAt": "2026-07-23T12:55:21.994Z",
   "tiles": [
     {
       "row": 0,
@@ -35,7 +35,7 @@
       "row": 1,
       "col": 3,
       "filename": "tile_1_3.json",
-      "segmentCount": 66
+      "segmentCount": 72
     },
     {
       "row": 1,
@@ -119,7 +119,7 @@
       "row": 2,
       "col": 6,
       "filename": "tile_2_6.json",
-      "segmentCount": 54
+      "segmentCount": 53
     },
     {
       "row": 2,
@@ -173,7 +173,7 @@
       "row": 3,
       "col": 6,
       "filename": "tile_3_6.json",
-      "segmentCount": 45
+      "segmentCount": 49
     },
     {
       "row": 3,
@@ -215,13 +215,13 @@
       "row": 4,
       "col": 5,
       "filename": "tile_4_5.json",
-      "segmentCount": 61
+      "segmentCount": 62
     },
     {
       "row": 4,
       "col": 6,
       "filename": "tile_4_6.json",
-      "segmentCount": 54
+      "segmentCount": 53
     },
     {
       "row": 4,
@@ -233,7 +233,7 @@
       "row": 4,
       "col": 8,
       "filename": "tile_4_8.json",
-      "segmentCount": 16
+      "segmentCount": 17
     },
     {
       "row": 4,
@@ -311,7 +311,7 @@
       "row": 5,
       "col": 5,
       "filename": "tile_5_5.json",
-      "segmentCount": 40
+      "segmentCount": 39
     },
     {
       "row": 5,
@@ -329,19 +329,19 @@
       "row": 5,
       "col": 8,
       "filename": "tile_5_8.json",
-      "segmentCount": 21
+      "segmentCount": 25
     },
     {
       "row": 5,
       "col": 9,
       "filename": "tile_5_9.json",
-      "segmentCount": 22
+      "segmentCount": 54
     },
     {
       "row": 5,
       "col": 10,
       "filename": "tile_5_10.json",
-      "segmentCount": 56
+      "segmentCount": 58
     },
     {
       "row": 5,
@@ -743,7 +743,7 @@
       "row": 9,
       "col": 6,
       "filename": "tile_9_6.json",
-      "segmentCount": 37
+      "segmentCount": 44
     },
     {
       "row": 9,
@@ -851,13 +851,13 @@
       "row": 10,
       "col": 6,
       "filename": "tile_10_6.json",
-      "segmentCount": 61
+      "segmentCount": 76
     },
     {
       "row": 10,
       "col": 7,
       "filename": "tile_10_7.json",
-      "segmentCount": 67
+      "segmentCount": 68
     },
     {
       "row": 10,
@@ -959,31 +959,31 @@
       "row": 11,
       "col": 6,
       "filename": "tile_11_6.json",
-      "segmentCount": 45
+      "segmentCount": 64
     },
     {
       "row": 11,
       "col": 7,
       "filename": "tile_11_7.json",
-      "segmentCount": 46
+      "segmentCount": 57
     },
     {
       "row": 11,
       "col": 8,
       "filename": "tile_11_8.json",
-      "segmentCount": 57
+      "segmentCount": 59
     },
     {
       "row": 11,
       "col": 9,
       "filename": "tile_11_9.json",
-      "segmentCount": 26
+      "segmentCount": 38
     },
     {
       "row": 11,
       "col": 10,
       "filename": "tile_11_10.json",
-      "segmentCount": 57
+      "segmentCount": 59
     },
     {
       "row": 11,
@@ -1013,13 +1013,13 @@
       "row": 11,
       "col": 15,
       "filename": "tile_11_15.json",
-      "segmentCount": 40
+      "segmentCount": 45
     },
     {
       "row": 11,
       "col": 16,
       "filename": "tile_11_16.json",
-      "segmentCount": 27
+      "segmentCount": 37
     },
     {
       "row": 11,
@@ -1061,31 +1061,31 @@
       "row": 12,
       "col": 6,
       "filename": "tile_12_6.json",
-      "segmentCount": 55
+      "segmentCount": 58
     },
     {
       "row": 12,
       "col": 7,
       "filename": "tile_12_7.json",
-      "segmentCount": 36
+      "segmentCount": 61
     },
     {
       "row": 12,
       "col": 8,
       "filename": "tile_12_8.json",
-      "segmentCount": 73
+      "segmentCount": 78
     },
     {
       "row": 12,
       "col": 9,
       "filename": "tile_12_9.json",
-      "segmentCount": 31
+      "segmentCount": 47
     },
     {
       "row": 12,
       "col": 10,
       "filename": "tile_12_10.json",
-      "segmentCount": 33
+      "segmentCount": 34
     },
     {
       "row": 12,
@@ -1103,19 +1103,19 @@
       "row": 12,
       "col": 13,
       "filename": "tile_12_13.json",
-      "segmentCount": 38
+      "segmentCount": 47
     },
     {
       "row": 12,
       "col": 14,
       "filename": "tile_12_14.json",
-      "segmentCount": 29
+      "segmentCount": 52
     },
     {
       "row": 12,
       "col": 15,
       "filename": "tile_12_15.json",
-      "segmentCount": 45
+      "segmentCount": 63
     },
     {
       "row": 12,
@@ -1157,37 +1157,37 @@
       "row": 13,
       "col": 5,
       "filename": "tile_13_5.json",
-      "segmentCount": 66
+      "segmentCount": 69
     },
     {
       "row": 13,
       "col": 6,
       "filename": "tile_13_6.json",
-      "segmentCount": 54
+      "segmentCount": 55
     },
     {
       "row": 13,
       "col": 7,
       "filename": "tile_13_7.json",
-      "segmentCount": 54
+      "segmentCount": 66
     },
     {
       "row": 13,
       "col": 8,
       "filename": "tile_13_8.json",
-      "segmentCount": 55
+      "segmentCount": 69
     },
     {
       "row": 13,
       "col": 9,
       "filename": "tile_13_9.json",
-      "segmentCount": 48
+      "segmentCount": 57
     },
     {
       "row": 13,
       "col": 10,
       "filename": "tile_13_10.json",
-      "segmentCount": 50
+      "segmentCount": 51
     },
     {
       "row": 13,
@@ -1265,7 +1265,7 @@
       "row": 14,
       "col": 6,
       "filename": "tile_14_6.json",
-      "segmentCount": 81
+      "segmentCount": 79
     },
     {
       "row": 14,
@@ -1277,13 +1277,13 @@
       "row": 14,
       "col": 8,
       "filename": "tile_14_8.json",
-      "segmentCount": 43
+      "segmentCount": 49
     },
     {
       "row": 14,
       "col": 9,
       "filename": "tile_14_9.json",
-      "segmentCount": 44
+      "segmentCount": 51
     },
     {
       "row": 14,
@@ -1319,19 +1319,19 @@
       "row": 14,
       "col": 15,
       "filename": "tile_14_15.json",
-      "segmentCount": 59
+      "segmentCount": 61
     },
     {
       "row": 14,
       "col": 16,
       "filename": "tile_14_16.json",
-      "segmentCount": 29
+      "segmentCount": 59
     },
     {
       "row": 14,
       "col": 17,
       "filename": "tile_14_17.json",
-      "segmentCount": 29
+      "segmentCount": 30
     },
     {
       "row": 14,
@@ -1385,7 +1385,7 @@
       "row": 15,
       "col": 9,
       "filename": "tile_15_9.json",
-      "segmentCount": 58
+      "segmentCount": 59
     },
     {
       "row": 15,
@@ -1493,7 +1493,7 @@
       "row": 16,
       "col": 10,
       "filename": "tile_16_10.json",
-      "segmentCount": 51
+      "segmentCount": 49
     },
     {
       "row": 16,
@@ -1595,13 +1595,13 @@
       "row": 17,
       "col": 10,
       "filename": "tile_17_10.json",
-      "segmentCount": 50
+      "segmentCount": 48
     },
     {
       "row": 17,
       "col": 11,
       "filename": "tile_17_11.json",
-      "segmentCount": 36
+      "segmentCount": 33
     },
     {
       "row": 17,
@@ -1703,13 +1703,13 @@
       "row": 18,
       "col": 11,
       "filename": "tile_18_11.json",
-      "segmentCount": 47
+      "segmentCount": 44
     },
     {
       "row": 18,
       "col": 12,
       "filename": "tile_18_12.json",
-      "segmentCount": 33
+      "segmentCount": 32
     },
     {
       "row": 18,
@@ -1721,7 +1721,7 @@
       "row": 18,
       "col": 14,
       "filename": "tile_18_14.json",
-      "segmentCount": 42
+      "segmentCount": 40
     },
     {
       "row": 18,
@@ -1811,7 +1811,7 @@
       "row": 19,
       "col": 12,
       "filename": "tile_19_12.json",
-      "segmentCount": 55
+      "segmentCount": 52
     },
     {
       "row": 19,
@@ -1829,43 +1829,43 @@
       "row": 19,
       "col": 15,
       "filename": "tile_19_15.json",
-      "segmentCount": 66
+      "segmentCount": 67
     },
     {
       "row": 19,
       "col": 16,
       "filename": "tile_19_16.json",
-      "segmentCount": 65
+      "segmentCount": 66
     },
     {
       "row": 19,
       "col": 17,
       "filename": "tile_19_17.json",
-      "segmentCount": 52
+      "segmentCount": 55
     },
     {
       "row": 19,
       "col": 18,
       "filename": "tile_19_18.json",
-      "segmentCount": 43
+      "segmentCount": 49
     },
     {
       "row": 19,
       "col": 19,
       "filename": "tile_19_19.json",
-      "segmentCount": 48
+      "segmentCount": 50
     },
     {
       "row": 19,
       "col": 20,
       "filename": "tile_19_20.json",
-      "segmentCount": 20
+      "segmentCount": 26
     },
     {
       "row": 19,
       "col": 21,
       "filename": "tile_19_21.json",
-      "segmentCount": 27
+      "segmentCount": 30
     },
     {
       "row": 20,
@@ -1919,7 +1919,7 @@
       "row": 20,
       "col": 13,
       "filename": "tile_20_13.json",
-      "segmentCount": 69
+      "segmentCount": 71
     },
     {
       "row": 20,
@@ -2033,7 +2033,7 @@
       "row": 21,
       "col": 14,
       "filename": "tile_21_14.json",
-      "segmentCount": 38
+      "segmentCount": 40
     },
     {
       "row": 21,
@@ -2045,7 +2045,7 @@
       "row": 21,
       "col": 16,
       "filename": "tile_21_16.json",
-      "segmentCount": 52
+      "segmentCount": 51
     },
     {
       "row": 21,
@@ -2081,7 +2081,7 @@
       "row": 21,
       "col": 22,
       "filename": "tile_21_22.json",
-      "segmentCount": 16
+      "segmentCount": 19
     },
     {
       "row": 22,
@@ -2375,13 +2375,13 @@
       "row": 24,
       "col": 15,
       "filename": "tile_24_15.json",
-      "segmentCount": 35
+      "segmentCount": 39
     },
     {
       "row": 24,
       "col": 16,
       "filename": "tile_24_16.json",
-      "segmentCount": 57
+      "segmentCount": 59
     },
     {
       "row": 24,
@@ -2417,7 +2417,7 @@
       "row": 24,
       "col": 22,
       "filename": "tile_24_22.json",
-      "segmentCount": 53
+      "segmentCount": 52
     },
     {
       "row": 24,
@@ -2495,7 +2495,7 @@
       "row": 25,
       "col": 15,
       "filename": "tile_25_15.json",
-      "segmentCount": 47
+      "segmentCount": 50
     },
     {
       "row": 25,
@@ -2693,7 +2693,7 @@
       "row": 26,
       "col": 27,
       "filename": "tile_26_27.json",
-      "segmentCount": 41
+      "segmentCount": 40
     },
     {
       "row": 27,
@@ -2885,13 +2885,13 @@
       "row": 28,
       "col": 19,
       "filename": "tile_28_19.json",
-      "segmentCount": 41
+      "segmentCount": 48
     },
     {
       "row": 28,
       "col": 20,
       "filename": "tile_28_20.json",
-      "segmentCount": 23
+      "segmentCount": 29
     },
     {
       "row": 28,
@@ -2945,7 +2945,7 @@
       "row": 28,
       "col": 29,
       "filename": "tile_28_29.json",
-      "segmentCount": 2
+      "segmentCount": 12
     },
     {
       "row": 28,
@@ -3023,7 +3023,7 @@
       "row": 29,
       "col": 22,
       "filename": "tile_29_22.json",
-      "segmentCount": 56
+      "segmentCount": 57
     },
     {
       "row": 29,
@@ -3065,7 +3065,7 @@
       "row": 29,
       "col": 29,
       "filename": "tile_29_29.json",
-      "segmentCount": 41
+      "segmentCount": 45
     },
     {
       "row": 29,
@@ -3191,7 +3191,7 @@
       "row": 30,
       "col": 31,
       "filename": "tile_30_31.json",
-      "segmentCount": 19
+      "segmentCount": 20
     },
     {
       "row": 30,
@@ -3365,13 +3365,13 @@
       "row": 32,
       "col": 23,
       "filename": "tile_32_23.json",
-      "segmentCount": 14
+      "segmentCount": 15
     },
     {
       "row": 32,
       "col": 24,
       "filename": "tile_32_24.json",
-      "segmentCount": 65
+      "segmentCount": 69
     },
     {
       "row": 32,
@@ -3743,7 +3743,7 @@
       "row": 35,
       "col": 33,
       "filename": "tile_35_33.json",
-      "segmentCount": 10
+      "segmentCount": 11
     },
     {
       "row": 36,
@@ -3767,7 +3767,7 @@
       "row": 36,
       "col": 18,
       "filename": "tile_36_18.json",
-      "segmentCount": 51
+      "segmentCount": 50
     },
     {
       "row": 36,
@@ -3857,7 +3857,7 @@
       "row": 37,
       "col": 17,
       "filename": "tile_37_17.json",
-      "segmentCount": 68
+      "segmentCount": 69
     },
     {
       "row": 37,
@@ -3941,7 +3941,7 @@
       "row": 37,
       "col": 35,
       "filename": "tile_37_35.json",
-      "segmentCount": 11
+      "segmentCount": 14
     },
     {
       "row": 38,
@@ -4031,13 +4031,13 @@
       "row": 38,
       "col": 34,
       "filename": "tile_38_34.json",
-      "segmentCount": 46
+      "segmentCount": 48
     },
     {
       "row": 38,
       "col": 35,
       "filename": "tile_38_35.json",
-      "segmentCount": 8
+      "segmentCount": 10
     },
     {
       "row": 38,
@@ -4349,7 +4349,7 @@
       "row": 41,
       "col": 38,
       "filename": "tile_41_38.json",
-      "segmentCount": 21
+      "segmentCount": 19
     },
     {
       "row": 42,
@@ -4409,7 +4409,7 @@
       "row": 42,
       "col": 31,
       "filename": "tile_42_31.json",
-      "segmentCount": 24
+      "segmentCount": 29
     },
     {
       "row": 42,
@@ -4451,19 +4451,19 @@
       "row": 42,
       "col": 38,
       "filename": "tile_42_38.json",
-      "segmentCount": 37
+      "segmentCount": 30
     },
     {
       "row": 42,
       "col": 39,
       "filename": "tile_42_39.json",
-      "segmentCount": 15
+      "segmentCount": 12
     },
     {
       "row": 42,
       "col": 40,
       "filename": "tile_42_40.json",
-      "segmentCount": 2
+      "segmentCount": 4
     },
     {
       "row": 43,
@@ -4511,19 +4511,37 @@
       "row": 43,
       "col": 27,
       "filename": "tile_43_27.json",
-      "segmentCount": 6
+      "segmentCount": 7
+    },
+    {
+      "row": 43,
+      "col": 28,
+      "filename": "tile_43_28.json",
+      "segmentCount": 12
+    },
+    {
+      "row": 43,
+      "col": 29,
+      "filename": "tile_43_29.json",
+      "segmentCount": 25
+    },
+    {
+      "row": 43,
+      "col": 30,
+      "filename": "tile_43_30.json",
+      "segmentCount": 36
     },
     {
       "row": 43,
       "col": 31,
       "filename": "tile_43_31.json",
-      "segmentCount": 12
+      "segmentCount": 23
     },
     {
       "row": 43,
       "col": 32,
       "filename": "tile_43_32.json",
-      "segmentCount": 34
+      "segmentCount": 36
     },
     {
       "row": 43,
@@ -4589,7 +4607,7 @@
       "row": 44,
       "col": 23,
       "filename": "tile_44_23.json",
-      "segmentCount": 50
+      "segmentCount": 47
     },
     {
       "row": 44,
@@ -4601,25 +4619,49 @@
       "row": 44,
       "col": 25,
       "filename": "tile_44_25.json",
-      "segmentCount": 39
+      "segmentCount": 44
     },
     {
       "row": 44,
       "col": 26,
       "filename": "tile_44_26.json",
-      "segmentCount": 22
+      "segmentCount": 48
     },
     {
       "row": 44,
       "col": 27,
       "filename": "tile_44_27.json",
-      "segmentCount": 21
+      "segmentCount": 40
+    },
+    {
+      "row": 44,
+      "col": 28,
+      "filename": "tile_44_28.json",
+      "segmentCount": 33
+    },
+    {
+      "row": 44,
+      "col": 29,
+      "filename": "tile_44_29.json",
+      "segmentCount": 61
+    },
+    {
+      "row": 44,
+      "col": 30,
+      "filename": "tile_44_30.json",
+      "segmentCount": 39
+    },
+    {
+      "row": 44,
+      "col": 31,
+      "filename": "tile_44_31.json",
+      "segmentCount": 41
     },
     {
       "row": 44,
       "col": 32,
       "filename": "tile_44_32.json",
-      "segmentCount": 25
+      "segmentCount": 46
     },
     {
       "row": 44,
@@ -4667,55 +4709,73 @@
       "row": 45,
       "col": 22,
       "filename": "tile_45_22.json",
-      "segmentCount": 38
+      "segmentCount": 42
     },
     {
       "row": 45,
       "col": 23,
       "filename": "tile_45_23.json",
-      "segmentCount": 39
+      "segmentCount": 56
     },
     {
       "row": 45,
       "col": 24,
       "filename": "tile_45_24.json",
-      "segmentCount": 26
+      "segmentCount": 46
     },
     {
       "row": 45,
       "col": 25,
       "filename": "tile_45_25.json",
-      "segmentCount": 13
+      "segmentCount": 23
     },
     {
       "row": 45,
       "col": 26,
       "filename": "tile_45_26.json",
-      "segmentCount": 11
+      "segmentCount": 26
     },
     {
       "row": 45,
       "col": 27,
       "filename": "tile_45_27.json",
-      "segmentCount": 26
+      "segmentCount": 52
     },
     {
       "row": 45,
       "col": 28,
       "filename": "tile_45_28.json",
-      "segmentCount": 11
+      "segmentCount": 51
+    },
+    {
+      "row": 45,
+      "col": 29,
+      "filename": "tile_45_29.json",
+      "segmentCount": 52
+    },
+    {
+      "row": 45,
+      "col": 30,
+      "filename": "tile_45_30.json",
+      "segmentCount": 37
+    },
+    {
+      "row": 45,
+      "col": 31,
+      "filename": "tile_45_31.json",
+      "segmentCount": 52
     },
     {
       "row": 45,
       "col": 32,
       "filename": "tile_45_32.json",
-      "segmentCount": 8
+      "segmentCount": 29
     },
     {
       "row": 45,
       "col": 33,
       "filename": "tile_45_33.json",
-      "segmentCount": 14
+      "segmentCount": 18
     },
     {
       "row": 45,
@@ -4763,7 +4823,7 @@
       "row": 46,
       "col": 23,
       "filename": "tile_46_23.json",
-      "segmentCount": 48
+      "segmentCount": 51
     },
     {
       "row": 46,
@@ -4775,49 +4835,61 @@
       "row": 46,
       "col": 25,
       "filename": "tile_46_25.json",
-      "segmentCount": 30
+      "segmentCount": 31
     },
     {
       "row": 46,
       "col": 26,
       "filename": "tile_46_26.json",
-      "segmentCount": 40
+      "segmentCount": 48
     },
     {
       "row": 46,
       "col": 27,
       "filename": "tile_46_27.json",
-      "segmentCount": 39
+      "segmentCount": 42
     },
     {
       "row": 46,
       "col": 28,
       "filename": "tile_46_28.json",
-      "segmentCount": 27
+      "segmentCount": 55
     },
     {
       "row": 46,
       "col": 29,
       "filename": "tile_46_29.json",
-      "segmentCount": 3
+      "segmentCount": 68
+    },
+    {
+      "row": 46,
+      "col": 30,
+      "filename": "tile_46_30.json",
+      "segmentCount": 48
+    },
+    {
+      "row": 46,
+      "col": 31,
+      "filename": "tile_46_31.json",
+      "segmentCount": 31
     },
     {
       "row": 46,
       "col": 32,
       "filename": "tile_46_32.json",
-      "segmentCount": 3
+      "segmentCount": 35
     },
     {
       "row": 46,
       "col": 33,
       "filename": "tile_46_33.json",
-      "segmentCount": 9
+      "segmentCount": 20
     },
     {
       "row": 46,
       "col": 34,
       "filename": "tile_46_34.json",
-      "segmentCount": 42
+      "segmentCount": 47
     },
     {
       "row": 46,
@@ -4871,31 +4943,55 @@
       "row": 47,
       "col": 27,
       "filename": "tile_47_27.json",
-      "segmentCount": 38
+      "segmentCount": 45
     },
     {
       "row": 47,
       "col": 28,
       "filename": "tile_47_28.json",
-      "segmentCount": 45
+      "segmentCount": 49
     },
     {
       "row": 47,
       "col": 29,
       "filename": "tile_47_29.json",
-      "segmentCount": 30
+      "segmentCount": 68
+    },
+    {
+      "row": 47,
+      "col": 30,
+      "filename": "tile_47_30.json",
+      "segmentCount": 29
+    },
+    {
+      "row": 47,
+      "col": 31,
+      "filename": "tile_47_31.json",
+      "segmentCount": 48
+    },
+    {
+      "row": 47,
+      "col": 32,
+      "filename": "tile_47_32.json",
+      "segmentCount": 37
+    },
+    {
+      "row": 47,
+      "col": 33,
+      "filename": "tile_47_33.json",
+      "segmentCount": 47
     },
     {
       "row": 47,
       "col": 34,
       "filename": "tile_47_34.json",
-      "segmentCount": 16
+      "segmentCount": 47
     },
     {
       "row": 47,
       "col": 35,
       "filename": "tile_47_35.json",
-      "segmentCount": 58
+      "segmentCount": 59
     },
     {
       "row": 47,
@@ -4931,7 +5027,7 @@
       "row": 48,
       "col": 27,
       "filename": "tile_48_27.json",
-      "segmentCount": 38
+      "segmentCount": 44
     },
     {
       "row": 48,
@@ -4943,19 +5039,43 @@
       "row": 48,
       "col": 29,
       "filename": "tile_48_29.json",
-      "segmentCount": 29
+      "segmentCount": 49
     },
     {
       "row": 48,
       "col": 30,
       "filename": "tile_48_30.json",
-      "segmentCount": 12
+      "segmentCount": 53
+    },
+    {
+      "row": 48,
+      "col": 31,
+      "filename": "tile_48_31.json",
+      "segmentCount": 44
+    },
+    {
+      "row": 48,
+      "col": 32,
+      "filename": "tile_48_32.json",
+      "segmentCount": 44
+    },
+    {
+      "row": 48,
+      "col": 33,
+      "filename": "tile_48_33.json",
+      "segmentCount": 37
+    },
+    {
+      "row": 48,
+      "col": 34,
+      "filename": "tile_48_34.json",
+      "segmentCount": 38
     },
     {
       "row": 48,
       "col": 35,
       "filename": "tile_48_35.json",
-      "segmentCount": 29
+      "segmentCount": 51
     },
     {
       "row": 48,
@@ -4997,31 +5117,49 @@
       "row": 49,
       "col": 29,
       "filename": "tile_49_29.json",
-      "segmentCount": 39
+      "segmentCount": 45
     },
     {
       "row": 49,
       "col": 30,
       "filename": "tile_49_30.json",
-      "segmentCount": 21
+      "segmentCount": 54
     },
     {
       "row": 49,
       "col": 31,
       "filename": "tile_49_31.json",
-      "segmentCount": 11
+      "segmentCount": 29
+    },
+    {
+      "row": 49,
+      "col": 32,
+      "filename": "tile_49_32.json",
+      "segmentCount": 39
+    },
+    {
+      "row": 49,
+      "col": 33,
+      "filename": "tile_49_33.json",
+      "segmentCount": 41
+    },
+    {
+      "row": 49,
+      "col": 34,
+      "filename": "tile_49_34.json",
+      "segmentCount": 44
     },
     {
       "row": 49,
       "col": 35,
       "filename": "tile_49_35.json",
-      "segmentCount": 9
+      "segmentCount": 17
     },
     {
       "row": 49,
       "col": 36,
       "filename": "tile_49_36.json",
-      "segmentCount": 25
+      "segmentCount": 27
     },
     {
       "row": 49,
@@ -5039,7 +5177,7 @@
       "row": 50,
       "col": 26,
       "filename": "tile_50_26.json",
-      "segmentCount": 50
+      "segmentCount": 53
     },
     {
       "row": 50,
@@ -5051,43 +5189,61 @@
       "row": 50,
       "col": 28,
       "filename": "tile_50_28.json",
-      "segmentCount": 48
+      "segmentCount": 44
     },
     {
       "row": 50,
       "col": 29,
       "filename": "tile_50_29.json",
-      "segmentCount": 31
+      "segmentCount": 40
     },
     {
       "row": 50,
       "col": 30,
       "filename": "tile_50_30.json",
-      "segmentCount": 11
+      "segmentCount": 21
     },
     {
       "row": 50,
       "col": 31,
       "filename": "tile_50_31.json",
-      "segmentCount": 8
+      "segmentCount": 24
     },
     {
       "row": 50,
       "col": 32,
       "filename": "tile_50_32.json",
-      "segmentCount": 4
+      "segmentCount": 50
+    },
+    {
+      "row": 50,
+      "col": 33,
+      "filename": "tile_50_33.json",
+      "segmentCount": 53
+    },
+    {
+      "row": 50,
+      "col": 34,
+      "filename": "tile_50_34.json",
+      "segmentCount": 41
+    },
+    {
+      "row": 50,
+      "col": 35,
+      "filename": "tile_50_35.json",
+      "segmentCount": 44
     },
     {
       "row": 50,
       "col": 36,
       "filename": "tile_50_36.json",
-      "segmentCount": 4
+      "segmentCount": 37
     },
     {
       "row": 50,
       "col": 37,
       "filename": "tile_50_37.json",
-      "segmentCount": 20
+      "segmentCount": 23
     },
     {
       "row": 51,
@@ -5099,7 +5255,7 @@
       "row": 51,
       "col": 26,
       "filename": "tile_51_26.json",
-      "segmentCount": 46
+      "segmentCount": 47
     },
     {
       "row": 51,
@@ -5111,7 +5267,7 @@
       "row": 51,
       "col": 28,
       "filename": "tile_51_28.json",
-      "segmentCount": 15
+      "segmentCount": 17
     },
     {
       "row": 51,
@@ -5129,25 +5285,43 @@
       "row": 51,
       "col": 31,
       "filename": "tile_51_31.json",
-      "segmentCount": 10
+      "segmentCount": 20
     },
     {
       "row": 51,
       "col": 32,
       "filename": "tile_51_32.json",
-      "segmentCount": 9
+      "segmentCount": 60
     },
     {
       "row": 51,
       "col": 33,
       "filename": "tile_51_33.json",
-      "segmentCount": 1
+      "segmentCount": 28
+    },
+    {
+      "row": 51,
+      "col": 34,
+      "filename": "tile_51_34.json",
+      "segmentCount": 51
+    },
+    {
+      "row": 51,
+      "col": 35,
+      "filename": "tile_51_35.json",
+      "segmentCount": 39
+    },
+    {
+      "row": 51,
+      "col": 36,
+      "filename": "tile_51_36.json",
+      "segmentCount": 19
     },
     {
       "row": 51,
       "col": 37,
       "filename": "tile_51_37.json",
-      "segmentCount": 28
+      "segmentCount": 37
     },
     {
       "row": 52,
@@ -5171,7 +5345,7 @@
       "row": 52,
       "col": 28,
       "filename": "tile_52_28.json",
-      "segmentCount": 55
+      "segmentCount": 54
     },
     {
       "row": 52,
@@ -5183,31 +5357,49 @@
       "row": 52,
       "col": 30,
       "filename": "tile_52_30.json",
-      "segmentCount": 29
+      "segmentCount": 32
     },
     {
       "row": 52,
       "col": 31,
       "filename": "tile_52_31.json",
-      "segmentCount": 14
+      "segmentCount": 18
     },
     {
       "row": 52,
       "col": 32,
       "filename": "tile_52_32.json",
-      "segmentCount": 37
+      "segmentCount": 58
     },
     {
       "row": 52,
       "col": 33,
       "filename": "tile_52_33.json",
-      "segmentCount": 12
+      "segmentCount": 51
+    },
+    {
+      "row": 52,
+      "col": 34,
+      "filename": "tile_52_34.json",
+      "segmentCount": 35
+    },
+    {
+      "row": 52,
+      "col": 35,
+      "filename": "tile_52_35.json",
+      "segmentCount": 50
+    },
+    {
+      "row": 52,
+      "col": 36,
+      "filename": "tile_52_36.json",
+      "segmentCount": 44
     },
     {
       "row": 52,
       "col": 37,
       "filename": "tile_52_37.json",
-      "segmentCount": 5
+      "segmentCount": 13
     },
     {
       "row": 53,
@@ -5237,31 +5429,43 @@
       "row": 53,
       "col": 31,
       "filename": "tile_53_31.json",
-      "segmentCount": 45
+      "segmentCount": 50
     },
     {
       "row": 53,
       "col": 32,
       "filename": "tile_53_32.json",
-      "segmentCount": 27
+      "segmentCount": 39
     },
     {
       "row": 53,
       "col": 33,
       "filename": "tile_53_33.json",
-      "segmentCount": 29
+      "segmentCount": 50
     },
     {
       "row": 53,
       "col": 34,
       "filename": "tile_53_34.json",
-      "segmentCount": 2
+      "segmentCount": 50
+    },
+    {
+      "row": 53,
+      "col": 35,
+      "filename": "tile_53_35.json",
+      "segmentCount": 44
+    },
+    {
+      "row": 53,
+      "col": 36,
+      "filename": "tile_53_36.json",
+      "segmentCount": 43
     },
     {
       "row": 53,
       "col": 37,
       "filename": "tile_53_37.json",
-      "segmentCount": 8
+      "segmentCount": 27
     },
     {
       "row": 54,
@@ -5273,13 +5477,13 @@
       "row": 54,
       "col": 29,
       "filename": "tile_54_29.json",
-      "segmentCount": 43
+      "segmentCount": 41
     },
     {
       "row": 54,
       "col": 30,
       "filename": "tile_54_30.json",
-      "segmentCount": 43
+      "segmentCount": 45
     },
     {
       "row": 54,
@@ -5291,25 +5495,31 @@
       "row": 54,
       "col": 32,
       "filename": "tile_54_32.json",
-      "segmentCount": 57
+      "segmentCount": 58
     },
     {
       "row": 54,
       "col": 33,
       "filename": "tile_54_33.json",
-      "segmentCount": 24
+      "segmentCount": 40
     },
     {
       "row": 54,
       "col": 34,
       "filename": "tile_54_34.json",
-      "segmentCount": 20
+      "segmentCount": 56
     },
     {
       "row": 54,
       "col": 35,
       "filename": "tile_54_35.json",
-      "segmentCount": 2
+      "segmentCount": 37
+    },
+    {
+      "row": 54,
+      "col": 36,
+      "filename": "tile_54_36.json",
+      "segmentCount": 32
     },
     {
       "row": 54,
@@ -5339,31 +5549,37 @@
       "row": 55,
       "col": 32,
       "filename": "tile_55_32.json",
-      "segmentCount": 54
+      "segmentCount": 55
     },
     {
       "row": 55,
       "col": 33,
       "filename": "tile_55_33.json",
-      "segmentCount": 45
+      "segmentCount": 50
     },
     {
       "row": 55,
       "col": 34,
       "filename": "tile_55_34.json",
-      "segmentCount": 22
+      "segmentCount": 34
     },
     {
       "row": 55,
       "col": 35,
       "filename": "tile_55_35.json",
-      "segmentCount": 16
+      "segmentCount": 58
     },
     {
       "row": 55,
       "col": 36,
       "filename": "tile_55_36.json",
-      "segmentCount": 10
+      "segmentCount": 45
+    },
+    {
+      "row": 55,
+      "col": 37,
+      "filename": "tile_55_37.json",
+      "segmentCount": 13
     },
     {
       "row": 56,
@@ -5375,7 +5591,7 @@
       "row": 56,
       "col": 31,
       "filename": "tile_56_31.json",
-      "segmentCount": 48
+      "segmentCount": 50
     },
     {
       "row": 56,
@@ -5387,31 +5603,31 @@
       "row": 56,
       "col": 33,
       "filename": "tile_56_33.json",
-      "segmentCount": 53
+      "segmentCount": 61
     },
     {
       "row": 56,
       "col": 34,
       "filename": "tile_56_34.json",
-      "segmentCount": 25
+      "segmentCount": 70
     },
     {
       "row": 56,
       "col": 35,
       "filename": "tile_56_35.json",
-      "segmentCount": 16
+      "segmentCount": 28
     },
     {
       "row": 56,
       "col": 36,
       "filename": "tile_56_36.json",
-      "segmentCount": 8
+      "segmentCount": 54
     },
     {
       "row": 56,
       "col": 37,
       "filename": "tile_56_37.json",
-      "segmentCount": 7
+      "segmentCount": 18
     },
     {
       "row": 57,
@@ -5429,19 +5645,31 @@
       "row": 57,
       "col": 33,
       "filename": "tile_57_33.json",
-      "segmentCount": 31
+      "segmentCount": 39
     },
     {
       "row": 57,
       "col": 34,
       "filename": "tile_57_34.json",
-      "segmentCount": 9
+      "segmentCount": 50
     },
     {
       "row": 57,
       "col": 35,
       "filename": "tile_57_35.json",
-      "segmentCount": 12
+      "segmentCount": 17
+    },
+    {
+      "row": 57,
+      "col": 36,
+      "filename": "tile_57_36.json",
+      "segmentCount": 6
+    },
+    {
+      "row": 57,
+      "col": 37,
+      "filename": "tile_57_37.json",
+      "segmentCount": 5
     },
     {
       "row": 58,
@@ -5465,19 +5693,19 @@
       "row": 58,
       "col": 34,
       "filename": "tile_58_34.json",
-      "segmentCount": 43
+      "segmentCount": 61
     },
     {
       "row": 58,
       "col": 35,
       "filename": "tile_58_35.json",
-      "segmentCount": 11
+      "segmentCount": 47
     },
     {
       "row": 58,
       "col": 36,
       "filename": "tile_58_36.json",
-      "segmentCount": 2
+      "segmentCount": 3
     },
     {
       "row": 59,
@@ -5507,7 +5735,7 @@
       "row": 59,
       "col": 35,
       "filename": "tile_59_35.json",
-      "segmentCount": 31
+      "segmentCount": 66
     },
     {
       "row": 59,
@@ -5537,19 +5765,19 @@
       "row": 60,
       "col": 34,
       "filename": "tile_60_34.json",
-      "segmentCount": 35
+      "segmentCount": 57
     },
     {
       "row": 60,
       "col": 35,
       "filename": "tile_60_35.json",
-      "segmentCount": 17
+      "segmentCount": 61
     },
     {
       "row": 60,
       "col": 36,
       "filename": "tile_60_36.json",
-      "segmentCount": 61
+      "segmentCount": 63
     },
     {
       "row": 60,
@@ -5573,19 +5801,19 @@
       "row": 61,
       "col": 34,
       "filename": "tile_61_34.json",
-      "segmentCount": 29
+      "segmentCount": 32
     },
     {
       "row": 61,
       "col": 35,
       "filename": "tile_61_35.json",
-      "segmentCount": 25
+      "segmentCount": 55
     },
     {
       "row": 61,
       "col": 36,
       "filename": "tile_61_36.json",
-      "segmentCount": 49
+      "segmentCount": 52
     },
     {
       "row": 61,
@@ -5609,13 +5837,13 @@
       "row": 62,
       "col": 35,
       "filename": "tile_62_35.json",
-      "segmentCount": 34
+      "segmentCount": 49
     },
     {
       "row": 62,
       "col": 36,
       "filename": "tile_62_36.json",
-      "segmentCount": 61
+      "segmentCount": 67
     },
     {
       "row": 62,
@@ -5645,13 +5873,13 @@
       "row": 63,
       "col": 36,
       "filename": "tile_63_36.json",
-      "segmentCount": 41
+      "segmentCount": 65
     },
     {
       "row": 63,
       "col": 37,
       "filename": "tile_63_37.json",
-      "segmentCount": 53
+      "segmentCount": 61
     },
     {
       "row": 63,
@@ -5681,19 +5909,19 @@
       "row": 64,
       "col": 36,
       "filename": "tile_64_36.json",
-      "segmentCount": 58
+      "segmentCount": 72
     },
     {
       "row": 64,
       "col": 37,
       "filename": "tile_64_37.json",
-      "segmentCount": 10
+      "segmentCount": 62
     },
     {
       "row": 64,
       "col": 38,
       "filename": "tile_64_38.json",
-      "segmentCount": 43
+      "segmentCount": 48
     },
     {
       "row": 64,
@@ -5729,13 +5957,13 @@
       "row": 65,
       "col": 37,
       "filename": "tile_65_37.json",
-      "segmentCount": 30
+      "segmentCount": 70
     },
     {
       "row": 65,
       "col": 38,
       "filename": "tile_65_38.json",
-      "segmentCount": 22
+      "segmentCount": 68
     },
     {
       "row": 65,
@@ -5771,19 +5999,19 @@
       "row": 66,
       "col": 37,
       "filename": "tile_66_37.json",
-      "segmentCount": 64
+      "segmentCount": 68
     },
     {
       "row": 66,
       "col": 38,
       "filename": "tile_66_38.json",
-      "segmentCount": 45
+      "segmentCount": 73
     },
     {
       "row": 66,
       "col": 39,
       "filename": "tile_66_39.json",
-      "segmentCount": 42
+      "segmentCount": 49
     },
     {
       "row": 66,
@@ -5819,19 +6047,19 @@
       "row": 67,
       "col": 38,
       "filename": "tile_67_38.json",
-      "segmentCount": 52
+      "segmentCount": 57
     },
     {
       "row": 67,
       "col": 39,
       "filename": "tile_67_39.json",
-      "segmentCount": 20
+      "segmentCount": 63
     },
     {
       "row": 67,
       "col": 40,
       "filename": "tile_67_40.json",
-      "segmentCount": 41
+      "segmentCount": 59
     },
     {
       "row": 67,
@@ -5867,19 +6095,19 @@
       "row": 68,
       "col": 39,
       "filename": "tile_68_39.json",
-      "segmentCount": 36
+      "segmentCount": 58
     },
     {
       "row": 68,
       "col": 40,
       "filename": "tile_68_40.json",
-      "segmentCount": 11
+      "segmentCount": 60
     },
     {
       "row": 68,
       "col": 41,
       "filename": "tile_68_41.json",
-      "segmentCount": 12
+      "segmentCount": 13
     },
     {
       "row": 69,
@@ -5916,6 +6144,12 @@
       "col": 41,
       "filename": "tile_69_41.json",
       "segmentCount": 5
+    },
+    {
+      "row": 69,
+      "col": 42,
+      "filename": "tile_69_42.json",
+      "segmentCount": 2
     },
     {
       "row": 70,
@@ -6189,15 +6423,9 @@
     },
     {
       "row": 77,
-      "col": 47,
-      "filename": "tile_77_47.json",
-      "segmentCount": 1
-    },
-    {
-      "row": 77,
       "col": 48,
       "filename": "tile_77_48.json",
-      "segmentCount": 8
+      "segmentCount": 5
     },
     {
       "row": 77,
