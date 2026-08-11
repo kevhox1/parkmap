@@ -147,12 +147,23 @@ struct CommunityPin: Identifiable {
 
     /// FT-15 / TF2-15 §7 / OQ-5: `true` when at least one `pin_evidence` row backs
     /// this pin's `reportGroupId`. This is a trust signal only — the photo itself is
-    /// never exposed to any user other than its uploader (§7). Defaults to `false`
-    /// when the key is absent from the payload, so this decodes safely against both
-    /// today's `pins_with_author` view (no such column yet) and a future view that
-    /// adds it. See PR description: the wire key name (`has_evidence_photo`, assumed
-    /// snake_case) is not yet defined in the Stream A schema sketch (§3.2) — needs
-    /// confirmation with @backend-data once that column/computed field exists.
+    /// never exposed to any user other than its uploader (§7).
+    ///
+    /// **Inert as of this PR — QA pass 1 finding, do not treat `false` as a real
+    /// answer.** OQ-5 ("should other users see an 'evidence attached ✓' signal in
+    /// phase 1?") has not been ruled on by Kevin, and Stream A's schema (§3.2) does
+    /// not add any backing column/computed field to `pins_with_author` — nothing can
+    /// ever populate this from the live schema today. It always decodes to `false`
+    /// via the `decodeIfPresent(...) ?? false` fallback below, which is intentional:
+    /// this keeps the field decode-safe (and named/typed, ready to wire up) without
+    /// asserting an answer to OQ-5 that hasn't been made. **Decode-only by design —
+    /// deliberately NOT written by `encode(to:)`**, so a future `Encodable`-based
+    /// insert (e.g. Stream B3's write path) never sends a `has_evidence_photo` key
+    /// PostgREST would reject as an unknown column. Once OQ-5 is ruled on and a real
+    /// backing column/view field exists, this needs: (a) the wire key confirmed
+    /// against the actual schema (`has_evidence_photo` here is an unconfirmed guess),
+    /// and (b) re-adding to `encode(to:)` only if a write path ever needs to send it
+    /// (unlikely — this is normally server-computed, not client-supplied).
     let hasEvidencePhoto: Bool
 }
 
@@ -249,7 +260,12 @@ extension CommunityPin: Codable {
             try container.encodeNil(forKey: .meta)
         }
         try container.encodeIfPresent(reportGroupId, forKey: .reportGroupId)
-        try container.encode(hasEvidencePhoto, forKey: .hasEvidencePhoto)
+        // hasEvidencePhoto is deliberately decode-only — NOT encoded. See its doc
+        // comment on the stored property above: no backing column exists on the live
+        // schema yet, and encoding it unconditionally would send an unknown
+        // `has_evidence_photo` key to PostgREST the moment a future write path
+        // (Stream B3) reaches for `Encodable` instead of a hand-built payload dict.
+        // QA pass 1 finding (docs/qa/ft15-b1-ios-models-qa.md, Finding #2).
     }
 }
 

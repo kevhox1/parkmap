@@ -161,6 +161,15 @@ extension Segment {
     /// text a user typed or picked; see the spec's §4.1 rationale for why an
     /// on-device equivalent of the FT-14 build-time name normalizer is explicitly
     /// out of scope here.
+    ///
+    /// Note on casing: `blockfaceKey` does NOT uppercase anything itself — no
+    /// `.uppercased()` call anywhere in this property. Segment values happen to
+    /// already be all-caps because the tile-build pipeline guarantees it (see this
+    /// file's own top-of-file doc comment: "Street name in all-caps"), so the key is
+    /// uppercase *as a consequence of the source data*, not because this property
+    /// normalizes it. If a future tile source ever stops guaranteeing that, this key
+    /// would silently start mixing case rather than normalizing — that's intentional
+    /// per the "verbatim, zero-touch reads" design (§4.1), not an oversight.
     var blockfaceKey: String {
         let (lo, hi) = fromStreet <= to ? (fromStreet, to) : (to, fromStreet)
         return "\(street)|\(lo)|\(hi)|\(side)"

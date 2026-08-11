@@ -4,6 +4,8 @@
 //
 //  FT-15 / TF2-15 — Temporary Block-Scoped Restrictions, Stream B1 (iOS models).
 //  Spec: docs/ft15-tf215-temporary-block-restrictions-spec.md §4.3, §5, §12 (AC-I1..AC-I4).
+//  QA pass 1: docs/qa/ft15-b1-ios-models-qa.md (🟡 ship with caveats — Findings #2/#3/#4/#5
+//  addressed in this revision; Finding #1 is Stream A/backend scope, not this file).
 //
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never
 //  compiled or run. A Mac `xcodebuild test` pass is a required gate before merge.
@@ -12,7 +14,7 @@
 //  (`startsAt`, `reportGroupId`, `hasEvidencePhoto`, widened `FilmingMeta.permitId`).
 //  Fixture-based only — no network, no Supabase client, no live DB.
 //
-//  Test inventory (16 tests):
+//  Test inventory (19 tests):
 //
 //  Segment.blockfaceKey (no @MainActor — matches FT11SegmentDecodeTests precedent;
 //  Segment's Codable conformance is declared directly on the struct, not via a
@@ -23,27 +25,33 @@
 //    4.  testBlockfaceKey_differsByStreet
 //    5.  testBlockfaceKey_differsByFromTo
 //    6.  testBlockfaceKey_formatIsPipeDelimitedFourParts
+//    7.  testBlockfaceKey_equalFromToStrings_degeneratesHarmlessly (QA Finding #5)
+//    8.  testBlockfaceKey_emptyStreetStrings_noCrash               (QA Finding #5)
 //
 //  CommunityPin.startsAt (@MainActor — decode requires it, same reason as
 //  CommunityPinTests.swift's suites):
-//    7.  testDecode_startsAt_present_isNonNil                    (AC-I3)
-//    8.  testDecode_startsAt_null_isNil                          (AC-I3)
-//    9.  testDecode_startsAt_keyAbsent_isNil                     (pre-FT-15 payload shape)
+//    9.  testDecode_startsAt_present_isNonNil                    (AC-I3)
+//   10.  testDecode_startsAt_null_isNil                          (AC-I3)
+//   11.  testDecode_startsAt_keyAbsent_isNil                     (pre-FT-15 payload shape)
 //
 //  CommunityPin.reportGroupId:
-//   10.  testDecode_reportGroupId_present_isNonNil
-//   11.  testDecode_reportGroupId_keyAbsent_isNil
+//   12.  testDecode_reportGroupId_present_isNonNil
+//   13.  testDecode_reportGroupId_keyAbsent_isNil
 //
-//  CommunityPin.hasEvidencePhoto:
-//   12.  testDecode_hasEvidencePhoto_true
-//   13.  testDecode_hasEvidencePhoto_keyAbsent_defaultsFalse
+//  CommunityPin.hasEvidencePhoto (decode-only as of QA Finding #2 — see doc comment on
+//  the stored property in CommunityPin.swift):
+//   14.  testDecode_hasEvidencePhoto_true
+//   15.  testDecode_hasEvidencePhoto_keyAbsent_defaultsFalse
+//   16.  testEncode_hasEvidencePhoto_neverWritesKey_evenWhenTrue  (QA Finding #2)
 //
 //  FilmingMeta.permitId widened to optional (crowd filming reports have no permit):
-//   14.  testDecode_filming_crowdReport_metaNull_noPermitIdRequired
-//   15.  testDecode_filming_openData_permitIdStillDecodes_regression
+//   17.  testDecode_filming_crowdReport_metaNull_noPermitIdRequired
+//   18.  testDecode_filming_openData_permitIdStillDecodes_regression
 //
 //  Round-trip:
-//   16.  testEncodeDecode_roundTrip_startsAt_reportGroupId_hasEvidencePhoto
+//   19.  testEncodeDecode_roundTrip_startsAt_reportGroupId
+//        (hasEvidencePhoto deliberately excluded from the round-trip expectation —
+//        see test doc comment and testEncode_hasEvidencePhoto_neverWritesKey_evenWhenTrue)
 //
 //  AC-I4 (no Calendar.current in any new/modified file): verified by manual review —
 //  Segment.swift's new `blockfaceKey` and CommunityPin.swift's new fields do only
@@ -140,6 +148,23 @@ final class SegmentBlockfaceKeyTests: XCTestCase {
         XCTAssertEqual(parts[1], "GREENE STREET", "Cross streets must be alphabetically sorted (lo)")
         XCTAssertEqual(parts[2], "WOOSTER STREET", "Cross streets must be alphabetically sorted (hi)")
         XCTAssertEqual(parts[3], "N")
+    }
+
+    /// QA pass 1, Finding #5: `fromStreet == to` degenerates harmlessly — both
+    /// branches of the `<=` comparison produce the identical pair, so the key is
+    /// still well-formed (not a real tile shape, but the logic must not misbehave).
+    func testBlockfaceKey_equalFromToStrings_degeneratesHarmlessly() {
+        let segment = decodeSegment(street: "SPRING STREET", from: "SAME STREET", to: "SAME STREET", side: "N")
+        XCTAssertEqual(segment.blockfaceKey, "SPRING STREET|SAME STREET|SAME STREET|N")
+    }
+
+    /// QA pass 1, Finding #5: empty `from`/`to` strings sort deterministically like
+    /// any other string (not a real tile shape — every real segment has non-empty
+    /// cross-street names — but `blockfaceKey` must not crash or behave undefined).
+    func testBlockfaceKey_emptyStreetStrings_noCrash() {
+        let segment = decodeSegment(street: "SPRING STREET", from: "", to: "GREENE STREET", side: "N")
+        XCTAssertEqual(segment.blockfaceKey, "SPRING STREET||GREENE STREET|N",
+            "Empty string sorts before any non-empty string, so it takes the lo position")
     }
 }
 
@@ -321,6 +346,28 @@ final class CommunityPinHasEvidencePhotoTests: XCTestCase {
         let pin = try decoder.decode(CommunityPin.self, from: Data(json.utf8))
         XCTAssertFalse(pin.hasEvidencePhoto, "Absent has_evidence_photo key must default to false")
     }
+
+    /// QA pass 1, Finding #2: `hasEvidencePhoto` must be decode-only. `encode(to:)`
+    /// must NOT write a `has_evidence_photo` key at all — even when the decoded value
+    /// is `true` — so a future `Encodable`-based write path (Stream B3) never sends a
+    /// key PostgREST would reject as an unknown column (no backing column exists on
+    /// the live schema, and Stream A does not add one to `pins_with_author`).
+    func testEncode_hasEvidencePhoto_neverWritesKey_evenWhenTrue() throws {
+        let json = ft15PinFixture(pinType: "construction", lifespan: "durable",
+                                   expiresAt: nil, hasEvidencePhoto: true, metaJSON: "null")
+        let pin = try decoder.decode(CommunityPin.self, from: Data(json.utf8))
+        XCTAssertTrue(pin.hasEvidencePhoto, "Precondition: decoded value must be true for this test to be meaningful")
+
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let encoded = try encoder.encode(pin)
+        let object = try JSONSerialization.jsonObject(with: encoded) as? [String: Any]
+
+        XCTAssertNotNil(object)
+        XCTAssertNil(object?["has_evidence_photo"],
+            "encode(to:) must never write has_evidence_photo — no backing column exists yet " +
+            "(QA pass 1 Finding #2); this field is decode-only until OQ-5 is ruled on")
+    }
 }
 
 // MARK: - FilmingMeta.permitId widened to optional
@@ -371,8 +418,14 @@ final class CommunityPinFT15RoundTripTests: XCTestCase {
 
     private let decoder = ft15Decoder()
 
-    /// Encode → decode preserves startsAt, reportGroupId, and hasEvidencePhoto.
-    func testEncodeDecode_roundTrip_startsAt_reportGroupId_hasEvidencePhoto() throws {
+    /// Encode → decode preserves startsAt and reportGroupId. hasEvidencePhoto is
+    /// deliberately EXCLUDED from this round-trip expectation — it's decode-only
+    /// (QA pass 1, Finding #2), so a `true` decoded value does NOT survive an
+    /// encode→decode cycle; it always comes back `false` on the far side, because
+    /// `encode(to:)` never writes the key at all. That's the intended, documented
+    /// behavior, not a bug — see testEncode_hasEvidencePhoto_neverWritesKey_evenWhenTrue
+    /// above for the dedicated assertion on that specific property.
+    func testEncodeDecode_roundTrip_startsAt_reportGroupId() throws {
         let json = ft15PinFixture(
             pinType: "construction", source: "crowd", lifespan: "durable",
             startsAt: kFT15StartsAt, startsAtKeyPresent: true,
@@ -382,6 +435,7 @@ final class CommunityPinFT15RoundTripTests: XCTestCase {
             metaJSON: "null"
         )
         let original = try decoder.decode(CommunityPin.self, from: Data(json.utf8))
+        XCTAssertTrue(original.hasEvidencePhoto, "Precondition: original must have decoded true")
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -390,7 +444,8 @@ final class CommunityPinFT15RoundTripTests: XCTestCase {
 
         XCTAssertEqual(roundTripped.startsAt, original.startsAt)
         XCTAssertEqual(roundTripped.reportGroupId, original.reportGroupId)
-        XCTAssertEqual(roundTripped.hasEvidencePhoto, original.hasEvidencePhoto)
-        XCTAssertTrue(roundTripped.hasEvidencePhoto)
+        XCTAssertFalse(roundTripped.hasEvidencePhoto,
+            "hasEvidencePhoto is decode-only — it must NOT survive an encode→decode round-trip; " +
+            "the re-decoded value comes back false because encode(to:) never writes the key")
     }
 }
