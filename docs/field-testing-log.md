@@ -9,7 +9,7 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Round 4 — build 14 field observations (2026-08-11)
 
-### FT-16 🔴 `filming` layer has been silently empty for ~3 months — NYC film-permit feed went dry (DATA/INFRA)
+### FT-16 🟡 `filming` layer has been silently empty for ~3 months — NYC film-permit feed went dry (DATA/INFRA)
 - **Area:** `supabase/functions/ingest-film-permits/index.ts` + the daily pg_cron job in
   `supabase/02d-ingest-cron.sql`. Backend-data.
 - **Found (orchestrator, 2026-08-11, while scoping FT-15):** our Edge Function pulls NYC Open Data
@@ -25,16 +25,28 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   unnoticed. Recommend a "feed has produced no new rows in N days" alarm regardless of what NYC does.
 - **Consequence for FT-15:** the crowd-report path is not a gap-filler for this feed — for filming it is
   currently the *only* signal. Open-data corroboration (`permit_id` matching) must stay strictly optional.
-- **Status:** 🟡 **PR #71 open** — investigation `docs/qa/ft16-film-permit-feed-investigation.md` confirmed the
-  outage independently (monthly counts show a hard cliff to zero from June, not a decline), **killed the
-  "intentional ~3-month publishing embargo" theory by measuring real submission-to-start lead times (1–5
-  days, not months)**, and ruled out a replacement feed (`tvpp-9vvx` = wrong agency/wrong content — youth
-  sports, college move-in). Decision: **keep** the cron + filter (neither is buggy — they correctly match
-  zero rows against a dead feed) and add a staleness guard + durable `ingest_runs` logging
-  (`supabase/02g-ingest-runs.sql`). QA `docs/qa/ft16-staleness-guard-qa.md`: migration APPLY-clean; Edge
-  Function fixes in flight (probe returning `null` on a 200-with-wrong-shape body collapsed to
-  `stale: false` — indistinguishable from verified-fresh, reproducing the very ambiguity the guard exists
-  to remove; plus no probe timeout).
+- **Investigated (`@backend-data`, 2026-08-11):** confirmed independently — hard cliff in monthly
+  submissions (250–500/mo Jan–Apr 2026 → zero every month since June), not a gradual decline. Ruled out
+  a candidate "intentional 3-month publishing delay" theory (surfaced via web search, unsubstantiated —
+  observed submission→start lead time is single-digit days, not months). No replacement feed exists:
+  catalog search found `tvpp-9vvx` ("NYC Permitted Event Information," CECM/SAPO) is the only actively-live
+  film-adjacent dataset, but it's a different agency's general street-event feed (dominated by youth
+  sports), covers only 5+ day permits, and would misrepresent the `filming` pin type if substituted.
+  Full write-up: `docs/qa/ft16-film-permit-feed-investigation.md`.
+- **Fix (PR #71, not yet merged):** kept the cron/filter as-is (not buggy — correctly empty given a dry
+  upstream) and added a durable staleness guard: the function now independently probes upstream
+  `max(enteredon)` every run (bypassing the current/future filter), logs loudly via `console.error` and
+  writes to a new `public.ingest_runs` table (`supabase/02g-ingest-runs.sql`) when the feed has produced
+  no new rows in 10+ days. Response JSON also carries `upstreamStale`/`staleDays` for a manual-invoke smoke
+  test. Spec: `docs/tier1-open-data-ingest-spec.md` §3.9.
+- **QA (`docs/qa/ft16-staleness-guard-qa.md`):** 🟡 ship with caveats (Edge Function) / **APPLY**
+  unconditionally (migration — clean, idempotent, correctly RLS'd, zero blast radius). Agreed with the
+  investigation and the keep-the-cron decision without pushback. Found a real defect: the freshness probe
+  returned `null` — without throwing — on a 200-with-wrong-shape response (empty array, missing/renamed
+  `latest` field), which collapsed to `stale: false` once persisted — indistinguishable from
+  verified-fresh, reproducing the very "legitimately quiet vs. silently broken" ambiguity the guard exists
+  to remove. Also flagged a missing probe timeout that could block the invocation (and the durable log
+  write) entirely on a stall.
 - **⚠️ DEFERRED FOLLOW-UP — FT-16a, alerting (Kevin's call, 2026-08-11):** the guard's output is a
   `console.error` + a queryable `ingest_runs` row, and **nothing polls either**. QA's point stands: this
   makes the next outage *technically visible if you check*, not *noticed* — and a human demonstrably won't
@@ -42,7 +54,10 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   sending one email is the proportionate fix, but no alerting mechanism exists anywhere in this repo yet, so
   it gets its own scoped pass rather than riding along in #71. **Named explicitly so it isn't silently
   dropped — "we'll notice next time" is the assumption that already failed once.**
-- **Lands in:** `supabase/functions/ingest-film-permits/`, `supabase/02g-ingest-runs.sql`.
+- **Status:** 🟡 **PR #71 open** — SQL migration + Edge Function change, **not yet applied to production**
+  (Kevin applies after QA, per `.claude/TEAM.md`). No client changes required; not a blocker for FT-15.
+- **Lands in:** `supabase/functions/ingest-film-permits/`, `supabase/02g-ingest-runs.sql`,
+  `docs/tier1-open-data-ingest-spec.md`.
 
 ### FT-15 🟡 Temporary block restrictions from posted paper signs (film shoot / closure) — user report + block-scoped override (FEATURE, large)
 - **Area:** New primitive — a **block-scoped, time-windowed restriction override** on top of the

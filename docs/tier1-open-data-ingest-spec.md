@@ -175,6 +175,49 @@ select cron.schedule(
 
 The service-role key in the pg_cron call is stored as a Supabase Vault secret, not committed to the repo.
 
+### 3.9 Staleness Detection (FT-16)
+
+**Filed 2026-08-11.** Full investigation: `docs/qa/ft16-film-permit-feed-investigation.md`.
+
+The current/future filter in §3.7 can legitimately return zero rows on any given day — there may
+simply be no permits scheduled. That is normal and must not be treated as an error. What must be
+detected is the upstream feed itself going dark: NYC MOME's `tg4x-b46p` dataset stopped receiving
+new permit submissions entirely around 2026-05-07, while its published metadata continued to claim
+`Update Frequency: Daily` and its Socrata `rowsUpdatedAt` timestamp kept advancing (the asset was
+being re-touched, but no new rows arrived). The ingest job ran daily for ~3 months against this dead
+feed, matched zero rows every time (correctly, given its filter), and raised nothing — a
+legitimately-empty pull and a broken pull were indistinguishable.
+
+**Fix, proportionate to this layer's blast radius** (an empty map layer is far less harmful than
+TF2-19's incorrect tile data, so this is a loud/observable signal, not a hard abort):
+
+1. On every invocation, `ingest-film-permits` separately probes
+   `$select=max(enteredon)` against the **whole** upstream dataset — no current/future filter — to
+   answer "has MOME submitted anything recently at all?" independent of whether today's filtered
+   query matched anything.
+2. If that upstream timestamp is more than `STALENESS_THRESHOLD_DAYS` (10, see code comment for
+   rationale) old, the function logs a `console.error` (distinct severity in the Supabase Functions
+   log dashboard from the routine `console.log` summary) and marks the run `stale = true`.
+3. Every invocation — success, no-op, or stale — writes one row to `public.ingest_runs`
+   (`supabase/02f-ingest-runs.sql`), a durable, source-tagged run log shared by all open-data ingest
+   jobs. This survives past Supabase's function-log retention window, which is what let this
+   3-month outage go unnoticed in the first place.
+4. The HTTP response also carries `upstreamStale`, `staleDays`, and `upstreamLatestRowAt` so a
+   manual `curl` invocation (Step 4 in §9) surfaces staleness immediately without needing to query
+   the database.
+
+**Decision on the cron job itself:** kept running daily, unchanged. The filter logic in §3.7 is not
+buggy — it is correctly matching zero rows against a genuinely stale upstream feed. No replacement
+dataset was found for individual short-duration film permits (the FT-16 investigation checked the
+NYC Open Data catalog directly; the only film-adjacent alternative, `tvpp-9vvx` "NYC Permitted Event
+Information," is a different Street Activity Permit Office feed — production logistics events like
+office moves and pop-up events, not MOME film-shoot permits, and would misrepresent the `filming`
+pin type if substituted). Disabling the cron was rejected: it would recreate the exact same
+invisible-failure risk this ticket exists to close, just with the added risk of nobody remembering
+to re-enable it if/when NYC resumes publishing. The daily invocation cost is one small Socrata query
+either way, self-heals the moment the upstream feed resumes, and is now paired with the staleness
+alarm above so a *future* outage is loud from day one instead of silent for three months.
+
 ---
 
 ## 4. ASP Suspension Calendar Ingest
@@ -370,6 +413,17 @@ The pg_cron job reads the service-role key from Vault at runtime. Store it once:
 2. Paste the entire contents of `supabase/02d-ingest-cron.sql` and run.
 3. Verify the cron job registered: `select jobname, schedule, active from cron.job where jobname = 'ingest-film-permits';` should return one row with `active = true`.
 4. The `upsert_filming_pin` RPC is also created by this script — verify: `select proname from pg_proc where proname = 'upsert_filming_pin';`.
+
+### Step 7 — Apply 02f ingest run log + staleness tracking (FT-16)
+
+1. Open the Supabase SQL Editor.
+2. Paste the entire contents of `supabase/02f-ingest-runs.sql` and run.
+3. Verify: `select * from public.ingest_runs limit 1;` (empty result is fine — no rows exist until
+   the Edge Function is redeployed with the FT-16 changes and invoked at least once).
+4. Redeploy the Edge Function (Step 3) — it now writes to `ingest_runs` and probes upstream
+   freshness on every run. Re-run Step 4's manual invocation and confirm the response includes
+   `upstreamStale`, `staleDays`, and `upstreamLatestRowAt`, and that `select * from public.ingest_runs
+   order by run_at desc limit 1;` shows the new row.
 
 ### Yearly calendar update (2027)
 

@@ -7,6 +7,7 @@
  *
  * Spec: docs/tier1-open-data-ingest-spec.md §3
  * Depends on: 02-pins-schema.sql + 02b-pins-ingest-indexes.sql applied.
+ * Depends on (FT-16): 02f-ingest-runs.sql applied — see "Staleness detection" below.
  *
  * Secrets (set via `supabase secrets set` before deploying — never hardcode):
  *   SUPABASE_URL            — injected automatically by Supabase runtime
@@ -17,7 +18,18 @@
  *   POST https://<project-ref>.functions.supabase.co/ingest-film-permits
  *   Authorization: Bearer <service-role-key>
  *
- * Response: JSON { inserted, updated, skipped, errors[] }
+ * Response: JSON { inserted, updated, skipped, errors[], upstreamStale, staleDays, upstreamLatestRowAt }
+ *
+ * Staleness detection (FT-16, docs/qa/ft16-film-permit-feed-investigation.md):
+ * The current/future filter below can legitimately match zero rows on any given day
+ * (no permits happen to be scheduled) — that is NOT an error. What IS an error is the
+ * upstream feed itself going dark: MOME stopping submission of new permit rows
+ * entirely, which happened silently around 2026-05-07 for ~3 months with this function
+ * running daily and never raising anything. This function now separately probes
+ * `max(enteredon)` across the WHOLE upstream dataset (no current/future filter) on
+ * every run, compares it to a staleness threshold, and writes every run's outcome to
+ * `public.ingest_runs` so "the feed has been dry for N days" is a durable, queryable
+ * fact instead of a state that only lives in ephemeral function logs.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -75,6 +87,15 @@ const SOCRATA_BASE = "https://data.cityofnewyork.us/resource/tg4x-b46p.json";
 const PAGE_SIZE = 1000;
 const GEOSEARCH_BASE = "https://geosearch.planninglabs.nyc/v2/search";
 const GEOCODE_MIN_SCORE = 0.7;
+
+// FT-16 staleness threshold: NYC's own dataset metadata claims "Update Frequency:
+// Daily" with automation enabled, and the field-observed lead time between a permit's
+// `enteredon` and its `startdatetime` is typically single-digit days (verified via a
+// live probe during the FT-16 investigation — see docs/qa/ft16-film-permit-feed-investigation.md).
+// 10 days is generous headroom above that normal cadence (avoids false alarms on a
+// slow weekend/holiday) while catching a real outage roughly 9x faster than the ~90
+// days it actually took us to notice this one.
+const STALENESS_THRESHOLD_DAYS = 10;
 
 const VALID_BOROUGHS = new Set([
   "Manhattan",
@@ -181,6 +202,33 @@ async function fetchPermitPage(
   return resp.json() as Promise<SocrataPermit[]>;
 }
 
+// FT-16: independent freshness probe. Deliberately does NOT reuse the
+// current/future $where clause from fetchPermitPage — the whole point is to answer
+// "is the upstream feed still receiving submissions at all?", which the filtered
+// query cannot distinguish from "no permits currently match, which is normal."
+async function fetchLatestUpstreamRowAt(
+  appToken: string | undefined
+): Promise<Date | null> {
+  const params = new URLSearchParams({ $select: "max(enteredon) as latest" });
+  const headers: Record<string, string> = {
+    "User-Agent": "WePark-ingest/1.0",
+    Accept: "application/json",
+  };
+  if (appToken) headers["X-App-Token"] = appToken;
+
+  const resp = await fetch(`${SOCRATA_BASE}?${params}`, { headers });
+  if (!resp.ok) {
+    throw new Error(
+      `Socrata freshness probe failed: ${resp.status} ${resp.statusText}`
+    );
+  }
+  const rows = (await resp.json()) as Array<{ latest?: string }>;
+  const latest = rows[0]?.latest;
+  if (!latest) return null;
+  const parsed = new Date(latest);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
@@ -237,16 +285,84 @@ Deno.serve(async (_req: Request): Promise<Response> => {
     result.errors.push(`Fatal fetch error: ${String(err)}`);
   }
 
+  // ---------------------------------------------------------------------
+  // FT-16: upstream freshness probe + durable run log.
+  // Best-effort — a probe or log-write failure must never fail the whole
+  // invocation (the main upsert work above already completed).
+  // ---------------------------------------------------------------------
+  let upstreamLatestRowAt: Date | null = null;
+  let staleDays: number | null = null;
+  let isStale = false;
+  let probeError: string | null = null;
+
+  try {
+    upstreamLatestRowAt = await fetchLatestUpstreamRowAt(appToken);
+    if (upstreamLatestRowAt) {
+      staleDays = Math.floor(
+        (now.getTime() - upstreamLatestRowAt.getTime()) / 86_400_000
+      );
+      isStale = staleDays >= STALENESS_THRESHOLD_DAYS;
+    }
+  } catch (err) {
+    probeError = String(err);
+  }
+
+  if (probeError) {
+    // Loud on purpose — console.error surfaces distinctly from console.log/warn in
+    // the Supabase Function logs dashboard and is the discoverable signal this
+    // ticket asks for. A probe failure doesn't prove the feed is stale, so we don't
+    // set isStale here — but it IS worth flagging for manual follow-up.
+    console.error(`ingest-film-permits freshness probe FAILED: ${probeError}`);
+  } else if (isStale) {
+    console.error(
+      `ingest-film-permits STALE FEED: upstream tg4x-b46p (NYC Film Permits) has ` +
+        `produced no new rows in ${staleDays} days (last enteredon=` +
+        `${upstreamLatestRowAt?.toISOString()}). Threshold is ` +
+        `${STALENESS_THRESHOLD_DAYS} days. See docs/qa/ft16-film-permit-feed-investigation.md.`
+    );
+  }
+
+  try {
+    const { error: logError } = await supabase.from("ingest_runs").insert({
+      source: "film_permits",
+      fetched_count: totalFetched,
+      inserted_count: result.inserted,
+      updated_count: result.updated,
+      skipped_count: result.skipped,
+      error_count: result.errors.length,
+      errors: result.errors.slice(0, 20),
+      upstream_latest_row_at: upstreamLatestRowAt?.toISOString() ?? null,
+      stale: isStale,
+      stale_days: staleDays,
+      notes: probeError ? `freshness probe failed: ${probeError}` : null,
+    });
+    if (logError) {
+      console.error(`ingest-film-permits failed to write ingest_runs row: ${logError.message}`);
+    }
+  } catch (err) {
+    console.error(`ingest-film-permits failed to write ingest_runs row: ${String(err)}`);
+  }
+
   console.log(
     `ingest-film-permits complete: fetched=${totalFetched} ` +
       `inserted=${result.inserted} updated=${result.updated} ` +
-      `skipped=${result.skipped} errors=${result.errors.length}`
+      `skipped=${result.skipped} errors=${result.errors.length} ` +
+      `upstreamStale=${isStale} staleDays=${staleDays ?? "unknown"}`
   );
 
-  return new Response(JSON.stringify({ ...result, totalFetched }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({
+      ...result,
+      totalFetched,
+      upstreamStale: isStale,
+      staleDays,
+      upstreamLatestRowAt: upstreamLatestRowAt?.toISOString() ?? null,
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------
