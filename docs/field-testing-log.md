@@ -25,9 +25,24 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   unnoticed. Recommend a "feed has produced no new rows in N days" alarm regardless of what NYC does.
 - **Consequence for FT-15:** the crowd-report path is not a gap-filler for this feed — for filming it is
   currently the *only* signal. Open-data corroboration (`permit_id` matching) must stay strictly optional.
-- **Status:** 🔴 open — standalone backend-data investigation: fix, repoint, or disable the cron (a silently
-  no-op'ing daily job is wasted infra either way). Explicitly NOT a blocker for FT-15.
-- **Lands in:** `supabase/functions/ingest-film-permits/`, `supabase/02d-ingest-cron.sql`.
+- **Status:** 🟡 **PR #71 open** — investigation `docs/qa/ft16-film-permit-feed-investigation.md` confirmed the
+  outage independently (monthly counts show a hard cliff to zero from June, not a decline), **killed the
+  "intentional ~3-month publishing embargo" theory by measuring real submission-to-start lead times (1–5
+  days, not months)**, and ruled out a replacement feed (`tvpp-9vvx` = wrong agency/wrong content — youth
+  sports, college move-in). Decision: **keep** the cron + filter (neither is buggy — they correctly match
+  zero rows against a dead feed) and add a staleness guard + durable `ingest_runs` logging
+  (`supabase/02g-ingest-runs.sql`). QA `docs/qa/ft16-staleness-guard-qa.md`: migration APPLY-clean; Edge
+  Function fixes in flight (probe returning `null` on a 200-with-wrong-shape body collapsed to
+  `stale: false` — indistinguishable from verified-fresh, reproducing the very ambiguity the guard exists
+  to remove; plus no probe timeout).
+- **⚠️ DEFERRED FOLLOW-UP — FT-16a, alerting (Kevin's call, 2026-08-11):** the guard's output is a
+  `console.error` + a queryable `ingest_runs` row, and **nothing polls either**. QA's point stands: this
+  makes the next outage *technically visible if you check*, not *noticed* — and a human demonstrably won't
+  check, which is exactly how this ran 3 months. A small scheduled job reading `ingest_runs.stale` and
+  sending one email is the proportionate fix, but no alerting mechanism exists anywhere in this repo yet, so
+  it gets its own scoped pass rather than riding along in #71. **Named explicitly so it isn't silently
+  dropped — "we'll notice next time" is the assumption that already failed once.**
+- **Lands in:** `supabase/functions/ingest-film-permits/`, `supabase/02g-ingest-runs.sql`.
 
 ### FT-15 🟡 Temporary block restrictions from posted paper signs (film shoot / closure) — user report + block-scoped override (FEATURE, large)
 - **Area:** New primitive — a **block-scoped, time-windowed restriction override** on top of the
