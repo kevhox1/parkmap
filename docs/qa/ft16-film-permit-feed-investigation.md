@@ -172,7 +172,7 @@ Per the three options framed in the task (repoint / fix the function / disable t
 
 ### What changed
 
-1. **`supabase/02f-ingest-runs.sql`** (new migration) — a small `public.ingest_runs` table:
+1. **`supabase/02g-ingest-runs.sql`** (new migration) — a small `public.ingest_runs` table:
    durable, source-tagged run history (`fetched_count`, `inserted_count`/`updated_count`/
    `skipped_count`/`error_count`, `upstream_latest_row_at`, `stale`, `stale_days`) written on every
    invocation. RLS enabled with **no policies** (deny-all to anon/authenticated — this is an
@@ -193,7 +193,13 @@ Per the three options framed in the task (repoint / fix the function / disable t
      main upsert path.
 
 3. **`docs/tier1-open-data-ingest-spec.md` §3.9** (new section) — the spec-of-record for this
-   mechanism, plus a new deployment Step 7 for `02f-ingest-runs.sql`.
+   mechanism, plus a new deployment Step 7 for `02g-ingest-runs.sql`.
+
+**Filename note:** originally authored as `02f-ingest-runs.sql`; renamed to `02g-ingest-runs.sql`
+after PR #69 (FT-15 Stream A, `supabase/02f-block-scoped-restrictions.sql`) claimed the `02f`
+ordinal first. The two migrations are independent — `02g-ingest-runs.sql` has no dependency on
+`02f-block-scoped-restrictions.sql` (different tables, no cross-references) — so they can be applied
+in either order, or this one applied without #69 ever landing.
 
 Threshold rationale: NYC's own metadata claims daily automation, and observed submission-to-start
 lead time is single-digit days (§3). 10 days gives headroom against a slow weekend/holiday while
@@ -225,8 +231,9 @@ right now.
 Per `.claude/TEAM.md`, schema changes get QA before production; per this task's constraints, nothing
 here has been applied to the live Supabase project (`jiispshyqerscdoferaw`). Kevin applies after QA:
 
-1. Apply `supabase/02f-ingest-runs.sql` via the Supabase SQL Editor (new step 7 in
-   `docs/tier1-open-data-ingest-spec.md` §9).
+1. Apply `supabase/02g-ingest-runs.sql` via the Supabase SQL Editor (new step 7 in
+   `docs/tier1-open-data-ingest-spec.md` §9). No ordering dependency on `02f-block-scoped-restrictions.sql`
+   (PR #69) — apply in either order.
 2. Redeploy `ingest-film-permits` (`supabase functions deploy ingest-film-permits --project-ref
    jiispshyqerscdoferaw`).
 3. Manually invoke once and confirm the response includes `upstreamStale: true` and a `staleDays`

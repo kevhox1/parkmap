@@ -7,7 +7,7 @@
  *
  * Spec: docs/tier1-open-data-ingest-spec.md §3
  * Depends on: 02-pins-schema.sql + 02b-pins-ingest-indexes.sql applied.
- * Depends on (FT-16): 02f-ingest-runs.sql applied — see "Staleness detection" below.
+ * Depends on (FT-16): 02g-ingest-runs.sql applied — see "Staleness detection" below.
  *
  * Secrets (set via `supabase secrets set` before deploying — never hardcode):
  *   SUPABASE_URL            — injected automatically by Supabase runtime

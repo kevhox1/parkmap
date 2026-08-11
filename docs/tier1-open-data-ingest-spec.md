@@ -199,7 +199,7 @@ TF2-19's incorrect tile data, so this is a loud/observable signal, not a hard ab
    rationale) old, the function logs a `console.error` (distinct severity in the Supabase Functions
    log dashboard from the routine `console.log` summary) and marks the run `stale = true`.
 3. Every invocation — success, no-op, or stale — writes one row to `public.ingest_runs`
-   (`supabase/02f-ingest-runs.sql`), a durable, source-tagged run log shared by all open-data ingest
+   (`supabase/02g-ingest-runs.sql`), a durable, source-tagged run log shared by all open-data ingest
    jobs. This survives past Supabase's function-log retention window, which is what let this
    3-month outage go unnoticed in the first place.
 4. The HTTP response also carries `upstreamStale`, `staleDays`, and `upstreamLatestRowAt` so a
@@ -414,10 +414,15 @@ The pg_cron job reads the service-role key from Vault at runtime. Store it once:
 3. Verify the cron job registered: `select jobname, schedule, active from cron.job where jobname = 'ingest-film-permits';` should return one row with `active = true`.
 4. The `upsert_filming_pin` RPC is also created by this script — verify: `select proname from pg_proc where proname = 'upsert_filming_pin';`.
 
-### Step 7 — Apply 02f ingest run log + staleness tracking (FT-16)
+### Step 7 — Apply 02g ingest run log + staleness tracking (FT-16)
+
+Note on ordering: `02g-ingest-runs.sql` has no dependency on `02f-block-scoped-restrictions.sql`
+(FT-15 Stream A, PR #69) or vice versa — the two `02f`/`02g` migrations touch unrelated tables
+(`ingest_runs` here vs. FT-15's block-restriction schema) and neither references the other. They
+can be applied in either order, and this one can be applied whether or not #69 has landed.
 
 1. Open the Supabase SQL Editor.
-2. Paste the entire contents of `supabase/02f-ingest-runs.sql` and run.
+2. Paste the entire contents of `supabase/02g-ingest-runs.sql` and run.
 3. Verify: `select * from public.ingest_runs limit 1;` (empty result is fine — no rows exist until
    the Edge Function is redeployed with the FT-16 changes and invoked at least once).
 4. Redeploy the Edge Function (Step 3) — it now writes to `ingest_runs` and probes upstream
