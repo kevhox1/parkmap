@@ -51,6 +51,14 @@ comment on column public.pins.report_group_id is
 comment on column public.pins.segment_id is
   'Street|from|to key from tiles/index.json (3-part, no side) for most pin types. For pin_type in (filming, construction) AND report_group_id is not null, this is instead a 4-part blockface key: STREET|MIN(FROM,TO)|MAX(FROM,TO)|SIDE (cross streets sorted so the key is direction-agnostic). Safe divergence: the only existing writer of segment_id on filming pins (upsert_filming_pin) always writes null, so there is no legacy 3-part data on filming rows to collide with; construction pins have no existing writer at all. See docs/ft15-tf215-temporary-block-restrictions-spec.md §3.2.';
 
+-- Intentionally NOT constrained: nothing in this schema enforces that report_group_id is not
+-- null implies pin_type in ('filming', 'construction') — that pairing is an application-level
+-- convention of this feature's write path (§3.4), not a DB invariant. A CHECK constraint tying
+-- report_group_id to a fixed pin_type allowlist would fight §9.3's explicit design goal that this
+-- is a reusable "block-scoped grouped report" primitive, not a filming/construction-specific one
+-- — a future pin_type could legitimately reuse report_group_id without a schema change here. The
+-- hard-ceiling constraint below has its own generous fallback (90 days) for exactly this reason.
+
 -- Lookup: fetch/update all rows in one report's group (read path, author-side edits).
 create index if not exists pins_report_group_id_idx
   on public.pins(report_group_id)
@@ -177,6 +185,19 @@ create policy pin_evidence_insert_own on public.pin_evidence
 -- ============================================================
 -- 4. Storage: private 'pin-evidence' bucket + owner-scoped policies
 -- ============================================================
+-- OPERATOR NOTE (Kevin runs this by hand in the SQL Editor, no agent watching): `storage.objects`
+-- is owned by `supabase_storage_admin`, not `postgres`. The `create policy ... on storage.objects`
+-- statements below need ownership of (or membership in) that role to succeed; whether the SQL
+-- Editor's session role has it varies by project vintage. This is the one section of this file
+-- with a real, non-hypothetical chance of failing on a given project. If it does, you'll see an
+-- error like `must be owner of table objects` or `must be owner of relation objects` on one of the
+-- `create policy` statements in this section. The rest of this file (sections 1, 2, 3, 5, 6) does
+-- NOT depend on this section succeeding and is independently idempotent/re-runnable — if section 4
+-- fails partway through, you can re-run the ENTIRE file safely; every earlier statement is a
+-- guarded `if not exists` / `create or replace` / `drop ... if exists` and will just no-op on
+-- re-apply, and section 4's own statements are equally safe to retry. If ownership turns out to be
+-- the blocker, the fix is a Supabase support/dashboard-level role grant, not a change to this SQL.
+--
 -- No public/anon read policy exists anywhere in this section, by design (§7). Access is only via
 -- the uploading user's own authenticated session (short-lived signed URLs requested by the
 -- uploader, or service-role tooling later).
@@ -184,10 +205,15 @@ insert into storage.buckets (id, name, public)
 values ('pin-evidence', 'pin-evidence', false)
 on conflict (id) do nothing;
 
--- ENABLE ROW LEVEL SECURITY is idempotent in Postgres 15 (Supabase's engine) — see the same note
--- in 02-pins-schema.sql. Supabase projects have RLS enabled on storage.objects by default; this
--- statement is a no-op belt-and-suspenders guard, not a functional change.
-alter table storage.objects enable row level security;
+-- Deliberately NOT running `alter table storage.objects enable row level security;` here.
+-- Supabase enables RLS on storage.objects by default on every managed project, so the statement
+-- would be a no-op on any project this migration is ever actually applied to — but unlike the
+-- `if not exists`-guarded DDL elsewhere in this file, `ALTER TABLE ... ENABLE ROW LEVEL SECURITY`
+-- is not itself failure-safe against an ownership error, and `storage.objects` is owned by
+-- `supabase_storage_admin`, not `postgres`. A statement that is guaranteed no-op on success and
+-- can abort a hand-run migration on failure is strictly worse than not running it. If a future
+-- project genuinely has RLS disabled on storage.objects, enable it via the Supabase dashboard
+-- (Storage → Policies) rather than this file.
 
 -- Ownership convention: object path is {auth.uid()}/{report_group_id}/{filename}. Using the path
 -- prefix (storage.foldername) rather than the storage.objects.owner column, because owner-column
