@@ -174,26 +174,67 @@ Per the three options framed in the task (repoint / fix the function / disable t
 
 1. **`supabase/02g-ingest-runs.sql`** (new migration) — a small `public.ingest_runs` table:
    durable, source-tagged run history (`fetched_count`, `inserted_count`/`updated_count`/
-   `skipped_count`/`error_count`, `upstream_latest_row_at`, `stale`, `stale_days`) written on every
-   invocation. RLS enabled with **no policies** (deny-all to anon/authenticated — this is an
+   `skipped_count`/`error_count`, `upstream_latest_row_at`, `probe_status`, `stale_days`) written on
+   every invocation. RLS enabled with **no policies** (deny-all to anon/authenticated — this is an
    internal ops table with no owning user; the service-role key used by the Edge Function bypasses
    RLS for writes). Generic across future ingest jobs (`source` is free text), not filming-specific.
+   `probe_status` is tri-state (`'fresh' | 'stale' | 'probe_failed'`), not boolean — see §5.1.
 
 2. **`supabase/functions/ingest-film-permits/index.ts`** — on every run, independent of the
    existing current/future filter:
    - Probes `$select=max(enteredon)` against the **whole** upstream dataset (no filter) to measure
-     "has MOME submitted anything recently at all?"
+     "has MOME submitted anything recently at all?", bounded by an 8s timeout.
    - If that timestamp is ≥ `STALENESS_THRESHOLD_DAYS` (10) old, logs via `console.error` (a
      distinct, higher-severity log line in the Supabase Functions dashboard than the routine
-     `console.log` summary) and marks the run `stale = true`.
-   - Writes one row to `ingest_runs` every invocation, success or no-op.
-   - Returns `upstreamStale`, `staleDays`, `upstreamLatestRowAt` in the JSON response, so a manual
-     `curl` (already documented in the deploy runbook, §9 Step 4) surfaces staleness immediately.
+     `console.log` summary) and marks the run `probe_status = 'stale'`. If the probe fails or
+     returns an unusable shape, `probe_status = 'probe_failed'` — equally loud, never conflated
+     with `'fresh'`.
+   - Writes one row to `ingest_runs` every invocation — success, no-op, stale, or probe-failed.
+   - Returns `upstreamProbeStatus`, `staleDays`, `upstreamLatestRowAt` in the JSON response, so a
+     manual `curl` (already documented in the deploy runbook, §9 Step 4) surfaces staleness — or an
+     inability to determine it — immediately.
    - All of the above is best-effort and wrapped so a probe or logging failure can never break the
      main upsert path.
 
 3. **`docs/tier1-open-data-ingest-spec.md` §3.9** (new section) — the spec-of-record for this
    mechanism, plus a new deployment Step 7 for `02g-ingest-runs.sql`.
+
+### 5.1 QA Pass 1 fixes (docs/qa/ft16-staleness-guard-qa.md)
+
+QA verdict: 🟡 ship with caveats (Edge Function) / **APPLY** unconditionally (SQL migration —
+"clean, idempotent, correctly RLS'd, zero blast radius"). QA agreed with the investigation's
+evidence and the keep-the-cron-and-add-observability decision without pushback, and flagged two
+real defects in the guard mechanism itself, both fixed here:
+
+- **Finding #2 (🔴, serious):** `fetchLatestUpstreamRowAt()` returned `null` — without throwing —
+  on an HTTP-200-but-wrong-shape response (empty array, missing/renamed `latest` field). That
+  `null` collapsed into `stale: false, notes: null` once written to `ingest_runs`, which is
+  indistinguishable from "we checked and it's genuinely fresh." QA's framing: this recreates, one
+  layer up, the exact "legitimately quiet vs. silently broken" ambiguity this entire PR exists to
+  eliminate — and this function already has a documented history of Socrata shape surprises
+  (see the trailing-`Z` SoQL type-mismatch comment on `fetchPermitPage`), so it wasn't hypothetical.
+  **Fix:** `fetchLatestUpstreamRowAt` now throws on every non-usable outcome (empty array, missing
+  field, unparseable date) instead of returning `null`; the table's `stale boolean` column became a
+  tri-state `probe_status` column (`'fresh' | 'stale' | 'probe_failed'`, defaulting pessimistically
+  to `'probe_failed'` at the DB level too) so "couldn't determine" can never render as "fine" in
+  either the stored row or the HTTP response.
+- **Finding #3 (🟡):** the probe `fetch()` had no timeout, and the `ingest_runs` write was
+  sequenced after it — a hang (not an error, an actual stall) would block the invocation until the
+  platform's own execution ceiling killed it, and the durable log row this PR is built around would
+  never get written for that run. **Fix:** wrapped the probe fetch in an `AbortController` with an
+  8s timeout, so a stall now degrades to the ordinary `probe_failed` path (which still reaches the
+  `ingest_runs` write) instead of hanging the whole invocation.
+- **Nit #4 (🟢):** the 10-day threshold's "generous"/"~9x margin" claim was inferred from monthly
+  aggregates, not measured against real day-level historical gaps. Measured it directly (see the
+  revised "Threshold rationale" below) — the claim needed softening, not reversing.
+- **Nit #5 (🟢):** `docs/tier1-open-data-ingest-spec.md` §9 Step 4's response-shape text predated
+  this PR and didn't mention the new fields. Updated.
+
+QA finding #1 (the signal is passive-only — nothing polls `ingest_runs` or the function logs on a
+schedule) was explicitly **not** actioned here per the coordinator's instruction: it's correct, but
+adding an alerting/paging mechanism (email, webhook, a second scheduled job) is a new capability
+that doesn't exist anywhere else in this repo, and is Kevin's call to make, raised with him
+separately — not something to slip into this PR unilaterally.
 
 **Filename note:** originally authored as `02f-ingest-runs.sql`; renamed to `02g-ingest-runs.sql`
 after PR #69 (FT-15 Stream A, `supabase/02f-block-scoped-restrictions.sql`) claimed the `02f`
@@ -201,9 +242,17 @@ ordinal first. The two migrations are independent — `02g-ingest-runs.sql` has 
 `02f-block-scoped-restrictions.sql` (different tables, no cross-references) — so they can be applied
 in either order, or this one applied without #69 ever landing.
 
-Threshold rationale: NYC's own metadata claims daily automation, and observed submission-to-start
-lead time is single-digit days (§3). 10 days gives headroom against a slow weekend/holiday while
-catching a real outage roughly 9x faster than the ~90 days it took to notice this one.
+Threshold rationale (revised after QA finding #4 asked for a measurement, not an inference from
+monthly aggregates): queried every consecutive gap between `enteredon` timestamps across the
+dataset's full history (2022-10 through the 2026-05 outage start). The single largest gap anywhere
+is 41.96 days, but it sits at the very start of the dataset's history (2022-10-20 → 2022-12-01,
+immediately after the earliest row that exists at all) and reads as onboarding/ramp-up noise, not
+steady-state behavior. Excluding that one bootstrap artifact, the largest gap across ~3.5 years of
+mature operation is 5.01 days, with every other outlier (December holiday weeks) under 5 days too.
+10 days is ~2x the largest genuine historical lull ever observed in steady-state — real headroom,
+not the 9x an earlier draft of this doc (and the code comment) claimed by inferring from monthly
+aggregates alone. It still catches a real outage roughly 9x faster than the ~90 days it took to
+notice this one.
 
 ### Why this is proportionate (not over-engineered)
 
@@ -236,9 +285,11 @@ here has been applied to the live Supabase project (`jiispshyqerscdoferaw`). Kev
    (PR #69) — apply in either order.
 2. Redeploy `ingest-film-permits` (`supabase functions deploy ingest-film-permits --project-ref
    jiispshyqerscdoferaw`).
-3. Manually invoke once and confirm the response includes `upstreamStale: true` and a `staleDays`
-   in the ~95+ range (expected, given the confirmed ~3-month outage) — this is the "it's alarming
-   correctly" smoke test, not a sign anything is broken.
+3. Manually invoke once and confirm the response includes `upstreamProbeStatus: "stale"` and a
+   `staleDays` in the ~95+ range (expected, given the confirmed ~3-month outage) — this is the
+   "it's alarming correctly" smoke test, not a sign anything is broken. A `"probe_failed"` result
+   here would mean the probe itself needs investigation (network/shape issue), not that the feed
+   is merely stale.
 4. No client changes required — this PR does not touch any RPC name, table both apps already read,
    or PostgREST contract PWA/iOS depend on. `@pwa-maintainer` and `@ios-engineer` do not need to do
    anything for this specific change. (FT-15's separate report-flow work, tracked independently, is

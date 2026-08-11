@@ -194,17 +194,25 @@ TF2-19's incorrect tile data, so this is a loud/observable signal, not a hard ab
 1. On every invocation, `ingest-film-permits` separately probes
    `$select=max(enteredon)` against the **whole** upstream dataset — no current/future filter — to
    answer "has MOME submitted anything recently at all?" independent of whether today's filtered
-   query matched anything.
-2. If that upstream timestamp is more than `STALENESS_THRESHOLD_DAYS` (10, see code comment for
-   rationale) old, the function logs a `console.error` (distinct severity in the Supabase Functions
-   log dashboard from the routine `console.log` summary) and marks the run `stale = true`.
-3. Every invocation — success, no-op, or stale — writes one row to `public.ingest_runs`
-   (`supabase/02g-ingest-runs.sql`), a durable, source-tagged run log shared by all open-data ingest
-   jobs. This survives past Supabase's function-log retention window, which is what let this
-   3-month outage go unnoticed in the first place.
-4. The HTTP response also carries `upstreamStale`, `staleDays`, and `upstreamLatestRowAt` so a
-   manual `curl` invocation (Step 4 in §9) surfaces staleness immediately without needing to query
-   the database.
+   query matched anything. The probe is bounded by an 8s `AbortController` timeout, so a hung
+   request degrades to a loud failure instead of blocking the whole invocation.
+2. The probe result is **tri-state**, stored as `probe_status` ∈ `{'fresh', 'stale', 'probe_failed'}`
+   — not a boolean. `'probe_failed'` covers a non-2xx response, a network/timeout error, *and* a
+   200 response with an unusable shape (empty array, missing/renamed field, unparseable date); any
+   of these throw inside the probe rather than silently returning "nothing found," so "we couldn't
+   tell" can never be stored as indistinguishable from "we checked and it's fine." If that upstream
+   timestamp is more than `STALENESS_THRESHOLD_DAYS` (10 — measured against the dataset's own
+   historical day-level gaps, see code comment) old, `probe_status = 'stale'`. Either non-`'fresh'`
+   outcome logs a `console.error` (distinct severity in the Supabase Functions log dashboard from
+   the routine `console.log` summary).
+3. Every invocation — success, no-op, stale, or probe-failed — writes one row to
+   `public.ingest_runs` (`supabase/02g-ingest-runs.sql`), a durable, source-tagged run log shared by
+   all open-data ingest jobs. This survives past Supabase's function-log retention window, which is
+   what let this 3-month outage go unnoticed in the first place.
+4. The HTTP response also carries `upstreamProbeStatus`, `staleDays`, and `upstreamLatestRowAt` so a
+   manual `curl` invocation (Step 4 in §9) surfaces staleness — or an inability to determine
+   staleness — immediately without needing to query the database. There is deliberately no boolean
+   shorthand in the response for the same collapsing-ambiguity reason as `probe_status` above.
 
 **Decision on the cron job itself:** kept running daily, unchanged. The filter logic in §3.7 is not
 buggy — it is correctly matching zero rows against a genuinely stale upstream feed. No replacement
@@ -397,7 +405,14 @@ curl -X POST \
   -d '{}'
 ```
 
-Expected response shape: `{"inserted":<N>,"updated":<M>,"skipped":<K>,"errors":[],"totalFetched":<T>}`. A non-empty `errors` array means some permits had coordinate problems — check the function logs in the Supabase Dashboard for the logged `eventid` values.
+Expected response shape (as of the FT-16 staleness guard, §3.9 — every invocation returns these
+fields, not just after Step 7): `{"inserted":<N>,"updated":<M>,"skipped":<K>,"errors":[],"totalFetched":<T>,"upstreamProbeStatus":"fresh"|"stale"|"probe_failed","staleDays":<D>|null,"upstreamLatestRowAt":"<ISO timestamp>"|null}`.
+A non-empty `errors` array means some permits had coordinate problems — check the function logs in
+the Supabase Dashboard for the logged `eventid` values. `upstreamProbeStatus` will read `"stale"`
+until NYC resumes publishing (expected, per the FT-16 investigation, not a sign this step failed) —
+writing that value to `ingest_runs` requires Step 7 to have been applied first; without Step 7 applied
+yet, the same fields still appear in the HTTP response but the `ingest_runs` insert silently no-ops
+with a logged error (table doesn't exist), which is fine for this step's purpose.
 
 ### Step 5 — Store service-role key in Vault (required for Step 6)
 
@@ -427,8 +442,10 @@ can be applied in either order, and this one can be applied whether or not #69 h
    the Edge Function is redeployed with the FT-16 changes and invoked at least once).
 4. Redeploy the Edge Function (Step 3) — it now writes to `ingest_runs` and probes upstream
    freshness on every run. Re-run Step 4's manual invocation and confirm the response includes
-   `upstreamStale`, `staleDays`, and `upstreamLatestRowAt`, and that `select * from public.ingest_runs
-   order by run_at desc limit 1;` shows the new row.
+   `upstreamProbeStatus`, `staleDays`, and `upstreamLatestRowAt`, and that `select * from public.ingest_runs
+   order by run_at desc limit 1;` shows the new row with `probe_status` set (expect `'stale'` until
+   NYC resumes publishing — a `'probe_failed'` row here on a fresh deploy would mean the probe itself
+   needs investigation, not that the feed is stale).
 
 ### Yearly calendar update (2027)
 

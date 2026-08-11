@@ -5,6 +5,12 @@
 -- Idempotent: safe to re-run on a clean or partially-applied project.
 -- Depends on: nothing beyond the base `public` schema (no FK to pins/zones/profiles —
 -- this is an ops/observability table, deliberately decoupled from app data).
+--
+-- QA pass 1 (docs/qa/ft16-staleness-guard-qa.md) reviewed an earlier cut of this table with a
+-- plain `stale boolean` column and flagged (finding #2) that it let "probe failed" collapse into
+-- the same `false` value as "verified fresh." Revised below to a tri-state `probe_status` column
+-- before this migration was ever applied anywhere — no ALTER/backfill needed, this is still the
+-- pre-apply shape.
 
 -- ============================================================
 -- Why this table exists
@@ -51,12 +57,27 @@ create table if not exists public.ingest_runs (
   -- what actually detects "the feed went dry" — a feed can be genuinely, correctly
   -- empty for OUR filter (no permits scheduled today) while still being freshly fed by
   -- the source agency; only a stalled `upstream_latest_row_at` means the upstream feed
-  -- itself stopped moving.
+  -- itself stopped moving. Null exactly when probe_status = 'probe_failed' (we could not
+  -- determine a timestamp at all — see probe_status below).
   upstream_latest_row_at   timestamptz,
-  -- Whether upstream_latest_row_at is older than the job's staleness threshold at the
-  -- time of this run. Computed and stored (not derived at query time) so historical
-  -- rows keep an accurate record even if the threshold constant changes later.
-  stale                    boolean not null default false,
+
+  -- Tri-state, not boolean, on purpose (QA finding #2 on the first cut of this table):
+  -- a boolean `stale` column lets "we probed and it's fresh" and "the probe itself
+  -- failed/returned an unusable shape" collapse into the same `false` value — which
+  -- recreates, one layer up, the exact "legitimately-empty vs. silently-broken"
+  -- ambiguity this whole mechanism exists to eliminate. 'probe_failed' must never be
+  -- representable as indistinguishable from 'fresh'.
+  --   'fresh'        — probe succeeded; upstream_latest_row_at is within the threshold.
+  --   'stale'        — probe succeeded; upstream_latest_row_at is older than the threshold.
+  --   'probe_failed' — probe could not produce a trustworthy timestamp at all (network
+  --                    error, timeout, non-2xx, or an unexpected/malformed response
+  --                    shape). Distinct from both of the above — treat as "unknown,
+  --                    needs a human," not as "fine."
+  probe_status             text not null default 'probe_failed'
+                             check (probe_status in ('fresh', 'stale', 'probe_failed')),
+  -- Days since upstream_latest_row_at, computed and stored (not derived at query time)
+  -- so historical rows keep an accurate record even if the threshold constant changes
+  -- later. Null exactly when probe_status = 'probe_failed'.
   stale_days               integer,
 
   notes                    text
@@ -76,10 +97,12 @@ comment on table public.ingest_runs is
 create index if not exists ingest_runs_source_run_at_idx
   on public.ingest_runs(source, run_at desc);
 
--- Fast lookup of currently-stale jobs.
-create index if not exists ingest_runs_stale_idx
+-- Fast lookup of runs that need a human look — both a confirmed-stale feed and a
+-- probe that couldn't determine freshness at all belong in this set; only 'fresh'
+-- is the "nothing to see here" state.
+create index if not exists ingest_runs_needs_attention_idx
   on public.ingest_runs(source, run_at desc)
-  where stale;
+  where probe_status <> 'fresh';
 
 -- ============================================================
 -- RLS
