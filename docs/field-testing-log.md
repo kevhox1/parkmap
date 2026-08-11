@@ -7,6 +7,39 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ---
 
+## Round 4 — build 14 field observations (2026-08-11)
+
+### FT-15 🔴 Temporary block restrictions from posted paper signs (film shoot / closure) — user report + block-scoped override (FEATURE, large)
+- **Area:** New primitive — a **block-scoped, time-windowed restriction override** on top of the
+  baked tile rules. Spans backend (schema + RPC), data (block resolution), iOS (report flow + render).
+- **Observed (Kevin, on-device photo, 2026-08-11, night):** two laminated orange **NYPD "NO PARKING —
+  FILM SHOOT"** placards zip-tied to a pole. Legible fields: posted **WED 8/12 @ 12pm**; *vehicles
+  must be moved by* **THURSDAY 8/13/26**; shoot time **6AM**; project name **North Six**; location
+  manager **Matthew, 347-996-8207**. Boilerplate: *"signs can be held a maximum of 24 hours in
+  advance of the date & time indicated below (as spaces become available)."*
+- **Affected extent (Kevin):** the whole of **E 2nd St between 3rd Ave and 1st Ave** — note this is
+  **2 blocks × 2 curbs = 4 blockfaces**, not one segment.
+- **Request:** "ingest this and update information for specific blocks… report 'street closure' or
+  something like that." I.e. a user sees a paper sign, reports it, and every affected blockface
+  reflects the restriction for its window — then reverts automatically.
+- **What already exists (do NOT rebuild):** `pin_type` enum already carries **`filming`** and
+  **`construction`** (Tier 1, `source='open_data'`, `lifespan='session'`, `docs/typed-pin-schema-spec.md`
+  §156/§319). `upsert_filming_pin` RPC + `ingest-film-permits` Edge Function + pg_cron job already
+  ship (`supabase/02d-ingest-cron.sql`) pulling the NYC Film Permits open dataset. Spec §AC-S5 already
+  anticipates a **crowd-sourced** `filming` pin. Shipped `ReportSheet` currently exposes only Tier-3
+  ephemeral types (enforcement/sweeper), so the report UI is the missing half.
+- **The four real gaps:** (1) **point → block scope** — every pin today is a single lat/lng; this
+  needs to attach to blockfaces and override baked rules; same primitive **TF2-15 construction layer**
+  needs → build once, use twice. (2) **explicit time window** (`starts_at`/`ends_at`), vs today's
+  `expires_at`-only session model. (3) **sign photo → structured fields** (manual form vs
+  photo-as-evidence vs vision OCR). (4) **trust/abuse** — a crowd pin that overrides authoritative
+  rules can wrongly say "free"; needs confirm/resolve + RLS + hard expiry, and can be cross-checked
+  against the already-ingested permit feed (`permit_id`) since this exact shoot is likely in it.
+- **Status:** 🔴 open — awaiting tech-lead spec (Kevin asked 2026-08-11; not yet dispatched).
+- **Lands in:** `supabase/` (schema + RPC), `build/`-side block resolution, iOS report flow + render.
+- **Related:** TF2-15 (construction layer) — should share this primitive. TF2-4 (school-zone wrong
+  side) is also on **E 2nd** and still needs the exact block from Kevin — different issue, same street.
+
 ## TF2 Round 3 — build 13 drive-test feedback (2026-07-09)
 
 Kevin drove build 13. **TF2-11 Option A zoom VERIFIED on-device** ("zoom is working better") — the
@@ -109,7 +142,12 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   duplicates). Separate follow-ups flagged, NOT bundled: 1,528-row zone-construction loss;
   dead-end/ramp handling. Caveat: recovers ~4 of the ~57 uncovered points — the bulk of the gap is
   likely blocks where NYC posts no signs at all (bigger, different problem).
-- **Status:** 🟡 Kevin approved → fix implemented + regen 7 run → **PR #68 open, in QA** (2026-08-01). Verified pre-PR: coverage 43%→47%, Harlem 38%→64%, Kevin block recovered both sides, zero category regressions, 39 new Harlem-row tiles. Merge → build 15 (with FT-13 ? button).
+- **Status:** 🟢 **MERGED #68** (`b5da617`, 2026-08-11) → rides **build 15** (with FT-13 ? button).
+  Verified pre-PR by orchestrator: coverage 43%→47%, Harlem 38%→64%, Kevin block recovered both
+  sides, zero category regressions, 39 new Harlem-row tiles. ⚠️ **Merged on Kevin's call without a
+  completed independent QA pass** — the QA agent was stopped mid-run (it had confirmed the 24 new
+  Bleecker faces first); no report exists in `docs/qa/`. Post-merge QA on `main` still available
+  before the archive. ⏳ Kevin on-device (build 15): Bleecker @ LaGuardia colored, Harlem jump.
 - **Lands in:** `build/preprocess.js` normalizer + regen 7.
 
 ### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
