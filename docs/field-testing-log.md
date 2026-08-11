@@ -9,7 +9,27 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Round 4 — build 14 field observations (2026-08-11)
 
-### FT-15 🔴 Temporary block restrictions from posted paper signs (film shoot / closure) — user report + block-scoped override (FEATURE, large)
+### FT-16 🔴 `filming` layer has been silently empty for ~3 months — NYC film-permit feed went dry (DATA/INFRA)
+- **Area:** `supabase/functions/ingest-film-permits/index.ts` + the daily pg_cron job in
+  `supabase/02d-ingest-cron.sql`. Backend-data.
+- **Found (orchestrator, 2026-08-11, while scoping FT-15):** our Edge Function pulls NYC Open Data
+  `tg4x-b46p` (`index.ts:74`) and filters to **current/future** permits. That dataset's newest row is
+  `startdatetime` **2026-05-12** (newest `enteredon` ~2026-05-07) across all **18,501** rows. So the
+  current/future filter has matched **zero rows since ~May 12** — the cron runs daily, the RPC upserts
+  nothing, and no error is ever raised. Zero rows have ever matched E 2nd St either.
+- **It's an upstream break, not a retirement:** dataset metadata still reads Agency MOME, Automation Yes,
+  **Update Frequency: Daily**. Socrata's `rowsUpdatedAt` shows 2026-08-10 (yesterday) but that's the asset
+  being touched, not new rows landing — the row data itself is frozen. No replacement dataset to repoint at.
+- **Same failure SHAPE as TF2-19:** a legitimately-empty pull and a broken pull look identical to us. TF2-19's
+  lesson was a fail-CLOSED completeness gate; this pipeline has no equivalent, so a 3-month outage passed
+  unnoticed. Recommend a "feed has produced no new rows in N days" alarm regardless of what NYC does.
+- **Consequence for FT-15:** the crowd-report path is not a gap-filler for this feed — for filming it is
+  currently the *only* signal. Open-data corroboration (`permit_id` matching) must stay strictly optional.
+- **Status:** 🔴 open — standalone backend-data investigation: fix, repoint, or disable the cron (a silently
+  no-op'ing daily job is wasted infra either way). Explicitly NOT a blocker for FT-15.
+- **Lands in:** `supabase/functions/ingest-film-permits/`, `supabase/02d-ingest-cron.sql`.
+
+### FT-15 🟡 Temporary block restrictions from posted paper signs (film shoot / closure) — user report + block-scoped override (FEATURE, large)
 - **Area:** New primitive — a **block-scoped, time-windowed restriction override** on top of the
   baked tile rules. Spans backend (schema + RPC), data (block resolution), iOS (report flow + render).
 - **Observed (Kevin, on-device photo, 2026-08-11, night):** two laminated orange **NYPD "NO PARKING —
@@ -35,7 +55,21 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   photo-as-evidence vs vision OCR). (4) **trust/abuse** — a crowd pin that overrides authoritative
   rules can wrongly say "free"; needs confirm/resolve + RLS + hard expiry, and can be cross-checked
   against the already-ingested permit feed (`permit_id`) since this exact shoot is likely in it.
-- **Status:** 🔴 open — awaiting tech-lead spec (Kevin asked 2026-08-11; not yet dispatched).
+- **Kevin's decisions (2026-08-11):** (a) ingestion = **photo + confirm form**; vision/OCR is phase 2 and
+  only ever PRE-FILLS that form, never the ingestion path. (b) render = **overlay, not recolor** — a crowd
+  report must not silently repaint authoritative baked rules. Plus hard expiry + existing confirm/resolve.
+- **Status:** 🟡 **SPEC'D** — `docs/ft15-tf215-temporary-block-restrictions-spec.md` (tech-lead, 2026-08-11),
+  covering FT-15 + TF2-15 as one shared primitive. Phase 1 = multi-block both-curbs **map tap-select**
+  (deliberately avoids re-solving FT-14-class name matching on-device — block identity read verbatim off the
+  tapped segment via a new `Segment.blockfaceKey`), photo evidence stored PII-safe (never shown to other
+  users — the placard carries a real name + cell), `starts_at`/`expires_at` with type defaults + hard
+  ceiling, marker-based render, construction reusing the identical flow to prove the abstraction.
+  Sizing: **backend 1 session, iOS 4–6 sessions** — not a quick add-on to `ReportSheet`.
+  **Two real gaps the spec found:** neither existing `CommunityPinService` fetch channel would ever return a
+  `source=crowd, lifespan=session` row (a third channel is required, else we insert rows the app never
+  shows); and `auto_resolve_on_dispute` only covers `lifespan='ephemeral'`, so a block report has no
+  dispute-driven resolution path today. ⏳ **OQ-1 awaiting Kevin:** marker-only render acceptable for
+  phase 1, or dashed/hatched polyline in the initial cut?
 - **Lands in:** `supabase/` (schema + RPC), `build/`-side block resolution, iOS report flow + render.
 - **Related:** TF2-15 (construction layer) — should share this primitive. TF2-4 (school-zone wrong
   side) is also on **E 2nd** and still needs the exact block from Kevin — different issue, same street.
