@@ -23,15 +23,27 @@ Reuses lessons from `docs/qa/ft14-join-drop-investigation.md` (PR #68, merged) �
 Full reasoning for each is in §13. All are resolved with a recommendation, so engineering is **not
 blocked** on an answer unless marked 🔴.
 
+> **Kevin's rulings, 2026-08-11 — these are decided, do not re-open:**
+> - **OQ-1 → MARKER.** Phase 1 is marker-only render. Polyline treatment deferred to a follow-up (§14).
+> - **Supabase migrations are applied to production BY KEVIN, MANUALLY.** No agent applies schema to prod,
+>   ever. Stream A produces the migration file; it goes through QA; Kevin runs it.
+> - **The build 15 TestFlight archive is HELD** pending the independent QA report on the merged regen 7
+>   (`docs/qa/ft14-normalizer-regen7-qa.md`).
+> - **Mac boundary:** VPS work runs up to the point where a Swift toolchain or simulator is required, then
+>   STOPS and says so explicitly. Kevin moves to the Mac and the session continues there. Do not fake,
+>   assume, or skip a compile/test/UI-smoke result — say "this needs the Mac."
+
 1. **Extent picker = map tap-select, not typed cross-streets.** Recommend the user taps the actual
    affected blockfaces on the map (reusing the already-rendered segment geometry) rather than typing or
    picking cross-street names. This sidesteps the FT-14 naming-inconsistency problem entirely instead of
    re-solving it on-device. See §4.
-2. **Rendering = existing marker pattern, not a new polyline layer, for phase 1.** "Overlay, not recolor"
-   is satisfied by reusing the proven `PinMarkerAnnotation` marker (Tier 1's existing filming/special-event
-   marker) at each affected block. A dashed/hatched polyline treatment across the block geometry is
-   possible but is new `MapViewRepresentable` overlay surface — deferred. See §9.1. 🔴 confirm this reading
-   of "overlay" is acceptable, or if you want the polyline treatment in phase 1.
+2. **Rendering = existing marker pattern, not a new polyline layer, for phase 1.** ✅ **CONFIRMED by Kevin
+   2026-08-11 — OQ-1 is CLOSED, phase 1 is marker-only.** "Overlay, not recolor" is satisfied by reusing the
+   proven `PinMarkerAnnotation` marker (Tier 1's existing filming/special-event marker) at each affected
+   block. The dashed/hatched polyline treatment across the block geometry is **deferred to a follow-up** —
+   it is a real visual improvement but adds new `MapViewRepresentable` overlay surface, and that file has a
+   merge-then-same-day-revert in its history (§15). Build the primitive first, prove it works, then improve
+   the treatment. See §9.1.
 3. **Photo evidence is captured in phase 1, but never shown to other users.** It's stored for
    provenance/moderation only (author + service-role read), because the placard in Kevin's own photo has a
    real name and cell number on it. No OCR/redaction exists yet to safely show it publicly. See §7.
@@ -619,12 +631,12 @@ currently ahead of it in the queue rather than treating it as a quick add-on to 
 
 ## 13. Open Questions (Kevin)
 
-**OQ-1 🔴 (semi-blocking — affects §9.1 scope).** Is a marker-only render treatment an acceptable reading of
-"overlay, not recolor" for phase 1, or do you want the dashed/hatched polyline treatment in the initial
-cut? Recommendation: marker-only for phase 1 — it's the proven, zero-new-overlay-type path; the polyline
-treatment is a real visual improvement but adds meaningfully more `MapViewRepresentable` surface for a
-first ship. Not fully blocking since engineering can start on everything else regardless, but B2's overlay
-scope depends on the answer.
+**OQ-1 ✅ CLOSED (Kevin, 2026-08-11): MARKER.** Phase 1 ships the marker-only render treatment — the
+proven, zero-new-overlay-type path. The dashed/hatched polyline treatment is **deferred to a named
+follow-up** (§14), not cancelled. **B2's overlay scope is therefore settled: reuse `PinMarkerAnnotation`,
+do NOT add a new polyline overlay type to `MapViewRepresentable.swift`.** The multi-segment *selection*
+highlight during tap-select (§4.2) is still required and is still new surface in that file — the live-UI
+smoke gate before merge stands.
 
 **OQ-2 (non-blocking).** Type-specific default windows (24h filming / 14d construction) and hard ceilings
 (7d / 90d) — these are my first-pass numbers, not measured against real permit durations. Fine to ship and
@@ -680,6 +692,11 @@ accurate at day 85 of its 90-day ceiling currently just needs a fresh report fro
 "still ongoing, extend" affordance (patching `expires_at` under the existing author-only `pins_update_own`
 RLS — no schema change needed) is a small, self-contained follow-up once real construction reports show
 this is actually a friction point in practice, not before.
+
+**Dashed/hatched polyline render treatment.** Deferred by Kevin's OQ-1 ruling (marker-only for phase 1),
+not cancelled. Revisit once the primitive is proven working on-device with real reports; at that point the
+cost/benefit of new `MapViewRepresentable` overlay surface can be judged against a feature that actually
+exists rather than a speculative one. Owner: `@ios-engineer` + `@designer`, post-phase-1.
 
 **Cross-street/typed-picker extent selection.** Tap-select (§4) covers Kevin's use case and every case
 where the reporter is at the location. If a future need for remote/non-present reporting emerges, a
