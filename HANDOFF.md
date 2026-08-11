@@ -182,6 +182,57 @@ Work-stream status as of 2026-05-11:
 
 ## Changelog
 
+### 2026-08-10 — FT-14 coverage recovery: PR #68 OPEN awaiting QA decision; build 15 queued behind it
+
+**WHERE WE ARE:** main clean @ `071a3e0`. Build **1.0 (14) live on TestFlight** and correct (see prior
+entry). **THE ONE OPEN DECISION: PR #68** (`data/ft14-normalizer-regen7`) is open, unmerged —
+Kevin manually stopped the QA agent mid-pass and hasn't yet said whether to (a) restart the
+independent QA pass (~15 min, recommended — orchestrator was the builder-of-record on this PR and
+must not self-certify) or (b) merge without it this once. **Resolve that first.**
+
+**FT-14 arc (this stretch's work):** Kevin found uncovered streets driving Bleecker @ LaGuardia Pl →
+built `scripts/coverage-report.js` (per-neighborhood coverage vs CSCL centerlines; run after every
+regen) → found Manhattan at 43% coverage → root cause: **11% of sign rows (6,044/54,987) silently
+dropped at the street-name join** (NYC spells "LA GUARDIA PLACE" multiple ways; SAINT↔ST; alias
+co-names like Lenox/Malcolm X) → investigation `docs/qa/ft14-join-drop-investigation.md` → Kevin
+approved fix + regen 7 → PR #68: 3-part normalizer fix (confined to `osmName()`/`NYC_TO_OSM`) +
+regen 7. **Orchestrator-verified pre-PR:** coverage 43%→47% (Harlem 38%→64%, +39 new upper-Manhattan
+tiles), Bleecker LA GUARDIA PLACE→MERCER recovered BOTH sides, zero category regressions (all +4-11%,
+ASP +17% = same-join recovery), tiles ≡ iOS Resources, sw.js v38→v39. The stopped QA agent had
+independently confirmed the spacing recoveries (24 new Bleecker faces) before being killed.
+**Process note:** the implementing agent was interrupted twice by session restarts; orchestrator
+finished verification+commit+PR directly (removed the builder's leftover env-gated TEMP block
+before committing). Builder worktree still exists at `.claude/worktrees/agent-a2320b83663818029`
+(holds branch `data/ft14-normalizer-regen7` — `git worktree remove` it before merge, else the
+branch delete fails; same gotcha hit on #63/#65).
+
+**After #68 merges → cut BUILD 15:** bump `CURRENT_PROJECT_VERSION` 14→15 (both configs, 4 slots),
+full suite + cold Release compile (headless CodeSign failure = expected env artifact, compile is
+the signal), commit, then Kevin's archive protocol (**⌘Q Xcode first** — stale-build-number gotcha,
+builds 8/12 — reopen, verify 15, Archive → Distribute → Upload). Build 15 payload: regen 7 tiles +
+FT-13 `?` toolbar button (#67, merged post-14, verified but never shipped).
+
+**KEVIN'S OUTSTANDING ON-DEVICE GATES (do on a WEEKDAY or Saturday, build 14 or 15):**
+TF2-16 heading locks at intersection approaches, no spin, releases through turns; TF2-17/18 chips
+read "Free until X" + sunlight-legible; TF2-19 Bowery/Houston metered/no-standing in-window
+(remember TF2-20: Sunday green is CORRECT); Parking 101 — Settings row tap-through, large Dynamic
+Type plates, fresh-install banner; build 15 adds: `?` toolbar button, Bleecker @ LaGuardia now
+colored, Harlem coverage jump.
+
+**BACKLOG (unchanged order):** supabase-swift real-time (hard TF2 req), external TestFlight group
+(privacy URL ready), Mapbox token bundle-ID restriction, FT-2 delete-own-pin (spec'd), TF2-15
+construction layer, tech-debt batch, FT-14 follow-ups explicitly deferred from #68 (1,528-row
+zone-construction loss; ~800 dead-end/ramp rows unfixable by renaming; the big "NYC posts no signs
+on many blocks" gap ≈ remaining ~50 pts), PWA `APP_VERSION` label drift (cosmetic, pwa-maintainer).
+Also: `docs/resume-bullets.md` exists (Kevin's resume source material — keep numbers current if he
+asks again).
+
+**PROCESS REMINDERS:** field-testing-log Status: lines = truth; spec-first; QA ≠ builder before
+every merge; isolated worktrees for git-touching agents; ONE simctl-created simulator per
+concurrent agent; live-UI smoke for ContentView/mount-chain PRs; Kevin's real-device drive = the
+gate for all camera/GPS behavior; QA agents must WRITE reports to docs/qa/ (several returned text
+without writing); unpair the passcode-locked iPhone from this Mac (slows every test run).
+
 ### 2026-07-13 — Build 14 SHIPPED to TestFlight; regen 6 (the real data fix); TF2-16..20 + FT-12/13; drive-test pending
 
 **WHERE WE ARE:** main clean @ `ac82021`, **build 1.0 (14) uploaded to TestFlight and on Kevin's phone**
