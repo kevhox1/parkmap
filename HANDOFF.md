@@ -271,8 +271,47 @@ migrations in the directory Kevin applies **by hand, in filename order**. #71 re
   `project.pbxproj` references right (the project uses `PBXFileSystemSynchronizedRootGroup`, so files
   under a synchronized root need no explicit entry).
 
-**NEXT:** Mac results for build 15 (cold Release + test suite) and #70's compile → regen-7 QA verdict
-→ archive or fix → re-QA #69 → Kevin applies `02f`/`02g` by hand → FT-15 B2/B3/B4 (B2 is Mac-shaped).
+**BUILD 15 MAC VERIFICATION — PASSED (2026-08-11, Kevin's Mac, Xcode 26.4.1):**
+- Cold `xcodebuild clean build -configuration Release` on `main` @ `4566dea9` → **`** BUILD SUCCEEDED **`**
+- Full suite on iPhone Air sim (iOS 26.4.1) → **585 passed / 0 failed / 0 skipped, `result: Passed`**
+  (`xcrun xcresulttool get test-results summary` — the authoritative read; a `| tail -30` on the raw
+  `xcodebuild test` output MISSES the summary under parallel clone testing, because the final
+  `** TEST SUCCEEDED **` flushes before the last clone's trailing per-test lines. Use the xcresult
+  bundle, not a tail, whenever a pass/fail count actually gates something.)
+- Note: the older "377/0" baseline elsewhere in this file is stale — the suite has grown to 585.
+**REGEN-7 QA — ✅ SAFE TO ARCHIVE** (`docs/qa/ft14-normalizer-regen7-qa.md`, 2026-08-11). Every
+quantitative claim in #68 re-derived from scratch and matched **exactly**: coverage 43%→47%, Harlem
+38%→64%, SoHo 65%→73%, Village 70%→73%; all 5 category counts; corridors (St Nicholas 444,
+Lenox/Malcolm X 192); Kevin's origin block recovered both sides; all 8 aliases verified against real
+OSM keys; 39-added/1-removed tile counts identical between `tiles/` and the iOS mirror. On the lost
+completeness-gate log line, it built four independent consistency checks (Socrata count growth,
+segment-count tracking, flat rules-per-segment ratio, uniform proportional category growth) that all
+indicate a complete pull, **not** a TF2-19-style truncation → no fresh regen needed before archive.
+
+**🟡 FT-14 FOLLOW-UP (not blocking build 15) — SAINT↔ST has no uniqueness gate.** The investigation
+doc justifies the SAINT↔ST swap by claiming OSM has exactly **3** Saint-prefixed streets citywide.
+That is **factually wrong — there are 37.** QA adversarially re-checked all 37 against regen-7 output
+and the single abbreviated `St `-prefixed OSM key and confirmed **zero wrong-street collisions
+today**, so no current bug. But unlike its sibling compact-spacing fallback, this path has **no
+uniqueness check** — it's a defense-in-depth gap that a future OSM data refresh could turn into
+silent wrong-street sign attachment, the worst failure mode this pipeline has. `@backend-data`:
+correct the doc's count and add a collision gate, normal cadence.
+
+**Process improvement flagged by QA:** capture the fetch completeness-gate expected/fetched numbers
+to a durable log during regen — losing them to an interrupted session is what made this verification
+harder than it needed to be.
+
+**⚠️ CHORE — DO IMMEDIATELY AFTER PR #71 MERGES (do not lose this):** the **FT-16a** deferred-alerting
+block in `docs/field-testing-log.md` still says **`ingest_runs.stale`**. That column was renamed to
+**`ingest_runs.probe_status`** (tri-state `fresh`/`stale`/`probe_failed`) by #71's round-2 QA fix. The
+block was deliberately left untouched during #71's rebase so the deferral text couldn't be watered
+down, and it is NOT being fixed on `main` before the merge because that would re-conflict #71 for a
+one-word change. **Swap the term the moment #71 lands** — a deferred-work note that names a column
+which no longer exists is exactly the kind of rot that misleads the session which eventually picks
+FT-16a up.
+
+**NEXT:** #70's compile on the Mac → regen-7 QA verdict → archive or fix → re-QA #69 → Kevin applies
+`02f`/`02g` by hand → FT-15 B2/B3/B4 (B2 is Mac-shaped).
 
 ### 2026-08-10 — FT-14 coverage recovery: PR #68 OPEN awaiting QA decision; build 15 queued behind it
 
