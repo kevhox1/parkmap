@@ -180,6 +180,25 @@ Work-stream status as of 2026-05-11:
 
 `xcodebuild` clean builds of the iOS app are slow on memory-constrained machines (8 GB RAM observed at 10–15 min). The bundled 1,028 tile JSONs are processed as individual file copies under Xcode 16's `PBXFileSystemSynchronizedRootGroup`. On a 16 GB+ Mac, clean builds drop to 2–3 min and incremental builds to seconds. Folder-reference refactor (see "Carry-over deferrals" above) would also help. If a session reports slow builds, suggest: (a) close Chrome/Spotify/OneDrive/heavy apps, (b) Cmd+. between runs to release the running app's 1.8GB, (c) Cmd+R not Cmd+Shift+K+R (don't clean every time), (d) hardware upgrade to 16 GB long-term.
 
+## Environment split: Linux VPS vs Kevin's Mac (since 2026-08-10)
+
+The repo runs in two places. **Detect where you are** (`uname` / hostname: `openclaw-sandbox` =
+the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's MacBook,
+`/Users/kevinhoxha/repos/parkmap`) and behave accordingly:
+
+- **VPS (Linux — phone-driven sessions):** full capability for specs, tech-lead/QA agents, the
+  entire tile/data pipeline (`node build/preprocess.js`, `scripts/coverage-report.js`), Supabase,
+  docs, git/PR management (`gh` authed). **NO Xcode, NO simulators, NO archive.**
+- **Mac (Darwin):** everything, including `xcodebuild` test runs, simulator live-UI smoke gates,
+  cold Release builds, and the Archive → TestFlight ceremony.
+- **The working protocol for Mac-only steps while Kevin drives from the VPS/phone:** do NOT block
+  or skip — emit the exact commands for Kevin to paste into his MacBook terminal (one fenced
+  `bash` block per command, self-contained, no placeholders), he runs them manually and pastes
+  back the output. Alternatively Kevin will say "we're on the Mac now" when he switches to a Mac
+  session — treat that as the environment flipping, not a new project.
+- Both checkouts push/pull through GitHub (`kevhox1/parkmap`) — always `git pull` at session
+  start; never assume the other machine's checkout is stale-free.
+
 ## Changelog
 
 ### 2026-08-10 — FT-14 coverage recovery: PR #68 OPEN awaiting QA decision; build 15 queued behind it
