@@ -271,6 +271,11 @@ migrations in the directory Kevin applies **by hand, in filename order**. #71 re
   `project.pbxproj` references right (the project uses `PBXFileSystemSynchronizedRootGroup`, so files
   under a synchronized root need no explicit entry).
 
+**🚀 BUILD 1.0 (15) SHIPPED TO TESTFLIGHT 2026-08-11 — archived, uploaded, installed on Kevin's
+phone.** Payload: regen 7 tiles (#68) + FT-13 "?" toolbar button (#67). Kevin's on-device pass is
+now the gate; see the FT-13 / FT-14 / TF2-16..19 entries in `docs/field-testing-log.md` for what's
+outstanding. **⏳ Awaiting Kevin's drive-test.**
+
 **BUILD 15 MAC VERIFICATION — PASSED (2026-08-11, Kevin's Mac, Xcode 26.4.1):**
 - Cold `xcodebuild clean build -configuration Release` on `main` @ `4566dea9` → **`** BUILD SUCCEEDED **`**
 - Full suite on iPhone Air sim (iOS 26.4.1) → **585 passed / 0 failed / 0 skipped, `result: Passed`**
