@@ -201,6 +201,79 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-11 — #68 merged + build 15 bumped; FT-15/FT-16 opened; three PRs in flight
+
+**WHERE WE ARE:** `main` @ `5f74219`+. **PR #68 MERGED** (`b5da617`) on Kevin's explicit call
+*without* a completed independent QA pass — he had stopped the earlier QA agent mid-run. That caveat
+is recorded in the FT-14 log entry rather than left to disappear. **`CURRENT_PROJECT_VERSION` bumped
+14→15** (`b3237d45`, all 4 pbxproj slots; `MARKETING_VERSION` stays 1.0). **The build 15 archive is
+HELD** pending `docs/qa/ft14-normalizer-regen7-qa.md` — Kevin's decision: QA gates the archive, it
+does not merely inform it. Kevin moved to the Mac late in the session; test/compile commands issued,
+results pending.
+
+**Kevin's standing rulings this session (do not re-open):**
+- **He applies Supabase migrations to production HIMSELF, by hand.** No agent applies schema to prod,
+  ever. Engineering writes the migration; QA clears it; Kevin runs it.
+- **OQ-1 → MARKER.** FT-15 phase 1 renders via the existing `PinMarkerAnnotation`; the dashed/hatched
+  polyline treatment is deferred to a follow-up. (The multi-segment *selection* highlight during
+  tap-select is still new `MapViewRepresentable` surface — the live-UI smoke gate still stands.)
+- **Mac boundary protocol:** drive every VPS-runnable stream to the Swift-toolchain/simulator edge,
+  then say plainly that a Mac is required and what for. Never fake or assume a compile/test result.
+
+**FT-15 (NEW, large) — temporary block restrictions from posted paper signs.** Kevin photographed an
+NYPD "NO PARKING — FILM SHOOT" placard covering **E 2nd St, 3rd Ave→1st Ave = 2 blocks × 2 curbs =
+4 blockfaces**. Spec written covering **FT-15 + TF2-15 (construction) as ONE shared primitive**:
+`docs/ft15-tf215-temporary-block-restrictions-spec.md`. Core design — extent is picked by **map
+tap-select**, with block identity read verbatim off the tapped tile segment via a new
+`Segment.blockfaceKey`, deliberately so the FT-14 naming problem is never re-solved on-device.
+Sizing is honest: **backend 1 session, iOS 4–6** — not a quick add-on to `ReportSheet`.
+
+**FT-16 (NEW) — the `filming` layer has been silently empty for ~3 months.** Our
+`ingest-film-permits` cron pulls `tg4x-b46p` and filters to current/future permits; that dataset
+froze ~2026-05-12 (hard cliff to zero submissions from June, not a decline). No error was ever
+raised — same failure SHAPE as TF2-19. An "intentional publishing embargo" theory was tested and
+killed by measuring real submission-to-start lead times (1–5 days, not months). No replacement feed
+exists (`tvpp-9vvx` rejected: wrong agency, wrong content). **Consequence: for filming, the FT-15
+crowd path is currently the ONLY signal** — open-data corroboration must stay strictly optional.
+
+**Three PRs open, NONE merged:**
+| PR | What | State |
+|---|---|---|
+| **#69** | FT-15 Stream A schema, `supabase/02f-block-scoped-restrictions.sql` | QA said **DO NOT APPLY**; both blocking findings fixed; **needs re-QA** |
+| **#70** | FT-15 Stream B1 iOS models (`Segment.blockfaceKey`, `CommunityPin` fields) | QA 🟡 ship-with-caveats; fixes landed; **COMPILE-UNVERIFIED, needs Mac** |
+| **#71** | FT-16 staleness guard + `supabase/02g-ingest-runs.sql` | QA running |
+
+**Two real defects independent QA caught (the case for the builder≠verifier rule):**
+1. **Abuse-control bypass (#69).** Both the hard-ceiling CHECK and the rate-limit trigger keyed off
+   `report_group_id is not null` — a client-supplied, RLS-unenforced column. Omitting it exempted an
+   insert from both, and Channel 3's fetch predicate has no `report_group_id` filter, so the row
+   still rendered as a live closure. Fixed with a `NOT VALID` correlation constraint (right call —
+   no prod access to verify existing rows, and `NOT VALID` cannot abort Kevin's `ALTER TABLE`).
+2. **`pins_with_author` is `select p.*`** (`02-pins-schema.sql:274`) — PostgreSQL expands `*` at
+   view-creation time, so the migration's new columns would never reach any client and the whole
+   feature would silently do nothing. Fixed by an explicit column list. **Trap avoided:** a naive
+   `create or replace ... select p.*` FAILS (can only append, not reorder — `p.*` would put the new
+   columns ahead of `author_username`), and the `DROP VIEW` route silently loses
+   `grant select to anon, authenticated`. Column list hand-verified: 19 original columns in original
+   order, 2 appended.
+
+**Also caught: migration-ordinal collision.** #69 and #71 both created a `supabase/02f-*.sql` —
+not a git conflict, so it would have merged cleanly and left two ambiguously-ordered `02f`
+migrations in the directory Kevin applies **by hand, in filename order**. #71 renamed to `02g`.
+
+**Process notes worth keeping:**
+- `gh pr view`/`gh pr edit` fail on this repo (projects-classic GraphQL deprecation). Use
+  `gh pr view --json ...`; for body edits use `gh api -X PATCH`. Also `gh pr diff <n> -- <path>`
+  rejects a path arg on this gh version.
+- **`FETCH_HEAD` is a single mutable ref shared across concurrent agents in one working tree.** A QA
+  pass here silently reviewed the wrong branch's diff before catching it. Pin the SHA to a local ref.
+- iOS code written on the VPS is **compile-unverified** — label it so in PR bodies, and get
+  `project.pbxproj` references right (the project uses `PBXFileSystemSynchronizedRootGroup`, so files
+  under a synchronized root need no explicit entry).
+
+**NEXT:** Mac results for build 15 (cold Release + test suite) and #70's compile → regen-7 QA verdict
+→ archive or fix → re-QA #69 → Kevin applies `02f`/`02g` by hand → FT-15 B2/B3/B4 (B2 is Mac-shaped).
+
 ### 2026-08-10 — FT-14 coverage recovery: PR #68 OPEN awaiting QA decision; build 15 queued behind it
 
 **WHERE WE ARE:** main clean @ `071a3e0`. Build **1.0 (14) live on TestFlight** and correct (see prior
