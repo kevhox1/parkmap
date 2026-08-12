@@ -32,6 +32,20 @@
 //    - ContentView.handleDrivePanDetected()
 //    - ContentView.handleDrivePinchZoomed(_:)
 //
+//  FT-17 (2026-08-12): reversed OQ-4 ("pan pauses follow, pinch does not") to "ANY user
+//  gesture — pan or pinch — pauses follow." Kevin's build-15 field report: a real pinch
+//  almost always also drifts MapKit's own pan recognizer, which silently discarded the
+//  OQ-3 altitude capture (the `wasPan` guard) while leaving follow active — the camera
+//  re-centered/re-zoomed under the user's fingers with no way to reach Recenter.
+//  ADDED (FT-17):
+//    - MapViewRepresentable.shouldPauseFollow(driveModeActive:isUserGesture:) — pure
+//      gesture-pause-decision function, replaces the removed pan-type-specific check in
+//      `regionWillChangeAnimated`.
+//  Group 3 (OQ-3 altitude capture) and its docstrings are updated in place to describe the
+//  FT-17-era behavior (the capture is still wired but now effectively inert in practice —
+//  see MapViewRepresentable.swift's `onDrivePinchZoomed` doc comment) rather than deleted,
+//  since `handleDrivePinchZoomed` itself is unchanged code.
+//
 //  Test count arithmetic (per HANDOFF baseline of 523):
 //    Deleted from Phase2TrackingModeEntryTests:   4
 //    Deleted from Phase2HeadingCoexistenceTests:  4
@@ -51,7 +65,14 @@
 //    Total added: 23
 //
 //    Net change: -21 + 23 = +2
-//    Expected total: 523 - 21 + 23 = 525
+//    Baseline after Option A (this file only, per HANDOFF's baseline of 523 at the time):
+//    523 - 21 + 23 = 525
+//
+//    FT-17 adds Group 7 (shouldPauseFollow — gesture→state mapping) to THIS file: +4 tests.
+//    This PR is COMPILE-UNVERIFIED (written on a Linux VPS with no Xcode/simulator) — the
+//    actual current whole-suite baseline (which may differ from 525 if other PRs landed
+//    tests since this file's last update) and the post-FT-17 total must be confirmed by
+//    `xcodebuild test` on Kevin's Mac, not inferred from this comment.
 //
 //  No Calendar.current.
 //  No hardcoded Mapbox tokens.
@@ -283,11 +304,17 @@ final class OptionAFollowPausedStateMachineTests: XCTestCase {
 
 // MARK: - Group 3: User altitude capture — OQ-3 (A-AC-3)
 
-/// Tests for handleDrivePinchZoomed: pinch updates currentDriveAltitude so the per-tick
-/// follow continues at the user's chosen zoom (Waze model).
+/// Tests for handleDrivePinchZoomed: pinch updates currentDriveAltitude so a resumed
+/// follow would continue at the user's chosen zoom (Waze model, OQ-3 — unchanged by FT-17).
 ///
-/// OQ-3: pinch does NOT pause follow — it captures the new altitude.
-/// OQ-4: pan DOES pause follow; pinch does not.
+/// FT-17 (2026-08-12) note: `handleDrivePinchZoomed` itself never touched `followPaused`
+/// and still doesn't — these tests remain valid unit-level assertions about THIS handler.
+/// What changed is a SEPARATE trigger point (`MapViewRepresentable.shouldPauseFollow`,
+/// see Group 7 below): pinch now ALSO fires `onDrivePanDetected` → `followPaused = true`,
+/// so in the live app a pinch pauses follow via that path, not via this handler. See
+/// `docs/tf2-11-drive-camera-ownership-spec.md` OQ-4 (amended) for the historical OQ-4
+/// text this comment used to assert ("pan DOES pause follow; pinch does not" — no longer
+/// the shipped behavior as of FT-17).
 @MainActor
 final class OptionAUserAltitudeTests: XCTestCase {
 
@@ -337,26 +364,35 @@ final class OptionAUserAltitudeTests: XCTestCase {
             "handleDrivePinchZoomed must ignore altitude <= 0 (invalid camera state guard)")
     }
 
-    // MARK: Test 11: handleDrivePinchZoomed does NOT set followPaused (OQ-4)
+    // MARK: Test 11: handleDrivePinchZoomed itself does not touch followPaused
 
-    /// OQ-4: pinch does NOT pause follow. Only pan sets followPaused = true.
-    /// Pinch captures altitude and the follow continues.
+    /// `handleDrivePinchZoomed`'s only job is the altitude capture (OQ-3); it never wrote
+    /// to `followPaused` before FT-17 and still doesn't. Pausing follow for a pinch is now
+    /// handled by a SEPARATE trigger — `onDrivePanDetected` firing for any gesture, per
+    /// FT-17 (see Group 7 below) — not by this handler. This test asserts the narrower,
+    /// still-true claim about this specific function's responsibility.
     func testHandleDrivePinchZoomed_doesNotSetFollowPaused() {
         var followPaused = false
         var currentDriveAltitude: CLLocationDistance = 621
         var driveModeActive = true
 
-        // Pinch handler — only updates altitude, does NOT touch followPaused.
+        // Pinch handler — only updates altitude, does NOT touch followPaused. In the live
+        // app, MapViewRepresentable separately fires onDrivePanDetected for this same
+        // pinch (FT-17), which is what actually sets followPaused = true — not this
+        // function. This function's contract is unchanged: altitude only.
         let handleDrivePinchZoomed: (CLLocationDistance) -> Void = { newAltitude in
             guard driveModeActive, newAltitude > 0 else { return }
             currentDriveAltitude = newAltitude
-            // followPaused intentionally NOT modified here (OQ-4)
+            // followPaused intentionally NOT modified here — see Group 7 for the FT-17
+            // trigger that now separately pauses follow for a pinch gesture.
         }
 
         handleDrivePinchZoomed(300)
 
         XCTAssertFalse(followPaused,
-            "Pinch must NOT set followPaused (OQ-4: only pan pauses follow, pinch keeps following)")
+            "handleDrivePinchZoomed itself must NOT set followPaused — pausing for a pinch " +
+            "gesture is driven by the separate onDrivePanDetected trigger (FT-17), not by " +
+            "this altitude-capture handler")
         XCTAssertEqual(currentDriveAltitude, 300, accuracy: 1,
             "Pinch must update currentDriveAltitude (OQ-3)")
     }
@@ -568,5 +604,70 @@ final class OptionAHeadingCoexistenceTests: XCTestCase {
         let result = MapViewRepresentable.targetPitch(forDriveModeActive: true, priorPitch: 0)
         XCTAssertEqual(result, MapViewRepresentable.driveModePitch, accuracy: 1,
             "targetPitch(active:true) must return driveModePitch (30°)")
+    }
+}
+
+// MARK: - Group 7: FT-17 — shouldPauseFollow (gesture → state mapping)
+
+/// Tests for `MapViewRepresentable.shouldPauseFollow(driveModeActive:isUserGesture:)`, the
+/// pure function that replaced the removed pan-type-specific check in
+/// `regionWillChangeAnimated`. FT-17 (2026-08-12) reversed OQ-4: ANY active user gesture —
+/// pan OR pinch — now pauses follow and surfaces Recenter, not just pan.
+///
+/// This is a pure boolean-AND function with no MKMapView / UIGestureRecognizer dependency,
+/// so it is directly and fully unit-testable without a simulator — unlike the gesture-type
+/// distinguishing logic it replaced (`$0 is UIPanGestureRecognizer`), which required live
+/// recognizer instances with read-only `.state` and could only be exercised on-device or in
+/// the simulator (see the FT-17 PR body's live-UI smoke checklist for that coverage).
+@MainActor
+final class FT17ShouldPauseFollowTests: XCTestCase {
+
+    // MARK: Test 24: Drive Mode active + user gesture → pauses follow
+
+    /// The core FT-17 assertion: with Drive Mode active, ANY active gesture (the function
+    /// takes no gesture-type parameter at all — pan and pinch are indistinguishable to it
+    /// by design) pauses follow.
+    func testShouldPauseFollow_driveModeActiveAndGesture_returnsTrue() {
+        XCTAssertTrue(
+            MapViewRepresentable.shouldPauseFollow(driveModeActive: true, isUserGesture: true),
+            "FT-17: any active gesture during Drive Mode must pause follow (pan or pinch — " +
+            "the function does not and must not distinguish gesture type)"
+        )
+    }
+
+    // MARK: Test 25: Drive Mode active, no gesture → does not pause
+
+    /// Guard: a programmatic camera change (setCamera / setRegion) fires
+    /// regionWillChangeAnimated with no active gesture recognizer. `isUserGesture` is false
+    /// for those. Must NOT pause follow — this is what keeps syncDriveHeading's per-tick
+    /// animated setCamera and the per-tick setDriveCamera from fighting themselves.
+    func testShouldPauseFollow_driveModeActiveNoGesture_returnsFalse() {
+        XCTAssertFalse(
+            MapViewRepresentable.shouldPauseFollow(driveModeActive: true, isUserGesture: false),
+            "Programmatic camera changes (isUserGesture == false) must never pause follow"
+        )
+    }
+
+    // MARK: Test 26: Drive Mode inactive, user gesture → does not pause
+
+    /// Guard: outside Drive Mode there is no follow to pause and no Recenter pill to show —
+    /// this is ordinary free-browse panning (FT-5's isUserInteracting handles that path
+    /// separately and is unaffected by this function).
+    func testShouldPauseFollow_driveModeInactive_returnsFalse() {
+        XCTAssertFalse(
+            MapViewRepresentable.shouldPauseFollow(driveModeActive: false, isUserGesture: true),
+            "Outside Drive Mode, a user gesture must not trigger the Drive Mode follow-pause " +
+            "path (free-browse panning is a separate, unaffected code path)"
+        )
+    }
+
+    // MARK: Test 27: Neither condition → does not pause
+
+    /// Base case: both false.
+    func testShouldPauseFollow_neitherCondition_returnsFalse() {
+        XCTAssertFalse(
+            MapViewRepresentable.shouldPauseFollow(driveModeActive: false, isUserGesture: false),
+            "Neither Drive Mode active nor a user gesture present — must not pause follow"
+        )
     }
 }
