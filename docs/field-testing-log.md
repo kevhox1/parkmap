@@ -7,6 +7,40 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ---
 
+## Round 5 — build 15 field observations (2026-08-12)
+
+### FT-17 🔴 Drive Mode: pinch-zoom doesn't pause follow — camera yanks back; want free zoom/pan + Recenter
+- **Area:** Drive Mode camera ownership. `MapViewRepresentable.regionWillChange/regionDidChange` +
+  `ContentView.followPaused` / `recenterDriveMode()`. **The single most regression-sensitive file pair
+  in the codebase** (#31 saga, W8.5c-polish merge-then-same-day-revert).
+- **Observed (Kevin, build 15, 2026-08-12):** "the map zooms back in when it's drive mode once I've
+  zoomed out to take a look at something else. I think there should just be a 'recenter button' but it
+  should allow free zoom/pan around."
+- **ROOT CAUSE (orchestrator, code read — the requested feature ALREADY EXISTS but can't be reached):**
+  1. The **Recenter pill already ships** (`ContentView.swift:1554`), gated on `followPaused == true`.
+  2. `followPaused` is set ONLY by `onDrivePanDetected`, which fires only when a
+     **`UIPanGestureRecognizer`** is active (`MapViewRepresentable.swift:1512-1522`).
+  3. **Pinch deliberately does NOT pause follow** — that was the explicit **OQ-4 resolution** in
+     `docs/tf2-11-drive-camera-ownership-spec.md`. Instead pinch captures the new altitude into
+     `currentDriveAltitude` so the next GPS tick honors the user's zoom.
+  4. But that altitude capture is **skipped whenever a pan recognizer was also active** (the `wasPan`
+     guard, `MapViewRepresentable.swift:1551-1555`). Real two-finger pinches almost always drift, so
+     MapKit's pan recognizer commonly fires → **the user's zoom is silently discarded.**
+  5. Independently, `recenterDriveMode()` **deliberately resets `currentDriveAltitude` to the FT-8
+     default** (`ContentView.swift:1723`) — so even a successful Recenter tap throws the user's zoom away.
+  - Net effect: a pure pinch leaves follow ACTIVE → every GPS tick re-centers on the user at
+    `currentDriveAltitude` → if the capture didn't land, that's the old tight zoom → **"it zoomed back in"**,
+    and the Recenter pill never appears because `followPaused` was never set.
+- **Kevin's ask = reverse the OQ-4 decision:** ANY user gesture (pan **or** pinch) pauses follow and
+  surfaces Recenter; free zoom/pan until an explicit Recenter tap. This is the Waze/Apple pattern and is
+  exactly the open "design question" FT-10 originally raised but resolved the other way.
+- **⚠️ FILE COLLISION:** touches the same two files as **FT-15 Stream B2** (map tap-select). These two
+  MUST be serialized, not run in parallel.
+- **Status:** 🔴 open — root-caused, not yet implemented. Needs the live-UI simulator smoke gate on
+  Kevin's Mac before merge (the gate that caught the W8.5c-polish regression).
+- **Lands in:** `ios/WePark/WePark/Views/MapViewRepresentable.swift`, `ios/WePark/WePark/ContentView.swift`,
+  and an OQ-4 amendment in `docs/tf2-11-drive-camera-ownership-spec.md`.
+
 ## Round 4 — build 14 field observations (2026-08-11)
 
 ### FT-16 🟡 `filming` layer has been silently empty for ~3 months — NYC film-permit feed went dry (DATA/INFRA)
@@ -57,7 +91,7 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 - **⚠️ DEFERRED FOLLOW-UP — FT-16a, alerting (Kevin's call, 2026-08-11):** the guard's output is a
   `console.error` + a queryable `ingest_runs` row, and **nothing polls either**. QA's point stands: this
   makes the next outage *technically visible if you check*, not *noticed* — and a human demonstrably won't
-  check, which is exactly how this ran 3 months. A small scheduled job reading `ingest_runs.stale` and
+  check, which is exactly how this ran 3 months. A small scheduled job reading `ingest_runs.probe_status` and
   sending one email is the proportionate fix, but no alerting mechanism exists anywhere in this repo yet, so
   it gets its own scoped pass rather than riding along in #71. **Named explicitly so it isn't silently
   dropped — "we'll notice next time" is the assumption that already failed once.**
