@@ -7,6 +7,7 @@
  *
  * Spec: docs/tier1-open-data-ingest-spec.md §3
  * Depends on: 02-pins-schema.sql + 02b-pins-ingest-indexes.sql applied.
+ * Depends on (FT-16): 02g-ingest-runs.sql applied — see "Staleness detection" below.
  *
  * Secrets (set via `supabase secrets set` before deploying — never hardcode):
  *   SUPABASE_URL            — injected automatically by Supabase runtime
@@ -17,7 +18,28 @@
  *   POST https://<project-ref>.functions.supabase.co/ingest-film-permits
  *   Authorization: Bearer <service-role-key>
  *
- * Response: JSON { inserted, updated, skipped, errors[] }
+ * Response: JSON { inserted, updated, skipped, errors[], upstreamProbeStatus, staleDays, upstreamLatestRowAt }
+ *   upstreamProbeStatus is tri-state: "fresh" | "stale" | "probe_failed" — deliberately
+ *   not a boolean (see the QA-fix note on fetchLatestUpstreamRowAt below).
+ *
+ * Staleness detection (FT-16, docs/qa/ft16-film-permit-feed-investigation.md):
+ * The current/future filter below can legitimately match zero rows on any given day
+ * (no permits happen to be scheduled) — that is NOT an error. What IS an error is the
+ * upstream feed itself going dark: MOME stopping submission of new permit rows
+ * entirely, which happened silently around 2026-05-07 for ~3 months with this function
+ * running daily and never raising anything. This function now separately probes
+ * `max(enteredon)` across the WHOLE upstream dataset (no current/future filter) on
+ * every run, compares it to a staleness threshold, and writes every run's outcome to
+ * `public.ingest_runs` so "the feed has been dry for N days" is a durable, queryable
+ * fact instead of a state that only lives in ephemeral function logs.
+ *
+ * QA pass 1 (docs/qa/ft16-staleness-guard-qa.md) on the first cut of this guard flagged
+ * two real defects, both fixed here: (1) a malformed-but-200 probe response used to
+ * silently return null and read, once caught, as "verified fresh" — now every
+ * non-usable outcome throws and lands in an explicit "probe_failed" state that is
+ * never representable as "fine". (2) the probe fetch() had no timeout, so a hang could
+ * block the invocation until the platform killed it, preventing the ingest_runs row
+ * this PR is built around from ever being written — now bounded by PROBE_TIMEOUT_MS.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -75,6 +97,22 @@ const SOCRATA_BASE = "https://data.cityofnewyork.us/resource/tg4x-b46p.json";
 const PAGE_SIZE = 1000;
 const GEOSEARCH_BASE = "https://geosearch.planninglabs.nyc/v2/search";
 const GEOCODE_MIN_SCORE = 0.7;
+
+// FT-16 staleness threshold, measured (not just inferred from "Daily" metadata) —
+// per QA finding #4, this is checked against the dataset's own historical day-level
+// gaps, not just a monthly-aggregate guess. Queried every consecutive gap between
+// `enteredon` timestamps across the dataset's full history (2022-10 through the
+// 2026-05 outage): the single largest gap anywhere is 41.96 days, but that one sits
+// at the very start of the dataset's history (2022-10-20 -> 2022-12-01, immediately
+// after the earliest row that exists at all) and reads as onboarding/ramp-up noise,
+// not steady-state operation — there is nothing before it to compare cadence
+// against. Excluding that one bootstrap artifact, the largest gap across ~3.5 years
+// of mature operation is 5.01 days (2022-12), with every other outlier (holiday
+// weeks in Dec 2023/2025, etc.) under 5 days too. 10 days is therefore ~2x the
+// largest genuine historical lull ever observed in steady-state — real headroom, but
+// not the 9x the first draft of this comment claimed. It still catches a real
+// outage roughly 9x faster than the ~90 days it actually took to notice this one.
+const STALENESS_THRESHOLD_DAYS = 10;
 
 const VALID_BOROUGHS = new Set([
   "Manhattan",
@@ -181,6 +219,80 @@ async function fetchPermitPage(
   return resp.json() as Promise<SocrataPermit[]>;
 }
 
+// FT-16 staleness probe timeout. A hung fetch() (TCP connects, no response ever
+// arrives) would otherwise block the whole invocation until the Edge Function
+// platform's own execution ceiling kills it — which also prevents the ingest_runs
+// row from ever being written (QA finding #3). A bounded probe guarantees the
+// try/catch around it always resolves in time for the durable-log write below to
+// still run, degrading a stall to the ordinary probe_failed path instead.
+const PROBE_TIMEOUT_MS = 8_000;
+
+// FT-16: independent freshness probe. Deliberately does NOT reuse the
+// current/future $where clause from fetchPermitPage — the whole point is to answer
+// "is the upstream feed still receiving submissions at all?", which the filtered
+// query cannot distinguish from "no permits currently match, which is normal."
+//
+// Throws (never silently returns a "can't tell" null) on any response that isn't a
+// genuinely usable timestamp — non-2xx, network/abort error, or a 200 with a
+// valid-JSON-but-wrong-shape body (empty array, missing/renamed `latest` field,
+// unparseable date). QA finding #2 on the first cut of this function: a bare
+// `return null` on a malformed-but-200 response was indistinguishable, once caught
+// upstream, from "we verified freshness and it's fine" — that recreated this PR's
+// own "legitimately quiet vs. silently broken" problem one layer up. This function
+// already has a documented history of Socrata shape surprises (see the trailing-`Z`
+// SoQL type-mismatch note on fetchPermitPage above), so treat every non-timestamp
+// outcome as a loud failure, not a quiet null.
+async function fetchLatestUpstreamRowAt(
+  appToken: string | undefined
+): Promise<Date> {
+  const params = new URLSearchParams({ $select: "max(enteredon) as latest" });
+  const headers: Record<string, string> = {
+    "User-Agent": "WePark-ingest/1.0",
+    Accept: "application/json",
+  };
+  if (appToken) headers["X-App-Token"] = appToken;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  let resp: Response;
+  try {
+    resp = await fetch(`${SOCRATA_BASE}?${params}`, {
+      headers,
+      signal: controller.signal,
+    });
+  } catch (err) {
+    throw new Error(
+      `Socrata freshness probe network error (possible timeout after ${PROBE_TIMEOUT_MS}ms): ${String(err)}`
+    );
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  if (!resp.ok) {
+    throw new Error(
+      `Socrata freshness probe failed: ${resp.status} ${resp.statusText}`
+    );
+  }
+
+  const body = (await resp.json()) as unknown;
+  if (!Array.isArray(body) || body.length === 0) {
+    throw new Error(
+      `Socrata freshness probe returned an unexpected shape (expected a non-empty array): ${JSON.stringify(body).slice(0, 200)}`
+    );
+  }
+  const latest = (body[0] as { latest?: unknown })?.latest;
+  if (typeof latest !== "string" || latest.length === 0) {
+    throw new Error(
+      `Socrata freshness probe row is missing a usable "latest" field: ${JSON.stringify(body[0]).slice(0, 200)}`
+    );
+  }
+  const parsed = new Date(latest);
+  if (isNaN(parsed.getTime())) {
+    throw new Error(`Socrata freshness probe returned an unparseable date: "${latest}"`);
+  }
+  return parsed;
+}
+
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
@@ -237,16 +349,97 @@ Deno.serve(async (_req: Request): Promise<Response> => {
     result.errors.push(`Fatal fetch error: ${String(err)}`);
   }
 
+  // ---------------------------------------------------------------------
+  // FT-16: upstream freshness probe + durable run log.
+  // Best-effort — a probe or log-write failure must never fail the whole
+  // invocation (the main upsert work above already completed). The probe itself is
+  // time-bounded (PROBE_TIMEOUT_MS, above) specifically so this block always finishes
+  // in bounded time and the ingest_runs write below is always reached.
+  //
+  // Tri-state on purpose (QA finding #2): "we checked and it's fresh," "we checked
+  // and it's stale," and "we could not check at all" are three genuinely different
+  // facts and must never collapse into the same stored value. probeStatus starts
+  // pessimistic ('probe_failed') and is only upgraded to 'fresh'/'stale' after a
+  // successful, well-shaped probe response — never the other way around.
+  // ---------------------------------------------------------------------
+  type ProbeStatus = "fresh" | "stale" | "probe_failed";
+
+  let upstreamLatestRowAt: Date | null = null;
+  let staleDays: number | null = null;
+  let probeStatus: ProbeStatus = "probe_failed";
+  let probeError: string | null = null;
+
+  try {
+    upstreamLatestRowAt = await fetchLatestUpstreamRowAt(appToken);
+    staleDays = Math.floor(
+      (now.getTime() - upstreamLatestRowAt.getTime()) / 86_400_000
+    );
+    probeStatus = staleDays >= STALENESS_THRESHOLD_DAYS ? "stale" : "fresh";
+  } catch (err) {
+    probeError = String(err);
+    probeStatus = "probe_failed";
+  }
+
+  if (probeStatus === "probe_failed") {
+    // Loud on purpose — console.error surfaces distinctly from console.log/warn in
+    // the Supabase Function logs dashboard and is the discoverable signal this
+    // ticket asks for. A probe failure doesn't prove the feed is stale, but it must
+    // be just as loud as a confirmed-stale feed — "couldn't tell" is never "fine."
+    console.error(`ingest-film-permits freshness probe FAILED: ${probeError}`);
+  } else if (probeStatus === "stale") {
+    console.error(
+      `ingest-film-permits STALE FEED: upstream tg4x-b46p (NYC Film Permits) has ` +
+        `produced no new rows in ${staleDays} days (last enteredon=` +
+        `${upstreamLatestRowAt?.toISOString()}). Threshold is ` +
+        `${STALENESS_THRESHOLD_DAYS} days. See docs/qa/ft16-film-permit-feed-investigation.md.`
+    );
+  }
+
+  try {
+    const { error: logError } = await supabase.from("ingest_runs").insert({
+      source: "film_permits",
+      fetched_count: totalFetched,
+      inserted_count: result.inserted,
+      updated_count: result.updated,
+      skipped_count: result.skipped,
+      error_count: result.errors.length,
+      errors: result.errors.slice(0, 20),
+      upstream_latest_row_at: upstreamLatestRowAt?.toISOString() ?? null,
+      probe_status: probeStatus,
+      stale_days: staleDays,
+      notes: probeError ? `freshness probe failed: ${probeError}` : null,
+    });
+    if (logError) {
+      console.error(`ingest-film-permits failed to write ingest_runs row: ${logError.message}`);
+    }
+  } catch (err) {
+    console.error(`ingest-film-permits failed to write ingest_runs row: ${String(err)}`);
+  }
+
   console.log(
     `ingest-film-permits complete: fetched=${totalFetched} ` +
       `inserted=${result.inserted} updated=${result.updated} ` +
-      `skipped=${result.skipped} errors=${result.errors.length}`
+      `skipped=${result.skipped} errors=${result.errors.length} ` +
+      `probeStatus=${probeStatus} staleDays=${staleDays ?? "unknown"}`
   );
 
-  return new Response(JSON.stringify({ ...result, totalFetched }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
+  return new Response(
+    JSON.stringify({
+      ...result,
+      totalFetched,
+      // Tri-state on purpose — no boolean shorthand here. A boolean "upstreamStale"
+      // field would re-introduce the exact ambiguity fixed in ingest_runs one layer
+      // up: a reader seeing `false` couldn't tell "verified fresh" from "the probe
+      // itself failed." Read upstreamProbeStatus, not an absence of staleness.
+      upstreamProbeStatus: probeStatus,
+      staleDays,
+      upstreamLatestRowAt: upstreamLatestRowAt?.toISOString() ?? null,
+    }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    }
+  );
 });
 
 // ---------------------------------------------------------------------------
