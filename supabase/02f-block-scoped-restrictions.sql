@@ -50,6 +50,42 @@
 -- (pre-existing pattern from `02-pins-schema.sql`/`02e`, not a regression introduced here). The
 -- rate-limit index composite-column tweak (finding #5) IS applied below — cheap, zero-risk.
 --
+-- Round 3 (this revision, docs/qa/ft15-a-block-scoped-schema-qa-pass2.md): both Pass 1 blocking
+-- findings (required report_group_id correlation, pins_with_author) were independently
+-- re-verified as genuinely fixed and are UNCHANGED in this revision. Pass 2 found two NEW,
+-- independent bypasses of the rate-limit trigger specifically (adversarial testing was the
+-- explicit ask of that pass) — both fixed here, narrowly, without touching anything else in the
+-- file:
+--   1. 🔴 BLOCKING, fixed. The rate-limit trigger's `count(distinct report_group_id)` self-
+--      exclusion (`report_group_id != new.report_group_id`) has no time bound: an author who
+--      always reuses ONE fixed report_group_id is excluded from its own count on every insert,
+--      forever, so the distinct-group count can never exceed the number of OTHER ids the author
+--      has ever used — an attacker who never varies the id stays at 0 permanently. See
+--      enforce_block_scoped_rate_limit() Guard 2 below (new): an absolute per-author cap on total
+--      block-scoped ROWS in the window, counted with NO id-based exclusion at all, closes this —
+--      count(*) grows with every row regardless of how report_group_id is chosen, unlike
+--      count(distinct ...) of a value the attacker fully controls. Guard 1 (the original distinct-
+--      group check) is left textually unchanged: QA pass 2 confirmed time-bounding its self-
+--      exclusion instead does NOT close the bypass (a reused id still maxes out at exactly one
+--      distinct value, however the exclusion window is scoped) and would additionally penalize a
+--      legitimate delayed retry of the same batch. See inline comment above Guard 1 for the full
+--      "why not fix it there instead" reasoning.
+--   2. 🟡 SIGNIFICANT, fixed. The trigger was `BEFORE INSERT` only; the pre-existing, unrestricted
+--      `pins_update_own` policy let an author insert a cheap non-grouped crowd pin (report_group_id
+--      null, so the guard's own null-check skipped the INSERT-time check entirely) and then UPDATE
+--      it into a filming/construction block-scoped report, never touching the rate limiter at all.
+--      Fixed by widening the trigger to `BEFORE INSERT OR UPDATE`, with new in-function logic that
+--      skips the guards (no re-check, no query) when an UPDATE does not change whether/how a row
+--      qualifies — i.e. the row was already a qualifying block-scoped report under the SAME
+--      report_group_id before this statement — so a legitimate author edit (notes, expires_at) is
+--      never rejected, and the internal UPDATEs issued by refresh_pin_vote_counts() and
+--      auto_resolve_on_dispute() (neither of which touches report_group_id) are unaffected. See
+--      enforce_block_scoped_rate_limit() for the full skip-condition reasoning and CREATE TRIGGER
+--      pins_enforce_block_scoped_rate_limit below.
+-- Verified NOT to reject Kevin's canonical 4-row E 2nd St batch (one report_group_id, 4 sequential
+-- inserts): traced Guard 2's existing-row count at each of the 4 inserts as 0, 1, 2, 3 — all well
+-- under the new max_rows default (30) — see rate_limit_config seed and Guard 2 comment below.
+--
 -- ============================================================
 -- DIVERGENCES FROM THE SPEC'S §3.2 SKETCH — read before applying
 -- ============================================================
@@ -426,24 +462,31 @@ create trigger pins_auto_resolve_on_dispute
 -- Placed before the Storage section (below) for the same reason as section 6 — this is
 -- spec-"required" and must not be gated behind Storage's ownership risk in a single-pass apply.
 --
--- Known limitation, not fixed (QA finding #4, low-severity, logged not blocking): this trigger's
--- `count(distinct report_group_id)` read has no row lock (no SELECT ... FOR UPDATE / advisory
--- lock) under default READ COMMITTED isolation, so two near-simultaneous submissions from the same
--- author (e.g. two devices) could both read "2 groups in the window" and both proceed, landing the
--- author at 4 instead of being capped at 3. This is an abuse deterrent, not a security boundary,
--- and the feature's realistic volume makes this a low-severity, accepted gap — not fixed here.
+-- Known limitation, not fixed (QA finding #4, low-severity, logged not blocking): both guards'
+-- COUNT reads (Guard 1's `count(distinct report_group_id)`, Guard 2's `count(*)`, added round 3 —
+-- see enforce_block_scoped_rate_limit() below) have no row lock (no SELECT ... FOR UPDATE /
+-- advisory lock) under default READ COMMITTED isolation, so two near-simultaneous submissions from
+-- the same author (e.g. two devices) could both read a count just under the threshold and both
+-- proceed, landing the author one over the intended cap. This is an abuse deterrent, not a
+-- security boundary, and the feature's realistic volume makes this a low-severity, accepted gap —
+-- not fixed here. Distinct from, and does not reopen, QA pass 2 Finding #1 (round 3's fix target):
+-- that finding was an UNBOUNDED bypass (permanently invisible, not merely racy); this TOCTOU note
+-- is about an ordinary off-by-a-few race on an otherwise-bounded, working limiter.
 create table if not exists public.rate_limit_config (
   key           text primary key,
   max_count     integer not null,
   window_hours  integer not null,
+  max_rows      integer not null,
   updated_at    timestamptz not null default now()
 );
 
 comment on table public.rate_limit_config is
   'Tunable thresholds for rate-limit triggers. Update in place (e.g. update public.rate_limit_config set max_count = 5 where key = ''block_scoped_report'') to retune without a migration.';
+comment on column public.rate_limit_config.max_rows is
+  'Absolute cap on total block-scoped crowd pins rows an author may create in window_hours, independent of report_group_id distinctness. Added QA pass 2 round 3 (docs/qa/ft15-a-block-scoped-schema-qa-pass2.md Finding #1): count(distinct report_group_id) alone can never exceed 1 for an author who always reuses a single fixed id, so max_count alone cannot bound that attack no matter how its self-exclusion is scoped. max_rows counts occurrences, not distinct ids, so it bounds it. Default (30) is deliberately generous — 10x max_count — so it cannot reject a legitimate single large multi-blockface report; see enforce_block_scoped_rate_limit() Guard 2.';
 
-insert into public.rate_limit_config (key, max_count, window_hours)
-values ('block_scoped_report', 3, 24)
+insert into public.rate_limit_config (key, max_count, window_hours, max_rows)
+values ('block_scoped_report', 3, 24, 30)
 on conflict (key) do nothing;
 
 alter table public.rate_limit_config enable row level security;
@@ -458,9 +501,11 @@ alter table public.rate_limit_config enable row level security;
 create or replace function public.enforce_block_scoped_rate_limit()
 returns trigger language plpgsql security definer as $$
 declare
-  v_max_count    integer;
-  v_window_hours integer;
-  v_recent_count integer;
+  v_max_count     integer;
+  v_window_hours  integer;
+  v_max_rows      integer;
+  v_recent_groups integer;
+  v_recent_rows   integer;
 begin
   -- Only rate-limit block-scoped crowd reports. Everything else (open-data ingestion,
   -- non-grouped crowd pins) is untouched. As of section 2 above, report_group_id is guaranteed
@@ -470,28 +515,91 @@ begin
     return new;
   end if;
 
-  select max_count, window_hours
-    into v_max_count, v_window_hours
+  -- QA pass 2 round 3, Finding #2: this trigger now fires BEFORE UPDATE as well as BEFORE INSERT
+  -- (see CREATE TRIGGER below), closing the pins_update_own bypass (insert a cheap non-grouped
+  -- crowd pin, then UPDATE it into a filming/construction report — the INSERT-time guard above
+  -- never saw a report_group_id to check). Firing on every UPDATE unconditionally would also
+  -- re-run the guards on a row that was ALREADY a qualifying block-scoped report before this
+  -- statement (e.g. an author fixing a typo in notes, or correcting expires_at on their own
+  -- existing report) — that row was already checked and counted when it first became qualifying,
+  -- and Guard 2 below in particular counts pre-existing rows, so re-checking on every edit could
+  -- reject a legitimate edit purely because OTHER activity by the same author has since filled the
+  -- window (an edit does not add a row). So: skip both guards entirely when this UPDATE does not
+  -- change whether/how the row qualifies — i.e. it was already qualifying, under the SAME
+  -- report_group_id, before this statement. This also means the internal UPDATEs issued by
+  -- refresh_pin_vote_counts() (votes trigger) and auto_resolve_on_dispute() below — neither of
+  -- which ever touches report_group_id — always hit this skip branch and are never blocked by rate
+  -- limiting. Any UPDATE that newly makes a row qualify, or reassigns an already-qualifying row to
+  -- a DIFFERENT report_group_id, still falls through to the guards below.
+  if tg_op = 'UPDATE' then
+    if old.report_group_id is not null
+       and old.source = 'crowd'
+       and old.report_group_id = new.report_group_id
+    then
+      return new;
+    end if;
+  end if;
+
+  select max_count, window_hours, max_rows
+    into v_max_count, v_window_hours, v_max_rows
     from public.rate_limit_config
    where key = 'block_scoped_report';
 
   -- Belt-and-suspenders fallback if the config row is ever missing.
   v_max_count    := coalesce(v_max_count, 3);
   v_window_hours := coalesce(v_window_hours, 24);
+  v_max_rows     := coalesce(v_max_rows, 30);
 
-  -- Count DISTINCT report_group_ids already created by this author in the window, excluding the
-  -- group currently being inserted — so the N rows of one batched report submission (same
-  -- report_group_id) don't self-count against the limit as they're inserted one at a time.
+  -- Guard 1 (original, spec §6.2 "3 block-scoped reports per author per 24h"): count DISTINCT
+  -- report_group_ids already created by this author in the window, excluding the group currently
+  -- being inserted/updated — so the N rows of one batched report submission (same report_group_id)
+  -- don't self-count against the limit as they land one at a time.
+  --
+  -- Left textually UNCHANGED from round 2 — QA pass 2 Finding #1 found this clause provides zero
+  -- protection against an author who always reuses ONE fixed report_group_id (count(distinct ...)
+  -- of a single constant value the attacker fully controls can never exceed 1, so it can never
+  -- reach v_max_count regardless of how many rows are inserted). The fix is NOT to time-bound this
+  -- self-exclusion: doing so still caps the count at exactly one distinct value for a reused id (a
+  -- reused id is still only ever "1 distinct id," time-bound or not), so it does not close the
+  -- bypass either — and it would newly penalize a legitimate delayed retry of the same batch (same
+  -- report_group_id, resubmitted after a network hiccup) by making the retry consume a fresh group
+  -- slot it wouldn't have consumed before. Guard 2 below closes the actual gap instead, without
+  -- that regression risk, by counting rows rather than distinct ids.
   select count(distinct report_group_id)
-    into v_recent_count
+    into v_recent_groups
     from public.pins
    where author_id = new.author_id
      and report_group_id is not null
      and report_group_id != new.report_group_id
      and created_at > now() - (v_window_hours || ' hours')::interval;
 
-  if v_recent_count >= v_max_count then
+  if v_recent_groups >= v_max_count then
     raise exception 'rate limit exceeded: max % block-scoped report(s) per % hour(s)', v_max_count, v_window_hours
+      using errcode = 'insufficient_privilege';
+  end if;
+
+  -- Guard 2 (new, QA pass 2 round 3): absolute cap on total block-scoped crowd ROWS created by
+  -- this author in the window — no report_group_id-based exclusion at all, deliberately. This is
+  -- what actually closes Finding #1: an attacker who always reuses one fixed report_group_id
+  -- defeats Guard 1 completely (however Guard 1's self-exclusion is scoped, count(distinct ...) of
+  -- one constant value can never reach v_max_count) but cannot defeat this guard, because count(*)
+  -- grows by one on every row regardless of what report_group_id is attached to it. v_max_rows
+  -- defaults generously (30 — 10x v_max_count, see rate_limit_config seed above) specifically so
+  -- it can never reject a legitimate single large multi-blockface report; it exists purely to
+  -- bound otherwise-unlimited row insertion under a single reused id. Verified against Kevin's
+  -- canonical 4-row E 2nd St batch (one report_group_id, 4 sequential inserts): the existing-row
+  -- count this query would see at each of the 4 inserts is 0, 1, 2, 3 — all well under 30, so the
+  -- batch is unaffected.
+  select count(*)
+    into v_recent_rows
+    from public.pins
+   where author_id = new.author_id
+     and report_group_id is not null
+     and source = 'crowd'
+     and created_at > now() - (v_window_hours || ' hours')::interval;
+
+  if v_recent_rows >= v_max_rows then
+    raise exception 'rate limit exceeded: max % block-scoped report row(s) per % hour(s)', v_max_rows, v_window_hours
       using errcode = 'insufficient_privilege';
   end if;
 
@@ -501,7 +609,7 @@ $$;
 
 drop trigger if exists pins_enforce_block_scoped_rate_limit on public.pins;
 create trigger pins_enforce_block_scoped_rate_limit
-  before insert on public.pins
+  before insert or update on public.pins
   for each row execute function public.enforce_block_scoped_rate_limit();
 
 -- ============================================================
