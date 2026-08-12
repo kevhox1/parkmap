@@ -153,7 +153,7 @@ The `meta` column is untyped at the DB level (JSONB) for schema flexibility. The
 
 | pin_type | meta shape | Required fields |
 |---|---|---|
-| `filming` | `{ permit_id: string, production_name: string?, film_office_url: string? }` | `permit_id` |
+| `filming` | `{ permit_id: string?, production_name: string?, film_office_url: string? }` | none required — `permit_id` required for the Tier 1 open-data path (`upsert_filming_pin`, always seeded from a real NYC film permit); optional for crowd-authored reports, which routinely have no permit number at all (see `docs/ft15-tf215-temporary-block-restrictions-spec.md` §1, §3.4 — FT-15's canonical case is a laminated placard with no permit printed on it). `permitId` was widened `String` → `String?` in the iOS model by that spec's Stream B1. |
 | `asp_suspended_today` | `{ suspension_date: string (YYYY-MM-DD), reason: string? }` | `suspension_date` |
 | `special_event` | `{ event_name: string, event_type: 'parade'\|'marathon'\|'snow_emergency'\|'fair'\|'other' }` | `event_name`, `event_type` |
 | `construction` | `{ permit_id: string?, agency: string?, start_date: string?, end_date: string? }` | none required (partial open data) |

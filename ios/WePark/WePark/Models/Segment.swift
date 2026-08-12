@@ -139,3 +139,39 @@ struct Segment: Codable, Identifiable {
         case onewayToward = "oneway_toward"
     }
 }
+
+// MARK: - FT-15 / TF2-15: blockfaceKey
+
+extension Segment {
+    /// Direction-agnostic blockface identity: `STREET|MIN(FROM,TO)|MAX(FROM,TO)|SIDE`.
+    ///
+    /// Spec: `docs/ft15-tf215-temporary-block-restrictions-spec.md` §4.3.
+    ///
+    /// This is the single source of truth for block identity used on both the write
+    /// path (building `pins.segment_id` when a user taps blocks to report a temporary
+    /// restriction) and the read path (matching a viewed `Segment` against
+    /// `visiblePins`). Cross streets are alphabetically sorted so two `Segment` rows
+    /// describing the same physical blockface — e.g. one per direction of a divided
+    /// street's sub-segments, or rows that happen to store `from`/`to` swapped —
+    /// still resolve to the identical key.
+    ///
+    /// Deliberately reads `street`, `fromStreet`, `to`, and `side` verbatim off the
+    /// already-decoded tile data — no street-name normalization, no fuzzy matching,
+    /// no on-device re-derivation of anything. Block identity never depends on
+    /// text a user typed or picked; see the spec's §4.1 rationale for why an
+    /// on-device equivalent of the FT-14 build-time name normalizer is explicitly
+    /// out of scope here.
+    ///
+    /// Note on casing: `blockfaceKey` does NOT uppercase anything itself — no
+    /// `.uppercased()` call anywhere in this property. Segment values happen to
+    /// already be all-caps because the tile-build pipeline guarantees it (see this
+    /// file's own top-of-file doc comment: "Street name in all-caps"), so the key is
+    /// uppercase *as a consequence of the source data*, not because this property
+    /// normalizes it. If a future tile source ever stops guaranteeing that, this key
+    /// would silently start mixing case rather than normalizing — that's intentional
+    /// per the "verbatim, zero-touch reads" design (§4.1), not an oversight.
+    var blockfaceKey: String {
+        let (lo, hi) = fromStreet <= to ? (fromStreet, to) : (to, fromStreet)
+        return "\(street)|\(lo)|\(hi)|\(side)"
+    }
+}

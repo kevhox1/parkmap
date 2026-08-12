@@ -25,6 +25,19 @@
 //   - No Supabase client — model + decode only (networking is Stream C, §12).
 //   - No force-unwraps.
 //
+//  FT-15 / TF2-15 (docs/ft15-tf215-temporary-block-restrictions-spec.md, Stream B1):
+//   - CommunityPin gains `startsAt` (§5.1), `reportGroupId` (§3.2, §9.2), and
+//     `hasEvidencePhoto` (§7 / OQ-5). All three are additive/optional-safe — no
+//     existing decode path (pre-FT-15 pin_type rows, or rows from a live schema that
+//     doesn't yet have these columns) is affected.
+//   - FilmingMeta.permitId widened from required to optional to admit crowd-authored
+//     filming reports that have no permit number (§1, §3.4). ConstructionMeta needed
+//     no change — every field was already optional.
+//   - The AC-D20 comment in PinDetailSheet.swift ("CommunityPin.swift is NOT modified")
+//     was diff-minimization scoped to that specific PR, not a standing freeze — see
+//     this spec's §10 work-streams table, which explicitly assigns model extension to
+//     this stream (B1).
+//
 
 import Foundation
 
@@ -95,6 +108,11 @@ struct CommunityPin: Identifiable {
     // MARK: Temporal
     let createdAt: Date
     let updatedAt: Date
+    /// FT-15 / TF2-15 (`docs/ft15-tf215-temporary-block-restrictions-spec.md` §5.1):
+    /// nil = active immediately, matching every existing pin type's current behavior
+    /// with zero migration risk. When non-nil, a report's active window is
+    /// `[startsAt, expiresAt]` rather than `[createdAt, expiresAt]`.
+    let startsAt: Date?
     /// nil = does not auto-expire (durable / correction types).
     let expiresAt: Date?
     /// Set when a durable/correction pin is voted resolved or admin-closed.
@@ -109,6 +127,44 @@ struct CommunityPin: Identifiable {
 
     // MARK: Free-text notes
     let notes: String?
+
+    // MARK: FT-15 / TF2-15 — block-scoped restriction linkage
+    //
+    // Spec: docs/ft15-tf215-temporary-block-restrictions-spec.md §3.2, §9.2.
+    //
+    // NOT part of the literal B1 field list in the spec's §10 work-streams table,
+    // added here anyway because §9.2's consumption design and AC-C1/AC-C3 both
+    // require `CommunityPin` to carry `report_group_id`, and no later B-stream
+    // (B2/B3/B4) touches `Models/CommunityPin.swift` per that same table — B1 is
+    // the only place this field can land. Flagged in the PR description for
+    // orchestrator visibility rather than silently added.
+
+    /// Links N blockface `pins` rows created from one user report (one report
+    /// covering multiple blocks/curbs shares a single `reportGroupId`). `nil` for
+    /// every pin type that predates FT-15/TF2-15 or wasn't created via the
+    /// block-scoped report flow.
+    let reportGroupId: UUID?
+
+    /// FT-15 / TF2-15 §7 / OQ-5: `true` when at least one `pin_evidence` row backs
+    /// this pin's `reportGroupId`. This is a trust signal only — the photo itself is
+    /// never exposed to any user other than its uploader (§7).
+    ///
+    /// **Inert as of this PR — QA pass 1 finding, do not treat `false` as a real
+    /// answer.** OQ-5 ("should other users see an 'evidence attached ✓' signal in
+    /// phase 1?") has not been ruled on by Kevin, and Stream A's schema (§3.2) does
+    /// not add any backing column/computed field to `pins_with_author` — nothing can
+    /// ever populate this from the live schema today. It always decodes to `false`
+    /// via the `decodeIfPresent(...) ?? false` fallback below, which is intentional:
+    /// this keeps the field decode-safe (and named/typed, ready to wire up) without
+    /// asserting an answer to OQ-5 that hasn't been made. **Decode-only by design —
+    /// deliberately NOT written by `encode(to:)`**, so a future `Encodable`-based
+    /// insert (e.g. Stream B3's write path) never sends a `has_evidence_photo` key
+    /// PostgREST would reject as an unknown column. Once OQ-5 is ruled on and a real
+    /// backing column/view field exists, this needs: (a) the wire key confirmed
+    /// against the actual schema (`has_evidence_photo` here is an unconfirmed guess),
+    /// and (b) re-adding to `encode(to:)` only if a write path ever needs to send it
+    /// (unlikely — this is normally server-computed, not client-supplied).
+    let hasEvidencePhoto: Bool
 }
 
 // MARK: - CommunityPin: Codable
@@ -132,12 +188,15 @@ extension CommunityPin: Codable {
         case authorUsername = "author_username"
         case createdAt      = "created_at"
         case updatedAt      = "updated_at"
+        case startsAt       = "starts_at"
         case expiresAt      = "expires_at"
         case resolvedAt     = "resolved_at"
         case confirmCount   = "confirm_count"
         case disputeCount   = "dispute_count"
         case meta
         case notes
+        case reportGroupId    = "report_group_id"
+        case hasEvidencePhoto = "has_evidence_photo"
     }
 
     init(from decoder: Decoder) throws {
@@ -155,6 +214,8 @@ extension CommunityPin: Codable {
         authorUsername = try container.decodeIfPresent(String.self, forKey: .authorUsername)
         createdAt     = try container.decode(Date.self,       forKey: .createdAt)
         updatedAt     = try container.decode(Date.self,       forKey: .updatedAt)
+        // FT-15/TF2-15 §5.1: nil = active immediately (absent on every pre-FT-15 row).
+        startsAt      = try container.decodeIfPresent(Date.self,   forKey: .startsAt)
         expiresAt     = try container.decodeIfPresent(Date.self,   forKey: .expiresAt)
         resolvedAt    = try container.decodeIfPresent(Date.self,   forKey: .resolvedAt)
         confirmCount  = try container.decode(Int.self,        forKey: .confirmCount)
@@ -164,6 +225,12 @@ extension CommunityPin: Codable {
         // Decode `meta` JSONB using pin_type as the discriminator (§10.4 strategy).
         // If the meta column is null the field becomes nil without error.
         meta = try PinMeta.decode(pinType: pinType, from: container)
+
+        // FT-15/TF2-15 §3.2: absent on every pin type that predates the block-scoped
+        // report flow, and absent entirely from today's live schema until Stream A ships.
+        reportGroupId = try container.decodeIfPresent(UUID.self, forKey: .reportGroupId)
+        // §7 / OQ-5: absent key → false (no evidence-photo trust signal available yet).
+        hasEvidencePhoto = try container.decodeIfPresent(Bool.self, forKey: .hasEvidencePhoto) ?? false
     }
 
     func encode(to encoder: Encoder) throws {
@@ -180,6 +247,7 @@ extension CommunityPin: Codable {
         try container.encodeIfPresent(authorUsername, forKey: .authorUsername)
         try container.encode(createdAt,     forKey: .createdAt)
         try container.encode(updatedAt,     forKey: .updatedAt)
+        try container.encodeIfPresent(startsAt,       forKey: .startsAt)
         try container.encodeIfPresent(expiresAt,      forKey: .expiresAt)
         try container.encodeIfPresent(resolvedAt,     forKey: .resolvedAt)
         try container.encode(confirmCount,  forKey: .confirmCount)
@@ -191,6 +259,13 @@ extension CommunityPin: Codable {
         } else {
             try container.encodeNil(forKey: .meta)
         }
+        try container.encodeIfPresent(reportGroupId, forKey: .reportGroupId)
+        // hasEvidencePhoto is deliberately decode-only — NOT encoded. See its doc
+        // comment on the stored property above: no backing column exists on the live
+        // schema yet, and encoding it unconditionally would send an unknown
+        // `has_evidence_photo` key to PostgREST the moment a future write path
+        // (Stream B3) reaches for `Encodable` instead of a hand-built payload dict.
+        // QA pass 1 finding (docs/qa/ft15-b1-ios-models-qa.md, Finding #2).
     }
 }
 
@@ -314,9 +389,19 @@ enum PinMeta: Codable {
 // MARK: FilmingMeta
 
 /// `pin_type = 'filming'`
-/// Required: `permit_id`. Optional: `production_name`, `film_office_url`.
+///
+/// Originally `permit_id` was required (§4.3 of `docs/typed-pin-schema-spec.md`) — true
+/// for the Tier 1 open-data path (`upsert_filming_pin`, always seeded from a real NYC
+/// film permit). FT-15 (`docs/ft15-tf215-temporary-block-restrictions-spec.md` §1, §3.4)
+/// adds a second, crowd-sourced writer for this same `pin_type`: a user reporting a
+/// laminated "NO PARKING — FILM SHOOT" placard with no permit number printed on it at
+/// all. `permitId` is widened to optional here so decode doesn't throw for crowd rows
+/// that never had one — window/notes for those live on the `pins` row itself
+/// (`starts_at`/`expires_at`/`notes`), not in `meta`, so a crowd-authored `filming` pin
+/// most commonly has `meta: null` entirely; this widening covers the case where a
+/// future writer sends a partial meta object without `permit_id`.
 struct FilmingMeta: Codable {
-    let permitId: String
+    let permitId: String?
     let productionName: String?
     let filmOfficeUrl: String?
 
@@ -367,7 +452,11 @@ struct SpecialEventMeta: Codable {
 // MARK: ConstructionMeta
 
 /// `pin_type = 'construction'`
-/// All fields optional (partial open data, §4.3).
+/// All fields optional (partial open data, §4.3). FT-15/TF2-15's crowd-sourced
+/// construction reports (`docs/ft15-tf215-temporary-block-restrictions-spec.md` §9.3)
+/// reuse this exact type unmodified — every field was already optional, so a crowd
+/// row with `meta: null` (the common case; the report window/notes live on the `pins`
+/// row itself) decodes without any change needed here.
 struct ConstructionMeta: Codable {
     let permitId: String?
     let agency: String?

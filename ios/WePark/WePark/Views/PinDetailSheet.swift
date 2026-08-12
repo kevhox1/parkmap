@@ -23,7 +23,15 @@
 //  Invariants:
 //   - No Calendar.current (AC-D19, AC-I5). All time arithmetic uses Date() + TimeInterval.
 //   - No force-unwraps.
-//   - CommunityPin.swift is NOT modified (AC-D20, AC-I2). Display logic lives here.
+//   - CommunityPin.swift is NOT modified BY THIS FILE (AC-D20, AC-I2) — display logic
+//     lives here, model shape lives in Models/CommunityPin.swift. That was a
+//     diff-minimization discipline scoped to the Tier 3 sub-PR #1 PR this comment
+//     originates from, not a standing freeze on the model file itself — FT-15/TF2-15
+//     (docs/ft15-tf215-temporary-block-restrictions-spec.md §10, Stream B1) deliberately
+//     extends CommunityPin.swift (adds startsAt/reportGroupId/hasEvidencePhoto). This
+//     view file's own reactions-row gate below (line ~55) still only covers
+//     `lifespan == .ephemeral` — widening it to include block-scoped `session`/`durable`
+//     reports is Stream B4's job (AC-C4), not done in this pass.
 //   - No setRegion, updateUIView mutation, or headlessWindow guard (AC-I3).
 //
 
