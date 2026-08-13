@@ -59,6 +59,17 @@
 //  Baseline: 280/0. After this suite: 280 + 13 (net new) = 293/0 (total).
 //  (21 original tests → 5 request tests restructured + 3 crowd merge + 4 locationContextLabel = 34 total)
 //
+//  FT-15 / TF2-15 Stream B4 (docs/ft15-tf215-temporary-block-restrictions-spec.md §12):
+//  fetchPins now issues a 3rd concurrent request (crowd block-scoped, filming/construction).
+//  The 5 request-structure tests + the debounce test above were updated in place
+//  (expectedFulfillmentCount / fetchCount assertions: 2 → 3) rather than duplicated, since
+//  they assert "how many requests fire per fetch", which is a property of ALL three
+//  channels together, not something a per-channel test file should own. New Channel-3-
+//  specific assertions (predicate shape, AC-C1/AC-C2, blockScopedRestriction lookup,
+//  mergeableTypes widening, CommunityPin.isUpcoming/showsReactionsRow) live in
+//  FT15B4Tests.swift, following the same separate-file-per-feature convention as
+//  FT15ModelTests.swift (Stream B1).
+//
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens or Supabase keys.
 //
@@ -243,8 +254,9 @@ final class CommunityPinServiceRequestTests: XCTestCase {
 
     /// Helper: builds a mock session that captures ALL requests fired during a fetch.
     ///
-    /// The fetch now issues two concurrent requests (open_data + crowd ephemeral).
-    /// The handler is called once per request; we capture all URLs in an array.
+    /// The fetch now issues three concurrent requests (open_data + crowd ephemeral +
+    /// FT-15/TF2-15 crowd block-scoped). The handler is called once per request; we
+    /// capture all URLs in an array.
     private func captureRequestsAndMakeService(
         handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
     ) -> (CommunityPinService, URLSession) {
@@ -270,8 +282,10 @@ final class CommunityPinServiceRequestTests: XCTestCase {
     func testFetchRequest_includesOpenDataSourceFilter() async throws {
         var capturedURLs: [String] = []
         // Both requests will call the handler. We need 2 fulfillments.
-        let expectation = expectation(description: "both fetches fire")
-        expectation.expectedFulfillmentCount = 2
+        let expectation = expectation(description: "all three fetches fire")
+        // FT-15/TF2-15: fetchPins now issues 3 concurrent requests (open_data +
+        // crowd ephemeral + crowd block-scoped), up from 2.
+        expectation.expectedFulfillmentCount = 3
 
         let (service, _) = captureRequestsAndMakeService { request in
             capturedURLs.append(request.url?.absoluteString ?? "")
@@ -301,8 +315,10 @@ final class CommunityPinServiceRequestTests: XCTestCase {
     /// never appear on the map.
     func testFetchRequest_includesCrowdEphemeralChannel() async throws {
         var capturedURLs: [String] = []
-        let expectation = expectation(description: "both fetches fire")
-        expectation.expectedFulfillmentCount = 2
+        let expectation = expectation(description: "all three fetches fire")
+        // FT-15/TF2-15: fetchPins now issues 3 concurrent requests (open_data +
+        // crowd ephemeral + crowd block-scoped), up from 2.
+        expectation.expectedFulfillmentCount = 3
 
         let (service, _) = captureRequestsAndMakeService { request in
             capturedURLs.append(request.url?.absoluteString ?? "")
@@ -331,8 +347,10 @@ final class CommunityPinServiceRequestTests: XCTestCase {
     /// 3-dispute-resolved pins are excluded from the response.
     func testFetchRequest_crowdChannel_includesResolvedAtIsNull() async throws {
         var capturedURLs: [String] = []
-        let expectation = expectation(description: "both fetches fire")
-        expectation.expectedFulfillmentCount = 2
+        let expectation = expectation(description: "all three fetches fire")
+        // FT-15/TF2-15: fetchPins now issues 3 concurrent requests (open_data +
+        // crowd ephemeral + crowd block-scoped), up from 2.
+        expectation.expectedFulfillmentCount = 3
 
         let (service, _) = captureRequestsAndMakeService { request in
             capturedURLs.append(request.url?.absoluteString ?? "")
@@ -359,8 +377,10 @@ final class CommunityPinServiceRequestTests: XCTestCase {
     /// AC-D6 companion: requests must NOT include an Authorization header (anon-only read).
     func testBuildRequest_noAuthorizationHeader() async throws {
         var capturedRequests: [URLRequest] = []
-        let expectation = expectation(description: "both fetches fire")
-        expectation.expectedFulfillmentCount = 2
+        let expectation = expectation(description: "all three fetches fire")
+        // FT-15/TF2-15: fetchPins now issues 3 concurrent requests (open_data +
+        // crowd ephemeral + crowd block-scoped), up from 2.
+        expectation.expectedFulfillmentCount = 3
 
         let (service, _) = captureRequestsAndMakeService { request in
             capturedRequests.append(request)
@@ -376,7 +396,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         service.onRegionChanged(region)
         await fulfillment(of: [expectation], timeout: 2.5)
 
-        // Neither request should have an Authorization header (anon read path — AC-D21).
+        // None of the 3 requests should have an Authorization header (anon read path — AC-D21).
         for request in capturedRequests {
             let authHeader = request.value(forHTTPHeaderField: "Authorization")
             XCTAssertNil(authHeader,
@@ -386,11 +406,13 @@ final class CommunityPinServiceRequestTests: XCTestCase {
 
     // MARK: - apikey header present
 
-    /// Both requests must include the apikey header (Supabase PostgREST requirement).
+    /// All 3 requests must include the apikey header (Supabase PostgREST requirement).
     func testBuildRequest_apiKeyHeader_present() async throws {
         var capturedRequests: [URLRequest] = []
-        let expectation = expectation(description: "both fetches fire")
-        expectation.expectedFulfillmentCount = 2
+        let expectation = expectation(description: "all three fetches fire")
+        // FT-15/TF2-15: fetchPins now issues 3 concurrent requests (open_data +
+        // crowd ephemeral + crowd block-scoped), up from 2.
+        expectation.expectedFulfillmentCount = 3
 
         let (service, _) = captureRequestsAndMakeService { request in
             capturedRequests.append(request)
@@ -409,7 +431,7 @@ final class CommunityPinServiceRequestTests: XCTestCase {
         for request in capturedRequests {
             let apiKeyHeader = request.value(forHTTPHeaderField: "apikey")
             XCTAssertEqual(apiKeyHeader, kAnonKey,
-                "Both requests must include apikey header. URL: \(request.url?.absoluteString ?? "")")
+                "All 3 requests must include apikey header. URL: \(request.url?.absoluteString ?? "")")
         }
     }
 }
@@ -420,11 +442,12 @@ final class CommunityPinServiceRequestTests: XCTestCase {
 final class CommunityPinServiceDebounceTests: XCTestCase {
 
     /// AC-D7: Two calls to onRegionChanged 200ms apart fire only ONE debounce window,
-    /// resulting in exactly two network requests (one per channel: open_data + crowd).
+    /// resulting in exactly three network requests (one per channel: open_data + crowd
+    /// ephemeral + FT-15/TF2-15 crowd block-scoped).
     ///
     /// The debounce collapses the two calls into one fetchPins invocation.
-    /// fetchPins issues two concurrent requests (Channel 1 + Channel 2).
-    /// Expected total: 2 requests (not 4, which would happen if both onRegionChanged calls fetched).
+    /// fetchPins issues three concurrent requests (Channel 1 + Channel 2 + Channel 3).
+    /// Expected total: 3 requests (not 6, which would happen if both onRegionChanged calls fetched).
     func testDebounce_twoRapidCalls_firesOneFetch() async {
         var fetchCount = 0
         PinMockURLProtocol.requestHandler = { request in
@@ -463,11 +486,13 @@ final class CommunityPinServiceDebounceTests: XCTestCase {
         // Wait 1.2s total (800ms debounce + 400ms buffer).
         try? await Task.sleep(for: .milliseconds(1200))
 
-        // fetchPins issues 2 requests per debounced call (open_data + crowd channels).
-        // Two rapid onRegionChanged calls that collapse to ONE fetch → 2 total requests.
-        // If debounce fails and two fetches fire → 4 requests (the failure mode).
-        XCTAssertEqual(fetchCount, 2,
-            "AC-D7: two onRegionChanged calls 200ms apart must fire ONE debounced fetch (= 2 requests: open_data + crowd)")
+        // fetchPins issues 3 requests per debounced call (open_data + crowd ephemeral +
+        // FT-15/TF2-15 crowd block-scoped channels).
+        // Two rapid onRegionChanged calls that collapse to ONE fetch → 3 total requests.
+        // If debounce fails and two fetches fire → 6 requests (the failure mode).
+        XCTAssertEqual(fetchCount, 3,
+            "AC-D7: two onRegionChanged calls 200ms apart must fire ONE debounced fetch " +
+            "(= 3 requests: open_data + crowd ephemeral + crowd block-scoped)")
     }
 }
 

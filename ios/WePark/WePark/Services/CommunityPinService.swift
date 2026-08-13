@@ -8,8 +8,10 @@
 //  Spec: docs/tier1-pin-display-spec.md §9, docs/tier3-auth-and-reactions-spec.md §3.9.
 //
 //  Responsibilities:
-//   - Debounced (800ms) PostgREST bounding-box fetch for filming / asp_suspended_today /
-//     special_event pins (source = open_data, not expired, not resolved).
+//   - Debounced (800ms) PostgREST bounding-box fetch, merged from 3 channels:
+//       1. filming / asp_suspended_today / special_event (source = open_data, not expired, not resolved)
+//       2. enforcement_active / sweeper_passed (source = crowd, lifespan = ephemeral, not expired, not resolved)
+//       3. filming / construction (source = crowd, block-scoped reports, not expired, not resolved) — FT-15/TF2-15
 //   - Periodic refresh (pinRefreshIntervalSeconds) re-fetches the last visible region so
 //     new pins from self + others appear, and expired pins drop, without manual panning.
 //     This is the TF1 stand-in for WebSocket Realtime. The timer fires only when a region
@@ -46,6 +48,18 @@
 //   - Read path remains raw URLSession with no Authorization header (anon read, AC-D21).
 //   - Write path attaches Authorization: Bearer <jwt> via SupabaseAuthService.
 //   - authService is injected at init. The convenience init() creates a shared instance.
+//
+//  FT-15 / TF2-15 (docs/ft15-tf215-temporary-block-restrictions-spec.md, Stream B4):
+//   - Adds Channel 3 (buildCrowdBlockScopedRequest): source=crowd, pin_type in
+//     (filming, construction), resolved_at is null, not expired. §3.4 calls this out
+//     explicitly as the gap that made the whole feature invisible pre-B4 — neither
+//     Channel 1 (hardcodes source=eq.open_data) nor Channel 2 (hardcodes
+//     lifespan=eq.ephemeral) would ever return a source=crowd, lifespan=session row.
+//   - Adds blockScopedRestriction(forBlockfaceKey:) — the shared lookup used by
+//     BlockDetailView / ParkedCarDetailView to decide whether to show the "Temporary
+//     restriction reported" banner (§9.2).
+//   - mergeableTypes (Realtime/optimistic-add merge path) widened to include
+//     .construction, matching the read path's new coverage.
 //
 
 import Foundation
@@ -364,20 +378,48 @@ final class CommunityPinService {
         }
     }
 
+    // MARK: - FT-15 / TF2-15: block-scoped restriction lookup (§9.2)
+
+    /// Returns the active-or-upcoming block-scoped restriction pin (`filming` or
+    /// `construction`, `report_group_id != nil`) whose `segmentId` matches the given
+    /// blockface key, if any.
+    ///
+    /// Used by `BlockDetailView` / `ParkedCarDetailView` to decide whether to show the
+    /// "Temporary restriction reported" banner (§9.2) for the segment currently being
+    /// viewed. `key` is expected to be a `Segment.blockfaceKey` value — matching is
+    /// string-equality only, by construction (§4.3): both the write path and this read
+    /// path derive the key from the identical computed property, so there is no
+    /// normalization or fuzzy matching here.
+    ///
+    /// If multiple block-scoped pins somehow match the same key (shouldn't happen under
+    /// normal use — one report per blockface — but not enforced server-side), the first
+    /// match in `visiblePins` wins; callers needing every match should filter
+    /// `visiblePins` directly instead.
+    func blockScopedRestriction(forBlockfaceKey key: String) -> CommunityPin? {
+        visiblePins.first { pin in
+            pin.reportGroupId != nil &&
+            (pin.pinType == .filming || pin.pinType == .construction) &&
+            pin.segmentId == key
+        }
+    }
+
     // MARK: - Network fetch
 
-    /// Issues two PostgREST bounding-box queries in parallel and merges the results:
+    /// Issues three PostgREST bounding-box queries in parallel and merges the results:
     ///   - Channel 1 (open_data): filming / asp_suspended_today / special_event pins.
     ///   - Channel 2 (crowd ephemeral): enforcement_active / sweeper_passed pins,
     ///     source=crowd, lifespan=ephemeral, resolved_at is null, not expired.
+    ///   - Channel 3 (crowd block-scoped, FT-15/TF2-15): filming / construction pins,
+    ///     source=crowd, resolved_at is null, not expired. §3.4.
     ///
-    /// Both channels share the same client-side filter on completion.
+    /// All three channels share the same client-side filter on completion.
     /// On success: replaces `visiblePins` with the merged, filtered result.
     /// On failure: sets `fetchError`; does NOT clear `visiblePins` (stale data stays visible).
     private func fetchPins(for region: MKCoordinateRegion) async {
         let bbox = BoundingBox(from: region)
         guard let openDataRequest = buildOpenDataRequest(bbox: bbox),
-              let crowdRequest = buildCrowdEphemeralRequest(bbox: bbox) else {
+              let crowdRequest = buildCrowdEphemeralRequest(bbox: bbox),
+              let blockScopedRequest = buildCrowdBlockScopedRequest(bbox: bbox) else {
             return
         }
 
@@ -388,12 +430,14 @@ final class CommunityPinService {
         lastFetchedRegion = region
 
         do {
-            // Issue both requests concurrently — independent channels, no ordering dependency.
+            // Issue all three requests concurrently — independent channels, no ordering dependency.
             async let openDataResult = urlSession.data(for: openDataRequest)
             async let crowdResult = urlSession.data(for: crowdRequest)
+            async let blockScopedResult = urlSession.data(for: blockScopedRequest)
 
             let (openDataData, openDataResponse) = try await openDataResult
             let (crowdData, crowdResponse) = try await crowdResult
+            let (blockScopedData, blockScopedResponse) = try await blockScopedResult
 
             if let httpResponse = openDataResponse as? HTTPURLResponse,
                !(200..<300).contains(httpResponse.statusCode) {
@@ -407,14 +451,25 @@ final class CommunityPinService {
                 isLoading = false
                 return
             }
+            if let httpResponse = blockScopedResponse as? HTTPURLResponse,
+               !(200..<300).contains(httpResponse.statusCode) {
+                fetchError = CommunityPinFetchError.httpError(statusCode: httpResponse.statusCode)
+                isLoading = false
+                return
+            }
 
             let openDataPins = try decodeResponse(data: openDataData)
             let crowdPins = try decodeResponse(data: crowdData)
+            let blockScopedPins = try decodeResponse(data: blockScopedData)
 
-            // Merge both channels: open_data first (deterministic ordering), then crowd.
-            // clientSideFilter deduplicates by filter logic (not by ID); both channels
-            // use distinct pin_type ranges so there is no overlap.
-            visiblePins = clientSideFilter(openDataPins + crowdPins)
+            // Merge all three channels: open_data first (deterministic ordering), then
+            // crowd-ephemeral, then crowd-block-scoped. clientSideFilter deduplicates by
+            // filter logic (not by ID); channel 1/2 use distinct pin_type ranges with no
+            // overlap. Channel 3 shares `filming` with channel 1, but the two are mutually
+            // exclusive on `source` (open_data vs. crowd) — see §3.4's `segment_id`
+            // semantics note for why a crowd filming row can never collide with an
+            // open-data filming row.
+            visiblePins = clientSideFilter(openDataPins + crowdPins + blockScopedPins)
             fetchError = nil
         } catch is CancellationError {
             // Task was cancelled (new region change arrived before debounce elapsed). No-op.
@@ -514,6 +569,71 @@ final class CommunityPinService {
         return request
     }
 
+    /// Builds the PostgREST URLRequest for Channel 3: crowd block-scoped restriction pins.
+    ///
+    /// Fetches: filming, construction (crowd-authored, block-scoped reports — §9.3: the
+    /// same primitive serves both FT-15's film-shoot case and TF2-15's construction case)
+    ///   source = eq.crowd
+    ///   pin_type in (filming, construction)
+    ///   resolved_at = is.null
+    ///   expires_at is null OR > now
+    ///
+    /// Spec: docs/ft15-tf215-temporary-block-restrictions-spec.md §3.4, §12 AC-C1/AC-C2.
+    ///
+    /// Concrete gap this closes (§3.4): `buildOpenDataRequest` hardcodes `source=eq.open_data`;
+    /// `buildCrowdEphemeralRequest` hardcodes `lifespan=eq.ephemeral`. Neither channel would
+    /// ever return a `source=crowd, lifespan=session` (or `durable`) row. Without this
+    /// channel, FT-15/TF2-15 block-scoped reports are written to `pins` (Stream B3's write
+    /// path) but never fetched by any client — the feature would be invisible end to end.
+    ///
+    /// Deliberately does NOT filter on `lifespan` — a block-scoped report is `session` or
+    /// `durable` depending on how the write path sets it; this channel's identity is
+    /// `source=crowd, pin_type in (filming, construction)`, not a lifespan value.
+    ///
+    /// Deliberately does NOT filter on `starts_at` (AC-C2): a report whose window hasn't
+    /// started yet must still be fetched so the consumption UI can show an "Upcoming" badge
+    /// (`CommunityPin.isUpcoming(now:)`) rather than silently hiding it until it goes live.
+    /// Only `expires_at` gates visibility here, matching every other channel's convention —
+    /// `clientSideFilter` needs no change for this (it already only checks `expiresAt`/
+    /// `resolvedAt`, never `startsAt`).
+    private func buildCrowdBlockScopedRequest(bbox: BoundingBox) -> URLRequest? {
+        let nowISO = iso8601Now()
+
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/pins_with_author"),
+            resolvingAgainstBaseURL: false
+        )
+
+        components?.queryItems = [
+            URLQueryItem(name: "pin_type",    value: "in.(filming,construction)"),
+            URLQueryItem(name: "source",      value: "eq.crowd"),
+            URLQueryItem(name: "resolved_at", value: "is.null"),
+            URLQueryItem(name: "or",          value: "(expires_at.is.null,expires_at.gt.\(nowISO))"),
+            URLQueryItem(name: "lat",         value: "gte.\(bbox.swLat)"),
+            URLQueryItem(name: "lat",         value: "lte.\(bbox.neLat)"),
+            URLQueryItem(name: "lng",         value: "gte.\(bbox.swLng)"),
+            URLQueryItem(name: "lng",         value: "lte.\(bbox.neLng)"),
+            URLQueryItem(
+                name: "select",
+                // Includes starts_at + report_group_id (absent from channels 1/2's select
+                // lists — this is the first channel that needs them). Deliberately does NOT
+                // select has_evidence_photo: that column does not exist on the live schema
+                // yet (CommunityPin.swift's decode-only note) and requesting an unknown
+                // column would make PostgREST reject the entire query with a 400.
+                value: "id,pin_type,source,lifespan,lat,lng,segment_id,zone_id,starts_at,expires_at,confirm_count,dispute_count,meta,notes,author_username,created_at,updated_at,resolved_at,author_id,report_group_id"
+            ),
+        ]
+
+        guard let url = components?.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        return request
+    }
+
     // MARK: - Response decoder
 
     /// Decodes a PostgREST JSON array response into `[CommunityPin]`.
@@ -576,12 +696,14 @@ final class CommunityPinService {
     /// sweeper_passed) in addition to the Tier 1 open-data types. Reactions (confirm_count,
     /// expires_at updates) from other users propagate via this path.
     func mergeRealtimeChange(pin: CommunityPin) {
-        // Tier 1 open-data display types + Tier 3 ephemeral crowd pins.
-        // asp_suspended_today is handled via banner supplement, not as a map marker (spec §3),
-        // but is still merged into visiblePins for the banner supplement.
+        // Tier 1 open-data display types + Tier 3 ephemeral crowd pins + FT-15/TF2-15
+        // crowd block-scoped pins. asp_suspended_today is handled via banner supplement,
+        // not as a map marker (spec §3), but is still merged into visiblePins for the
+        // banner supplement.
         let mergeableTypes: Set<PinType> = [
             .filming, .specialEvent, .aspSuspendedToday,    // Tier 1
-            .enforcementActive, .sweeperPassed, .brokenMeter  // Tier 3
+            .enforcementActive, .sweeperPassed, .brokenMeter, // Tier 3
+            .construction  // FT-15/TF2-15 — filming is already covered by the Tier 1 line above
         ]
         guard mergeableTypes.contains(pin.pinType) else { return }
 

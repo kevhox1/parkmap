@@ -4,34 +4,41 @@
 //
 //  Tier 1 Pin Display — read-only detail sheet for community pins.
 //  Tier 3 Sub-PR #1 additions: reactions row for ephemeral crowd pins.
-//  Spec: docs/tier1-pin-display-spec.md §8, docs/tier3-auth-and-reactions-spec.md §3.10.
+//  FT-15 / TF2-15 Stream B4 additions: block-scoped restriction detail view, widened
+//  reactions gate, construction glyph/color.
+//  Spec: docs/tier1-pin-display-spec.md §8, docs/tier3-auth-and-reactions-spec.md §3.10,
+//  docs/ft15-tf215-temporary-block-restrictions-spec.md §9.2/§9.3.
 //
 //  Surfaces:
-//   - filming:      type icon + label, open-data badge, production name,
-//                   expiry, NYC Film Office link (if filmOfficeUrl non-nil).
+//   - filming (open_data, reportGroupId == nil): type icon + label, open-data badge,
+//     production name, expiry, NYC Film Office link (if filmOfficeUrl non-nil).
 //   - special_event: type icon + label, open-data badge, event name, event type, expiry.
+//   - filming / construction, block-scoped (reportGroupId != nil, FT-15/TF2-15 §9.2/§9.3):
+//     Upcoming/Active badge, covered block (parsed from the 4-part blockfaceKey
+//     segment_id), starts_at–expires_at window, multi-blockface extent if >1 sibling
+//     shares the reportGroupId, notes.
 //   - enforcement_active / sweeper_passed (Tier 3 ephemeral crowd pins):
 //       reactions row with "Still there?" (confirm + extend) and "Gone" (dispute) buttons.
 //
-//  Reactions row (sub-PR #1):
-//   - Shown only when pin.lifespan == .ephemeral && pin.source == .crowd.
+//  Reactions row (sub-PR #1; widened FT-15/TF2-15 AC-C4):
+//   - Shown when pin.source == .crowd AND (pin.lifespan == .ephemeral OR
+//     pin.reportGroupId != nil) — see `CommunityPin.showsReactionsRow`
+//     (Views/PinMarkerAnnotation.swift).
 //   - A1 own-pin guard: buttons disabled when pin.authorId == authService.currentUserId.
-//   - "Still there?" disabled when pin is within 5min of the 2h TTL cap.
+//   - "Still there?" disabled when pin.lifespan == .ephemeral AND pin is within 5min of
+//     the 2h TTL cap — see `isStillHereDisabled`'s doc comment for why this check is
+//     scoped to ephemeral pins only (non-ephemeral pins never hit it).
 //   - Confirm count badge reads from pin.confirmCount (updated in real time via Realtime).
 //   - Loading state: ProgressView while async calls are in-flight.
 //
 //  Invariants:
-//   - No Calendar.current (AC-D19, AC-I5). All time arithmetic uses Date() + TimeInterval.
+//   - No Calendar.current (AC-D19, AC-I5). All time arithmetic uses Date() + TimeInterval,
+//     or a plain DateFormatter with `.easternTime` (no Calendar involved).
 //   - No force-unwraps.
 //   - CommunityPin.swift is NOT modified BY THIS FILE (AC-D20, AC-I2) — display logic
 //     lives here, model shape lives in Models/CommunityPin.swift. That was a
 //     diff-minimization discipline scoped to the Tier 3 sub-PR #1 PR this comment
-//     originates from, not a standing freeze on the model file itself — FT-15/TF2-15
-//     (docs/ft15-tf215-temporary-block-restrictions-spec.md §10, Stream B1) deliberately
-//     extends CommunityPin.swift (adds startsAt/reportGroupId/hasEvidencePhoto). This
-//     view file's own reactions-row gate below (line ~55) still only covers
-//     `lifespan == .ephemeral` — widening it to include block-scoped `session`/`durable`
-//     reports is Stream B4's job (AC-C4), not done in this pass.
+//     originates from, not a standing freeze on the model file itself.
 //   - No setRegion, updateUIView mutation, or headlessWindow guard (AC-I3).
 //
 
@@ -59,8 +66,12 @@ struct PinDetailSheet: View {
                     Divider()
                     detailSection
                     // Tier 3 sub-PR #1: reactions row for ephemeral crowd pins.
-                    // Condition: only shown when the pin is a Tier 3 ephemeral crowd pin.
-                    if pin.lifespan == .ephemeral && pin.source == .crowd {
+                    // FT-15/TF2-15 AC-C4 widened this from `pin.lifespan == .ephemeral` only
+                    // to also cover block-scoped session/durable reports — see
+                    // `CommunityPin.showsReactionsRow` (PinMarkerAnnotation.swift) for the
+                    // exact widened condition. Lives on the model (not this view) so it's
+                    // directly unit-testable.
+                    if pin.showsReactionsRow {
                         Divider()
                         ReactionsRow(
                             pin: pin,
@@ -126,15 +137,116 @@ struct PinDetailSheet: View {
 
     @ViewBuilder
     private var detailSection: some View {
-        switch pin.pinType {
-        case .filming:
-            filmingDetails
-        case .specialEvent:
-            specialEventDetails
-        default:
-            genericDetails
+        // FT-15/TF2-15 §9.2/§9.3: block-scoped reports (filming or construction, produced
+        // by the map-tap-select report flow) always have `reportGroupId != nil` and get a
+        // dedicated detail view — richer than genericDetails (shows the covered block +
+        // the report's start/end window + multi-blockface extent), and shared between
+        // filming and construction per §9.3's "same primitive" design. This check runs
+        // BEFORE the pinType switch so it also catches crowd `filming` reports (which
+        // would otherwise fall into the open-data-oriented `filmingDetails` below).
+        if pin.reportGroupId != nil {
+            blockScopedDetails
+        } else {
+            switch pin.pinType {
+            case .filming:
+                filmingDetails
+            case .specialEvent:
+                specialEventDetails
+            default:
+                genericDetails
+            }
         }
     }
+
+    // MARK: block-scoped restriction details (FT-15 / TF2-15 §9.2, §9.3, AC-C5)
+
+    @ViewBuilder
+    private var blockScopedDetails: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            statusBadge
+
+            if let segmentId = pin.segmentId {
+                detailRow(label: "Block", value: blockfaceSummary(for: segmentId))
+            }
+
+            detailRow(label: "Window", value: windowSummary)
+
+            // AC-C5 (nice-to-have, not required for AC pass): if other blockfaces share
+            // this report's reportGroupId, surface the full extent so the user
+            // understands this marker is one of several covering the same report.
+            if let groupId = pin.reportGroupId {
+                let siblingCount = pinService.visiblePins.filter { $0.reportGroupId == groupId }.count
+                if siblingCount > 1 {
+                    detailRow(label: "Extent", value: "Part of a \(siblingCount)-blockface report")
+                }
+            }
+
+            if let notes = pin.notes {
+                detailRow(label: "Notes", value: notes)
+            }
+        }
+    }
+
+    /// "Upcoming" (window hasn't started yet) vs. "Active now" badge — AC-C2.
+    private var statusBadge: some View {
+        let upcoming = pin.isUpcoming()
+        return Text(upcoming ? "Upcoming" : "Active now")
+            .font(.caption.bold())
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background((upcoming ? Color.blue : Color.green).opacity(0.15), in: Capsule())
+            .foregroundStyle(upcoming ? .blue : .green)
+    }
+
+    /// Parses a `Segment.blockfaceKey`-shaped `segment_id` ("STREET|LO|HI|SIDE") into a
+    /// human-readable summary, e.g. "E 2nd St, 1st Ave–3rd Ave (North side)". Falls back to
+    /// the raw string if the shape doesn't match 4 parts (e.g. a legacy 3-part key) —
+    /// display-only; this never re-derives block identity (§4.3: matching stays
+    /// string-equality only, on the exact `segmentId` value already decoded from the row).
+    private func blockfaceSummary(for segmentId: String) -> String {
+        let parts = segmentId.components(separatedBy: "|")
+        guard parts.count == 4 else { return segmentId }
+        let street = StreetNameNormalizer.canonical(parts[0])
+        let lo = StreetNameNormalizer.canonical(parts[1])
+        let hi = StreetNameNormalizer.canonical(parts[2])
+        let side = sideLabel(parts[3])
+        return "\(street), \(lo)\u{2013}\(hi) (\(side) side)"
+    }
+
+    /// Converts a single-letter side code to a capitalized label ("N" → "North").
+    /// Any other value passes through unchanged. Mirrors the sideLabel helper already
+    /// duplicated per-view in BlockDetailView/ParkedCarDetailView (view-file-local by
+    /// existing project convention — see RuleRow's own duplicated formatMinutes comment).
+    private func sideLabel(_ code: String) -> String {
+        switch code.uppercased() {
+        case "N": return "North"
+        case "S": return "South"
+        case "E": return "East"
+        case "W": return "West"
+        default:  return code
+        }
+    }
+
+    /// "<start> – <end>" window summary, e.g. "Aug 13, 6:00 AM – Aug 14, 6:00 AM".
+    /// `startsAt == nil` means "active immediately" (§5.1) — rendered as "now".
+    /// `expiresAt == nil` means no end time was set — rendered as "no end date set".
+    private var windowSummary: String {
+        let startText = pin.startsAt.map(Self.windowDateFormatter.string(from:)) ?? "now"
+        guard let expiresAt = pin.expiresAt else {
+            return "Starts \(startText) \u{2013} no end date set"
+        }
+        return "\(startText) \u{2013} \(Self.windowDateFormatter.string(from: expiresAt))"
+    }
+
+    /// Eastern-time formatter for the block-scoped window summary. No `Calendar.current`
+    /// (AC-D19) — a plain `DateFormatter` with `.easternTime` timeZone, same pattern as
+    /// `CommunityPin.formatExpiry`.
+    private static let windowDateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeZone = .easternTime
+        formatter.dateFormat = "MMM d, h:mm a"
+        return formatter
+    }()
 
     // MARK: filming details
 
@@ -223,6 +335,7 @@ struct PinDetailSheet: View {
         switch pin.pinType {
         case .filming:           return "video.fill"
         case .specialEvent:      return "star.fill"
+        case .construction:      return "hammer.fill"
         case .enforcementActive: return "exclamationmark.triangle.fill"
         case .sweeperPassed:     return "truck.box.fill"
         case .brokenMeter:       return "parkingsign.circle.fill"
@@ -234,12 +347,18 @@ struct PinDetailSheet: View {
         switch pin.pinType {
         case .filming:           return .purple
         case .specialEvent:      return .orange
+        case .construction:      return Self.constructionOrange
         case .enforcementActive: return .red
         case .sweeperPassed:     return Color(red: 0.0, green: 0.55, blue: 0.27)
         case .brokenMeter:       return .gray
         default:                 return .gray
         }
     }
+
+    /// FT-15/TF2-15 §9.1: distinct from `.orange` (special_event's color) — same "safety
+    /// orange" RGB values as `PinMarkerAnnotation.markerStyle`'s construction case, so the
+    /// detail sheet header and the map marker read as the same visual identity.
+    private static let constructionOrange = Color(red: 0.91, green: 0.45, blue: 0.05)
 
     private var sourceBadgeLabel: String {
         switch pin.pinType {
@@ -348,11 +467,26 @@ private struct ReactionsRow: View {
 
     /// "Still there?" is disabled when:
     ///   1. It is the user's own pin (A1 guard).
-    ///   2. The pin is within 5 minutes of the 2h TTL cap (expires_at > now + 115 min).
-    ///      No point extending — the cap is close. Uses Date() + TimeInterval (no Calendar.current).
+    ///   2. The pin is `ephemeral` AND within 5 minutes of the 2h TTL cap
+    ///      (expires_at > now + 115 min). No point extending — the cap is close.
+    ///      Uses Date() + TimeInterval (no Calendar.current).
     ///   3. A reaction call is in-flight.
+    ///
+    /// FT-15/TF2-15 fix (AC-C4 widened this row to also cover block-scoped `session`/
+    /// `durable` reports, whose `expires_at` sits days out, not minutes): the TTL-cap
+    /// proximity check in rule 2 is now scoped to `pin.lifespan == .ephemeral` only.
+    /// Without this guard, a construction report with `expires_at` 14 days out would
+    /// satisfy `expiresAt > now + 115min` for essentially its entire lifetime, permanently
+    /// disabling the button — not because extending would be destructive (the underlying
+    /// `extend_pin_expiry` RPC already no-ops server-side for non-ephemeral pins via its own
+    /// `where lifespan = 'ephemeral'` guard, `supabase/02-pins-schema.sql:262`), but because
+    /// the client-side disable check was written assuming every pin here is ephemeral. This
+    /// widen makes the confirm vote (the part that matters for non-ephemeral reports) always
+    /// reachable, while the harmless-but-pointless extend-RPC call underneath still fires —
+    /// it just no-ops for these pin types.
     private var isStillHereDisabled: Bool {
         if isOwnPin || isLoading { return true }
+        guard pin.lifespan == .ephemeral else { return false }
         if let expiresAt = pin.expiresAt {
             // 115 minutes = 2h cap - 5min buffer.
             return expiresAt > Date().addingTimeInterval(115 * 60)

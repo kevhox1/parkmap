@@ -8,6 +8,9 @@
 //    1. Severity color band (6pt, decorative, accessibilityHidden)
 //    2. Block header — "<StreetName> — <SideLabel>" + "between X and Y"
 //    3. Primary safety label (first focusable a11y element)
+//    3b. FT-15/TF2-15 (§9.2): "Temporary restriction reported" banner, shown only when
+//        pinService is non-nil and CommunityPinService.blockScopedRestriction(forBlockfaceKey:)
+//        finds a match for this segment's blockfaceKey. Tap opens PinDetailSheet.
 //    4. Rules list, ordered by Category.priority (most restrictive first)
 //    5. "Park here →" stub button (disabled, W5 entry point)
 //
@@ -32,8 +35,24 @@ struct BlockDetailView: View {
     /// disabled with the "Coming next" caption (preview / standalone use).
     let onParkHere: (() -> Void)?
 
+    /// FT-15/TF2-15 (§9.2): Pin service used to look up an active/upcoming block-scoped
+    /// restriction covering this segment. `nil` in previews/standalone use — the banner
+    /// simply doesn't render (same optional-service pattern as `onParkHere`).
+    let pinService: CommunityPinService? = nil
+
+    /// FT-15/TF2-15 (§9.2): Called when the user taps the restriction banner. Passes the
+    /// matched `CommunityPin` so the caller can present `PinDetailSheet` (reuses the
+    /// existing `activeSheet = .pinDetail(pin)` pattern in ContentView — no new sheet
+    /// case needed). `nil` in previews/standalone use, matching `onParkHere`'s convention.
+    let onOpenRestriction: ((CommunityPin) -> Void)? = nil
+
     // Evaluate once at sheet-open time (stable reference time for the whole sheet).
     private let now: Date = .nowET
+
+    /// FT-15/TF2-15 (§9.2): the block-scoped restriction pin covering this segment, if any.
+    private var blockScopedRestriction: CommunityPin? {
+        pinService?.blockScopedRestriction(forBlockfaceKey: segment.blockfaceKey)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -47,6 +66,13 @@ struct BlockDetailView: View {
 
                     // 3. Primary safety label (first focusable element per §3.5 / palette §5.1).
                     safetyLabelView
+
+                    // 3b. FT-15/TF2-15 (§9.2): temporary restriction banner.
+                    if let restriction = blockScopedRestriction {
+                        TemporaryRestrictionBanner(pin: restriction) {
+                            onOpenRestriction?(restriction)
+                        }
+                    }
 
                     // 4. Rules list
                     if !segment.rules.isEmpty {
@@ -386,6 +412,115 @@ struct RuleRow: View {
             return .gray
         }
     }
+}
+
+// MARK: - TemporaryRestrictionBanner (FT-15 / TF2-15 §9.2)
+
+/// "Temporary restriction reported" banner shown in `BlockDetailView` and
+/// `ParkedCarDetailView` when the viewed segment's `blockfaceKey` matches an active or
+/// upcoming crowd-reported block-scoped restriction (filming or construction, §9.3's
+/// shared primitive).
+///
+/// Shared between both views the same way `RuleRow` is (internal, not private, so both
+/// view files in this module can use it) — the highest-value consumption point per §9.2
+/// is telling someone whose car is *already parked on* an affected block, which is exactly
+/// what `ParkedCarDetailView` needs this for.
+///
+/// Tapping opens `PinDetailSheet` for full detail + confirm/dispute — reuses the existing
+/// `ReactionsRow` pattern (AC-C4's widened gate), no new voting UI (§9.2).
+struct TemporaryRestrictionBanner: View {
+
+    let pin: CommunityPin
+    let onTap: () -> Void
+
+    private var isUpcoming: Bool { pin.isUpcoming() }
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(alignment: .top, spacing: 10) {
+                ZStack {
+                    Circle()
+                        .fill(iconColor)
+                        .frame(width: 30, height: 30)
+                    Image(systemName: iconSymbol)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(typeLabel)
+                            .font(.subheadline.bold())
+                            .foregroundStyle(.primary)
+                        statusBadge
+                    }
+                    Text("Temporary restriction reported \u{00B7} \(windowText)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Spacer(minLength: 0)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(12)
+            .background(iconColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(
+            "\(typeLabel) reported, \(isUpcoming ? "upcoming" : "active"). \(windowText). Tap for details."
+        )
+    }
+
+    // MARK: - Style helpers
+
+    private var typeLabel: String {
+        switch pin.pinType {
+        case .construction: return "Construction"
+        default:             return "Film shoot"  // .filming is the only other block-scoped type today (§9.3)
+        }
+    }
+
+    private var iconSymbol: String {
+        pin.pinType == .construction ? "hammer.fill" : "video.fill"
+    }
+
+    private var iconColor: Color {
+        pin.pinType == .construction
+            ? Color(red: 0.91, green: 0.45, blue: 0.05)  // matches PinDetailSheet.constructionOrange
+            : .purple
+    }
+
+    private var statusBadge: some View {
+        Text(isUpcoming ? "Upcoming" : "Active")
+            .font(.caption2.bold())
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background((isUpcoming ? Color.blue : Color.green).opacity(0.18), in: Capsule())
+            .foregroundStyle(isUpcoming ? .blue : .green)
+    }
+
+    /// "<start> – <end>" — same format as `PinDetailSheet.windowSummary`, duplicated here
+    /// per this file's own established convention of view-file-local formatting helpers
+    /// (see `RuleRow.formatMinutes`'s doc comment on why duplication is intentional).
+    private var windowText: String {
+        let startText = pin.startsAt.map(Self.dateFormatter.string(from:)) ?? "now"
+        guard let expiresAt = pin.expiresAt else {
+            return "Starts \(startText), no end date set"
+        }
+        return "\(startText) \u{2013} \(Self.dateFormatter.string(from: expiresAt))"
+    }
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.timeZone = .easternTime
+        formatter.dateFormat = "MMM d, h:mm a"
+        return formatter
+    }()
 }
 
 // MARK: - Preview
