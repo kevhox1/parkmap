@@ -19,3 +19,6 @@ ios/WePark/Config.xcconfig
 
 # OS junk
 .DS_Store
+
+# Supabase CLI scratch state (created by `supabase functions deploy`) — never commit
+supabase/.temp/
