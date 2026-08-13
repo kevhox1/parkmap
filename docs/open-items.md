@@ -57,9 +57,9 @@ App Store Connect, real-device drive test).
 | # | Item | Where | Notes |
 |---|---|---|---|
 | ~~13~~ | ~~**Apply `02g`** + redeploy Edge Function~~ — ✅ **DONE 2026-08-13.** Verified live: `probe_status='stale'`, `stale_days=91`. FT-16 closed end to end. | — | — |
-| 14 | **FT-14 follow-up** — SAINT↔ST has no uniqueness gate; the doc claims 3 Saint-prefixed streets, there are 37. Zero collisions today; a future OSM refresh could silently attach signs to the wrong street. | VPS | Approved, queued |
-| 15 | **FT-14 deferred** — 1,528-row zone-construction loss | VPS | Approved, queued |
-| 16 | **Mapbox token restriction** — investigated 2026-08-13, see `docs/mapbox-token-security.md`. "Bundle-ID restriction" is not a real Mapbox dashboard feature (confirmed against current Mapbox docs); the item as originally worded can't be executed as stated. PWA token is already URL-restricted; iOS token is already separate + gitignored (code side adequate, no-op). Replaced with a short scope-check + labeling checklist for Kevin, dashboard-only. | VPS (done) → **MAC** (Kevin's dashboard checklist, ~5 min) | Doc'd, awaiting Kevin's dashboard pass |
+| ~~14~~ | ~~**FT-14 follow-up** — SAINT↔ST uniqueness gate~~ | — | ✅ **DONE.** Gate added to `osmName()`, mirroring the compact-spacing fallback's uniqueness pattern; the doc's false "3 Saint-prefixed streets" claim corrected (real count: 37); proven **byte-identical tile output** on a live-pull before/after, so no regen needed. |
+| ~~15~~ | ~~**FT-14 deferred** — 1,528-row zone-construction loss~~ | — | ✅ **INVESTIGATED, deliberately not fixed** (`docs/qa/ft14-zone-construction-loss-investigation.md`). Root cause: an intersection-setback coordinate mismatch in `extractSubSegment()` — the original distance-0/away-arrow hypothesis is **refuted** (0 matches). Affects ~28% of geometry-successful blocks. Fix touches heavily-tuned geometry and needs its own regen → **awaiting Kevin's call on a dedicated pass.** |
+| ~~16~~ | ~~**Mapbox token restriction**~~ — ✅ **RESOLVED as a no-op 2026-08-13** (`docs/mapbox-token-security.md`, merged #78). "Bundle-ID restriction" is not a real Mapbox feature; PWA token already URL-restricted, iOS token already separate + gitignored. Optional ~5-min dashboard labeling checklist remains for Kevin. | — | — |
 | 17 | **FT-16a** — alerting for the staleness guard (nothing polls `ingest_runs.probe_status`) | VPS | Deferred by Kevin, named so it isn't lost |
 
 ---
