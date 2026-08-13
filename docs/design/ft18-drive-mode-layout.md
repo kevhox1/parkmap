@@ -384,6 +384,28 @@ For whichever proposal ships:
 
 ---
 
+## ✅ KEVIN'S DECISIONS — 2026-08-13 (all five closed, do not re-open)
+
+| # | Question | **Ruling** |
+|---|---|---|
+| 1 | End control placement | **Match Apple Maps** — isolated top-trailing icon, NOT in the bottom action cluster. The designer's safety argument is accepted: End Drive is a one-tap, no-confirmation, session-terminating action and must not sit adjacent to Report/Park Here on a phone mounted in a moving car. |
+| 2 | "Find my car" during Drive Mode | **Remove it.** Not kept as a small icon. Its broken `recenterMap()` browse-path call (bug F4) disappears with it. |
+| 3 | Gear button during Drive Mode | **Hide it fully.** Not dimmed-but-tappable. Voice control stays reachable via the always-visible mute button in the bottom card. Resolves the F2 coordinate collision with the End pill. |
+| 4 | Report / Park Here ordering | **Park Here trailing** — it is the primary "I'm done" action and gets the thumb-natural position. |
+| 5 | Which proposal | **Proposal 1 — Bottom Dock.** Not the lower-risk Coordinated Two-Zone alternative. |
+
+**Implementation notes that follow from these rulings:**
+- All four bugs (F1 trailing `Spacer()`, F2 gear/End collision, F3 duplicated mute toggle, F4 broken
+  mid-drive camera path) are in scope — they live in the same code the redesign rewrites, and fixing
+  them separately would mean touching `ContentView.swift` twice.
+- The layout must hold across **all 7 enumerated states**, including S6 (destination + approaching +
+  follow-paused + Park Until stacked). A layout that only works in the steady state is not done.
+- **Sequencing:** this work touches `ContentView.swift`, which is contended. It must land **after
+  PR #74 (FT-17a)** merges — #74 modifies `recenterDriveMode()` in the same file — and it must be
+  coordinated with **FT-15 Stream B2**, which also wants that file.
+
+---
+
 ## Open Questions
 
 1. **End control placement** — top-trailing isolated icon (my recommendation) vs. literally in the
