@@ -86,6 +86,116 @@
 -- inserts): traced Guard 2's existing-row count at each of the 4 inserts as 0, 1, 2, 3 — all well
 -- under the new max_rows default (30) — see rate_limit_config seed and Guard 2 comment below.
 --
+-- Round 4 (this revision, docs/qa/ft15-a-block-scoped-schema-qa-pass3.md): Pass 3 found two NEW
+-- blocking bypasses, and — critically — noted that all THREE rounds of bypass so far share one
+-- root cause: every guard in this file gates on a column (report_group_id, source, created_at)
+-- that the client fully controls via ordinary RLS-permitted writes. A fourth trigger patch would
+-- produce a fourth bypass. This revision fixes the CLASS, not the instances: it takes the guard-
+-- input columns away from the client at the Postgres privilege layer, so no future trigger-logic
+-- patch can be defeated by a clever payload on these specific columns ever again.
+--   1. 🔴 BLOCKING, fixed. `UPDATE ... SET source = 'open_data'` on an author's own crowd row
+--      (permitted by the pre-existing, column-unrestricted `pins_update_own` RLS policy) escaped
+--      the ceiling CHECK, `auto_resolve_on_dispute()`, AND Guard 2's own count — all three gate on
+--      `source = 'crowd'`, and the rate-limit trigger's own skip condition never inspected
+--      `NEW.source`. See Finding #1. Fixed via column-level UPDATE privilege lockdown on `source`
+--      (see new section 2b below) — RLS no longer matters here because the client cannot include
+--      `source` in an UPDATE payload's SET list AT ALL once the privilege is revoked; Postgres
+--      rejects the whole statement (42501) before RLS is ever evaluated for that column.
+--   2. 🔴 BLOCKING, fixed. `pins.created_at` is a plain client-writable column — Pass 3 flagged
+--      this as strong-but-not-live-verified circumstantial evidence (no table/column-level
+--      GRANT/REVOKE anywhere in the repo restricting it, standard Supabase project-template
+--      defaults, and the same fact pattern as the round-1 `report_group_id` finding). Not
+--      independently re-verified live here either (same no-DB-access constraint as every prior
+--      pass) — but section 2b's fix does not depend on resolving that uncertainty: it closes the
+--      column at the privilege layer regardless of whether it was previously reachable by an
+--      explicit payload or only by the (already-established) blanket table-level grant. A client
+--      can set an arbitrary `created_at` on INSERT, making the row permanently invisible to both
+--      guards' window filters (`created_at > now() - window`), forever, via a pure INSERT loop —
+--      no UPDATE trickery needed. See Finding #2. Fixed via column-level INSERT privilege lockdown
+--      on `created_at` (section 2b) — the column keeps its `default now()` for every insert that
+--      omits it (every currently-shipping write path already does), and any insert that
+--      explicitly includes it is now rejected outright, not silently overridden.
+--   3. 🟡 SIGNIFICANT, fixed (not just narrowed). Pass 3 Finding #3: Guard 2's `count(*)` reads
+--      live `pins` rows, so delete-then-reinsert (permitted by the pre-existing, unrestricted
+--      `pins_delete_own` policy) turns the 30-row cap into a live-snapshot cap, not a cumulative
+--      one. Fixed by moving BOTH guards (not just Guard 2) off live `pins` counts onto a new
+--      append-only `block_scoped_report_log` table, written once per row the moment it first
+--      becomes a qualifying block-scoped crowd report, never pruned. A `DELETE` on `pins` cannot
+--      remove a log entry — there is no FK, no CASCADE, no code path that touches this table
+--      except the trigger's own single `INSERT`. See section 7 below.
+--
+--   Why the previously-proposed literal fix (`revoke insert (created_at, source) on public.pins
+--   from anon, authenticated;` / similarly for update) does NOT work as its own one-liner, and
+--   what this revision does instead: PostgreSQL's column-level REVOKE only removes a column-level
+--   grant. It does NOT touch (and is not touched by) a pre-existing TABLE-level grant for the same
+--   privilege — and `anon`/`authenticated` hold exactly that: a blanket table-level INSERT/UPDATE
+--   on `public.pins`, from Supabase's project-template default privileges (no explicit
+--   `grant insert/update on public.pins` statement exists anywhere in this repo's `supabase/*.sql`
+--   — confirmed by grep — yet the shipped `insertCrowdPin` write path works in production today,
+--   which is only possible via that template-level default). A column-level `REVOKE` layered on
+--   top of an untouched table-level grant is a silent no-op: the table-level grant alone remains
+--   sufficient to authorize writing any column, including the ones just "revoked." (Verified
+--   against current PostgreSQL documentation and the ACL-merge behavior it describes — table-level
+--   and column-level ACLs are OR'd together for the same privilege type, not narrowed by each
+--   other; a column-level REVOKE is only meaningful when there is no covering table-level grant.)
+--   The correct pattern — and what section 2b does — is REVOKE the table-level privilege entirely,
+--   then GRANT it back at the column level, explicitly, only for the columns that should remain
+--   writable. Both statements are naturally idempotent (REVOKE of an ungranted privilege and
+--   re-GRANT of an already-held privilege are both no-ops, not errors), so re-running this file
+--   converges to the same locked-down state every time.
+--
+--   Also decided, after checking what the two live write paths (`ios/.../CommunityPinService.swift`
+--   `insertCrowdPin`, and a repo-wide grep confirming `index.html`/the PWA never touches `pins` at
+--   all — this is an iOS-only feature today) actually send on every request:
+--   - `source` is EXCLUDED from the UPDATE grant but DELIBERATELY KEPT in the INSERT grant.
+--     `pins_insert_crowd`'s `WITH CHECK (source = 'crowd')` (02-pins-schema.sql:143-147) already
+--     makes any other INSERT-time `source` value impossible for a non-service-role session — RLS
+--     was never the weak link on the INSERT side, only on UPDATE (RLS has no per-column
+--     granularity, so `pins_update_own` could not by itself express "author may edit notes but not
+--     source"). Revoking INSERT on `source` would have bought zero additional security (RLS already
+--     closes that path) while breaking every shipped crowd-pin insert outright, because
+--     `insertCrowdPin` unconditionally sends `"source": "crowd"` in the request body
+--     (CommunityPinService.swift:709) — Postgres would reject the whole statement with a
+--     column-privilege error the instant that field is present, regardless of its value. This is
+--     the one point in the task's suggested direction this revision deliberately does NOT follow
+--     literally, and why: it would have broken the shipped Tier-3 write path for no security gain.
+--     A server-side "force source='crowd' via trigger" was considered and rejected for the same
+--     reason — it would be pure decoration on top of an already-airtight RLS boundary.
+--   - `pin_type` is added to the UPDATE lockdown (task's own recommended direction, Finding #1:
+--     "arguably new.pin_type = old.pin_type") even though no single-column repro was demonstrated
+--     for it in Pass 3: relabeling INTO filming/construction from another type while reusing an
+--     already-not-null report_group_id, or OUT of filming/construction to dodge
+--     `auto_resolve_on_dispute()`'s pin_type gate while remaining counted elsewhere, are both
+--     closed by removing the client's ability to change pin_type post-insert at all. No known
+--     legitimate use case for an author to change their own pin's type after submission.
+--   - `created_at`/`source`/`pin_type`/`report_group_id` are the ONLY four columns removed from the
+--     UPDATE grant. `notes`, `expires_at`, and `starts_at` (the columns a legitimate author-side
+--     edit or a future "extend/correct my report window" affordance would touch, per the task's
+--     explicit instruction and spec §14) remain fully client-updatable, gated only by the existing
+--     `pins_update_own` RLS (`auth.uid() = author_id`), unchanged.
+--   - Neither `service_role` (the ingest cron / `upsert_filming_pin`, which also runs `SECURITY
+--     DEFINER` and therefore executes as the function owner regardless of grants — traced its own
+--     `ON CONFLICT DO UPDATE` clause in 02d-ingest-cron.sql:63-69 and confirmed it never touches
+--     `source`/`pin_type`/`created_at`/`report_group_id` anyway) nor `postgres`/the table owner
+--     (Kevin's SQL Editor session — table owners are exempt from ACL checks on their own objects by
+--     definition, this cannot be revoked) is affected by anything in section 2b. Only `anon` and
+--     `authenticated` are named in every REVOKE/GRANT statement there.
+--
+--   What did NOT change: the BEFORE INSERT OR UPDATE skip-condition logic in
+--   `enforce_block_scoped_rate_limit()` (comparing OLD vs NEW report_group_id/source) is left
+--   exactly as round 3 wrote it. Once section 2b lands, `anon`/`authenticated` can no longer change
+--   `report_group_id` or `source` via UPDATE at all — so for those two roles, the "this UPDATE newly
+--   makes a row qualify" branch the skip-condition guards against becomes structurally unreachable,
+--   not just correctly handled. It is kept anyway, unmodified, as a second, independent layer: it
+--   is still exactly correct for a hypothetical future write path (e.g. a `service_role` batch
+--   correction tool) that legitimately changes these columns and SHOULD be re-checked by the rate
+--   limiter, and removing still-correct, cheap logic in the name of "simplification" would trade a
+--   real (if now redundant for today's two roles) safety net for a marginal readability gain. This
+--   is the one guard Pass 3 didn't ask to be removed and whose job — correctly handling a
+--   hypothetical future UPDATE that changes qualification state, for ANY role, not just the two
+--   privilege-locked ones — is not fully covered by section 2b alone (section 2b only constrains
+--   `anon`/`authenticated`, not `service_role`).
+--
 -- ============================================================
 -- DIVERGENCES FROM THE SPEC'S §3.2 SKETCH — read before applying
 -- ============================================================
@@ -218,6 +328,83 @@ begin
       ) not valid;
   end if;
 end $$;
+
+-- ============================================================
+-- 2b. Column-level privilege lockdown (round 4 — closes the CLASS of bug behind Pass 1/2/3)
+-- ============================================================
+-- Three straight QA rounds each found a bypass of every guard this file adds, and all three had
+-- the exact same shape: a guard trusted a column value the client could set. Round 1: omit
+-- report_group_id. Round 2: reuse one report_group_id forever. Round 3: (a) UPDATE source away
+-- from 'crowd' to fall out of every source='crowd'-gated check at once, (b) backdate created_at on
+-- INSERT so the guards' own recency window never sees the row. See the REVISION HISTORY "Round 4"
+-- entry above for the full write-up, including why the naive `revoke insert/update (col) ... from
+-- anon, authenticated` one-liner does NOT work by itself (a column-level REVOKE cannot narrow a
+-- pre-existing table-level GRANT for the same privilege — Postgres ACL-merges them, it does not
+-- let the more specific one win) and exactly what evidence ruled out breaking the shipped
+-- `insertCrowdPin` write path.
+--
+-- Mechanism: REVOKE the table-level INSERT/UPDATE privilege entirely (removing the blanket grant
+-- anon/authenticated hold via Supabase's project-template defaults — no explicit table-level grant
+-- for public.pins exists anywhere in this repo, confirmed by grep), then GRANT it back at the
+-- column level, explicitly, only for the columns each operation should still be able to touch.
+-- Both REVOKE and GRANT are naturally idempotent (no IF EXISTS guard needed): revoking a privilege
+-- that isn't held, or granting one that's already held, is a no-op in Postgres, not an error — so
+-- re-running this file converges to the same locked-down end state every time.
+--
+-- After this section commits, for the `anon` and `authenticated` roles ONLY:
+--   - created_at cannot be set on INSERT (was: freely settable, closes Finding #2 — the backdating
+--     bypass). The column's `default now()` (02-pins-schema.sql:59) still applies to every insert
+--     that omits it, which is every insert either shipped client issues today.
+--   - source, pin_type, report_group_id, and created_at cannot be changed via UPDATE at all (was:
+--     freely settable via the column-unrestricted pins_update_own policy, closes Finding #1's
+--     source-relabeling bypass and the task's own flagged pin_type variant of it). Reassigning an
+--     existing row to a different report_group_id, which the round-3 rate-limit trigger's own
+--     comments describe as a still-open edge case, is also now impossible via UPDATE for these two
+--     roles — not because the trigger detects and blocks it, but because the column simply cannot
+--     appear in an UPDATE payload's SET list for them anymore.
+--   - notes, expires_at, starts_at, lat, lng, segment_id, zone_id, lifespan, meta, and the counters
+--     remain fully writable exactly as before — no change to any legitimate author-edit path.
+--     (expires_at/starts_at specifically: the task instructions require authors keep the ability to
+--     correct their own report window; this preserves that. The hard-ceiling CHECK, unaffected by
+--     this section, still bounds how far expires_at can be pushed regardless.)
+--   - source is intentionally NOT removed from the INSERT grant (see REVISION HISTORY Round 4 for
+--     the full reasoning) — pins_insert_crowd's WITH CHECK (source = 'crowd') already makes any
+--     other INSERT-time value impossible for these two roles; revoking INSERT-source would have
+--     added no security property while breaking the shipped write path, which sends
+--     "source": "crowd" on every request.
+--   - service_role and the table owner (postgres — Kevin's SQL Editor session) are untouched: only
+--     anon/authenticated appear in any statement below, and table owners are exempt from ACL
+--     checks on their own objects by Postgres definition, independent of any REVOKE.
+--
+-- Column lists below are exhaustive over the CURRENT 19-column shape of public.pins (17 from
+-- 02-pins-schema.sql + starts_at/report_group_id from section 1 above) minus only the columns each
+-- operation must not touch. If a future migration adds a new pins column, that column is NOT
+-- writable by anon/authenticated until it's explicitly added to one or both GRANT column lists
+-- below — deliberately fail-closed, not fail-open, for exactly the class of bug this section exists
+-- to close. Whoever adds a new pins column: update the two GRANT statements below in the same
+-- migration, or the new column will silently reject every anon/authenticated write to it.
+--
+-- No ownership risk here comparable to section 8's Storage operator note: public.pins was created
+-- by whichever role ran 02-pins-schema.sql (the same SQL Editor session role that runs this file —
+-- normally postgres, an owner-equivalent role in Supabase), unlike storage.objects, which belongs
+-- to supabase_storage_admin. REVOKE/GRANT on public.pins below should not fail on ownership grounds
+-- on any project this file is ever actually applied to.
+revoke insert on public.pins from anon, authenticated;
+revoke update on public.pins from anon, authenticated;
+
+grant insert (
+  id, pin_type, source, lifespan, lat, lng, segment_id, zone_id, author_id,
+  updated_at, expires_at, resolved_at, confirm_count, dispute_count, meta, notes,
+  starts_at, report_group_id
+) on public.pins to anon, authenticated;
+
+grant update (
+  id, lifespan, lat, lng, segment_id, zone_id, author_id,
+  updated_at, expires_at, resolved_at, confirm_count, dispute_count, meta, notes,
+  starts_at
+) on public.pins to anon, authenticated;
+-- Not granted for UPDATE, deliberately: created_at, source, pin_type, report_group_id.
+-- Not granted for INSERT, deliberately: created_at.
 
 -- ============================================================
 -- 3. Hard-ceiling constraint on the time window (§5.3)
@@ -463,15 +650,57 @@ create trigger pins_auto_resolve_on_dispute
 -- spec-"required" and must not be gated behind Storage's ownership risk in a single-pass apply.
 --
 -- Known limitation, not fixed (QA finding #4, low-severity, logged not blocking): both guards'
--- COUNT reads (Guard 1's `count(distinct report_group_id)`, Guard 2's `count(*)`, added round 3 —
--- see enforce_block_scoped_rate_limit() below) have no row lock (no SELECT ... FOR UPDATE /
--- advisory lock) under default READ COMMITTED isolation, so two near-simultaneous submissions from
--- the same author (e.g. two devices) could both read a count just under the threshold and both
--- proceed, landing the author one over the intended cap. This is an abuse deterrent, not a
--- security boundary, and the feature's realistic volume makes this a low-severity, accepted gap —
--- not fixed here. Distinct from, and does not reopen, QA pass 2 Finding #1 (round 3's fix target):
--- that finding was an UNBOUNDED bypass (permanently invisible, not merely racy); this TOCTOU note
--- is about an ordinary off-by-a-few race on an otherwise-bounded, working limiter.
+-- COUNT reads (Guard 1's `count(distinct report_group_id)`, Guard 2's `count(*)`, both now read
+-- from block_scoped_report_log — see below) have no row lock (no SELECT ... FOR UPDATE / advisory
+-- lock) under default READ COMMITTED isolation, so two near-simultaneous submissions from the same
+-- author (e.g. two devices) could both read a count just under the threshold and both proceed,
+-- landing the author one over the intended cap. This is an abuse deterrent, not a security
+-- boundary, and the feature's realistic volume makes this a low-severity, accepted gap — not fixed
+-- here. Distinct from, and does not reopen, QA pass 2 Finding #1 (round 3's fix target): that
+-- finding was an UNBOUNDED bypass (permanently invisible, not merely racy); this TOCTOU note is
+-- about an ordinary off-by-a-few race on an otherwise-bounded, working limiter. Unaffected by
+-- round 4's log-table change — same race shape, just against a different table now.
+--
+-- Round 4 addition (docs/qa/ft15-a-block-scoped-schema-qa-pass3.md Finding #3, 🟡): both guards
+-- previously counted live `public.pins` rows. `count(*)`/`count(distinct ...)` against a live
+-- table reflects the table's CURRENT state, not a cumulative tally of everything ever inserted —
+-- an author can insert up to the cap, DELETE some or all of those rows (permitted by the
+-- pre-existing, unrestricted pins_delete_own policy — no cooldown, no rate limit on deletes), then
+-- insert more, repeating indefinitely while never holding more than ~30 rows at once. This is a
+-- genuinely different bug class from Findings #1/#2 above (it's not a client-controlled-column
+-- problem — DELETE doesn't let you set any column value at all — so section 2b's privilege
+-- lockdown does not touch it), but it's simple to close with the same "make the guard's source of
+-- truth something the client can't unwind" principle: block_scoped_report_log below is an
+-- append-only ledger, written once per row the moment it first becomes a qualifying block-scoped
+-- crowd report (see the INSERT near the end of enforce_block_scoped_rate_limit()), and NEVER
+-- pruned, updated, or referenced by any DELETE/CASCADE from pins. Deleting a pins row cannot remove
+-- its log entry, so both guards' counts are now genuinely cumulative over the window, not a
+-- snapshot of what currently exists.
+create table if not exists public.block_scoped_report_log (
+  id               bigserial primary key,
+  author_id        uuid not null,
+  report_group_id  uuid not null,
+  created_at       timestamptz not null default now()
+);
+
+comment on table public.block_scoped_report_log is
+  'Append-only ledger of block-scoped crowd report rows, written once each by enforce_block_scoped_rate_limit() the moment a pins row first becomes a qualifying block-scoped crowd report (source=crowd, report_group_id is not null). Never updated, never deleted, no FK to pins or auth.users (same "application-level invariant, not enforced in SQL" pattern already used for pin_evidence.report_group_id — an FK to auth.users would block account deletion; an FK/CASCADE to pins would defeat the entire point of this table, which is to survive a pins row being deleted). Exists solely so both rate-limit guards below count cumulative report volume, not a live pins-table snapshot that DELETE can unwind (docs/qa/ft15-a-block-scoped-schema-qa-pass3.md Finding #3). No RLS policies (deny-all, same posture as rate_limit_config below) — only the SECURITY DEFINER trigger function writes to it.';
+
+-- Hot query support: both guards filter on (author_id, created_at) and Guard 1 additionally reads
+-- report_group_id for its DISTINCT count — same composite-index reasoning as
+-- pins_author_report_group_created_idx in section 1 above.
+create index if not exists block_scoped_report_log_author_created_idx
+  on public.block_scoped_report_log(author_id, created_at, report_group_id);
+
+alter table public.block_scoped_report_log enable row level security;
+-- Deliberately no select/insert/update/delete policy for anon or authenticated — same
+-- RLS-enabled-with-zero-policies deny-all posture as rate_limit_config immediately below, for the
+-- same reason: this is internal abuse-accounting state, not user data, and the only writer is the
+-- SECURITY DEFINER trigger function (bypasses RLS as the function owner). Also covered
+-- independently by section 2b's column-level lockdown philosophy in spirit, though not by that
+-- section literally (2b only touches public.pins) — this table has no client-facing grant at all,
+-- which is a strictly stronger posture than a column-level allowlist.
+
 create table if not exists public.rate_limit_config (
   key           text primary key,
   max_count     integer not null,
@@ -483,7 +712,7 @@ create table if not exists public.rate_limit_config (
 comment on table public.rate_limit_config is
   'Tunable thresholds for rate-limit triggers. Update in place (e.g. update public.rate_limit_config set max_count = 5 where key = ''block_scoped_report'') to retune without a migration.';
 comment on column public.rate_limit_config.max_rows is
-  'Absolute cap on total block-scoped crowd pins rows an author may create in window_hours, independent of report_group_id distinctness. Added QA pass 2 round 3 (docs/qa/ft15-a-block-scoped-schema-qa-pass2.md Finding #1): count(distinct report_group_id) alone can never exceed 1 for an author who always reuses a single fixed id, so max_count alone cannot bound that attack no matter how its self-exclusion is scoped. max_rows counts occurrences, not distinct ids, so it bounds it. Default (30) is deliberately generous — 10x max_count — so it cannot reject a legitimate single large multi-blockface report; see enforce_block_scoped_rate_limit() Guard 2.';
+  'Absolute cap on total block-scoped crowd report rows an author may create in window_hours, independent of report_group_id distinctness. Added QA pass 2 round 3 (docs/qa/ft15-a-block-scoped-schema-qa-pass2.md Finding #1): count(distinct report_group_id) alone can never exceed 1 for an author who always reuses a single fixed id, so max_count alone cannot bound that attack no matter how its self-exclusion is scoped. max_rows counts occurrences, not distinct ids, so it bounds it. Default (30) is deliberately generous — 10x max_count — so it cannot reject a legitimate single large multi-blockface report; see enforce_block_scoped_rate_limit() Guard 2. Round 4: Guard 2 (and Guard 1) now count rows in block_scoped_report_log, not live public.pins rows, so this cap is cumulative over window_hours and immune to delete-then-reinsert (docs/qa/ft15-a-block-scoped-schema-qa-pass3.md Finding #3).';
 
 insert into public.rate_limit_config (key, max_count, window_hours, max_rows)
 values ('block_scoped_report', 3, 24, 30)
@@ -555,7 +784,20 @@ begin
   -- being inserted/updated — so the N rows of one batched report submission (same report_group_id)
   -- don't self-count against the limit as they land one at a time.
   --
-  -- Left textually UNCHANGED from round 2 — QA pass 2 Finding #1 found this clause provides zero
+  -- Round 4: source table changed from public.pins to block_scoped_report_log (see table comment
+  -- above and REVISION HISTORY). Two independent reasons, both now closed by the same change:
+  --   (a) QA pass 3 Finding #3 — counting live pins rows lets delete-then-reinsert erase an id from
+  --       this count entirely; the log is append-only, so a deleted pins row's group id still
+  --       counts against the author for the rest of the window.
+  --   (b) The log is pre-filtered at write time (only ever written for source='crowd',
+  --       report_group_id is not null rows — see the INSERT near the end of this function), so this
+  --       query no longer needs to re-assert `source = 'crowd'` or `report_group_id is not null`
+  --       itself — one less place trusting a live column value, on top of section 2b's privilege
+  --       lockdown already making that value untamperable post-write.
+  --
+  -- Self-exclusion (`report_group_id != new.report_group_id`) is left textually UNCHANGED from
+  -- round 2 for the reason already established then and re-confirmed by QA pass 3, which explicitly
+  -- traced this exact query end to end: QA pass 2 Finding #1 found this clause provides zero
   -- protection against an author who always reuses ONE fixed report_group_id (count(distinct ...)
   -- of a single constant value the attacker fully controls can never exceed 1, so it can never
   -- reach v_max_count regardless of how many rows are inserted). The fix is NOT to time-bound this
@@ -564,12 +806,15 @@ begin
   -- bypass either — and it would newly penalize a legitimate delayed retry of the same batch (same
   -- report_group_id, resubmitted after a network hiccup) by making the retry consume a fresh group
   -- slot it wouldn't have consumed before. Guard 2 below closes the actual gap instead, without
-  -- that regression risk, by counting rows rather than distinct ids.
+  -- that regression risk, by counting rows rather than distinct ids. (Reusing one fixed
+  -- report_group_id across many separate, honest INSERT statements is still possible after section
+  -- 2b — report_group_id must stay client-chosen at INSERT time, per spec §3.2's "no new RPC"
+  -- decision, so no privilege lockdown can close that specific choice. Guard 2 is deliberately the
+  -- mechanism that bounds it, not Guard 1.)
   select count(distinct report_group_id)
     into v_recent_groups
-    from public.pins
+    from public.block_scoped_report_log
    where author_id = new.author_id
-     and report_group_id is not null
      and report_group_id != new.report_group_id
      and created_at > now() - (v_window_hours || ' hours')::interval;
 
@@ -578,30 +823,48 @@ begin
       using errcode = 'insufficient_privilege';
   end if;
 
-  -- Guard 2 (new, QA pass 2 round 3): absolute cap on total block-scoped crowd ROWS created by
+  -- Guard 2 (added QA pass 2 round 3): absolute cap on total block-scoped crowd ROWS created by
   -- this author in the window — no report_group_id-based exclusion at all, deliberately. This is
-  -- what actually closes Finding #1: an attacker who always reuses one fixed report_group_id
-  -- defeats Guard 1 completely (however Guard 1's self-exclusion is scoped, count(distinct ...) of
-  -- one constant value can never reach v_max_count) but cannot defeat this guard, because count(*)
-  -- grows by one on every row regardless of what report_group_id is attached to it. v_max_rows
-  -- defaults generously (30 — 10x v_max_count, see rate_limit_config seed above) specifically so
-  -- it can never reject a legitimate single large multi-blockface report; it exists purely to
-  -- bound otherwise-unlimited row insertion under a single reused id. Verified against Kevin's
-  -- canonical 4-row E 2nd St batch (one report_group_id, 4 sequential inserts): the existing-row
+  -- what actually closes round-2's Finding #1: an attacker who always reuses one fixed
+  -- report_group_id defeats Guard 1 completely (however Guard 1's self-exclusion is scoped,
+  -- count(distinct ...) of one constant value can never reach v_max_count) but cannot defeat this
+  -- guard, because count(*) grows by one on every row regardless of what report_group_id is
+  -- attached to it.
+  --
+  -- Round 4: source table changed from public.pins to block_scoped_report_log, for the identical
+  -- reason as Guard 1 above — this is the guard QA pass 3 Finding #3 specifically named
+  -- ("delete-then-reinsert...turns the 30-row cap into a live-snapshot cap"). A row deleted from
+  -- pins after being logged still counts here for the rest of the window; the cap is now genuinely
+  -- cumulative, not a snapshot of what currently exists.
+  --
+  -- v_max_rows defaults generously (30 — 10x v_max_count, see rate_limit_config seed above)
+  -- specifically so it can never reject a legitimate single large multi-blockface report; it exists
+  -- purely to bound otherwise-unlimited row insertion under a single reused id. Verified against
+  -- Kevin's canonical 4-row E 2nd St batch (one report_group_id, 4 sequential inserts): the logged
   -- count this query would see at each of the 4 inserts is 0, 1, 2, 3 — all well under 30, so the
-  -- batch is unaffected.
+  -- batch is unaffected (each insert is only logged AFTER it clears both guards, so a row never
+  -- counts against itself).
   select count(*)
     into v_recent_rows
-    from public.pins
+    from public.block_scoped_report_log
    where author_id = new.author_id
-     and report_group_id is not null
-     and source = 'crowd'
      and created_at > now() - (v_window_hours || ' hours')::interval;
 
   if v_recent_rows >= v_max_rows then
     raise exception 'rate limit exceeded: max % block-scoped report row(s) per % hour(s)', v_max_rows, v_window_hours
       using errcode = 'insufficient_privilege';
   end if;
+
+  -- Round 4: log this row now that both guards have cleared. Deliberately placed here, not at the
+  -- top of the function — a row that goes on to fail either guard above (RAISE EXCEPTION aborts the
+  -- whole statement) must never be logged, or the cap would ratchet down on every rejected attempt
+  -- as well as every successful one. Because this INSERT runs inside the same BEFORE-trigger
+  -- invocation as the outer INSERT/UPDATE statement it's attached to, if anything LATER in that same
+  -- statement fails (e.g. the ceiling CHECK constraint, evaluated after BEFORE ROW triggers run),
+  -- Postgres rolls back the whole statement atomically — including this log write — so a row that
+  -- ultimately never lands in pins can never leave a phantom log entry either.
+  insert into public.block_scoped_report_log (author_id, report_group_id)
+  values (new.author_id, new.report_group_id);
 
   return new;
 end;
