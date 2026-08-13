@@ -25,6 +25,15 @@
 //    - authService passed into ContentView and from there into CommunityPinService
 //      so the same anonymous identity is used for all writes (AC-A5 singleton invariant).
 //
+//  supabase-swift adoption — Stream A (Auth/Keychain), docs/supabase-swift-realtime-spec.md §9:
+//    - SupabaseAuthService's internals now wrap the SDK's AuthClient (Keychain-backed session
+//      storage) instead of raw URLSession + UserDefaults. The AuthClient instance itself is
+//      built inside SupabaseAuthService()'s own convenience init (via a SupabaseClients value —
+//      see that file + SupabaseAuthService.swift's headers), so this file's authService
+//      property declaration is textually unchanged from pre-SDK. authService's public API and
+//      this file's .task wiring are unchanged (AC-A1): ContentView / CommunityPinService need
+//      zero changes.
+//
 
 import SwiftUI
 import UserNotifications
@@ -115,6 +124,13 @@ struct WeParkApp: App {
     /// Note: @State on App body properties is the Swift-idiomatic way to hold a single
     /// service instance at the app root without escaping it into a global. The instance is
     /// alive for the full app lifetime.
+    ///
+    /// supabase-swift Stream A: SupabaseAuthService()'s convenience init builds its own
+    /// SupabaseClients (and that struct's own AuthClient) internally — see
+    /// SupabaseClients.swift. This keeps WeParkApp.swift's diff minimal for this stream; when
+    /// Stream B wires CommunityPinService to the SDK's Realtime client, this property likely
+    /// becomes a shared `@State private var supabaseClients = SupabaseClients()` injected into
+    /// both services (spec §3.4) — deferred to that PR rather than speculatively added now.
     @State private var authService = SupabaseAuthService()
 
     var body: some Scene {

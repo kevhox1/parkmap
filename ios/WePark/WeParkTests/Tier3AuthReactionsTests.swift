@@ -5,33 +5,35 @@
 //  Tier 3 Sub-PR #1 — Unit tests for anonymous auth + write path + reactions.
 //  Spec: docs/tier3-auth-and-reactions-spec.md §7 (AC-A1 through AC-V4).
 //
-//  Test inventory (15 tests):
+//  supabase-swift adoption — Stream A (Auth/Keychain) update
+//  (docs/supabase-swift-realtime-spec.md §9, §11): the `SupabaseAuthServiceTests` class that
+//  used to live in this file (AC-A1 through AC-A4, 5 tests) has moved to its own file,
+//  `WeParkTests/SupabaseAuthServiceTests.swift`, rewritten against the SDK-backed internals
+//  (AC-A1 through AC-A5). The two helper methods below (`makeAuthenticatedPair` /
+//  `makeAuthenticatedWritePair`) that construct an authenticated `SupabaseAuthService` for the
+//  CommunityPinService write-path tests were updated to use the new
+//  `SupabaseAuthService(supabaseURL:supabaseAnonKey:testStorage:fetch:)` test-seam initializer
+//  (the old `urlSession:`-based initializer no longer exists) — this is the only change in this
+//  file; CommunityPinService.swift itself is untouched, and none of the assertions below
+//  changed.
 //
-//  Anonymous auth — SupabaseAuthService (AC-A1 through AC-A4):
-//    1.  testEnsureSession_noPersistedSession_callsSignIn           (AC-A1)
-//    2.  testEnsureSession_validPersistedSession_doesNotResignIn    (AC-A2)
-//    3.  testEnsureSession_expiredToken_callsRefresh                (AC-A2 variant)
-//    4.  testSignIn_setsCurrentUserId                              (AC-A1)
-//    5.  testSignIn_httpFailure_doesNotSetUserId                    (fail-silently)
+//  Test inventory (10 tests remain in this file after the move):
 //
 //  Write path — request shapes (AC-W1, AC-W2, AC-W3, AC-V1):
-//    6.  testInsertCrowdPin_requestIncludesAuthorizationHeader      (AC-W1)
-//    7.  testInsertCrowdPin_payloadShape                            (AC-W2)
-//    8.  testInsertCrowdPin_notAuthenticated_throws                 (AC-W3)
-//    9.  testUpsertVote_requestIncludesPreferHeader                 (AC-V1)
-//   10.  testUpsertVote_notAuthenticated_throws                     (AC-W3 mirror)
+//    1.  testInsertCrowdPin_requestIncludesAuthorizationHeader      (AC-W1)
+//    2.  testInsertCrowdPin_payloadShape                            (AC-W2)
+//    3.  testInsertCrowdPin_notAuthenticated_throws                 (AC-W3)
+//    4.  testUpsertVote_requestIncludesPreferHeader                 (AC-V1)
+//    5.  testUpsertVote_notAuthenticated_throws                     (AC-W3 mirror)
 //
 //  Reactions UI — own-pin guard logic (AC-V4):
-//   11.  testOwnPinGuard_sameId_isOwnPin_true
-//   12.  testOwnPinGuard_differentId_isOwnPin_false
-//   13.  testOwnPinGuard_nilAuthorId_isOwnPin_false
+//    6.  testOwnPinGuard_sameId_isOwnPin_true
+//    7.  testOwnPinGuard_differentId_isOwnPin_false
+//    8.  testOwnPinGuard_nilAuthorId_isOwnPin_false
 //
 //  Reactions UI — "Still there?" + "Gone" call discipline (AC-V2, AC-V3):
-//   14.  testStillHere_callsBothUpsertAndExtend                    (AC-V2)
-//   15.  testGone_callsOnlyUpsertDispute                           (AC-V3)
-//
-//  Baseline before this suite: 243 tests.
-//  After this suite: 243 + 15 = 258 tests.
+//    9.  testStillHere_callsBothUpsertAndExtend                    (AC-V2)
+//   10.  testGone_callsOnlyUpsertDispute                           (AC-V3)
 //
 //  All tests use MockURLProtocol (from RouteServiceTests) or AuthMockURLProtocol.
 //  No live network calls, no live DB needed for these unit tests.
@@ -51,15 +53,27 @@ private let kAuthAnonKey = "test-anon-key-auth"
 private let kUser1 = UUID(uuidString: "A0000001-0000-0000-0000-000000000001")!
 private let kUser2 = UUID(uuidString: "A0000002-0000-0000-0000-000000000002")!
 
-/// A valid Supabase auth response JSON fixture.
-/// expires_in: 3600 (1 hour from call time — always valid for the duration of a test).
+/// A valid Supabase Auth SDK `Session` JSON fixture — shape matches supabase-swift's
+/// `Session`/`User` `Decodable` requirements exactly (synthesized `Codable` for `Session`;
+/// `User`'s custom `init(from:)` only truly requires `id`, `aud`, `created_at`, `updated_at`).
+/// `expires_at` is a real future Unix timestamp (1 hour out) so `Session.isExpired` is false —
+/// the SDK checks `expiresAt`, not `expiresIn`, for expiry.
 private func authResponseJSON(userId: UUID = kUser1) -> Data {
-    """
+    let expiresAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+    return """
     {
       "access_token": "eyJ.test.token",
       "refresh_token": "refresh-test-token",
+      "token_type": "bearer",
       "expires_in": 3600,
-      "user": { "id": "\(userId.uuidString)" }
+      "expires_at": \(expiresAt),
+      "user": {
+        "id": "\(userId.uuidString)",
+        "aud": "authenticated",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "is_anonymous": true
+      }
     }
     """.data(using: .utf8)!
 }
@@ -154,156 +168,6 @@ private func bodyData(from request: URLRequest) -> Data? {
     return data.isEmpty ? nil : data
 }
 
-// MARK: - SupabaseAuthService Tests (AC-A1 through AC-A4)
-
-@MainActor
-final class SupabaseAuthServiceTests: XCTestCase {
-
-    // MARK: Teardown: clear UserDefaults keys after each test
-
-    override func tearDown() {
-        super.tearDown()
-        let keys = [
-            "wepark_auth_access_token",
-            "wepark_auth_refresh_token",
-            "wepark_auth_user_id",
-            "wepark_auth_expires_at",
-        ]
-        for key in keys { UserDefaults.standard.removeObject(forKey: key) }
-    }
-
-    // MARK: AC-A1: first launch → signInAnonymously sets currentUserId
-
-    /// AC-A1: ensureSession() with no persisted session calls signIn and sets currentUserId.
-    func testEnsureSession_noPersistedSession_callsSignIn() async {
-        AuthMockURLProtocol.requestHandler = { _ in
-            (HTTPURLResponse(url: kAuthURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             authResponseJSON(userId: kUser1))
-        }
-        let service = SupabaseAuthService(
-            supabaseURL: kAuthURL,
-            supabaseAnonKey: kAuthAnonKey,
-            urlSession: authMockSession()
-        )
-
-        await service.ensureSession()
-
-        XCTAssertEqual(service.currentUserId, kUser1,
-            "AC-A1: currentUserId must be set to the anonymous user UUID after ensureSession()")
-        XCTAssertTrue(service.isAuthenticated,
-            "AC-A1: isAuthenticated must be true after successful ensureSession()")
-        XCTAssertNotNil(service.accessToken,
-            "AC-A1: accessToken must be non-nil after successful ensureSession()")
-    }
-
-    // MARK: AC-A2: valid persisted session → no new sign-in call
-
-    /// AC-A2: ensureSession() with a valid persisted session does NOT call signIn again.
-    func testEnsureSession_validPersistedSession_doesNotResignIn() async {
-        // Pre-seed UserDefaults with a valid session (expires 1 hour from now).
-        let defaults = UserDefaults.standard
-        defaults.set("existing-access-token", forKey: "wepark_auth_access_token")
-        defaults.set("existing-refresh-token", forKey: "wepark_auth_refresh_token")
-        defaults.set(kUser1.uuidString, forKey: "wepark_auth_user_id")
-        defaults.set(Date().addingTimeInterval(3600).timeIntervalSince1970,
-                     forKey: "wepark_auth_expires_at")
-
-        var signInCallCount = 0
-        AuthMockURLProtocol.requestHandler = { _ in
-            signInCallCount += 1
-            return (HTTPURLResponse(url: kAuthURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    authResponseJSON(userId: kUser2))
-        }
-
-        let service = SupabaseAuthService(
-            supabaseURL: kAuthURL,
-            supabaseAnonKey: kAuthAnonKey,
-            urlSession: authMockSession()
-        )
-
-        await service.ensureSession()
-
-        XCTAssertEqual(signInCallCount, 0,
-            "AC-A2: must not call signInAnonymously when a valid session is already persisted")
-        XCTAssertEqual(service.currentUserId, kUser1,
-            "AC-A2: must restore the persisted userId, not create a new anonymous one")
-    }
-
-    // MARK: AC-A2 variant: expired token → refresh called
-
-    /// Expired token (within 2 min of expiry) triggers a refresh, not a new sign-in.
-    func testEnsureSession_expiredToken_callsRefresh() async {
-        // Pre-seed with a token that expires in 60s (within 120s refresh window).
-        let defaults = UserDefaults.standard
-        defaults.set("expiring-access-token", forKey: "wepark_auth_access_token")
-        defaults.set("valid-refresh-token", forKey: "wepark_auth_refresh_token")
-        defaults.set(kUser1.uuidString, forKey: "wepark_auth_user_id")
-        defaults.set(Date().addingTimeInterval(60).timeIntervalSince1970,
-                     forKey: "wepark_auth_expires_at")
-
-        var capturedURL: URL?
-        AuthMockURLProtocol.requestHandler = { request in
-            capturedURL = request.url
-            return (HTTPURLResponse(url: kAuthURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-                    authResponseJSON(userId: kUser1))
-        }
-
-        let service = SupabaseAuthService(
-            supabaseURL: kAuthURL,
-            supabaseAnonKey: kAuthAnonKey,
-            urlSession: authMockSession()
-        )
-
-        await service.ensureSession()
-
-        // The refresh endpoint is /auth/v1/token (not /auth/v1/signup).
-        let urlString = capturedURL?.absoluteString ?? ""
-        XCTAssertTrue(urlString.contains("/auth/v1/token"),
-            "Expired token should trigger refresh via /auth/v1/token, got: \(urlString)")
-    }
-
-    // MARK: AC-A1: signIn sets currentUserId
-
-    /// Direct test of the sign-in flow: response is parsed and currentUserId is set.
-    func testSignIn_setsCurrentUserId() async {
-        AuthMockURLProtocol.requestHandler = { _ in
-            (HTTPURLResponse(url: kAuthURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
-             authResponseJSON(userId: kUser2))
-        }
-        let service = SupabaseAuthService(
-            supabaseURL: kAuthURL,
-            supabaseAnonKey: kAuthAnonKey,
-            urlSession: authMockSession()
-        )
-
-        await service.ensureSession()
-
-        XCTAssertEqual(service.currentUserId, kUser2)
-        XCTAssertTrue(service.isAuthenticated)
-    }
-
-    // MARK: Fail-silently: HTTP error does not set userId
-
-    /// If the sign-in endpoint returns a non-2xx, currentUserId stays nil (fail silently — AC-A4).
-    func testSignIn_httpFailure_doesNotSetUserId() async {
-        AuthMockURLProtocol.requestHandler = { request in
-            (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!,
-             Data())
-        }
-        let service = SupabaseAuthService(
-            supabaseURL: kAuthURL,
-            supabaseAnonKey: kAuthAnonKey,
-            urlSession: authMockSession()
-        )
-
-        await service.ensureSession()
-
-        XCTAssertNil(service.currentUserId,
-            "currentUserId must remain nil when sign-in returns a server error")
-        XCTAssertFalse(service.isAuthenticated)
-    }
-}
-
 // MARK: - CommunityPinService Write Path Tests (AC-W1, AC-W2, AC-W3, AC-V1)
 
 /// @MainActor: CommunityPinService and SupabaseAuthService are both @MainActor @Observable.
@@ -318,10 +182,12 @@ final class CommunityPinWritePathTests: XCTestCase {
     /// ensureSession() on the auth service, then resets the handler so subsequent
     /// auth service calls (from validAccessToken) also succeed.
     private func makeAuthenticatedPair() async -> (CommunityPinService, SupabaseAuthService) {
+        let mockSession = authMockSession()
         let authService = SupabaseAuthService(
             supabaseURL: kAuthURL,
             supabaseAnonKey: kAuthAnonKey,
-            urlSession: authMockSession()
+            testStorage: InMemoryAuthStorage(),
+            fetch: { try await mockSession.data(for: $0) }
         )
 
         // Set the auth mock to return a valid session response.
@@ -329,7 +195,7 @@ final class CommunityPinWritePathTests: XCTestCase {
             (HTTPURLResponse(url: kAuthURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
              authResponseJSON(userId: kUser1))
         }
-        // Call ensureSession to populate in-memory auth state (accessToken, tokenExpiresAt, etc.)
+        // Call ensureSession to populate in-memory auth state (accessToken, currentUserId, etc.)
         await authService.ensureSession()
 
         let pinService = CommunityPinService(
@@ -601,10 +467,12 @@ final class ReactionCallDisciplineTests: XCTestCase {
     }
 
     private func makeAuthenticatedWritePair() async -> (CommunityPinService, SupabaseAuthService) {
+        let mockSession = authMockSession()
         let authService = SupabaseAuthService(
             supabaseURL: kAuthURL,
             supabaseAnonKey: kAuthAnonKey,
-            urlSession: authMockSession()
+            testStorage: InMemoryAuthStorage(),
+            fetch: { try await mockSession.data(for: $0) }
         )
         AuthMockURLProtocol.requestHandler = { _ in
             (HTTPURLResponse(url: kAuthURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
