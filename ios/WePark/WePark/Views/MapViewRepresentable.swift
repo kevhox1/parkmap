@@ -223,6 +223,19 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// until an explicit Recenter tap. See `docs/field-testing-log.md` FT-17 and
     /// `docs/tf2-11-drive-camera-ownership-spec.md` OQ-4 (amended).
     ///
+    /// FT-17a (2026-08-13) fixed a defect in HOW this fires: `regionWillChangeAnimated`
+    /// originally detected "any active gesture" by scanning `mapView.gestureRecognizers`,
+    /// which only ever contains our own `UILongPressGestureRecognizer` and
+    /// `UITapGestureRecognizer` (added in `makeUIView`) — MapKit's native pan and pinch
+    /// recognizers live on internal subviews and are never in that array. So this callback
+    /// fired only when our tap/long-press happened to flicker into an active state during a
+    /// real pan/pinch (sporadic, not reliable — Kevin: "the recenter pill is sporadic, it
+    /// doesn't always appear"). The fix installs our own passive, observer-only
+    /// `UIPanGestureRecognizer` + `UIPinchGestureRecognizer` directly on the map view
+    /// (`Coordinator.panGesture` / `pinchGesture`) purely to read their `.state`; tap and
+    /// long-press are deliberately excluded from this detection so they do NOT pause follow.
+    /// See `docs/field-testing-log.md` FT-17a.
+    ///
     /// Programmatic `setCamera` / `setRegion` calls fire `regionWillChangeAnimated` with no
     /// active gesture recognizer, so this callback does NOT fire for them (correct).
     ///
@@ -319,6 +332,43 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// - Returns: `true` when follow should pause and the Recenter pill should surface.
     static func shouldPauseFollow(driveModeActive: Bool, isUserGesture: Bool) -> Bool {
         driveModeActive && isUserGesture
+    }
+
+    /// Pure gesture-state-detection function: no MKMapView dependency (only bare
+    /// `UIGestureRecognizer.State` values), directly unit-testable.
+    ///
+    /// FT-17a (2026-08-13): replaces the broken `mapView.gestureRecognizers?.contains { ... }`
+    /// scan that used to compute `isUserGesture` in `regionWillChangeAnimated`. That scan only
+    /// ever inspected our own tap and long-press recognizers (the only two ever added directly
+    /// to the map view) — MapKit's native pan and pinch recognizers live on internal subviews
+    /// and were never in that array, so real pans/pinches were detected only when our tap or
+    /// long-press happened to flicker into an active state alongside them. That made the
+    /// Recenter pill appear sporadically instead of reliably. See `docs/field-testing-log.md`
+    /// FT-17a for the full root-cause trace.
+    ///
+    /// Fix: `regionWillChangeAnimated` now reads the `.state` of two dedicated,
+    /// observer-only recognizers (`Coordinator.panGesture` / `pinchGesture`, added directly
+    /// to the map view in `makeUIView` and never intercepting MapKit's own gesture handling —
+    /// see `gestureRecognizer(_:shouldRecognizeSimultaneouslyWith:)`) and passes their states
+    /// here. Tap and long-press are deliberately NOT passed in, so neither pauses follow —
+    /// only pan and pinch do (see FT-17a's PR body for the explicit tap/long-press decision).
+    ///
+    /// - Parameters:
+    ///   - panState: `.state` of the observer `UIPanGestureRecognizer`, or `nil` if it hasn't
+    ///     been installed yet (e.g. `regionWillChangeAnimated` fires before `makeUIView`
+    ///     finishes wiring it — treated as inactive).
+    ///   - pinchState: `.state` of the observer `UIPinchGestureRecognizer`, same nil handling.
+    /// - Returns: `true` if either recognizer is in `.began`, `.changed`, or `.ended` —
+    ///   i.e. currently tracking touches or just completed a real touch-driven gesture.
+    static func isUserGestureActive(
+        panState: UIGestureRecognizer.State?,
+        pinchState: UIGestureRecognizer.State?
+    ) -> Bool {
+        func isActive(_ state: UIGestureRecognizer.State?) -> Bool {
+            guard let state else { return false }
+            return state == .began || state == .changed || state == .ended
+        }
+        return isActive(panState) || isActive(pinchState)
     }
 
     /// Pure span-decision function: no MKMapView dependency, directly unit-testable.
@@ -642,6 +692,45 @@ struct MapViewRepresentable: UIViewRepresentable {
         tap.delegate = context.coordinator
         mapView.addGestureRecognizer(tap)
 
+        // FT-17a: Observer-only UIPanGestureRecognizer + UIPinchGestureRecognizer.
+        //
+        // Root cause this fixes: MapKit's own pan/pinch recognizers live on MKMapView's
+        // internal subviews and are NEVER present in `mapView.gestureRecognizers` — the
+        // FT-17-era `regionWillChangeAnimated` detection scanned exactly that array, so it
+        // could only ever see our tap/long-press recognizers, making Drive Mode follow-pause
+        // (and the Recenter pill) fire sporadically instead of reliably. See
+        // `docs/field-testing-log.md` FT-17a.
+        //
+        // These two recognizers exist SOLELY so `regionWillChangeAnimated` /
+        // `regionDidChangeAnimated` can read a real `.state` for pan/pinch — they have no
+        // target-action side effects of their own (`handlePanObserver`/`handlePinchObserver`
+        // are no-ops) and must NEVER call `cancel`, mutate the camera, or otherwise act as
+        // more than a passive state observer. `shouldRecognizeSimultaneouslyWith` (below)
+        // unconditionally returns `true`, so they track alongside MapKit's native pan/pinch
+        // without intercepting or altering it — pinch-zoom and pan continue to work exactly
+        // as they do today (Kevin confirmed this feel is correct; do not regress it).
+        //
+        // Deliberate scope decision (FT-17a): tap and long-press are NOT part of this
+        // detection — only pan and pinch pause Drive Mode follow. A block tap (select) and a
+        // long-press (pin-drop) are momentary, non-camera-moving gestures; pausing follow for
+        // them would surface the Recenter pill for actions that never actually moved the
+        // camera off the driver's position, which is not what "recenter" means to the user.
+        let pan = UIPanGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePanObserver(_:))
+        )
+        pan.delegate = context.coordinator
+        mapView.addGestureRecognizer(pan)
+        context.coordinator.panGesture = pan
+
+        let pinch = UIPinchGestureRecognizer(
+            target: context.coordinator,
+            action: #selector(Coordinator.handlePinchObserver(_:))
+        )
+        pinch.delegate = context.coordinator
+        mapView.addGestureRecognizer(pinch)
+        context.coordinator.pinchGesture = pinch
+
         context.coordinator.mapView = mapView
 
         // W8.5c-polish PR-3 / PR-2: Wire coordinator actions into the shared action box.
@@ -807,6 +896,26 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         var parent: MapViewRepresentable
         weak var mapView: MKMapView?
+
+        // MARK: - FT-17a: Observer-only pan/pinch gesture recognizers
+
+        /// Passive, observer-only `UIPanGestureRecognizer` installed directly on the map
+        /// view (in `makeUIView`) purely to read `.state` in `regionWillChangeAnimated`.
+        ///
+        /// FT-17a (2026-08-13): MapKit's own pan recognizer lives on an internal subview of
+        /// `MKMapView` and is never present in `mapView.gestureRecognizers` — scanning that
+        /// array (the FT-17-era approach) could not reliably detect a real pan. This
+        /// recognizer is attached to the map view itself and participates in simultaneous
+        /// recognition (`gestureRecognizer(_:shouldRecognizeSimultaneouslyWith:)` returns
+        /// `true` unconditionally) so it tracks alongside MapKit's native pan handling
+        /// without ever intercepting or altering it — MapKit's own pan/zoom behavior is
+        /// unchanged. `weak` because `mapView` already owns it via `addGestureRecognizer`.
+        weak var panGesture: UIPanGestureRecognizer?
+
+        /// Passive, observer-only `UIPinchGestureRecognizer` — see `panGesture` doc for the
+        /// full rationale. Detects pinch the same way; MapKit's native pinch recognizer
+        /// similarly lives on an internal subview.
+        weak var pinchGesture: UIPinchGestureRecognizer?
 
         /// Tracks which payload generation we last applied to avoid redundant overlay swaps.
         var lastAppliedGeneration: Int = -1
@@ -1520,14 +1629,26 @@ struct MapViewRepresentable: UIViewRepresentable {
             // free-browse pans also set the interaction flag.
             //
             // We distinguish user gestures from programmatic recenters by checking whether
-            // any gesture recognizer is in an active state. Programmatic `setRegion` /
-            // `setCamera` calls fire `regionWillChangeAnimated` with no active recognizer,
-            // so `isUserInteracting` stays `false` for those (correct — programmatic camera
-            // moves, including syncDriveHeading's setCamera and the per-tick setDriveCamera,
-            // should not trigger pan detection).
-            let isUserGesture = mapView.gestureRecognizers?.contains(where: {
-                $0.state == .began || $0.state == .changed || $0.state == .ended
-            }) ?? false
+            // our observer pan/pinch recognizers are in an active state. Programmatic
+            // `setRegion` / `setCamera` calls fire `regionWillChangeAnimated` with neither
+            // recognizer active, so `isUserInteracting` stays `false` for those (correct —
+            // programmatic camera moves, including syncDriveHeading's setCamera and the
+            // per-tick setDriveCamera, should not trigger pan detection).
+            //
+            // FT-17a (2026-08-13): previously this scanned `mapView.gestureRecognizers`,
+            // which only ever contains our OWN tap and long-press recognizers — MapKit's
+            // native pan/pinch recognizers live on internal subviews and are never in that
+            // array, so this used to detect a real pan/pinch only sporadically (when tap or
+            // long-press happened to flicker into an active state alongside it). It now
+            // reads `panGesture`/`pinchGesture` — dedicated, passive observer recognizers
+            // installed directly on the map view in `makeUIView` for exactly this purpose.
+            // Tap and long-press are deliberately excluded: neither pauses follow or sets
+            // `isUserInteracting` (see FT-17a's PR body for that decision). See
+            // `docs/field-testing-log.md` FT-17a and `isUserGestureActive`'s doc comment.
+            let isUserGesture = MapViewRepresentable.isUserGestureActive(
+                panState: panGesture?.state,
+                pinchState: pinchGesture?.state
+            )
             if isUserGesture {
                 isUserInteracting = true
             }
@@ -1538,7 +1659,7 @@ struct MapViewRepresentable: UIViewRepresentable {
             // pauses follow and surfaces Recenter (see `shouldPauseFollow` doc and
             // `onDrivePanDetected`'s doc comment for the full root-cause trace). We no
             // longer distinguish gesture type here — `isUserGesture` (computed above from
-            // "any recognizer is .began/.changed/.ended") is sufficient.
+            // the observer pan/pinch recognizers' `.state`) is sufficient.
             //
             // Programmatic animated setCamera fires regionWillChangeAnimated with NO active
             // gesture recognizer, so this block never fires for programmatic camera calls.
@@ -1579,15 +1700,16 @@ struct MapViewRepresentable: UIViewRepresentable {
             //      the `onDrivePanDetected` follow-pause path above and does not also need
             //      an altitude capture, since follow is paused either way post-FT-17).
             //
-            // We re-check current gesture recognizers: if any UIPanGestureRecognizer is
-            // in a non-possible state, this was a pan (handled by onDrivePanDetected in
-            // regionWillChangeAnimated). We use the ENDED/CHANGED state check here since
-            // this fires after the gesture settles.
+            // We re-check the observer `panGesture`: if it's in a settling state, this was
+            // a pan (handled by onDrivePanDetected in regionWillChangeAnimated). We use the
+            // ENDED/CHANGED state check here since this fires after the gesture settles.
+            //
+            // FT-17a (2026-08-13): previously scanned `mapView.gestureRecognizers` for a
+            // `UIPanGestureRecognizer`, which never matched anything real (see
+            // `isUserGestureActive`'s doc comment) — this guard was effectively always
+            // `false` in practice pre-fix. It now reads `panGesture` directly.
             if parent.driveModeActive, wasUserInteracting {
-                let wasPan = mapView.gestureRecognizers?.contains(where: {
-                    $0 is UIPanGestureRecognizer &&
-                    ($0.state == .ended || $0.state == .changed)
-                }) ?? false
+                let wasPan = panGesture?.state == .ended || panGesture?.state == .changed
                 if !wasPan {
                     // Pinch zoom settled: report the new altitude to ContentView.
                     let newAltitude = mapView.camera.centerCoordinateDistance
@@ -1664,11 +1786,28 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
 
+        // MARK: - FT-17a: Observer-only pan/pinch handlers
+
+        /// No-op target-action for the observer `panGesture`.
+        ///
+        /// This recognizer exists solely so `regionWillChangeAnimated` /
+        /// `regionDidChangeAnimated` can read its `.state`; UIKit requires a target-action
+        /// pair for a gesture recognizer to track touches at all, but this handler itself
+        /// does nothing — it must never mutate the camera or any state. Reading `.state` is
+        /// done directly from `panGesture` where needed, not from this callback.
+        @objc func handlePanObserver(_ recognizer: UIPanGestureRecognizer) {}
+
+        /// No-op target-action for the observer `pinchGesture`. See `handlePanObserver` doc.
+        @objc func handlePinchObserver(_ recognizer: UIPinchGestureRecognizer) {}
+
         // MARK: - UIGestureRecognizerDelegate
 
         /// Allow all recognizers to fire simultaneously with MKMapView's built-in
         /// recognizers so that map gestures (pan, pinch, double-tap-to-zoom) continue
-        /// to work alongside our block-tap and long-press logic.
+        /// to work alongside our block-tap/long-press logic and the FT-17a observer
+        /// `panGesture`/`pinchGesture` recognizers. Returning `true` unconditionally means
+        /// these observers never block or steal MapKit's own gesture handling — they are
+        /// purely passive.
         func gestureRecognizer(
             _ gestureRecognizer: UIGestureRecognizer,
             shouldRecognizeSimultaneouslyWith otherRecognizer: UIGestureRecognizer

@@ -46,9 +46,27 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 - **⚠️ Kevin's test caveat:** the simulator run used a STATIC location (`simctl location set`), so
   "doesn't snap back" is **not conclusive** — with few/no GPS ticks nothing would pull the camera back
   regardless of `followPaused`. Real-device driving remains the true gate.
-- **Status:** 🔴 open — **build 16 HELD** on this. Shipping a fix that works intermittently is worse
-  than shipping none: Kevin can't tell a flaky pill from a broken one while driving.
-- **Lands in:** `ios/WePark/WePark/Views/MapViewRepresentable.swift`.
+- **Fix implemented (`@ios-engineer`, 2026-08-13, PR TBD):** installed two dedicated, observer-only
+  recognizers — `UIPanGestureRecognizer` + `UIPinchGestureRecognizer` — directly on the map view in
+  `makeUIView`, with `shouldRecognizeSimultaneouslyWith` → true so they read `.state` alongside MapKit's
+  native pan/pinch without ever intercepting or altering it. `regionWillChangeAnimated` /
+  `regionDidChangeAnimated` now read `Coordinator.panGesture`/`pinchGesture` instead of scanning
+  `mapView.gestureRecognizers`. Extracted the state→bool mapping into a new pure function,
+  `MapViewRepresentable.isUserGestureActive(panState:pinchState:)` (no MKMapView/live-recognizer
+  dependency, unlike the code it replaces — fully unit-testable), which feeds the existing
+  `shouldPauseFollow(driveModeActive:isUserGesture:)`. **Explicit scope decision:** pan and pinch pause
+  Drive Mode follow; tap (block select) and long-press (pin drop) do NOT — enforced structurally, since
+  `isUserGestureActive`'s signature has no tap/long-press parameters at all. `isUserInteracting` (FT-5's
+  free-browse snap-back guard) is re-pointed at the same fixed `isUserGesture` computation it already
+  shared a code path with — it had the identical latent bug (tap/long-press flicker, not real pan
+  detection), so this also fixes FT-5's guard, not just Drive Mode's. Tests: `WeParkTests/FT17aTests.swift`
+  (11 new tests: 9 on `isUserGestureActive`, 2 composition tests through `shouldPauseFollow`).
+  **COMPILE-UNVERIFIED** — written on a Linux VPS with no Xcode/simulator/toolchain.
+- **Status:** 🟡 **fix implemented, awaiting Kevin's build + live-UI gesture smoke** (pill IS testable
+  with a static location — it's gesture-driven, not GPS-driven; snap-back is NOT testable without real
+  GPS ticks, per the caveat above). **Build 16 stays HELD** until Kevin confirms on-device/simulator.
+- **Lands in:** `ios/WePark/WePark/Views/MapViewRepresentable.swift`, `WeParkTests/FT17aTests.swift`,
+  `docs/tf2-11-drive-camera-ownership-spec.md` (Amendment Log).
 
 ### FT-17 🔴 Drive Mode: pinch-zoom doesn't pause follow — camera yanks back; want free zoom/pan + Recenter
 - **Area:** Drive Mode camera ownership. `MapViewRepresentable.regionWillChange/regionDidChange` +
