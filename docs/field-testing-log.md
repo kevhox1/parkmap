@@ -77,8 +77,10 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   exactly the open "design question" FT-10 originally raised but resolved the other way.
 - **⚠️ FILE COLLISION:** touches the same two files as **FT-15 Stream B2** (map tap-select). These two
   MUST be serialized, not run in parallel.
-- **Status:** 🔴 open — root-caused, not yet implemented. Needs the live-UI simulator smoke gate on
-  Kevin's Mac before merge (the gate that caught the W8.5c-polish regression).
+- **Status:** 🟢 **MERGED #72** (`8ca6d9ff`, 2026-08-12) — any gesture now pauses follow via the pure
+  `shouldPauseFollow(driveModeActive:isUserGesture:)`; OQ-4 amended in the camera-ownership spec.
+  Kevin on-device: pinch/pan hold and don't snap back. **BUT the fix is only intermittently reachable —
+  see FT-17a**, which is what build 16 is actually held on.
 - **Lands in:** `ios/WePark/WePark/Views/MapViewRepresentable.swift`, `ios/WePark/WePark/ContentView.swift`,
   and an OQ-4 amendment in `docs/tf2-11-drive-camera-ownership-spec.md`.
 
@@ -136,8 +138,10 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   sending one email is the proportionate fix, but no alerting mechanism exists anywhere in this repo yet, so
   it gets its own scoped pass rather than riding along in #71. **Named explicitly so it isn't silently
   dropped — "we'll notice next time" is the assumption that already failed once.**
-- **Status:** 🟡 **PR #71 open** — SQL migration + Edge Function change, **not yet applied to production**
-  (Kevin applies after QA, per `.claude/TEAM.md`). No client changes required; not a blocker for FT-15.
+- **Status:** 🟡 **MERGED #71** (`3d5cb891`, 2026-08-12) — but **NOT yet applied to production**. ⏳ Kevin
+  must run `supabase/02g-ingest-runs.sql` in the SQL Editor and redeploy the `ingest-film-permits`
+  Edge Function; until then the guard exists in the repo but not in the running system. No client
+  changes required; not a blocker for FT-15.
 - **Lands in:** `supabase/functions/ingest-film-permits/`, `supabase/02g-ingest-runs.sql`,
   `docs/tier1-open-data-ingest-spec.md`.
 
@@ -664,7 +668,7 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   `parent.driveHeading != nil`, so any user pan pauses follow whether moving or not. One-line change;
   keep the FT-5 isUserInteracting logic + the heading-follow itself unchanged. Re-verify
   RegionSyncGuardTests + #31 smoke gate (sensitive path).
-- **Status:** 🔴 open — fix identified. Goes in next TF2 build (build 3).
+- **Status:** 🟢 **MERGED #52** → build 3. (Status line corrected 2026-08-13 — it had drifted stale while the header already recorded the merge.)
 - **Lands in:** iOS (`MapViewRepresentable.swift`).
 
 ---
@@ -723,8 +727,9 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   returns `.free` "Free until…" (green chip + voice) during paid hours. Map polyline color (`currentState`)
   is CORRECT (amber meteredActive) — only text/chip/voice surfaces lie. **Systemic — affects every metered
   street citywide.** Fix: reorder so metered-active check precedes the ASP-free branch.
-- **Status:** 🟡 iOS fix in progress (ios/ft9-metered-label-fix) for TF2. PWA fix = separate
-  pwa-maintainer follow-up (not in TF2).
+- **Status:** 🟢 **MERGED #50** (`15729b46`) — metered-active now pre-empts the upcoming-ASP-free branch in
+  `safetyLabel`. PWA fix remains a separate pwa-maintainer follow-up (not iOS-blocking).
+  (Status line corrected 2026-08-13 — had drifted stale.)
 - **Lands in:** iOS rules engine (`safetyLabel`) now; PWA `index.html` (`actionableSafetyLabel`) later.
 
 ### FT-8 🟡 Drive/Cruise default zoom too wide — shows too many streets
@@ -757,8 +762,8 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   (GPS course jitters at low speed, or magnetometer/device heading) and not snapped to the segment
   bearing → askew. Possible fix: smooth/animate the puck+camera between fixes, and derive/clamp
   heading toward the matched street segment's bearing (one-way direction).
-- **Status:** 🔴 open — investigating to scope. Likely needs tech-lead spec (touches the
-  #31-sensitive Drive Mode camera path; RegionSyncGuardTests + live-UI smoke gate mandatory).
+- **Status:** 🟢 **MERGED #49** — Drive Mode camera (smooth follow, course heading, tighter zoom,
+  unlocked zoom/pan). (Status line corrected 2026-08-13 — had drifted stale.)
 - **Lands in:** iOS (`MapViewRepresentable.swift`, heading/location plumbing), no backend.
 
 ### FT-6 🟢 Customizable ASP reminder timing — multiple reminders + "night before" (FEATURE) — MERGED #48
