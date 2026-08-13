@@ -234,6 +234,22 @@ function buildCompactStreetIndex() {
   }
   return idx;
 }
+// FT-14 QA correction (docs/qa/ft14-normalizer-regen7-qa.md Finding #1): the SAINT<->ST
+// swap below was originally justified by "OSM has exactly 3 Saint-prefixed streets
+// citywide" -- that count was wrong (re-derived: 37, see the corrected investigation
+// doc). Mirrors the compact-spacing fallback's uniqueness-gate pattern immediately
+// below: canonicalize every OSM key by collapsing "Saint"->"St" (case-folded), index
+// it, and only accept a match when it's unique.
+let stSaintIndex = null;
+function buildStSaintIndex() {
+  const idx = {};
+  for (const k of Object.keys(OSM_STREETS)) {
+    const canon = k.replace(/\bSaint\b/gi, 'St').toLowerCase();
+    if (!idx[canon]) idx[canon] = [];
+    idx[canon].push(k);
+  }
+  return idx;
+}
 // Normalize NYC's weird street names: "EAST    4 STREET" → "EAST 4TH STREET", "2 AVENUE" → "2ND AVENUE"
 function normalizeNYCName(name) {
   if (!name) return name;
@@ -298,15 +314,28 @@ function osmName(nycName) {
     titled.replace(/ Ave$/, ' Avenue'),
     titled.replace(/ Place$/, ' Pl'),
     titled.replace(/ Pl$/, ' Place'),
-    // FT-14 join-drop fix: SAINT <-> ST bidirectional swap (e.g. NYC "St Nicholas
-    // Avenue" <-> OSM "Saint Nicholas Avenue"). Candidates still must exact-match a
-    // real OSM key below, and OSM has exactly 3 "Saint"-prefixed streets citywide, so
-    // there's no room for an accidental wrong-street match.
-    titled.replace(/\bSt\b/g, 'Saint'),
-    titled.replace(/\bSaint\b/g, 'St'),
   ];
   for (const v of variations) {
     if (OSM_STREETS[v]) { osmNameCache[upper] = v; return v; }
+  }
+
+  // FT-14 join-drop fix, gated per QA correction (docs/qa/ft14-normalizer-regen7-qa.md
+  // Finding #1): SAINT <-> ST bidirectional swap (e.g. NYC "St Nicholas Avenue" <-> OSM
+  // "Saint Nicholas Avenue"). The original safety claim ("OSM has exactly 3
+  // Saint-prefixed streets citywide") was wrong -- the real count is 37 -- so this now
+  // uses the same uniqueness-gate pattern as the compact-spacing fallback immediately
+  // below: only accept a match when the Saint/St-canonicalized form identifies exactly
+  // one OSM street. Re-verified zero collisions citywide except one pre-existing
+  // case-only duplicate (Manhattan Bridge Lower Level / lower level), which is already
+  // resolved earlier by the case-insensitive match above and never reaches this gate in
+  // practice. Proven to change nothing today: a live-pull before/after run produced
+  // byte-identical tile output (see PR description).
+  if (!stSaintIndex) stSaintIndex = buildStSaintIndex();
+  const saintCanon = titled.replace(/\bSaint\b/gi, 'St').toLowerCase();
+  const saintMatches = stSaintIndex[saintCanon];
+  if (saintMatches && saintMatches.length === 1) {
+    osmNameCache[upper] = saintMatches[0];
+    return saintMatches[0];
   }
 
   // FT-14 join-drop fix: collision-checked compact-spacing fallback. Strips all
