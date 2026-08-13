@@ -201,6 +201,110 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-13 — burn-down stretch: FT-16 closed live, FT-15 schema APPLIED, SPM landed; build 16 HELD
+
+**WHERE WE ARE:** `main` @ `0457ab43`. Build **1.0 (15) live on TestFlight** and installed on Kevin's
+phone but **undriven** — he has no car access until ~2026-08-17. `CURRENT_PROJECT_VERSION` is already
+bumped to **16** (`6bbb8514`) but **the archive is HELD**.
+
+**🔑 KEVIN'S STANDING DIRECTIVE (2026-08-13):** *"I don't want to make ANY other proposed changes
+until we clear up every single open item."* Stop dribbling builds out. Work everything to *ready*,
+then ship **one** build that closes all the on-device verification items at once. The burn-down board
+is **`docs/open-items.md`** — keep it current; it marks every item VPS vs Mac.
+
+**🔑 Kevin is the ONLY TestFlight user** (confirmed 2026-08-13). Breaking changes — data migrations,
+session resets, state-dropping schema changes — are *cheap right now* and get expensive the moment
+the external TestFlight group exists. Don't build migration shims for hypothetical users.
+
+---
+
+**CLOSED THIS STRETCH:**
+
+- **FT-16 — DONE END TO END, LIVE IN PRODUCTION.** Merged #71, Kevin applied `02g` by hand,
+  redeployed the Edge Function via the Supabase CLI, and a manual invocation verified the guard:
+  `ingest_runs` row 1 reads `probe_status='stale'`, `stale_days=91`,
+  `upstream_latest_row_at=2026-05-13`, `error_count=0`. **Before this, that exact run returned zeros
+  and looked like a success — which is how a 3-month outage went unnoticed.**
+- **FT-15 Stream A schema — MERGED (#69, `a646cf62`) AND APPLIED TO PRODUCTION.** Took **four QA
+  rounds**; three found genuine, exploitable bypasses. Pass 4 was the first to **actually execute**
+  the migration (the agent installed Postgres locally and ran the real files against real roles/RLS).
+  Kevin verified live: 2 new columns, 3 new tables, 2 storage policies, `created_at` **non-insertable**,
+  `source`/`pin_type`/`report_group_id` **non-updatable** by anon/authenticated, 3 new constraints.
+- **Phase 0 SPM — MERGED (#76, `5e33c141`). The realtime track is unblocked.** `supabase-swift 2.55.0`,
+  products **Auth + Realtime only**, 7 packages resolved (6 transitive, all Apple or Point-Free).
+  pbxproj diff **purely additive, 38 insertions / 0 deletions**. `xcodebuild clean build` → BUILD
+  SUCCEEDED. **`Package.resolved` is now TRACKED** — the old blanket `.gitignore` rule was library
+  convention and wrong for an app; untracked resolution is what broke the 2026-06 attempt.
+- **FT-17 — MERGED (#72).** Any gesture pauses Drive Mode follow (OQ-4 reversed, spec amended).
+- Doc hygiene: **five stale `Status:` lines corrected** in the field-testing log (FT-17, FT-16, TF2-1,
+  FT-9, FT-7/8/10 all read "open" while their work had merged, some months prior). Per the log's own
+  rule that future sessions trust `Status:` over the header emoji, a stale one is worse than none.
+
+**OPEN PRs (none merged):**
+
+| PR | What | Blocked on |
+|---|---|---|
+| **#73** | FT-15 Stream B4 — Channel 3 fetch + `TemporaryRestrictionBanner`. Per-channel failure isolation added. | Mac compile. **Schema is now live, so the hard ordering constraint is satisfied.** |
+| **#74** | FT-17a — Recenter pill reliability | Kevin's re-smoke |
+| **#75** | FT-14 follow-ups — SAINT/ST gate + zone-loss investigation | review |
+| _(in flight)_ | Realtime **Stream A** (Auth/Keychain) | agent running |
+
+**FT-17 → FT-17a arc (worth understanding, not just reading):** Kevin reported the map zooming back
+in during Drive Mode. Root cause: the Recenter pill *already shipped*, but `followPaused` was set only
+by pan, per OQ-4. Kevin's ask reversed that decision → FT-17 (#72). On-device, the pill then appeared
+only **sporadically** → FT-17a: `isUserGesture` scanned `mapView.gestureRecognizers`, which contains
+only **our own tap and long-press** — MapKit's pan/pinch live on internal subviews. Fixed with
+dedicated passive observer recognizers. Kevin's round-2 smoke then found **two more**: Recenter didn't
+move the map (it waited for the next GPS tick — invisible on a static simulator location), and
+pan/pinch felt **worse**. That second one was caused by making detection reliable: `onDrivePanDetected`
+began firing on *every* `regionWillChangeAnimated` during a gesture, each one writing SwiftUI `@State`
+→ per-frame re-renders. Both fixed in round 2; **awaiting re-smoke.**
+
+**FT-18 (NEW) — Drive Mode layout redesign, `docs/design/ft18-drive-mode-layout.md`.** The designer
+read the code rather than the screenshot and **found four bugs nobody had filed**: (1) the top row ends
+in a trailing `Spacer()` that crushes three buttons left while a separate toolbar floats right — the
+actual cause of the "two anchors" look; (2) the gear button and End Drive pill render at *identical*
+coordinates; (3) the mute toggle renders **twice** in Cruise Mode; (4) "Find me"/"Find my car" stay
+live during Drive Mode but call the browse-mode camera path, producing a broken camera state mid-drive.
+It also **pushed back on Kevin's "all buttons on the bottom"** for the destructive End control, citing
+Apple Maps' own isolation of that control. **⏳ 5 open questions awaiting Kevin — this blocks both the
+redesign and the four bug fixes, since they're the same code.**
+
+**FT-14 follow-ups (#75):** SAINT↔ST uniqueness gate added — the investigation doc's claim of "3
+Saint-prefixed streets" was wrong, there are **37** — and proven a **pure no-op today** (live pull
+through gated vs ungated pipelines produced **byte-identical** tiles: 1,070/1,070, 42,975/42,975
+segments). **No regen needed.** Separately, the 1,528-row **zone-construction loss is root-caused but
+deliberately NOT fixed**: `createSubSegments()` builds zone boundaries in raw intersection-relative
+distance while `extractSubSegment()` interprets them *after* `trimIntersectionSetback()` shifted the
+origin by the 10m setback; zones past the trimmed length collapse and take their rules with them.
+Reproduced exactly (raw 256.56ft → trimmed 190.94ft = 256.56 − 2×32.8). **Affects ~28% of
+geometry-successful blocks (3,008/10,613).** The fix changes rendered geometry and needs its own regen
+— **Kevin's call, its own dedicated pass.** Plausibly a real chunk of the coverage still missing.
+
+**PROCESS LESSONS (hard-won this stretch):**
+- **This VPS has 2 CPU cores.** Concurrent agents *contend* rather than parallelize — with 4-5 in
+  flight, throughput varied ~30x (123 tool calls in 23 min vs 23 tool calls in 2.2 h). **Keep it to
+  1-2 agents.** Fan-out here costs wall-clock and legibility for no gain.
+- **File contention, not agent capacity, is the real bottleneck.** `MapViewRepresentable.swift`,
+  `ContentView.swift`, and `CommunityPinService.swift` are each wanted by 2-3 streams. Serialize.
+- **`FETCH_HEAD` is a single mutable ref shared across concurrent agents in one working tree.** A QA
+  pass silently reviewed the wrong branch's diff before catching it. Pin the SHA to a local ref.
+- `gh pr view`/`gh pr edit` fail on this repo (projects-classic deprecation) — use `--json`; body edits
+  via `gh api repos/kevhox1/parkmap/pulls/<n> -X PATCH`. `gh pr diff <n> -- <path>` rejects a path arg.
+- `xcodebuild test | tail -N` **misses the summary** under parallel clone testing. Use
+  `xcrun xcresulttool get test-results summary --path <bundle>` whenever a count gates something.
+- Homebrew on Kevin's Mac fails on outdated Command Line Tools. **Do NOT run its suggested
+  `sudo rm -rf /Library/Developer/CommandLineTools`** — Xcode 26.4.1 works and we depend on it.
+  Install CLIs from GitHub release binaries instead (that's how the `supabase` CLI got there).
+- **Security fixes that depend on client-controlled columns keep failing.** Three of #69's four rounds
+  found a bypass of that exact shape. The fix that worked was structural — take the columns away via
+  `REVOKE` table-level then `GRANT` column-level. Note a bare column-level `REVOKE` is a **silent
+  no-op** against a table-level grant (verified empirically).
+
+**NEXT:** Kevin's re-smoke of #74 → merge → B2 unblocked · Kevin's 5 FT-18 answers → redesign + 4 bug
+fixes · Kevin's TF2-4 cross streets · Stream A lands → Stream B after FT-15 settles · #73 Mac compile
+→ merge · B3 · Mapbox token · then **one** build 16 archive, then the drive test (~2026-08-17).
+
 ### 2026-08-11 — #68 merged + build 15 bumped; FT-15/FT-16 opened; three PRs in flight
 
 **WHERE WE ARE:** `main` @ `5f74219`+. **PR #68 MERGED** (`b5da617`) on Kevin's explicit call
