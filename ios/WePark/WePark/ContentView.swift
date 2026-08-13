@@ -1721,14 +1721,13 @@ struct ContentView: View {
     /// Resumes the custom follow camera and restores the Drive Mode camera defaults.
     ///
     /// Option A design — no `userTrackingMode = .follow`. The recenter action:
-    ///   1. Resets `currentDriveAltitude` to the FT-8 default — so the next per-tick
-    ///      `setDriveCamera` follows at the canonical tight zoom, not the user's panned view.
+    ///   1. Resets `currentDriveAltitude` to the FT-8 default — so the camera (both the
+    ///      immediate application below and any subsequent per-tick `setDriveCamera`) follows
+    ///      at the canonical tight zoom, not the user's panned view.
     ///   2. Sets `followPaused = false` — resumes the per-tick `setDriveCamera` in
-    ///      `handleLocationUpdate()`. The next GPS tick recenters smoothly with the
-    ///      driveAnimationDuration (0.3s) animated setCamera.
-    ///   3. Fires `coordinatorActions.applyDrivePitch?(true, preDrivePitch)` — restores
-    ///      pitch (30°) and altitude immediately (no waiting for next GPS tick) so the camera
-    ///      snaps to drive defaults at once, matching the UX expectation of "tap Recenter → back".
+    ///      `handleLocationUpdate()` for all FUTURE GPS ticks.
+    ///   3. Applies the camera change IMMEDIATELY, not waiting for the next GPS tick — see
+    ///      FT-17a Defect 1 below.
     ///
     /// Architecture: no `region` write, no `userTrackingMode =`, no `updateUIView` call.
     /// All closures fire outside SwiftUI's view-update cycle — #31 invariant maintained.
@@ -1738,15 +1737,44 @@ struct ContentView: View {
     /// ask was scoped to "any gesture pauses follow, resumed only by Recenter" — whether
     /// Recenter should also preserve the user's last zoom instead of resetting it is a
     /// separate, deliberately deferred question (see FT-17 PR body).
+    ///
+    /// FT-17a Defect 1 (2026-08-13): previously step 3 only fired
+    /// `coordinatorActions.applyDrivePitch?(true, preDrivePitch)`, which restores pitch and
+    /// altitude immediately but does NOT move the camera's center coordinate — centering was
+    /// left entirely to the next per-tick `setDriveCamera` call in `handleLocationUpdate()`,
+    /// which fires on the next GPS tick (up to ~1s away while actually driving; NEVER on a
+    /// static/simulated location with no further ticks). Kevin, testing on a static
+    /// simulator location: "the recenter button appears but doesn't work, map stays where it
+    /// is." Fix: when a last-known location is available, call `coordinatorActions
+    /// .setDriveCamera?(coord, nil, currentDriveAltitude)` immediately instead — the exact
+    /// same closure `handleLocationUpdate()` calls per-tick, so there is no new
+    /// camera-application code path; it sets center, pitch, AND altitude in one `setCamera`
+    /// call, superseding the narrower `applyDrivePitch` call for this purpose. This extends
+    /// the existing "apply immediately, don't wait for a fix" precedent (previously only
+    /// pitch/altitude) to also cover centering. If no location fix exists yet at all (e.g.
+    /// Drive Mode was entered before the first GPS fix arrived), there is nothing to center
+    /// on — fall back to the pitch/altitude-only `applyDrivePitch` call (unchanged prior
+    /// behavior) so the camera at least un-zooms/un-tilts immediately; centering then
+    /// catches up on the first GPS tick via the identical guarded call already in
+    /// `handleLocationUpdate()`. This never jumps the camera to (0,0) or crashes.
     private func recenterDriveMode() {
-        // Reset altitude to FT-8 default — per-tick follow will use this from the next GPS tick.
+        // Reset altitude to FT-8 default — used by both the immediate application below and
+        // any subsequent per-tick follow.
         currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
             MapViewRepresentable.driveModeCameraSpan
         )
-        // Resume custom follow — next GPS tick will re-center via setDriveCamera.
+        // Resume custom follow — future GPS ticks re-center via setDriveCamera.
         followPaused = false
-        // Immediately apply drive pitch/altitude so camera doesn't wait for next GPS fix.
-        coordinatorActions.applyDrivePitch?(true, preDrivePitch)
+
+        if let coord = locationService.userLocation {
+            // Immediately center + apply pitch/altitude in a single setCamera call — the
+            // same closure handleLocationUpdate() calls per-tick (FT-17a Defect 1).
+            coordinatorActions.setDriveCamera?(coord, nil, currentDriveAltitude)
+        } else {
+            // No location fix yet — nothing to center on. Apply pitch/altitude immediately
+            // (prior behavior); the first GPS tick will center once a fix arrives.
+            coordinatorActions.applyDrivePitch?(true, preDrivePitch)
+        }
     }
 
     // MARK: - W5.1: Recenter actions

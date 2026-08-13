@@ -59,13 +59,50 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   `isUserGestureActive`'s signature has no tap/long-press parameters at all. `isUserInteracting` (FT-5's
   free-browse snap-back guard) is re-pointed at the same fixed `isUserGesture` computation it already
   shared a code path with — it had the identical latent bug (tap/long-press flicker, not real pan
-  detection), so this also fixes FT-5's guard, not just Drive Mode's. Tests: `WeParkTests/FT17aTests.swift`
-  (11 new tests: 9 on `isUserGestureActive`, 2 composition tests through `shouldPauseFollow`).
+  detection), so this also fixes FT-5's guard, not just Drive Mode's.
   **COMPILE-UNVERIFIED** — written on a Linux VPS with no Xcode/simulator/toolchain.
-- **Status:** 🟡 **fix implemented, awaiting Kevin's build + live-UI gesture smoke** (pill IS testable
-  with a static location — it's gesture-driven, not GPS-driven; snap-back is NOT testable without real
-  GPS ticks, per the caveat above). **Build 16 stays HELD** until Kevin confirms on-device/simulator.
-- **Lands in:** `ios/WePark/WePark/Views/MapViewRepresentable.swift`, `WeParkTests/FT17aTests.swift`,
+- **PR #74 review round 1 (orchestrator, 2026-08-13):** pushed `c4fb08b4` directly onto the branch —
+  the observer recognizers were installed with default touch-delivery settings
+  (`cancelsTouchesInView`/`delaysTouchesBegan`/`delaysTouchesEnded` all default `true`), which is a
+  separate axis from `shouldRecognizeSimultaneouslyWith` and could make MapKit's own pan/pinch feel
+  sticky or drop mid-gesture. Set all three to `false` on both observers so they are genuinely passive.
+- **Kevin's PR #74 simulator smoke test (2026-08-13): `TEST SUCCEEDED`, core fix confirmed** — "the
+  recenter pill now appears reliably on pinch." Two further defects surfaced:
+  - **Defect 1 🔴 — "the recenter button appears but doesn't work, map stays where it is."**
+    `recenterDriveMode()` only applied pitch/altitude immediately; centering was left to the next
+    per-tick `setDriveCamera` call, which never fires on a static/simulated location with no further
+    GPS ticks. **Fixed:** `recenterDriveMode()` now calls `coordinatorActions.setDriveCamera?(coord,
+    nil, currentDriveAltitude)` immediately using the last-known location (`locationService
+    .userLocation`) — the exact closure the per-tick path already calls, no new camera-application
+    code path — falling back to the pitch/altitude-only `applyDrivePitch` call when no fix exists yet
+    (graceful: no crash, no jump to (0,0)).
+  - **Defect 2 🔴 — "pan and pinch work but not quite as smoothly as before… worse than before"**
+    (regression). `regionWillChangeAnimated` fires repeatedly throughout a single continuous gesture,
+    not once per gesture — reliable detection turned a formerly-rare `onDrivePanDetected` dispatch
+    into a per-region-change-event flood, each writing `followPaused = true` to SwiftUI `@State` and
+    forcing a full Drive Mode overlay re-render mid-gesture. **Fixed:** new pure function
+    `MapViewRepresentable.shouldSignalFollowPause(shouldPause:alreadySignaledThisGesture:)` gates the
+    dispatch to once per gesture, backed by `Coordinator.hasSignaledFollowPauseThisGesture` (a plain
+    coordinator Bool, not SwiftUI state — reset once neither observer recognizer is active any more,
+    checked defensively rather than unconditionally in case `regionDidChangeAnimated` also turns out
+    to fire mid-gesture on some device/iOS version). Audited `regionDidChangeAnimated` for the same
+    class of bug: `isUserInteracting` is a plain coordinator Bool (no re-render risk); the
+    `onDrivePinchZoomed` altitude-capture dispatch is gated on `regionDidChangeAnimated` firing once
+    per settled gesture (an existing, unchanged assumption already load-bearing elsewhere in this
+    file) and was not found to be broken under that assumption, though flagged as sharing the same
+    risk class if that assumption ever proves false; `onRegionChanged`/`region` fires unconditionally
+    on every `regionDidChangeAnimated` call but is unrelated to gesture-type detection reliability
+    (pre-existing behavior, unaffected by this fix) — out of scope here.
+  - Tests: `WeParkTests/FT17aTests.swift`, 17 total (9 `isUserGestureActive`, 2 `shouldPauseFollow`
+    composition, 4 `shouldSignalFollowPause`, 2 `recenterDriveMode` mirror tests for Defect 1).
+    **COMPILE-UNVERIFIED.**
+- **Status:** 🟡 **fix + 2 follow-on defect fixes implemented, awaiting Kevin's build + live-UI gesture
+  smoke round 2** (pill's appearance AND Defect 1's immediate-centering fix are both testable with a
+  static location — gesture-driven / last-known-location-driven, not GPS-tick-driven; ongoing
+  GPS-tick snap-back and Defect 2's gesture-smoothness are best judged with real or simulated motion).
+  **Build 16 stays HELD** until Kevin confirms on-device/simulator.
+- **Lands in:** `ios/WePark/WePark/Views/MapViewRepresentable.swift`, `ios/WePark/WePark/ContentView.swift`
+  (Defect 1 only, `recenterDriveMode()`), `WeParkTests/FT17aTests.swift`,
   `docs/tf2-11-drive-camera-ownership-spec.md` (Amendment Log).
 
 ### FT-17 🔴 Drive Mode: pinch-zoom doesn't pause follow — camera yanks back; want free zoom/pan + Recenter

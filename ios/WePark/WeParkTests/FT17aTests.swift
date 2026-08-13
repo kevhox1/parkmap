@@ -38,12 +38,39 @@
 //  — Kevin must confirm `xcodebuild test` passes and run the live-UI gesture smoke checklist
 //  in the PR body before merge.
 //
+//  --- Follow-up (same day, Kevin's PR #74 simulator smoke test): TWO defects found in the
+//  fix above. Both addressed in this file's Group 3/4.
+//
+//  Defect 1 — "the recenter button appears but doesn't work, map stays where it is."
+//  `recenterDriveMode()` (ContentView.swift) reset state and applied pitch/altitude
+//  immediately, but only CENTERED the camera on the next per-tick `setDriveCamera` call in
+//  `handleLocationUpdate()` — which fires on the next GPS tick (never, on a static simulator
+//  location with no further ticks). Fix: `recenterDriveMode()` now calls
+//  `coordinatorActions.setDriveCamera?(coord, nil, currentDriveAltitude)` immediately using
+//  the last known location (same closure the per-tick path already calls — no new
+//  camera-application code path), falling back to the pitch/altitude-only path when no fix
+//  exists yet (graceful — no crash, no jump to (0,0)). See Group 3 below.
+//
+//  Defect 2 — "pan and pinch work but not quite as smoothly as before."
+//  `regionWillChangeAnimated` fires repeatedly throughout a single continuous gesture, not
+//  once per gesture. Making pan/pinch detection reliable (the fix above) turned a formerly
+//  rare `onDrivePanDetected` dispatch into a per-region-change-event flood — each dispatch
+//  writes `followPaused = true` to SwiftUI `@State`, forcing a full Drive Mode overlay
+//  re-render mid-gesture. Fix: `MapViewRepresentable.shouldSignalFollowPause(shouldPause:
+//  alreadySignaledThisGesture:)` — a pure function — gates the dispatch to once per gesture,
+//  backed by `Coordinator.hasSignaledFollowPauseThisGesture` (reset once neither observer
+//  recognizer is active any more). See Group 4 below.
+//
 //  No Calendar.current.
-//  No import SwiftUI (this file only exercises a pure MapViewRepresentable static function).
+//  No import SwiftUI (this file only exercises pure MapViewRepresentable static functions and
+//  inline "mirror" closures replicating ContentView's private methods, matching the existing
+//  house pattern in FT10Tests.swift — ContentView's methods are private and not directly
+//  testable without a live view hierarchy).
 //
 
 import XCTest
 import MapKit
+import CoreLocation
 @testable import WePark
 
 // MARK: - Group 1: isUserGestureActive — pure gesture-state-to-bool mapping
@@ -204,5 +231,188 @@ final class FT17aShouldPauseFollowCompositionTests: XCTestCase {
             "Programmatic camera changes (neither observer recognizer active) must never " +
             "pause follow"
         )
+    }
+}
+
+// MARK: - Group 3: shouldSignalFollowPause — Defect 2 dedup gate
+
+/// Tests for `MapViewRepresentable.shouldSignalFollowPause(shouldPause:alreadySignaledThisGesture:)`,
+/// the pure function that fixes Defect 2 ("pan and pinch work but not quite as smoothly as
+/// before" — jank from `onDrivePanDetected` firing on every `regionWillChangeAnimated` call
+/// within a single gesture instead of once).
+final class FT17aShouldSignalFollowPauseTests: XCTestCase {
+
+    // MARK: Test 12: first event in a gesture that should pause → signals
+
+    func testShouldSignalFollowPause_firstEventShouldPause_returnsTrue() {
+        XCTAssertTrue(
+            MapViewRepresentable.shouldSignalFollowPause(
+                shouldPause: true,
+                alreadySignaledThisGesture: false
+            ),
+            "The first region-change event in a gesture that should pause follow must signal"
+        )
+    }
+
+    // MARK: Test 13: subsequent events in the SAME gesture → do not re-signal
+
+    /// The core Defect 2 regression case: `regionWillChangeAnimated` fires many times for one
+    /// physical gesture. Once already signaled, further events in the same gesture must not
+    /// dispatch again (this is what stops the per-event `followPaused = true` re-render storm).
+    func testShouldSignalFollowPause_alreadySignaled_returnsFalse() {
+        XCTAssertFalse(
+            MapViewRepresentable.shouldSignalFollowPause(
+                shouldPause: true,
+                alreadySignaledThisGesture: true
+            ),
+            "Once already signaled for the current gesture, subsequent region-change events " +
+            "must NOT re-dispatch onDrivePanDetected — this is the Defect 2 fix"
+        )
+    }
+
+    // MARK: Test 14: shouldPause false → never signals regardless of prior state
+
+    func testShouldSignalFollowPause_shouldNotPause_returnsFalse() {
+        for alreadySignaled in [false, true] {
+            XCTAssertFalse(
+                MapViewRepresentable.shouldSignalFollowPause(
+                    shouldPause: false,
+                    alreadySignaledThisGesture: alreadySignaled
+                ),
+                "If shouldPause is false (not Drive Mode, or no active gesture), never signal " +
+                "regardless of the dedup flag's prior state"
+            )
+        }
+    }
+
+    // MARK: Test 15: a NEW gesture (flag reset) can signal again
+
+    /// After a gesture ends and `hasSignaledFollowPauseThisGesture` resets to `false`
+    /// (`regionDidChangeAnimated`, once neither observer recognizer is active), the NEXT
+    /// gesture must be able to signal again — the dedup gate is per-gesture, not permanent.
+    func testShouldSignalFollowPause_afterReset_signalsAgainForNewGesture() {
+        // Simulates: gesture 1 signals once, ends, flag resets, gesture 2 begins.
+        var alreadySignaledThisGesture = false
+
+        // Gesture 1, event 1: signals.
+        XCTAssertTrue(
+            MapViewRepresentable.shouldSignalFollowPause(
+                shouldPause: true,
+                alreadySignaledThisGesture: alreadySignaledThisGesture
+            )
+        )
+        alreadySignaledThisGesture = true
+
+        // Gesture 1, event 2-3: does not re-signal.
+        XCTAssertFalse(
+            MapViewRepresentable.shouldSignalFollowPause(
+                shouldPause: true,
+                alreadySignaledThisGesture: alreadySignaledThisGesture
+            )
+        )
+
+        // Gesture 1 ends — regionDidChangeAnimated resets the flag.
+        alreadySignaledThisGesture = false
+
+        // Gesture 2, event 1: signals again.
+        XCTAssertTrue(
+            MapViewRepresentable.shouldSignalFollowPause(
+                shouldPause: true,
+                alreadySignaledThisGesture: alreadySignaledThisGesture
+            ),
+            "A new gesture (after the dedup flag resets) must be able to signal " +
+            "onDrivePanDetected again — the pill must reappear on every real gesture, not " +
+            "just the first one ever"
+        )
+    }
+}
+
+// MARK: - Group 4: recenterDriveMode — Defect 1 immediate-centering decision
+
+/// Mirrors ContentView's `recenterDriveMode()` (private, not directly testable — same house
+/// pattern as FT10Tests.swift's mirror tests). Verifies the FT-17a Defect 1 fix: Recenter
+/// centers the camera IMMEDIATELY using the last known location, instead of waiting for the
+/// next per-tick GPS update (which may never arrive on a static/simulated location).
+final class FT17aRecenterImmediateCenteringTests: XCTestCase {
+
+    // MARK: Test 16: location available → setDriveCamera called immediately with that coordinate
+
+    func testRecenterDriveMode_locationAvailable_callsSetDriveCameraImmediately() {
+        let knownCoord = CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99)
+        var lastKnownLocation: CLLocationCoordinate2D? = knownCoord
+        var currentDriveAltitude: CLLocationDistance = 300  // stale, pre-reset value
+        var followPaused = true
+
+        var setDriveCameraCallCount = 0
+        var setDriveCameraCoord: CLLocationCoordinate2D?
+        var applyDrivePitchCallCount = 0
+
+        // Mirror of the fixed recenterDriveMode().
+        let recenterDriveMode: () -> Void = {
+            currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
+                MapViewRepresentable.driveModeCameraSpan
+            )
+            followPaused = false
+            if let coord = lastKnownLocation {
+                setDriveCameraCallCount += 1
+                setDriveCameraCoord = coord
+            } else {
+                applyDrivePitchCallCount += 1
+            }
+        }
+
+        recenterDriveMode()
+
+        XCTAssertEqual(setDriveCameraCallCount, 1,
+            "With a last-known location available, recenterDriveMode must call setDriveCamera " +
+            "immediately (FT-17a Defect 1) rather than waiting for the next GPS tick")
+        XCTAssertEqual(applyDrivePitchCallCount, 0,
+            "applyDrivePitch (the narrower pitch/altitude-only path) must NOT also fire when " +
+            "setDriveCamera already covers centering + pitch + altitude in one call")
+        XCTAssertEqual(setDriveCameraCoord?.latitude ?? 0, knownCoord.latitude, accuracy: 0.0001)
+        XCTAssertEqual(setDriveCameraCoord?.longitude ?? 0, knownCoord.longitude, accuracy: 0.0001)
+        XCTAssertFalse(followPaused, "followPaused must still be cleared (A-AC-6: follow resumes)")
+        XCTAssertEqual(
+            currentDriveAltitude,
+            MapViewRepresentable.altitudeForSpan(MapViewRepresentable.driveModeCameraSpan),
+            accuracy: 1,
+            "currentDriveAltitude must still reset to the FT-8 default (A-AC-10, unchanged)"
+        )
+    }
+
+    // MARK: Test 17: no location yet → falls back to applyDrivePitch, does not crash
+
+    /// Guard: Drive Mode entered before any GPS fix has arrived. Must not crash and must not
+    /// jump the camera to (0, 0) — falls back to the pitch/altitude-only immediate
+    /// application (prior behavior), leaving centering to the first GPS tick.
+    func testRecenterDriveMode_noLocationYet_fallsBackToApplyDrivePitch_doesNotCrash() {
+        let lastKnownLocation: CLLocationCoordinate2D? = nil
+        var currentDriveAltitude: CLLocationDistance = 0
+        var followPaused = true
+
+        var setDriveCameraCallCount = 0
+        var applyDrivePitchCallCount = 0
+
+        let recenterDriveMode: () -> Void = {
+            currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
+                MapViewRepresentable.driveModeCameraSpan
+            )
+            followPaused = false
+            if lastKnownLocation != nil {
+                setDriveCameraCallCount += 1
+            } else {
+                applyDrivePitchCallCount += 1
+            }
+        }
+
+        recenterDriveMode()
+
+        XCTAssertEqual(setDriveCameraCallCount, 0,
+            "With no last-known location, setDriveCamera must not be called with a bogus " +
+            "coordinate")
+        XCTAssertEqual(applyDrivePitchCallCount, 1,
+            "With no last-known location, recenterDriveMode must fall back to the " +
+            "pitch/altitude-only immediate application — graceful, no crash, no jump to (0,0)")
+        XCTAssertFalse(followPaused, "followPaused must still be cleared even without a fix")
     }
 }

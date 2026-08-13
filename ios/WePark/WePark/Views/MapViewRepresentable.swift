@@ -371,6 +371,36 @@ struct MapViewRepresentable: UIViewRepresentable {
         return isActive(panState) || isActive(pinchState)
     }
 
+    /// Pure dedup-decision function: no MKMapView / Coordinator dependency, directly
+    /// unit-testable.
+    ///
+    /// FT-17a Defect 2 (2026-08-13): `regionWillChangeAnimated` fires repeatedly throughout
+    /// a single continuous pan/pinch gesture (MapKit calls it on every incremental region
+    /// change, not once per gesture — confirmed on Kevin's PR #74 simulator smoke test).
+    /// Before FT-17a's detection fix (`isUserGestureActive`, above), `onDrivePanDetected`
+    /// almost never actually dispatched (the same broken-detection bug that made the
+    /// Recenter pill sporadic), so this per-event repetition was invisible. Making detection
+    /// reliable turned a rare dispatch into a per-region-change-event flood: each dispatch
+    /// writes `followPaused = true` to a SwiftUI `@State` in ContentView (SwiftUI does not
+    /// dedupe same-value `@State` writes), so every one of those was a full view
+    /// invalidation/re-render of the Drive Mode overlay stack mid-gesture — felt as jank.
+    ///
+    /// - Parameters:
+    ///   - shouldPause: The result of `shouldPauseFollow(driveModeActive:isUserGesture:)` for
+    ///     this region-change event.
+    ///   - alreadySignaledThisGesture: Whether `onDrivePanDetected` was already dispatched
+    ///     for the gesture currently in progress (`Coordinator
+    ///     .hasSignaledFollowPauseThisGesture`).
+    /// - Returns: `true` only on the first region-change event within a gesture that should
+    ///   pause follow — `false` for every subsequent event in the same gesture, even though
+    ///   `shouldPause` remains `true` throughout the gesture's duration.
+    static func shouldSignalFollowPause(
+        shouldPause: Bool,
+        alreadySignaledThisGesture: Bool
+    ) -> Bool {
+        shouldPause && !alreadySignaledThisGesture
+    }
+
     /// Pure span-decision function: no MKMapView dependency, directly unit-testable.
     ///
     /// Returns the target latitude span given the Drive Mode state.
@@ -996,6 +1026,29 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// Lives on Coordinator (NSObject) only — no @State/@Binding/@Published, no
         /// ContentView changes.
         var isUserInteracting: Bool = false
+
+        /// FT-17a Defect 2: whether `onDrivePanDetected` has already been dispatched for the
+        /// gesture currently in progress.
+        ///
+        /// `regionWillChangeAnimated` fires repeatedly throughout a single continuous
+        /// pan/pinch gesture (MapKit calls it on every incremental region change, not once
+        /// per gesture) — confirmed on-device by Kevin's PR #74 smoke test. Before FT-17a's
+        /// detection fix, `onDrivePanDetected` almost never fired at all (the same
+        /// `mapView.gestureRecognizers` bug that made the Recenter pill sporadic), so this
+        /// storm was never visible. Making detection reliable turned that rare, sporadic
+        /// dispatch into a per-region-change-event flood — each dispatch writes
+        /// `followPaused = true` to a SwiftUI `@State` in ContentView, and SwiftUI does not
+        /// dedupe same-value `@State` writes, so every one of those was a full view
+        /// invalidation/re-render of the Drive Mode overlay stack mid-gesture (felt as jank:
+        /// "pan and pinch work but not quite as smoothly as before").
+        ///
+        /// Set `true` synchronously the first time `onDrivePanDetected` is dispatched for a
+        /// gesture; reset `false` once neither observer recognizer (`panGesture`/
+        /// `pinchGesture`) is active any more (checked in `regionDidChangeAnimated`, not
+        /// unconditionally — see that method's comment for why). This is a plain Bool on
+        /// Coordinator (NSObject), not a SwiftUI `@State`/`@Binding`/`@Published` — reading
+        /// or writing it repeatedly has no view-invalidation cost, unlike `followPaused`.
+        var hasSignaledFollowPauseThisGesture: Bool = false
 
         init(parent: MapViewRepresentable) {
             self.parent = parent
@@ -1677,10 +1730,28 @@ struct MapViewRepresentable: UIViewRepresentable {
             //
             // Programmatic animated setCamera fires regionWillChangeAnimated with NO active
             // gesture recognizer, so this block never fires for programmatic camera calls.
-            guard MapViewRepresentable.shouldPauseFollow(
+            let shouldPause = MapViewRepresentable.shouldPauseFollow(
                 driveModeActive: parent.driveModeActive,
                 isUserGesture: isUserGesture
+            )
+            guard shouldPause else { return }
+
+            // FT-17a Defect 2: `regionWillChangeAnimated` fires repeatedly throughout a
+            // single continuous gesture (confirmed on-device, PR #74 smoke test) — without
+            // this dedup guard, every one of those calls would dispatch `onDrivePanDetected`,
+            // each writing `followPaused = true` to a SwiftUI `@State` in ContentView and
+            // forcing a full Drive Mode overlay re-render mid-gesture (felt as jank: "pan and
+            // pinch work but not quite as smoothly as before"). See
+            // `hasSignaledFollowPauseThisGesture`'s doc comment and `shouldSignalFollowPause`.
+            guard MapViewRepresentable.shouldSignalFollowPause(
+                shouldPause: shouldPause,
+                alreadySignaledThisGesture: hasSignaledFollowPauseThisGesture
             ) else { return }
+            // Set synchronously (plain Coordinator Bool, not SwiftUI state — no
+            // "Modifying state during view update" risk) so a second `regionWillChangeAnimated`
+            // call later in the SAME run loop tick (before the async dispatch below runs)
+            // still sees the gate as already signaled.
+            hasSignaledFollowPauseThisGesture = true
 
             // Dispatch async to avoid "Modifying state during view update" if SwiftUI is
             // mid-render (ContentView sets `followPaused = true` in response).
@@ -1699,6 +1770,25 @@ struct MapViewRepresentable: UIViewRepresentable {
             // so clearing here is the correct moment (map has fully settled).
             let wasUserInteracting = isUserInteracting
             isUserInteracting = false
+
+            // FT-17a Defect 2: re-arm the follow-pause dedup gate for the NEXT gesture, but
+            // only once the current one has genuinely ended — i.e. neither observer
+            // recognizer is still active. `regionDidChangeAnimated` is documented above (see
+            // the `isUserInteracting` clear, same call) as firing once the map has "fully
+            // settled" — but that assumption is unverified for `regionDidChangeAnimated`
+            // specifically (only `regionWillChangeAnimated`'s per-event repetition was
+            // confirmed on-device for Defect 2). Gating the reset on actual recognizer state,
+            // rather than resetting unconditionally on every call, means that even if
+            // `regionDidChangeAnimated` turns out to also fire mid-gesture on some
+            // device/iOS version, `hasSignaledFollowPauseThisGesture` cannot be prematurely
+            // cleared and cause a second `onDrivePanDetected` dispatch (and re-render) within
+            // the same still-in-progress gesture.
+            if !MapViewRepresentable.isUserGestureActive(
+                panState: panGesture?.state,
+                pinchState: pinchGesture?.state
+            ) {
+                hasSignaledFollowPauseThisGesture = false
+            }
 
             // Option A: Capture user-adjusted altitude during Drive Mode pinch zoom.
             //
