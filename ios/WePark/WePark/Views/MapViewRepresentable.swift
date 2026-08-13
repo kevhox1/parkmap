@@ -204,14 +204,24 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     // MARK: - Option A: Drive Mode gesture output callbacks
 
-    /// Option A: Called when a user pan gesture is detected during Drive Mode.
+    /// Option A: Called when a user gesture is detected during Drive Mode.
     ///
-    /// Fires from `regionWillChangeAnimated` when an active `UIPanGestureRecognizer` is
-    /// detected and `driveModeActive` is true. ContentView responds by setting
+    /// Fires from `regionWillChangeAnimated` when ANY active gesture recognizer (pan OR
+    /// pinch) is detected and `driveModeActive` is true. ContentView responds by setting
     /// `followPaused = true` to pause the per-tick custom follow and show the Recenter button.
     ///
-    /// Pinch gestures do NOT trigger this callback (per OQ-4: pinch updates
-    /// `currentDriveAltitude` and keep following — pan is the "I want to look elsewhere" signal).
+    /// FT-17 (2026-08-12) reversed the original OQ-4 resolution. OQ-4 originally shipped
+    /// "pan pauses follow, pinch does not" (pinch instead updated `currentDriveAltitude`
+    /// and kept following — see `onDrivePinchZoomed` below). On-device, real two-finger
+    /// pinches almost always drift enough that MapKit's own `UIPanGestureRecognizer` also
+    /// becomes active concurrently, which silently discarded the altitude capture (the
+    /// `wasPan` guard in `regionDidChangeAnimated` skipped it) while leaving follow ACTIVE —
+    /// so the very next GPS tick re-centered and re-zoomed the map out from under the user's
+    /// pinch ("it zoomed back in"), and the Recenter pill never appeared because
+    /// `followPaused` was never set for a pinch. Kevin's ask, matching the Waze/Apple pattern:
+    /// ANY user gesture — pan or pinch — pauses follow and surfaces Recenter; free zoom/pan
+    /// until an explicit Recenter tap. See `docs/field-testing-log.md` FT-17 and
+    /// `docs/tf2-11-drive-camera-ownership-spec.md` OQ-4 (amended).
     ///
     /// Programmatic `setCamera` / `setRegion` calls fire `regionWillChangeAnimated` with no
     /// active gesture recognizer, so this callback does NOT fire for them (correct).
@@ -219,15 +229,26 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Default: nil (no-op). Set from ContentView's `mapRepresentable` property.
     var onDrivePanDetected: (() -> Void)? = nil
 
-    /// Option A: Called when the user pinch-zooms during Drive Mode (while follow is NOT paused).
+    /// Option A: Called when the user pinch-zooms during Drive Mode.
     ///
-    /// Fires from `regionDidChangeAnimated` when `driveModeActive && !followPaused` and
-    /// the change was from a user pinch (detected via active `UIPinchGestureRecognizer`
-    /// in the preceding `regionWillChangeAnimated`). ContentView responds by updating
-    /// `currentDriveAltitude` so the next per-tick `setCamera` honours the user's zoom.
+    /// Fires from `regionDidChangeAnimated` when `driveModeActive` and the settled change
+    /// was from a pure pinch (no `UIPanGestureRecognizer` active — detected via the
+    /// preceding `regionWillChangeAnimated`). ContentView responds by updating
+    /// `currentDriveAltitude` so a resumed follow would honour the user's zoom.
     ///
-    /// Per OQ-3: user-adjusted altitude persists across GPS ticks (Waze model).
-    /// Per OQ-4: pinch does NOT pause follow — only updates altitude.
+    /// FT-17 note: since ANY gesture (including pinch) now also fires `onDrivePanDetected`
+    /// and sets `followPaused = true`, the per-tick `setDriveCamera` is skipped the moment
+    /// this callback's altitude lands — and `recenterDriveMode()` unconditionally resets
+    /// `currentDriveAltitude` to the FT-8 default on the explicit Recenter tap (left
+    /// unchanged by FT-17; see PR discussion). So today this callback's captured value is
+    /// effectively inert in practice: it lands, then gets overwritten by the very next
+    /// Recenter tap before follow ever resumes with it. KEPT rather than removed because
+    /// (a) it is harmless dead weight, not a correctness risk, and (b) it is the only piece
+    /// of plumbing that would let a future "Recenter preserves the user's last zoom" change
+    /// (an open question — see FT-17 PR body) ship without re-deriving this capture path.
+    /// Per OQ-3 (original): user-adjusted altitude persists across GPS ticks (Waze model),
+    /// still true for the un-paused window between a pinch starting and `followPaused`
+    /// flipping true on the same gesture.
     ///
     /// Default: nil (no-op). Set from ContentView's `mapRepresentable` property.
     var onDrivePinchZoomed: ((CLLocationDistance) -> Void)? = nil
@@ -281,6 +302,23 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// - Returns: 45° when entering Drive Mode; `priorPitch` when exiting.
     static func targetPitch(forDriveModeActive active: Bool, priorPitch: CGFloat) -> CGFloat {
         active ? driveModePitch : priorPitch
+    }
+
+    /// Pure gesture-pause-decision function: no MKMapView dependency, directly unit-testable.
+    ///
+    /// FT-17 (2026-08-12): reverses the original OQ-4 resolution. ANY active user gesture —
+    /// pan or pinch — pauses Drive Mode follow, not just pan. `isUserGesture` already
+    /// collapses "any gesture recognizer on the map view is in an active state" (computed
+    /// once in `regionWillChangeAnimated` for the pre-existing FT-5 `isUserInteracting`
+    /// signal); this function adds no further type-of-gesture narrowing on top of it.
+    ///
+    /// - Parameters:
+    ///   - driveModeActive: Whether Drive Mode is currently active.
+    ///   - isUserGesture: Whether an active (non-`.possible`) gesture recognizer was
+    ///     detected on the map view for this `regionWillChangeAnimated` event.
+    /// - Returns: `true` when follow should pause and the Recenter pill should surface.
+    static func shouldPauseFollow(driveModeActive: Bool, isUserGesture: Bool) -> Bool {
+        driveModeActive && isUserGesture
     }
 
     /// Pure span-decision function: no MKMapView dependency, directly unit-testable.
@@ -1494,33 +1532,26 @@ struct MapViewRepresentable: UIViewRepresentable {
                 isUserInteracting = true
             }
 
-            // Option A: Drive Mode pan detection.
+            // Option A: Drive Mode gesture-pause detection.
             //
-            // OQ-4 resolution: pan pauses follow (shows Recenter); pinch does NOT pause
-            // follow (it updates currentDriveAltitude per OQ-3 in regionDidChangeAnimated).
-            //
-            // We distinguish pan from pinch by checking the specific recognizer types that
-            // are active. MKMapView installs its own UIPanGestureRecognizer and
-            // UIPinchGestureRecognizer as subviews' gesture recognizers. We check all
-            // recognizers on the mapView for the active-state pan type.
+            // FT-17 (2026-08-12) reversed OQ-4: ANY active user gesture — pan OR pinch —
+            // pauses follow and surfaces Recenter (see `shouldPauseFollow` doc and
+            // `onDrivePanDetected`'s doc comment for the full root-cause trace). We no
+            // longer distinguish gesture type here — `isUserGesture` (computed above from
+            // "any recognizer is .began/.changed/.ended") is sufficient.
             //
             // Programmatic animated setCamera fires regionWillChangeAnimated with NO active
             // gesture recognizer, so this block never fires for programmatic camera calls.
-            guard parent.driveModeActive, isUserGesture else { return }
+            guard MapViewRepresentable.shouldPauseFollow(
+                driveModeActive: parent.driveModeActive,
+                isUserGesture: isUserGesture
+            ) else { return }
 
-            let activePan = mapView.gestureRecognizers?.contains(where: {
-                $0 is UIPanGestureRecognizer &&
-                ($0.state == .began || $0.state == .changed || $0.state == .ended)
-            }) ?? false
-
-            if activePan {
-                // Pan during Drive Mode → pause follow. Dispatch async to avoid
-                // "Modifying state during view update" if SwiftUI is mid-render.
-                DispatchQueue.main.async { [weak self] in
-                    self?.parent.onDrivePanDetected?()
-                }
+            // Dispatch async to avoid "Modifying state during view update" if SwiftUI is
+            // mid-render (ContentView sets `followPaused = true` in response).
+            DispatchQueue.main.async { [weak self] in
+                self?.parent.onDrivePanDetected?()
             }
-            // Pinch (non-pan gesture): altitude capture happens in regionDidChangeAnimated.
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
@@ -1536,12 +1567,17 @@ struct MapViewRepresentable: UIViewRepresentable {
 
             // Option A: Capture user-adjusted altitude during Drive Mode pinch zoom.
             //
-            // OQ-3: user pinch-zooms while following → capture new altitude as
-            // currentDriveAltitude so the next GPS tick honours the user's zoom.
-            // OQ-4: pinch does NOT pause follow (only pan does). We check that:
+            // OQ-3: user pinch-zooms → capture new altitude as currentDriveAltitude so a
+            // resumed follow would honour the user's zoom (see `onDrivePinchZoomed`'s doc
+            // comment: FT-17 made follow pause on pinch too, so this capture is currently
+            // inert in practice — kept for a possible future "Recenter preserves zoom"
+            // change, not removed). We check that:
             //   1. Drive Mode is active.
             //   2. The change was user-initiated (wasUserInteracting == true).
-            //   3. No pan recognizer was active at regionWillChange (pure pinch).
+            //   3. No pan recognizer was active at regionWillChange (pure pinch — a pan,
+            //      or a pinch that also triggered MapKit's pan recognizer, is handled by
+            //      the `onDrivePanDetected` follow-pause path above and does not also need
+            //      an altitude capture, since follow is paused either way post-FT-17).
             //
             // We re-check current gesture recognizers: if any UIPanGestureRecognizer is
             // in a non-possible state, this was a pan (handled by onDrivePanDetected in

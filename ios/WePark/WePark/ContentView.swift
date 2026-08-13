@@ -378,26 +378,40 @@ struct ContentView: View {
     /// Current driving context (nil when no street data near GPS position).
     @State private var drivingContext: DrivingContext? = nil
 
-    /// Option A: True when the custom Drive Mode follow is paused due to a user pan gesture.
+    /// Option A: True when the custom Drive Mode follow is paused due to a user map gesture.
     ///
-    /// Set to `true` by `onDrivePanDetected` (MapViewRepresentable → ContentView callback)
-    /// when a user pan is detected during Drive Mode (FT-5 `isUserInteracting` + pan type check).
+    /// Set to `true` by `onDrivePanDetected` (MapViewRepresentable → ContentView callback,
+    /// name kept for diff-minimality) when ANY user gesture — pan OR pinch — is detected
+    /// during Drive Mode (FT-5 `isUserInteracting` signal, no longer narrowed to pan-only).
     /// Cleared to `false` on Recenter tap or Drive Mode exit.
+    ///
+    /// FT-17 (2026-08-12): reversed the original OQ-4 resolution ("pan pauses, pinch does
+    /// not") after Kevin's build-15 field report — a pinch that also drifted MapKit's pan
+    /// recognizer silently discarded the user's zoom while leaving follow active, so the
+    /// camera re-centered/re-zoomed under the user's fingers with no way to reach Recenter.
+    /// See `docs/field-testing-log.md` FT-17 and `docs/tf2-11-drive-camera-ownership-spec.md`
+    /// OQ-4 (amended).
     ///
     /// When `true` → per-tick `setDriveCamera` is skipped (follow paused); Recenter button shown.
     /// When `false` → per-tick `setDriveCamera` fires on every GPS update (following active).
     ///
     /// Managed independently of `isUserInteracting` (which auto-clears on regionDidChangeAnimated).
     /// `followPaused` stays `true` until the user explicitly taps Recenter — matching Waze/Apple
-    /// Maps behavior where a pan keeps the view locked on the panned position.
+    /// Maps behavior where a gesture keeps the view locked until the user asks to go back.
     @State private var followPaused: Bool = false
 
     /// Option A: User-adjustable camera altitude during Drive Mode (meters above ground).
     ///
     /// Initialized to `altitudeForSpan(driveModeCameraSpan)` (~621m) on Drive Mode entry.
     /// Updated by `onDrivePinchZoomed` when the user pinch-zooms during Drive Mode (OQ-3:
-    /// preserve user-adjusted altitude — Waze model). The next GPS tick uses this altitude
-    /// so follow continues at the user's chosen zoom instead of re-imposing the FT-8 default.
+    /// preserve user-adjusted altitude — Waze model).
+    ///
+    /// FT-17 note: since a pinch now also sets `followPaused = true` (see above), the
+    /// per-tick `setDriveCamera` that would have honoured this value is skipped until the
+    /// user taps Recenter — and Recenter unconditionally resets this to the FT-8 default
+    /// (`recenterDriveMode()`, deliberately left unchanged by FT-17 — see PR body). The
+    /// `onDrivePinchZoomed` capture is effectively inert today; kept as the seam a future
+    /// "Recenter preserves zoom" change would reuse.
     ///
     /// Reset to the FT-8 default on Recenter tap (explicit "go back to default" action).
     /// Reset to 0 and re-initialized on Drive Mode re-entry.
@@ -1546,8 +1560,8 @@ struct ContentView: View {
             .padding(.top, endDrivePillTopPadding)
             Spacer()
             // Option A: Recenter pill — visible when the custom Drive Mode follow is paused
-            // due to a user pan (followPaused == true). Tapping resumes follow and restores
-            // the FT-8 default altitude.
+            // due to a user gesture (followPaused == true; FT-17: pan OR pinch). Tapping
+            // resumes follow and restores the FT-8 default altitude.
             // TF2-18 P1-3: bottom padding is now a function of the actual bottom-card stack
             // state (approach strip / Park Until pill) instead of a flat hardcoded 8pt —
             // mirrors `paddingForBannerState` at the top of the screen (review finding P1-3).
@@ -1718,6 +1732,12 @@ struct ContentView: View {
     ///
     /// Architecture: no `region` write, no `userTrackingMode =`, no `updateUIView` call.
     /// All closures fire outside SwiftUI's view-update cycle — #31 invariant maintained.
+    ///
+    /// FT-17 (2026-08-12) deliberately did NOT change step 1 (the altitude reset), even
+    /// though FT-17 made pinch-to-zoom pause follow the same way pan already did. Kevin's
+    /// ask was scoped to "any gesture pauses follow, resumed only by Recenter" — whether
+    /// Recenter should also preserve the user's last zoom instead of resetting it is a
+    /// separate, deliberately deferred question (see FT-17 PR body).
     private func recenterDriveMode() {
         // Reset altitude to FT-8 default — per-tick follow will use this from the next GPS tick.
         currentDriveAltitude = MapViewRepresentable.altitudeForSpan(
@@ -2257,27 +2277,34 @@ struct ContentView: View {
 
     // MARK: - Option A: Drive pan / pinch handlers
 
-    /// Called by MapViewRepresentable's `onDrivePanDetected` when the user pans the map
-    /// during Drive Mode. Pauses the custom follow so the per-tick `setDriveCamera` stops
-    /// fighting the user's view, and shows the Recenter button.
+    /// Called by MapViewRepresentable's `onDrivePanDetected` when the user makes ANY map
+    /// gesture — pan OR pinch, per FT-17 — during Drive Mode. Pauses the custom follow so
+    /// the per-tick `setDriveCamera` stops fighting the user's view, and shows the Recenter
+    /// button.
+    ///
+    /// FT-17 (2026-08-12): broadened from pan-only to any gesture. See the `followPaused`
+    /// property doc comment and `docs/field-testing-log.md` FT-17 for the root-cause trace.
     ///
     /// `followPaused` stays `true` until the user taps Recenter — matching Waze/Apple Maps
-    /// behavior where a pan locks the view on the panned position until explicitly recentered.
+    /// behavior where a gesture locks the view until explicitly recentered.
     private func handleDrivePanDetected() {
         guard driveModeActive else { return }
         followPaused = true
     }
 
-    /// Called by MapViewRepresentable's `onDrivePinchZoomed` when the user pinch-zooms the
-    /// map during Drive Mode (while follow is NOT paused — OQ-4: pinch keeps following).
+    /// Called by MapViewRepresentable's `onDrivePinchZoomed` when a pure pinch (no pan
+    /// recognizer concurrently active) settles during Drive Mode.
     ///
-    /// Updates `currentDriveAltitude` so the next per-tick `setDriveCamera` continues follow
-    /// at the user's chosen zoom instead of re-imposing the FT-8 default (OQ-3: Waze model).
+    /// Updates `currentDriveAltitude` so a subsequent per-tick `setDriveCamera` would honour
+    /// the user's chosen zoom instead of the FT-8 default (OQ-3: Waze model).
     ///
-    /// If follow is paused (user already panned), we still update the altitude so a subsequent
-    /// Recenter doesn't abruptly jump to a different zoom level — the user's pinch intent is
-    /// preserved. Recenter's explicit altitude reset to the FT-8 default is the "go back to
-    /// default" action.
+    /// FT-17 note: `onDrivePanDetected` now ALSO fires for this same pinch gesture (see
+    /// above), setting `followPaused = true` — so per-tick `setDriveCamera` is already
+    /// skipped by the time this altitude lands, and the value gets overwritten the moment
+    /// the user taps Recenter (`recenterDriveMode()` resets to the FT-8 default, deliberately
+    /// left unchanged — see PR body). This handler is effectively inert today; kept as the
+    /// seam a future "Recenter preserves the user's zoom" change would reuse rather than
+    /// re-derive from scratch.
     private func handleDrivePinchZoomed(_ newAltitude: CLLocationDistance) {
         guard driveModeActive, newAltitude > 0 else { return }
         currentDriveAltitude = newAltitude

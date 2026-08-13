@@ -3,7 +3,59 @@
 **Feature:** Durable drive-mode altitude control  
 **Owner:** @ios-engineer (after Kevin approves this spec); @qa-verifier per pass  
 **Created:** 2026-06-12  
-**Status:** SPEC — awaiting Kevin review before any engineering
+**Status:** SPEC — awaiting Kevin review before any engineering (superseded in part — see Amendment Log)
+
+---
+
+## Amendment Log
+
+### 2026-08-12 — OQ-4 REVERSED (FT-17)
+
+**Original OQ-4 resolution (shipped, Option A):** pan pauses follow and shows the Recenter
+pill; pinch does NOT pause follow — pinch instead updates `currentDriveAltitude` (OQ-3) and
+follow keeps centering on the user's GPS position at the newly pinched zoom.
+
+**Reversed to:** ANY user gesture on the map during Drive Mode — pan OR pinch — pauses
+follow and shows the Recenter pill. Free zoom/pan until an explicit Recenter tap. Pinch no
+longer has special "keep following" treatment.
+
+**Attribution:** Kevin's build-15 field report (`docs/field-testing-log.md` FT-17,
+2026-08-12): "the map zooms back in when it's drive mode once I've zoomed out to take a
+look at something else. I think there should just be a 'recenter button' but it should
+allow free zoom/pan around."
+
+**Why the original resolution failed in practice:** the OQ-4 recommendation assumed a pinch
+gesture would be cleanly distinguishable from a pan gesture at the `UIGestureRecognizer`
+level. On real hardware this assumption didn't hold — a two-finger pinch on a touchscreen
+almost always drifts enough that MapKit's own `UIPanGestureRecognizer` also becomes active
+concurrently. The shipped code's `wasPan` guard (added defensively to avoid double-handling
+a gesture as both a pan and a pinch) then silently discarded the OQ-3 altitude capture for
+any pinch that also triggered the pan recognizer — which was most real pinches — while
+`followPaused` was never set (pan-only trigger, per the original OQ-4). Net effect: the very
+next GPS tick re-centered AND re-zoomed the map back to the FT-8 default altitude under the
+user's fingers, with no Recenter pill ever appearing to let them undo it. This is worse than
+either pure option — the user got neither "pinch keeps following at my zoom" (the intended
+OQ-3/OQ-4 UX) nor "pinch pauses so I can look around" (Kevin's actual ask).
+
+**Fix:** `MapViewRepresentable.shouldPauseFollow(driveModeActive:isUserGesture:)` — a pure
+`driveModeActive && isUserGesture` function with no gesture-type check at all — replaces the
+pan-type-specific gate in `regionWillChangeAnimated`. `onDrivePanDetected` (name unchanged
+for diff-minimality; it now fires for any gesture, not just pan) sets `followPaused = true`
+for pan or pinch alike.
+
+**Left unchanged:** `recenterDriveMode()` still resets `currentDriveAltitude` to the FT-8
+default on every Recenter tap (§6.5 below, OQ-3's "Recenter as the explicit go-back-to-
+default action" framing) — Recenter does not preserve the user's last zoom. This was a
+deliberate scope decision on the FT-17 PR (not re-litigated here) to keep the fix small;
+`onDrivePinchZoomed`'s altitude-capture plumbing (§3.5 / §6.4 below) is left in place,
+currently inert in practice, as the seam a future "Recenter preserves zoom" change would
+reuse. See the FT-17 PR body for the open question raised to the orchestrator.
+
+**Sections below describing the original OQ-4 recommendation and pinch-keeps-following
+behavior are LEFT AS HISTORICAL RECORD** (per this repo's norm against silently deleting
+spec history — see the W8.5c-polish incident in `HANDOFF.md`), each annotated inline with a
+pointer back to this amendment. Do not treat unannotated text elsewhere in this document as
+current behavior for the pinch-gesture question — this Amendment Log entry is authoritative.
 
 ---
 
@@ -20,8 +72,10 @@ Option C's `maxCenterCoordinateDistance` determines how far out the user can pin
 **OQ-3 (Option A only): Preserve user-adjusted altitude between GPS ticks?**  
 If the user pinches to a different zoom during Drive Mode (per-tick custom follow), should the next GPS tick re-impose the spec'd ~621m altitude, or should it honor the user's manual zoom? Waze behavior: user pinch adjusts zoom and follow continues at the new zoom. The spec recommends tracking a `currentDriveAltitude` that user zoom updates (same model as Waze). Kevin confirms before Option A is built.
 
-**OQ-4 (Option A only): Gesture-pause threshold for the Recenter button.**  
-In Option A there is no `.follow` to break on pan — the Recenter button must be driven by `isUserInteracting` (the `regionWillChangeAnimated` gesture flag, which already exists for FT-5 browse mode). The relevant question: should any user gesture (pan AND pinch) show Recenter, or only pan? Pinch to zoom is arguably a "I want a different zoom level, keep following me" gesture (Waze model), while pan is "I want to look somewhere else." Recommended: pan shows Recenter; pinch does not (pinch updates `currentDriveAltitude` per OQ-3 and keep following). Kevin confirms.
+**OQ-4 (Option A only): Gesture-pause threshold for the Recenter button.** ⚠️ **REVERSED
+2026-08-12 — see Amendment Log above.** Historical text below is the ORIGINAL recommendation
+that shipped, not current behavior.  
+In Option A there is no `.follow` to break on pan — the Recenter button must be driven by `isUserInteracting` (the `regionWillChangeAnimated` gesture flag, which already exists for FT-5 browse mode). The relevant question: should any user gesture (pan AND pinch) show Recenter, or only pan? Pinch to zoom is arguably a "I want a different zoom level, keep following me" gesture (Waze model), while pan is "I want to look somewhere else." Recommended: pan shows Recenter; pinch does not (pinch updates `currentDriveAltitude` per OQ-3 and keep following). Kevin confirms. — **As of FT-17 (2026-08-12): both pan and pinch show Recenter. See Amendment Log.**
 
 ---
 
@@ -160,10 +214,15 @@ User pan during Drive Mode:
     → isUserInteracting = true (existing FT-5 gesture flag)
   → ContentView sees isUserInteracting: shows Recenter button (followPaused = true)
 
-User pinch during Drive Mode (OQ-3 / OQ-4 dependent):
+User pinch during Drive Mode (OQ-3 / OQ-4 dependent — ⚠️ OQ-4 half REVERSED 2026-08-12,
+see Amendment Log above):
   → regionDidChangeAnimated: user-adjusted zoom → update currentDriveAltitude
   → next GPS tick: new setCamera uses currentDriveAltitude (not re-imposing entry altitude)
-  → Recenter button NOT shown for pinch (OQ-4 recommendation)
+  → Recenter button NOT shown for pinch (OQ-4 ORIGINAL recommendation — HISTORICAL, no
+    longer shipped behavior). As of FT-17 (2026-08-12): pinch ALSO fires
+    onDrivePanDetected → followPaused = true → Recenter button DOES show for pinch, and
+    the per-tick setCamera above is skipped (not honoring currentDriveAltitude) until the
+    user taps Recenter.
 
 Recenter button tap:
   → followPaused = false
@@ -355,7 +414,7 @@ Note: `isUserInteracting` already clears itself in `regionDidChangeAnimated` (af
 
 Current behavior: `applyDriveCameraState` sets `centerCoordinateDistance` to `altitudeForSpan(driveModeCameraSpan)` (~621m) on every Drive Mode entry and Recenter. The user cannot persistently adjust zoom during Drive Mode without it being reset.
 
-Recommended Option A behavior (pending OQ-3 Kevin decision): introduce `@State currentDriveAltitude: CLLocationDistance` initialized to `altitudeForSpan(driveModeCameraSpan)` on Drive Mode entry. When the user pinches to zoom during Drive Mode (while NOT in `followPaused` mode — per OQ-4, pinch does not pause follow), the `regionDidChangeAnimated` callback reads `mapView.camera.centerCoordinateDistance` and updates `currentDriveAltitude`. The next GPS tick fires `setCamera` with the updated `currentDriveAltitude`. Tapping Recenter resets `currentDriveAltitude` to the FT-8 default.
+Recommended Option A behavior (pending OQ-3 Kevin decision): introduce `@State currentDriveAltitude: CLLocationDistance` initialized to `altitudeForSpan(driveModeCameraSpan)` on Drive Mode entry. When the user pinches to zoom during Drive Mode (while NOT in `followPaused` mode — per OQ-4 ORIGINAL recommendation, HISTORICAL, see Amendment Log: as of FT-17 2026-08-12 a pinch DOES set `followPaused = true`), the `regionDidChangeAnimated` callback reads `mapView.camera.centerCoordinateDistance` and updates `currentDriveAltitude`. The next GPS tick fires `setCamera` with the updated `currentDriveAltitude`. Tapping Recenter resets `currentDriveAltitude` to the FT-8 default.
 
 This matches Waze and Apple Maps behavior: user pinch adjusts zoom and follow continues at the new zoom; Recenter is the explicit "go back to default" action.
 
@@ -394,12 +453,12 @@ If Kevin prefers re-imposing the FT-8 altitude on every tick (no user-adjustable
 
 ## 8. Open Decisions (Summary)
 
-| ID | Question | Who | Blocks |
-|---|---|---|---|
-| OQ-1 | Try Option C first, or go straight to Option A? | Kevin | Engineering start |
-| OQ-2 | Acceptable `maxCenterCoordinateDistance` for Option C clamp? Spec recommends 900m. | Kevin | C-A build |
-| OQ-3 | Preserve user-adjusted altitude in Option A per-tick follow (Waze model)? | Kevin | A-A implementation detail |
-| OQ-4 | Does user pinch trigger `followPaused` + Recenter (Option A)? Spec recommends pinch does NOT pause. | Kevin | A-A implementation detail |
+| ID | Question | Who | Blocks | Status |
+|---|---|---|---|---|
+| OQ-1 | Try Option C first, or go straight to Option A? | Kevin | Engineering start | Resolved as shipped (Option A) |
+| OQ-2 | Acceptable `maxCenterCoordinateDistance` for Option C clamp? Spec recommends 900m. | Kevin | C-A build | N/A (Option C not shipped) |
+| OQ-3 | Preserve user-adjusted altitude in Option A per-tick follow (Waze model)? | Kevin | A-A implementation detail | Resolved as shipped |
+| OQ-4 | Does user pinch trigger `followPaused` + Recenter (Option A)? Spec recommends pinch does NOT pause. | Kevin | A-A implementation detail | **REVERSED 2026-08-12 (FT-17): pinch DOES pause follow now — see Amendment Log at top of document.** |
 
 ---
 
