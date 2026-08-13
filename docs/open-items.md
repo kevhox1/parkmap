@@ -34,8 +34,8 @@ App Store Connect, real-device drive test).
 
 | # | Item | Where | Blocked on |
 |---|---|---|---|
-| 5 | **PR #69** — Stream A schema. 4 QA rounds, 3 bypasses found so far. | VPS | Pass 4 verdict |
-| 6 | **Apply `02f`** to production Supabase, by hand | **MAC / Kevin** | #5 clearing |
+| ~~5~~ | ~~**PR #69** Stream A schema~~ — ✅ **DONE.** Pass 4 APPLY (live-executed against real Postgres). Merged `a646cf62`. | — | — |
+| ~~6~~ | ~~**Apply `02f`**~~ — ✅ **DONE 2026-08-13.** Verified live: 2 new cols, 3 new tables, 2 storage policies, `created_at` non-insertable, locked cols non-updatable, 3 new constraints. | — | — |
 | 7 | **PR #73** — Stream B4 fetch channel + banner. Isolation fix landed. | **MAC** (compile) | #6 — hard ordering: merging before the schema is live blanks the *entire* community-pin layer app-wide |
 | 8 | **Stream B2** — map tap-select (pick the 4 blockfaces) | VPS → **MAC** (live-UI smoke) | FT-17a (same files) |
 | 9 | **Stream B3** — write path + photo upload | VPS | #7 merging (same file) |
@@ -56,7 +56,7 @@ App Store Connect, real-device drive test).
 
 | # | Item | Where | Notes |
 |---|---|---|---|
-| 13 | **Apply `02g`** + redeploy `ingest-film-permits` Edge Function (FT-16 merged but NOT live) | **MAC / Kevin** | Guard exists in repo, not in the running system |
+| ~~13~~ | ~~**Apply `02g`** + redeploy Edge Function~~ — ✅ **DONE 2026-08-13.** Verified live: `probe_status='stale'`, `stale_days=91`. FT-16 closed end to end. | — | — |
 | 14 | **FT-14 follow-up** — SAINT↔ST has no uniqueness gate; the doc claims 3 Saint-prefixed streets, there are 37. Zero collisions today; a future OSM refresh could silently attach signs to the wrong street. | VPS | Approved, queued |
 | 15 | **FT-14 deferred** — 1,528-row zone-construction loss | VPS | Approved, queued |
 | 16 | **Mapbox token restriction** — bundle-ID / URL scoping | VPS | Approved, queued |

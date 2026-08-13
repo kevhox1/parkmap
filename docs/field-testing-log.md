@@ -138,10 +138,12 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   sending one email is the proportionate fix, but no alerting mechanism exists anywhere in this repo yet, so
   it gets its own scoped pass rather than riding along in #71. **Named explicitly so it isn't silently
   dropped — "we'll notice next time" is the assumption that already failed once.**
-- **Status:** 🟡 **MERGED #71** (`3d5cb891`, 2026-08-12) — but **NOT yet applied to production**. ⏳ Kevin
-  must run `supabase/02g-ingest-runs.sql` in the SQL Editor and redeploy the `ingest-film-permits`
-  Edge Function; until then the guard exists in the repo but not in the running system. No client
-  changes required; not a blocker for FT-15.
+- **Status:** 🟢 **RESOLVED — LIVE IN PRODUCTION 2026-08-13.** Merged #71 (`3d5cb891`), `02g` applied by
+  Kevin in the SQL Editor, Edge Function redeployed via the Supabase CLI, and a manual invocation
+  **verified the guard end to end**: `ingest_runs` row 1 reads `probe_status = 'stale'`,
+  `stale_days = 91`, `upstream_latest_row_at = 2026-05-13`, `fetched_count = 0`, `error_count = 0`.
+  Before this, that exact run returned zeros and looked like a success — which is how the outage went
+  unnoticed for three months. It now says so out loud. No client changes were required.
 - **Lands in:** `supabase/functions/ingest-film-permits/`, `supabase/02g-ingest-runs.sql`,
   `docs/tier1-open-data-ingest-spec.md`.
 
