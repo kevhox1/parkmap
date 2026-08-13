@@ -720,6 +720,16 @@ struct MapViewRepresentable: UIViewRepresentable {
             action: #selector(Coordinator.handlePanObserver(_:))
         )
         pan.delegate = context.coordinator
+        // FT-17a follow-up (orchestrator review): make these genuinely passive.
+        // `shouldRecognizeSimultaneouslyWith` resolves recognizer-vs-recognizer conflict, but
+        // touch DELIVERY is a separate axis: `cancelsTouchesInView` defaults to `true`, which
+        // would cancel touches to the view once the observer recognizes, and
+        // `delaysTouchesEnded` defaults to `true`, adding latency. Either can make MapKit's own
+        // pan/pinch feel sticky or drop mid-gesture — the exact regression FT-17a must not cause
+        // (Kevin confirmed the current pan/pinch feel is correct).
+        pan.cancelsTouchesInView = false
+        pan.delaysTouchesBegan = false
+        pan.delaysTouchesEnded = false
         mapView.addGestureRecognizer(pan)
         context.coordinator.panGesture = pan
 
@@ -728,6 +738,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             action: #selector(Coordinator.handlePinchObserver(_:))
         )
         pinch.delegate = context.coordinator
+        // Same passivity settings as the pan observer above — see that comment.
+        pinch.cancelsTouchesInView = false
+        pinch.delaysTouchesBegan = false
+        pinch.delaysTouchesEnded = false
         mapView.addGestureRecognizer(pinch)
         context.coordinator.pinchGesture = pinch
 
