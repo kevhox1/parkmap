@@ -176,6 +176,12 @@ final class CommunityPinService {
     /// True when Drive Mode is active. Set from ContentView via `setDriveModeActive(_:)`.
     private var driveModeActive: Bool = false
 
+    /// Consecutive failure count per channel label ("open_data" / "crowd_ephemeral" /
+    /// "crowd_block_scoped"). Used only to throttle `logChannelFailure` console spam during
+    /// a sustained outage (e.g. Channel 3 hitting production before Stream A's migration
+    /// lands — docs/qa/ft15-b4-fetch-channel-qa.md Findings #1/#2). Reset to 0 on success.
+    private var channelFailureStreak: [String: Int] = [:]
+
     // MARK: - Init
 
     /// Designated initializer.
@@ -412,9 +418,27 @@ final class CommunityPinService {
     ///   - Channel 3 (crowd block-scoped, FT-15/TF2-15): filming / construction pins,
     ///     source=crowd, resolved_at is null, not expired. §3.4.
     ///
-    /// All three channels share the same client-side filter on completion.
-    /// On success: replaces `visiblePins` with the merged, filtered result.
-    /// On failure: sets `fetchError`; does NOT clear `visiblePins` (stale data stays visible).
+    /// Per-channel failure isolation (docs/qa/ft15-b4-fetch-channel-qa.md Finding #1):
+    /// each channel's request/decode is attempted independently via `fetchChannelOutcome`.
+    /// A single channel's non-2xx status, network error, or decode failure does NOT abort
+    /// the other two channels — their fresh results still reach `visiblePins` this cycle.
+    /// This matters concretely today: Channel 3's `select` list depends on columns
+    /// (`starts_at`, `report_group_id`) that don't exist in production until Stream A's
+    /// migration is applied. Until then, Channel 3 will 400 on every cycle — without this
+    /// isolation, that single failure would have taken the entire community-pin layer
+    /// stale app-wide (existing filming/ASP/enforcement/sweeper markers included), not
+    /// just the new block-scoped feature.
+    ///
+    /// A failed channel's contribution to `visiblePins` this cycle falls back to whatever
+    /// that channel last successfully contributed (re-run through `clientSideFilter` so
+    /// anything that has since expired is still dropped — see `resolveChannelPins`).
+    /// This is a deliberately simple "fail soft, don't invent staleness tracking" choice:
+    /// it can never make a curb LOOK more restricted than the last known-good fetch said,
+    /// and it can't silently blank markers just because an unrelated channel is down.
+    ///
+    /// On success (any channel): replaces `visiblePins` with the merged, filtered result.
+    /// On failure (any channel): sets `fetchError`; retained/refreshed pins from the other
+    /// channels are still applied to `visiblePins` (stale-but-present, never blanked).
     private func fetchPins(for region: MKCoordinateRegion) async {
         let bbox = BoundingBox(from: region)
         guard let openDataRequest = buildOpenDataRequest(bbox: bbox),
@@ -429,55 +453,136 @@ final class CommunityPinService {
         // Store the last fetched region so the periodic refresh (Fix 2) can re-fetch it.
         lastFetchedRegion = region
 
-        do {
-            // Issue all three requests concurrently — independent channels, no ordering dependency.
-            async let openDataResult = urlSession.data(for: openDataRequest)
-            async let crowdResult = urlSession.data(for: crowdRequest)
-            async let blockScopedResult = urlSession.data(for: blockScopedRequest)
+        // Issue all three requests concurrently — independent channels, no ordering
+        // dependency. Each one reports its own success/failure rather than throwing out
+        // of the shared `do` block, so one channel's problem can't discard the others'
+        // in-flight results.
+        async let channel1Outcome = fetchChannelOutcome(request: openDataRequest, label: "open_data")
+        async let channel2Outcome = fetchChannelOutcome(request: crowdRequest, label: "crowd_ephemeral")
+        async let channel3Outcome = fetchChannelOutcome(request: blockScopedRequest, label: "crowd_block_scoped")
 
-            let (openDataData, openDataResponse) = try await openDataResult
-            let (crowdData, crowdResponse) = try await crowdResult
-            let (blockScopedData, blockScopedResponse) = try await blockScopedResult
+        let outcome1 = await channel1Outcome
+        let outcome2 = await channel2Outcome
+        let outcome3 = await channel3Outcome
 
-            if let httpResponse = openDataResponse as? HTTPURLResponse,
-               !(200..<300).contains(httpResponse.statusCode) {
-                fetchError = CommunityPinFetchError.httpError(statusCode: httpResponse.statusCode)
-                isLoading = false
-                return
-            }
-            if let httpResponse = crowdResponse as? HTTPURLResponse,
-               !(200..<300).contains(httpResponse.statusCode) {
-                fetchError = CommunityPinFetchError.httpError(statusCode: httpResponse.statusCode)
-                isLoading = false
-                return
-            }
-            if let httpResponse = blockScopedResponse as? HTTPURLResponse,
-               !(200..<300).contains(httpResponse.statusCode) {
-                fetchError = CommunityPinFetchError.httpError(statusCode: httpResponse.statusCode)
-                isLoading = false
-                return
-            }
-
-            let openDataPins = try decodeResponse(data: openDataData)
-            let crowdPins = try decodeResponse(data: crowdData)
-            let blockScopedPins = try decodeResponse(data: blockScopedData)
-
-            // Merge all three channels: open_data first (deterministic ordering), then
-            // crowd-ephemeral, then crowd-block-scoped. clientSideFilter deduplicates by
-            // filter logic (not by ID); channel 1/2 use distinct pin_type ranges with no
-            // overlap. Channel 3 shares `filming` with channel 1, but the two are mutually
-            // exclusive on `source` (open_data vs. crowd) — see §3.4's `segment_id`
-            // semantics note for why a crowd filming row can never collide with an
-            // open-data filming row.
-            visiblePins = clientSideFilter(openDataPins + crowdPins + blockScopedPins)
-            fetchError = nil
-        } catch is CancellationError {
-            // Task was cancelled (new region change arrived before debounce elapsed). No-op.
-        } catch {
-            fetchError = error
+        // If a newer onRegionChanged call cancelled this fetchTask while requests were
+        // in flight, treat the whole cycle as a no-op: a fresh fetchPins() for the new
+        // region is already queued. This preserves the pre-existing cancellation
+        // behavior (previously the single `catch is CancellationError` case) — routine
+        // debounce supersession should never be logged as a channel failure or partially
+        // merged into visiblePins.
+        guard !Task.isCancelled else {
+            isLoading = false
+            return
         }
 
+        // Merge all three channels: open_data first (deterministic ordering), then
+        // crowd-ephemeral, then crowd-block-scoped. clientSideFilter deduplicates by
+        // filter logic (not by ID); channel 1/2 use distinct pin_type ranges with no
+        // overlap. Channel 3 shares `filming` with channel 1, but the two are mutually
+        // exclusive on `source` (open_data vs. crowd) — see §3.4's `segment_id`
+        // semantics note for why a crowd filming row can never collide with an
+        // open-data filming row.
+        let channel1Pins = resolveChannelPins(outcome: outcome1, label: "open_data", memberOf: Self.isChannel1Member)
+        let channel2Pins = resolveChannelPins(outcome: outcome2, label: "crowd_ephemeral", memberOf: Self.isChannel2Member)
+        let channel3Pins = resolveChannelPins(outcome: outcome3, label: "crowd_block_scoped", memberOf: Self.isChannel3Member)
+
+        visiblePins = clientSideFilter(channel1Pins + channel2Pins + channel3Pins)
+
         isLoading = false
+    }
+
+    /// The outcome of a single channel's fetch + decode attempt.
+    private enum ChannelFetchOutcome {
+        case success([CommunityPin])
+        case failure(Error)
+    }
+
+    /// Runs one channel's request end-to-end (network + HTTP status check + decode),
+    /// reporting its own outcome instead of throwing into a shared `do` block. This is
+    /// the isolation primitive `fetchPins` composes over `async let` — see that method's
+    /// doc comment for why isolation matters here.
+    private func fetchChannelOutcome(request: URLRequest, label: String) async -> ChannelFetchOutcome {
+        do {
+            let (data, response) = try await urlSession.data(for: request)
+            if let httpResponse = response as? HTTPURLResponse,
+               !(200..<300).contains(httpResponse.statusCode) {
+                throw CommunityPinFetchError.httpError(statusCode: httpResponse.statusCode)
+            }
+            let pins = try decodeResponse(data: data)
+            return .success(pins)
+        } catch {
+            return .failure(error)
+        }
+    }
+
+    /// Resolves one channel's contribution to this fetch cycle's merge.
+    ///
+    /// - On success: resets the channel's failure streak and returns the fresh pins.
+    /// - On failure: logs (throttled — see `logChannelFailure`), sets `fetchError`, and
+    ///   falls back to whichever pins of this channel's type are already in `visiblePins`
+    ///   from the last successful fetch — NOT an empty array. This is what stops one
+    ///   channel's outage from blanking the *other* channels' markers (Finding #1): the
+    ///   caller merges `channel1Pins + channel2Pins + channel3Pins`, and only the failed
+    ///   channel's slice degrades to "last known good" instead of "nothing." The retained
+    ///   slice still passes back through `clientSideFilter` at the call site, so a pin
+    ///   that expires while its channel is down is still correctly removed — this does
+    ///   not freeze stale data forever, it just avoids blanking it prematurely.
+    private func resolveChannelPins(
+        outcome: ChannelFetchOutcome,
+        label: String,
+        memberOf predicate: (CommunityPin) -> Bool
+    ) -> [CommunityPin] {
+        switch outcome {
+        case .success(let pins):
+            channelFailureStreak[label] = 0
+            return pins
+        case .failure(let error):
+            logChannelFailure(label: label, error: error)
+            fetchError = error
+            return visiblePins.filter(predicate)
+        }
+    }
+
+    /// Logs a channel failure, throttled to avoid spamming the console once per
+    /// `pinRefreshIntervalSeconds` tick during a sustained outage (e.g. Channel 3 hitting
+    /// production 400s every cycle before Stream A's migration lands). Logs the first
+    /// failure immediately, then only every 10th consecutive failure after that
+    /// (~80s at the periodic-refresh cadence).
+    private func logChannelFailure(label: String, error: Error) {
+        let streak = (channelFailureStreak[label] ?? 0) + 1
+        channelFailureStreak[label] = streak
+        guard streak == 1 || streak.isMultiple(of: 10) else { return }
+        print("[CommunityPinService] channel '\(label)' fetch failed (consecutive: \(streak)): \(error)")
+    }
+
+    /// True if `pin` matches Channel 1's fetch predicate (open_data source; filming /
+    /// asp_suspended_today / special_event). Used only to select which slice of the
+    /// currently-visible pins to retain when Channel 1's fetch fails — see
+    /// `resolveChannelPins`. Mirrors `buildOpenDataRequest`'s filter.
+    ///
+    /// `nonisolated` (matching `ephemeralTTLSeconds(for:)`'s existing precedent below):
+    /// this is passed around as a plain `(CommunityPin) -> Bool` closure value, and it
+    /// touches no actor-isolated state (only its `CommunityPin` parameter), so it should
+    /// not carry `@MainActor` isolation onto that closure type.
+    private nonisolated static func isChannel1Member(_ pin: CommunityPin) -> Bool {
+        pin.source == .openData &&
+        [PinType.filming, .aspSuspendedToday, .specialEvent].contains(pin.pinType)
+    }
+
+    /// True if `pin` matches Channel 2's fetch predicate (crowd source, ephemeral
+    /// lifespan; enforcement_active / sweeper_passed). Mirrors `buildCrowdEphemeralRequest`.
+    private nonisolated static func isChannel2Member(_ pin: CommunityPin) -> Bool {
+        pin.source == .crowd &&
+        pin.lifespan == .ephemeral &&
+        [PinType.enforcementActive, .sweeperPassed].contains(pin.pinType)
+    }
+
+    /// True if `pin` matches Channel 3's fetch predicate (crowd source; filming /
+    /// construction, any lifespan). Mirrors `buildCrowdBlockScopedRequest`.
+    private nonisolated static func isChannel3Member(_ pin: CommunityPin) -> Bool {
+        pin.source == .crowd &&
+        [PinType.filming, .construction].contains(pin.pinType)
     }
 
     // MARK: - Request builders

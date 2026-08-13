@@ -188,8 +188,14 @@ struct PinDetailSheet: View {
     }
 
     /// "Upcoming" (window hasn't started yet) vs. "Active now" badge — AC-C2.
+    ///
+    /// Uses `pinService.nowProvider()` (not a bare `Date()`) so this stays deterministic
+    /// under test injection, matching every other time comparison in this feature (QA nit
+    /// #6, docs/qa/ft15-b4-fetch-channel-qa.md). `pinService` is a required, non-optional
+    /// property on this view (unlike `BlockDetailView`/`ParkedCarDetailView`'s optional
+    /// `pinService?`), so no fallback is needed here.
     private var statusBadge: some View {
-        let upcoming = pin.isUpcoming()
+        let upcoming = pin.isUpcoming(now: pinService.nowProvider())
         return Text(upcoming ? "Upcoming" : "Active now")
             .font(.caption.bold())
             .padding(.horizontal, 8)
@@ -347,18 +353,13 @@ struct PinDetailSheet: View {
         switch pin.pinType {
         case .filming:           return .purple
         case .specialEvent:      return .orange
-        case .construction:      return Self.constructionOrange
+        case .construction:      return ParkingColors.constructionOrange
         case .enforcementActive: return .red
         case .sweeperPassed:     return Color(red: 0.0, green: 0.55, blue: 0.27)
         case .brokenMeter:       return .gray
         default:                 return .gray
         }
     }
-
-    /// FT-15/TF2-15 §9.1: distinct from `.orange` (special_event's color) — same "safety
-    /// orange" RGB values as `PinMarkerAnnotation.markerStyle`'s construction case, so the
-    /// detail sheet header and the map marker read as the same visual identity.
-    private static let constructionOrange = Color(red: 0.91, green: 0.45, blue: 0.05)
 
     private var sourceBadgeLabel: String {
         switch pin.pinType {

@@ -69,7 +69,7 @@ struct BlockDetailView: View {
 
                     // 3b. FT-15/TF2-15 (§9.2): temporary restriction banner.
                     if let restriction = blockScopedRestriction {
-                        TemporaryRestrictionBanner(pin: restriction) {
+                        TemporaryRestrictionBanner(pin: restriction, now: pinService?.nowProvider() ?? now) {
                             onOpenRestriction?(restriction)
                         }
                     }
@@ -431,9 +431,19 @@ struct RuleRow: View {
 struct TemporaryRestrictionBanner: View {
 
     let pin: CommunityPin
+
+    /// Reference time for the Upcoming/Active badge (AC-C2). Defaults to `Date()` for
+    /// previews/standalone use; callers with a `CommunityPinService` in scope should pass
+    /// `pinService.nowProvider()` so this stays deterministic under test injection rather
+    /// than reading the wall clock directly (QA nit #6,
+    /// docs/qa/ft15-b4-fetch-channel-qa.md — `isUpcoming` display sites were the one
+    /// asymmetric spot in this feature that didn't thread the service's injectable time).
+    /// Declared before `onTap` so trailing-closure call syntax keeps binding to `onTap`.
+    var now: Date = Date()
+
     let onTap: () -> Void
 
-    private var isUpcoming: Bool { pin.isUpcoming() }
+    private var isUpcoming: Bool { pin.isUpcoming(now: now) }
 
     var body: some View {
         Button(action: onTap) {
@@ -491,7 +501,7 @@ struct TemporaryRestrictionBanner: View {
 
     private var iconColor: Color {
         pin.pinType == .construction
-            ? Color(red: 0.91, green: 0.45, blue: 0.05)  // matches PinDetailSheet.constructionOrange
+            ? ParkingColors.constructionOrange
             : .purple
     }
 

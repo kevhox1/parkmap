@@ -5,7 +5,7 @@
 //  Community 1.0 Tier 1 Pin Display — fixture-driven unit tests.
 //  Spec: docs/tier1-pin-display-spec.md §11 (AC-D1 through AC-D9d).
 //
-//  Test inventory (34 tests):
+//  Test inventory (38 tests):
 //
 //  Client-side filter — expiry (4 tests, AC-D1 through AC-D4):
 //    1.  testClientSideFilter_expiredPin_removed              (AC-D1)
@@ -54,10 +54,19 @@
 //   28.  testInject_replacesVisiblePins
 //   29.  testInject_emptyArray_clearsVisiblePins
 //
+//  Per-channel failure isolation (4 tests, fix for docs/qa/ft15-b4-fetch-channel-qa.md
+//  Finding #1 — one channel's non-2xx response must not discard the other channels'
+//  fresh results, nor blank that channel's own previously-visible pins):
+//   30.  testFetchPins_channel3Fails_channel1And2StillMergeFreshResults
+//   31.  testFetchPins_channel3Fails_previouslyVisibleChannel3PinRetained
+//   32.  testFetchPins_channel3Fails_expiredPreviouslyVisiblePinStillDropped
+//   33.  testFetchPins_allChannelsSucceed_fetchErrorNil
+//
 //  URL request structure tests moved to CommunityPinServiceRequestTests (5 tests above).
 //
-//  Baseline: 280/0. After this suite: 280 + 13 (net new) = 293/0 (total).
-//  (21 original tests → 5 request tests restructured + 3 crowd merge + 4 locationContextLabel = 34 total)
+//  Baseline: 280/0. After this suite: 280 + 13 + 4 (net new) = 297/0 (total).
+//  (21 original tests → 5 request tests restructured + 3 crowd merge + 4 locationContextLabel
+//  + 4 channel-isolation = 38 total)
 //
 //  FT-15 / TF2-15 Stream B4 (docs/ft15-tf215-temporary-block-restrictions-spec.md §12):
 //  fetchPins now issues a 3rd concurrent request (crowd block-scoped, filming/construction).
@@ -69,6 +78,13 @@
 //  mergeableTypes widening, CommunityPin.isUpcoming/showsReactionsRow) live in
 //  FT15B4Tests.swift, following the same separate-file-per-feature convention as
 //  FT15ModelTests.swift (Stream B1).
+//
+//  Per-channel failure isolation fix (this revision, addressing QA pass 1 Finding #1):
+//  fetchPins no longer aborts all three channels on one channel's failure. Each channel's
+//  request/decode is attempted independently (fetchChannelOutcome); a failing channel
+//  falls back to its own previously-visible pins (re-filtered for expiry) rather than an
+//  empty array, so an unrelated channel's outage can never blank markers it has nothing
+//  to do with. See CommunityPinServiceChannelIsolationTests below.
 //
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens or Supabase keys.
@@ -493,6 +509,206 @@ final class CommunityPinServiceDebounceTests: XCTestCase {
         XCTAssertEqual(fetchCount, 3,
             "AC-D7: two onRegionChanged calls 200ms apart must fire ONE debounced fetch " +
             "(= 3 requests: open_data + crowd ephemeral + crowd block-scoped)")
+    }
+}
+
+// MARK: - Per-channel failure isolation tests (fix for QA Finding #1,
+// docs/qa/ft15-b4-fetch-channel-qa.md)
+
+/// Builds a raw PostgREST-shaped JSON array response body for a single pin, independent
+/// of `makeFixturePin` (which decodes through `CommunityPin` directly rather than
+/// producing a `Data` response body a mock `URLProtocol` handler can return).
+private func channelPinResponseBody(
+    id: UUID = UUID(),
+    pinType: PinType,
+    source: PinSource,
+    lifespan: PinLifespan = .session,
+    expiresAt: Date = kFuture
+) -> Data {
+    let fmt = ISO8601DateFormatter()
+    fmt.formatOptions = [.withInternetDateTime]
+    let json = """
+    [{
+      "id": "\(id.uuidString)",
+      "pin_type": "\(pinType.rawValue)",
+      "source": "\(source.rawValue)",
+      "lifespan": "\(lifespan.rawValue)",
+      "lat": 40.7505,
+      "lng": -73.9965,
+      "segment_id": null,
+      "zone_id": null,
+      "author_id": null,
+      "author_username": null,
+      "created_at": "2026-06-01T10:00:00+00:00",
+      "updated_at": "2026-06-01T10:00:00+00:00",
+      "expires_at": "\(fmt.string(from: expiresAt))",
+      "resolved_at": null,
+      "confirm_count": 0,
+      "dispute_count": 0,
+      "meta": null,
+      "notes": null
+    }]
+    """
+    return Data(json.utf8)
+}
+
+/// Verifies the per-channel failure isolation fix: `fetchPins` issues Channel 1
+/// (open_data), Channel 2 (crowd ephemeral), and Channel 3 (crowd block-scoped)
+/// independently, and one channel's non-2xx response must not discard the other two
+/// channels' fresh results, nor blank out that channel's own previously-visible pins.
+///
+/// Channels are distinguished in the mock handler by URL substring: "asp_suspended_today"
+/// (Channel 1 only), "enforcement_active" (Channel 2 only), "construction" (Channel 3 only,
+/// via its `pin_type=in.(filming,construction)` filter — no other channel's URL contains
+/// the literal string "construction").
+@MainActor
+final class CommunityPinServiceChannelIsolationTests: XCTestCase {
+
+    private func makeIsolationService(
+        handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)
+    ) -> CommunityPinService {
+        PinMockURLProtocol.requestHandler = handler
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [PinMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        return CommunityPinService(
+            supabaseURL: kServiceURL,
+            supabaseAnonKey: kAnonKey,
+            nowProvider: { kNow },
+            urlSession: session
+        )
+    }
+
+    private let testRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99),
+        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+    )
+
+    /// Channel 3 (block-scoped) 400s; Channel 1 and Channel 2 return 200 with fresh pins.
+    /// The fresh Channel 1/2 pins must still land in `visiblePins` — the pre-fix behavior
+    /// discarded ALL three channels' results whenever any one of them failed.
+    func testFetchPins_channel3Fails_channel1And2StillMergeFreshResults() async throws {
+        let freshFilmingId = UUID()
+        let freshEnforcementId = UUID()
+        let expectation = expectation(description: "all three channels attempted")
+        expectation.expectedFulfillmentCount = 3
+
+        let service = makeIsolationService { request in
+            let url = request.url?.absoluteString ?? ""
+            defer { expectation.fulfill() }
+            if url.contains("construction") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!,
+                        Data())
+            } else if url.contains("asp_suspended_today") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        channelPinResponseBody(id: freshFilmingId, pinType: .filming, source: .openData))
+            } else {
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        channelPinResponseBody(id: freshEnforcementId, pinType: .enforcementActive, source: .crowd, lifespan: .ephemeral))
+            }
+        }
+
+        service.onRegionChanged(testRegion)
+        await fulfillment(of: [expectation], timeout: 2.5)
+        // Give the @MainActor merge a beat to complete after the last await inside fetchPins.
+        try await Task.sleep(for: .milliseconds(200))
+
+        let ids = Set(service.visiblePins.map { $0.id })
+        XCTAssertTrue(ids.contains(freshFilmingId),
+            "Channel 1's fresh pin must merge into visiblePins even though Channel 3 failed")
+        XCTAssertTrue(ids.contains(freshEnforcementId),
+            "Channel 2's fresh pin must merge into visiblePins even though Channel 3 failed")
+        XCTAssertNotNil(service.fetchError, "A failing channel must still surface via fetchError")
+    }
+
+    /// A previously-successful Channel 3 pin must survive a cycle where Channel 3 fails —
+    /// the failure must not blank markers that a DIFFERENT, unrelated outage has nothing
+    /// to do with. Channel 1 and Channel 2 return empty arrays (no fresh data of their own)
+    /// so the only pin in play is the retained Channel 3 one.
+    func testFetchPins_channel3Fails_previouslyVisibleChannel3PinRetained() async throws {
+        let staleBlockScopedPin = makeFixturePin(
+            pinType: .construction,
+            source: .crowd,
+            expiresAt: kFuture
+        )
+        let expectation = expectation(description: "all three channels attempted")
+        expectation.expectedFulfillmentCount = 3
+
+        let service = makeIsolationService { request in
+            defer { expectation.fulfill() }
+            let url = request.url?.absoluteString ?? ""
+            if url.contains("construction") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!,
+                        Data())
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
+        }
+        // Seed visiblePins as if a prior successful fetch had populated it.
+        service.inject(fixtures: [staleBlockScopedPin])
+
+        service.onRegionChanged(testRegion)
+        await fulfillment(of: [expectation], timeout: 2.5)
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertTrue(service.visiblePins.contains { $0.id == staleBlockScopedPin.id },
+            "A previously-visible Channel 3 pin must be retained when Channel 3's fetch fails, " +
+            "not dropped just because that one channel is down")
+    }
+
+    /// The "retain previous pins on failure" fallback still runs the retained slice back
+    /// through `clientSideFilter` — a pin that expires while its channel happens to be down
+    /// must NOT be frozen on the map forever. This is what keeps the fail-soft fallback from
+    /// silently misleading a driver about a curb being restricted after the restriction has
+    /// actually lapsed.
+    func testFetchPins_channel3Fails_expiredPreviouslyVisiblePinStillDropped() async throws {
+        let expiredBlockScopedPin = makeFixturePin(
+            pinType: .construction,
+            source: .crowd,
+            expiresAt: kPast
+        )
+        let expectation = expectation(description: "all three channels attempted")
+        expectation.expectedFulfillmentCount = 3
+
+        let service = makeIsolationService { request in
+            defer { expectation.fulfill() }
+            let url = request.url?.absoluteString ?? ""
+            if url.contains("construction") {
+                return (HTTPURLResponse(url: request.url!, statusCode: 400, httpVersion: nil, headerFields: nil)!,
+                        Data())
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
+        }
+        service.inject(fixtures: [expiredBlockScopedPin])
+
+        service.onRegionChanged(testRegion)
+        await fulfillment(of: [expectation], timeout: 2.5)
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertFalse(service.visiblePins.contains { $0.id == expiredBlockScopedPin.id },
+            "An already-expired retained pin must still be dropped by clientSideFilter, " +
+            "even on the fail-soft retention path")
+    }
+
+    /// Baseline regression: when all three channels succeed, fetchError must be nil
+    /// (the per-channel isolation refactor must not leave a stale error set from a
+    /// previous failed cycle).
+    func testFetchPins_allChannelsSucceed_fetchErrorNil() async throws {
+        let expectation = expectation(description: "all three channels attempted")
+        expectation.expectedFulfillmentCount = 3
+
+        let service = makeIsolationService { request in
+            defer { expectation.fulfill() }
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
+        }
+
+        service.onRegionChanged(testRegion)
+        await fulfillment(of: [expectation], timeout: 2.5)
+        try await Task.sleep(for: .milliseconds(200))
+
+        XCTAssertNil(service.fetchError, "fetchError must be nil after a fully-successful fetch cycle")
     }
 }
 

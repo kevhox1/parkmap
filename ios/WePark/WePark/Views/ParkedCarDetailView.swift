@@ -132,7 +132,7 @@ struct ParkedCarDetailView: View {
                     // value consumption point per the spec: telling someone whose car is
                     // already parked on an affected block.
                     if let restriction = blockScopedRestriction {
-                        TemporaryRestrictionBanner(pin: restriction) {
+                        TemporaryRestrictionBanner(pin: restriction, now: pinService?.nowProvider() ?? now) {
                             onOpenRestriction?(restriction)
                         }
                     }

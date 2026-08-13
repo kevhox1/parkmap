@@ -29,6 +29,7 @@
 
 import Foundation
 import MapKit
+import SwiftUI
 import UIKit
 
 // MARK: - CommunityPin display extensions
@@ -512,8 +513,11 @@ final class PinMarkerAnnotation: MKAnnotationView {
             // FT-15/TF2-15 §9.1: crowd-reported block closures (filming reuses the existing
             // purple video.fill case above; construction is new). A distinct "safety orange"
             // — not `UIColor.systemOrange` (already used by `.specialEvent`) — so the two
-            // marker types don't visually collide on the map.
-            return ("hammer.fill", UIColor(red: 0.91, green: 0.45, blue: 0.05, alpha: 1.0))
+            // marker types don't visually collide on the map. Single source of truth in
+            // ParkingColors.constructionOrange (QA nit #4,
+            // docs/qa/ft15-b4-fetch-channel-qa.md) — bridged to UIColor here since
+            // MKAnnotationView's API is UIKit, not SwiftUI.
+            return ("hammer.fill", UIColor(ParkingColors.constructionOrange))
         default:
             // Fallback for any type that reaches this path unexpectedly.
             return ("mappin.fill", UIColor.systemGray)
