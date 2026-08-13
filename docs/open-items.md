@@ -88,6 +88,13 @@ label drift (cosmetic).
 
 ## Notes that affect sequencing
 
+- **Kevin is the ONLY TestFlight user** (confirmed 2026-08-13). No external testers yet — the
+  external TestFlight group is still a backlog item. This makes breaking changes *cheap*: data
+  migrations, session resets, and state-dropping schema changes cost nothing right now and get
+  expensive the moment external testers exist. Don't build migration shims for hypothetical users
+  (this already saved the realtime Stream A work a `UserDefaults`→Keychain session shim). Revisit
+  this assumption the moment the external group is created.
+
 - **File contention is the real bottleneck, not agent capacity.** `MapViewRepresentable.swift`,
   `ContentView.swift`, and `CommunityPinService.swift` are each wanted by 2-3 streams. They must be
   serialized.
