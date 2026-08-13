@@ -9,6 +9,47 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Round 5 — build 15 field observations (2026-08-12)
 
+### FT-18 🔴 Drive Mode button layout/spacing looks bad — redesign toward Apple Maps (DESIGN)
+- **Area:** Drive Mode chrome. `ContentView.swift` toolbar/overlay stack. Designer → iOS.
+- **Observed (Kevin, simulator, build 16 candidate, 2026-08-13):** "the spacing on all the buttons in
+  drive mode looks really bad… Let's consider Apple Maps as the base product. Maybe all buttons are on
+  the bottom? I want it to be clean."
+- **What's on screen today (from Kevin's screenshot):** a crowded top row of mixed-shape controls —
+  `End Cruise` (pill, red), a speaker toggle (circle), `Report` (pill, orange), `Park here` (pill,
+  blue) — overlapping map content, PLUS a separate vertical stack of 4 circular buttons hugging the
+  right edge (locate, clock/Park-Until, directions, favorite). Two competing control languages
+  (pills vs circles), two competing anchors (top row vs right rail), uneven gaps, and the cluster sits
+  directly over the map exactly where the route ahead is.
+- **Reference:** Apple Maps — bottom-anchored primary actions, a single control language, generous
+  breathing room, minimal chrome over the live map.
+- **Status:** 🔴 open — needs `@designer` proposal first (Kevin has said he lacks native-iOS design
+  intuition; this is exactly the "catch it before TestFlight" case), then `@ios-engineer` implements.
+- **⚠️ FILE COLLISION:** `ContentView.swift` — same file as FT-15 Stream B2 and FT-17's follow-up.
+  Serialize.
+- **Lands in:** `ios/WePark/WePark/ContentView.swift` (+ possibly new view files).
+
+### FT-17a 🔴 Recenter pill appears only sporadically — gesture detection reads the wrong recognizers
+- **Observed (Kevin, simulator, 2026-08-13, FT-17 branch):** "pinch to zoom out and pan works great,
+  it holds and doesn't snap back. But the recenter pill is sporadic. It doesn't always appear."
+- **ROOT CAUSE (orchestrator, code read):** `regionWillChangeAnimated` computes `isUserGesture` by
+  scanning **`mapView.gestureRecognizers`** (`MapViewRepresentable.swift:1528`). But the only
+  recognizers ever added to the map view itself are **our long-press and tap**
+  (`:626`, `:643`) — MKMapView's own pan/pinch recognizers live on its internal subviews and are NOT
+  in that array. So during a pinch, `isUserGesture` is true only when our tap/long-press happens to
+  flicker into `.began/.changed/.ended` before cancelling → intermittent `followPaused` → intermittent
+  pill. **FT-17 widened WHAT the trigger responds to without fixing HOW it detects.** The same latent
+  unreliability existed pre-FT-17 for pan.
+- **Fix direction:** install our own `UIPanGestureRecognizer` + `UIPinchGestureRecognizer` on the map
+  view with `shouldRecognizeSimultaneouslyWith` → true (the `UIGestureRecognizerDelegate` and that
+  simultaneous-recognition behavior already exist, `:806`, `:1667-1674`), and drive `followPaused`
+  from those directly instead of inspecting `mapView.gestureRecognizers`.
+- **⚠️ Kevin's test caveat:** the simulator run used a STATIC location (`simctl location set`), so
+  "doesn't snap back" is **not conclusive** — with few/no GPS ticks nothing would pull the camera back
+  regardless of `followPaused`. Real-device driving remains the true gate.
+- **Status:** 🔴 open — **build 16 HELD** on this. Shipping a fix that works intermittently is worse
+  than shipping none: Kevin can't tell a flaky pill from a broken one while driving.
+- **Lands in:** `ios/WePark/WePark/Views/MapViewRepresentable.swift`.
+
 ### FT-17 🔴 Drive Mode: pinch-zoom doesn't pause follow — camera yanks back; want free zoom/pan + Recenter
 - **Area:** Drive Mode camera ownership. `MapViewRepresentable.regionWillChange/regionDidChange` +
   `ContentView.followPaused` / `recenterDriveMode()`. **The single most regression-sensitive file pair
