@@ -218,7 +218,16 @@ Binding rationale:
 - Raw `URLSession` calls to `https://api.mapbox.com/directions/v5/mapbox/driving/<coords>?access_token=<token>&alternatives=true&geometries=geojson&steps=true`.
 - This is exactly what the PWA already does (`MAPBOX_DIRECTIONS_URL` at `index.html:5987`, `fetchAndRenderRoute` at `index.html:6252`). The iOS port is a verbatim translation of ~60 lines of JS to Swift async/await.
 - Billing: **Directions API is billed separately from the Navigation SDK**. Free tier: **100,000 requests/month**. Above that: $2.00/1,000 requests. At TestFlight scale (50 users × 5 trips/day × 30 days = 7,500 requests/month), this is well inside the free tier by a factor of 13.
-- The existing Mapbox token in `tracker-config.js` (`pk.*` token, URL-restricted to `kevhox1.github.io` and `localhost:8765`) cannot be reused for iOS native HTTP calls — the iOS app's requests will not come from those URLs. A new Mapbox token will need to be created for the iOS bundle, restricted to the app's bundle ID via Mapbox's iOS SDK token restriction (or left as an unrestricted token with API-key access stored in a `.xcconfig` file outside version control). **This is a 5-minute Mapbox dashboard task, but it must happen before Drive Mode code starts.**
+- The existing Mapbox token in `tracker-config.js` (`pk.*` token, URL-restricted to `kevhox1.github.io` and `localhost:8765`) cannot be reused for iOS native HTTP calls — the iOS app's requests will not come from those URLs. A new Mapbox token will need to be created for the iOS bundle, stored in a `.xcconfig` file outside version control. **This is a 5-minute Mapbox dashboard task, but it must happen before Drive Mode code starts.**
+  <br>**Correction (2026-08-13, see `docs/mapbox-token-security.md`):** the phrase above originally
+  said this new token should be "restricted to the app's bundle ID via Mapbox's iOS SDK token
+  restriction." That feature does not exist on Mapbox's dashboard — Mapbox only offers URL
+  restrictions (web-only, explicitly incompatible with native SDKs) and per-token scope
+  minimization (public vs. secret scopes). There is no bundle-ID / application-ID restriction
+  analogous to Google Maps API keys. The correct control for the iOS token is: keep it separate
+  from the PWA token (done), keep it out of version control (done, gitignored `Config.xcconfig`),
+  and limit it to public scopes only in the dashboard. See `docs/mapbox-token-security.md` for the
+  full writeup and Kevin's checklist.
 - Parking-aware route scoring: `pickBestParkingAwareRoute` (`index.html:6298`) — 40 lines of JS — ports directly to Swift. If OQ-4 answer is "yes, include scoring," this adds one session of work. If OQ-4 is "no," skip it and use `alternatives=false` or just take the first returned route.
 
 **Apple MKDirections**

@@ -201,6 +201,38 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-13 — open-items #16 (Mapbox token restriction) investigated; closed as doc correction, not code work
+
+**WHERE WE ARE:** Kevin approved open-items.md #16 ("Mapbox token restriction — bundle-ID / URL
+scoping") for burn-down. Investigation (not implementation) — see `docs/mapbox-token-security.md`
+for the full writeup.
+
+**Finding:** the item as worded since W8.5a (2026-05-20) describes a Mapbox dashboard feature
+("bundle-ID restriction … via Mapbox's iOS SDK token restriction") that **does not exist.**
+Confirmed against current Mapbox docs: URL restrictions are web-only and explicitly incompatible
+with native SDKs; the only native-appropriate lever is per-token scope minimization (public vs.
+secret scopes). Mapbox has no bundle-ID / application-ID restriction analogous to Google Maps API
+keys. This is very likely why the item was re-carried unresolved across ~15 HANDOFF entries over
+three months (W8.5a → TF1 ship 2026-06-06 → today) — there was nothing to click.
+
+**What's already adequate (no code change shipped):** the PWA token (`tracker-config.js`) and the
+iOS token (`ios/WePark/Config.xcconfig`, gitignored) are separate tokens by design and by evidence
+— `docs/drive-mode-scope-spec.md` §4 always said not to reuse the PWA token for iOS, every
+post-W8.5a QA pass's `grep -r "pk.eyJ" ios/` hygiene check found zero committed token bytes, and
+the W8.5a live smoke (HTTP 200, valid route) is itself evidence the iOS token isn't the
+URL-restricted PWA token (a URL-restricted token 403s on requests with no `Referer` header, which
+is exactly what native `URLSession` sends — confirmed against Mapbox's troubleshooting docs).
+
+**What Kevin still does, dashboard-only (~5 min, see `docs/mapbox-token-security.md` §3 for exact
+steps):** confirm the PWA token's URL restriction survived, label the iOS token distinctly, confirm
+its scopes are public-only with no secret scopes checked, and confirm (by comparing prefixes, never
+full values) that `Config.xcconfig`'s token isn't accidentally the same value as the PWA token.
+
+**Docs touched:** `docs/mapbox-token-security.md` (new), `docs/drive-mode-scope-spec.md` §4
+(correction note, factual error from 2026-05-18 not later regression), `docs/open-items.md` #16.
+No `index.html`, `tracker-config.js`, or `ios/` source changes — nothing for `@pwa-maintainer` or
+`@ios-engineer` to pick up here.
+
 ### 2026-08-13 — burn-down stretch: FT-16 closed live, FT-15 schema APPLIED, SPM landed; build 16 HELD
 
 **WHERE WE ARE:** `main` @ `0457ab43`. Build **1.0 (15) live on TestFlight** and installed on Kevin's
