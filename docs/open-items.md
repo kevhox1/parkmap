@@ -59,7 +59,7 @@ App Store Connect, real-device drive test).
 | ~~13~~ | ~~**Apply `02g`** + redeploy Edge Function~~ — ✅ **DONE 2026-08-13.** Verified live: `probe_status='stale'`, `stale_days=91`. FT-16 closed end to end. | — | — |
 | 14 | **FT-14 follow-up** — SAINT↔ST has no uniqueness gate; the doc claims 3 Saint-prefixed streets, there are 37. Zero collisions today; a future OSM refresh could silently attach signs to the wrong street. | VPS | Approved, queued |
 | 15 | **FT-14 deferred** — 1,528-row zone-construction loss | VPS | Approved, queued |
-| 16 | **Mapbox token restriction** — bundle-ID / URL scoping | VPS | Approved, queued |
+| 16 | **Mapbox token restriction** — investigated 2026-08-13, see `docs/mapbox-token-security.md`. "Bundle-ID restriction" is not a real Mapbox dashboard feature (confirmed against current Mapbox docs); the item as originally worded can't be executed as stated. PWA token is already URL-restricted; iOS token is already separate + gitignored (code side adequate, no-op). Replaced with a short scope-check + labeling checklist for Kevin, dashboard-only. | VPS (done) → **MAC** (Kevin's dashboard checklist, ~5 min) | Doc'd, awaiting Kevin's dashboard pass |
 | 17 | **FT-16a** — alerting for the staleness guard (nothing polls `ingest_runs.probe_status`) | VPS | Deferred by Kevin, named so it isn't lost |
 
 ---
