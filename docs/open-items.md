@@ -78,6 +78,23 @@ App Store Connect, real-device drive test).
 
 ---
 
+## 🟢 NEW — tech debt discovered by QA, tracked not silently dropped
+
+**Duplicate-adjacent-vertex points in tile polylines: 12.4% → 22.7%** — a real, previously-undisclosed
+side effect of the FT-14/FT-19 geometry fix (#80, merged). Found by QA re-running
+`scripts/coverage-report.js` and noticing SoHo "regress" 73%→72%: the extra duplicate points shift
+that tool's `line[Math.floor(length/2)]` neighborhood-attribution point across the SoHo/West Village
+boundary for straddling streets. **Rule composition verified unchanged — this is a reporting artifact,
+not rule loss.** But it roughly doubles the pre-existing "~6.8% degenerate segments" tech-debt note.
+
+**Cheap fix:** skip pushing coordinate-identical points in `extractSubSegment()`'s result loop.
+**Not cheap to validate:** it changes tile output, so it needs a regen + re-verify. **Recommendation:
+fold it into the next regen rather than spending a regen cycle on vertex hygiene alone** — e.g.
+whenever the remaining **359 still-lost rows** get addressed. Kevin's call if he'd rather have it
+before the next build.
+
+---
+
 ## ⛔ BACKBURNERED — needs a design discussion with Kevin FIRST, do not start
 
 **FT-20** — dark-mode default + browse-mode chrome redesign + Apple-Maps-style bottom sheet.
