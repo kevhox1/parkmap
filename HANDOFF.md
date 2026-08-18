@@ -201,6 +201,74 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-18 — burn-down COMPLETE except one PR: FT-15 feature-complete, geometry regen shipped
+
+**WHERE WE ARE:** `main` @ `39230d58`+. Build **1.0 (15)** still the newest on TestFlight; `CURRENT_PROJECT_VERSION`
+is **16** and the archive is still **HELD** — deliberately. **One PR open in the entire project: #82.**
+
+**🔑 KEVIN'S DIRECTIVE (still in force):** clear every open item before starting new work; ship ONE build
+rather than dribbling them out. The board is `docs/open-items.md`. He had no car access 2026-08-14→~18,
+which is exactly why holding the build cost nothing and bought a much better payload.
+
+**🔑 Kevin is the ONLY TestFlight user.** Breaking changes stay cheap until an external group exists.
+
+---
+
+**MERGED THIS STRETCH (all verified, most on-device):**
+
+| | |
+|---|---|
+| **FT-16** | Closed **end to end, live in production** — `02g` applied, Edge Function redeployed, `ingest_runs` reads `probe_status='stale'`, `stale_days=91` |
+| **FT-15 Stream A** (#69) | Schema merged **and applied to prod**. 4 QA rounds, 3 real bypasses. Pass 4 executed the migration against real Postgres. Kevin verified live: `created_at` non-insertable, `source`/`pin_type`/`report_group_id` non-updatable |
+| **Phase 0 SPM** (#76) | `supabase-swift 2.55.0`, Auth+Realtime, 7 packages. Purely additive pbxproj. **`Package.resolved` now TRACKED** |
+| **Auth Stream A** (#77) | Keychain-backed sessions, auto-resign on `.signedOut`. Compiled clean first try |
+| **FT-17** (#72) / **FT-17a** (#74) | Drive Mode free zoom/pan; Recenter reliability. **Kevin validated on-device** |
+| **FT-18** (#79) | Bottom Dock redesign + 4 designer-found bugs. **Kevin validated every state on-device** |
+| **FT-14/FT-19** (#80) | Geometry regen — see below |
+| **FT-15 B1/B4/B3** (#70/#73/#81) | Models, fetch channel + banner, write path + evidence upload |
+| **FT-14 follow-ups** (#75) | SAINT↔ST uniqueness gate, proven byte-identical |
+| **Mapbox** (#78) | Closed as a **no-op** — "bundle-ID restriction" is not a real Mapbox feature; that false premise is why the item survived ~15 HANDOFF entries |
+
+**THE GEOMETRY WIN (#80) — one root cause, three reported symptoms.** `trimIntersectionSetback()`
+shifted `blockGeo`'s coordinate origin with no record of it, so `extractSubSegment()` misread raw
+distances. Fixed structurally (`setbackFt` on `blockGeo`; one translation point), plus the
+all-or-nothing short-block skip became a continuous clamped taper. **Rows lost 1,624→359 (−78%),
+blocks with a dropped zone 3,015→1,842, segments 43,073→44,280, coverage 47%→48%.** It also fixed
+**FT-19** (lines overshooting intersections) and **TF2-4** — on `E 2ND ST (2ND→1ST AVE)`, the block
+Kevin finally identified, the school zone was rendering **exactly one setback (32.8ft) out of
+position**, matching his June wording. QA verified everything independently, including querying live
+Socrata itself. ⚠️ **The PR's "zero neighborhood regressions" claim is FALSE** — SoHo 73%→72%, traced
+to a reporting artifact from duplicate-vertex growth (12.4%→22.7%), rule composition verified
+unchanged. **That duplicate-vertex growth is real and tracked** in `docs/open-items.md`.
+
+**STILL OPEN — #82 (FT-15 Stream B2), the last PR in the project.** Map tap-select + report sheet.
+Rebased onto `main` so it finally compiles standalone (it calls B3's symbols). QA 🟡: found that
+`blockSelectModeActive`/`driveModeActive` were **not** mutually exclusive despite a comment claiming
+so — fixed structurally from both sides. **Needs, in order:** Kevin's compile → a **`PlistBuddy` check
+that `NSCameraUsageDescription` reached the built bundle** (W8.5a class of bug; a miss here is a hard
+crash on first photo tap, not a degraded feature) → simulator smoke incl. the collision repro.
+
+**⛔ BACKBURNERED — FT-20.** Dark-mode default + browse-mode chrome + an Apple-Maps-style bottom
+sheet as primary navigation. **Kevin explicitly said do not start; discuss first, after the board
+clears.** Note dark mode is not a one-liner — the red/amber/green polylines are the product's data
+encoding and TF2-18 already logged a sunlight-legibility problem. See `docs/field-testing-log.md` FT-20.
+
+**PROCESS LESSONS ADDED THIS STRETCH:**
+- **`let` with a default value is EXCLUDED from Swift's synthesized memberwise init.** Broke B4's
+  compile; a QA pass had read the same diff and flagged only a style nit. Compilers catch what reads don't.
+- **Always `git pull` after `checkout` of an existing local branch** — Kevin smoke-tested stale
+  round-1 code once because of this. Use `git checkout -B <branch> origin/<branch>`.
+- `xcodebuild test | tail` **misses the summary**; use `xcrun xcresulttool get test-results summary`.
+- A transient `FBSOpenApplicationServiceErrorDomain … RequestDenied` launch error mid-run is a stale
+  app instance on the simulator; `TEST SUCCEEDED` after it is real — verify via the xcresult count.
+- **Do NOT run Homebrew's suggested `sudo rm -rf /Library/Developer/CommandLineTools`** — Kevin's CLT
+  are outdated but Xcode 26.4.1 works and we depend on it. Install CLIs from GitHub release binaries.
+
+**NEXT:** #82 compile + PlistBuddy + smoke → merge → **board clear** → cold Release build → archive
+build 16 → Kevin's drive test. That build carries FT-17/17a, FT-18, the geometry regen, Keychain auth,
+and the complete FT-15 film-shoot-sign feature.
+
+
 ### 2026-08-13 — open-items #16 (Mapbox token restriction) investigated; closed as doc correction, not code work
 
 **WHERE WE ARE:** Kevin approved open-items.md #16 ("Mapbox token restriction — bundle-ID / URL
