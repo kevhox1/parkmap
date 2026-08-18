@@ -415,10 +415,10 @@ For whichever proposal ships:
   after seeing it. Do not "restore" the labeled pill in a later pass.
 - **Gear hidden in Drive Mode + exactly one mute button** (bottom card only) — confirmed.
 - **FT-17a not regressed** — *"zoom and recenter looks great."*
-- **NOT verified:** the ParkUntil-pill-above-card stacking order (§S5/S6). Kevin never entered that
-  state — the pill only appears after a park-until time is actually set, distinct from the clock icon
-  in the browse-mode ribbon. Left as a known-unverified detail rather than a blocker; it will surface
-  the first time the feature is used on-device.
+- **ParkUntil-pill stacking order (§S5/S6): ✅ VERIFIED.** Kevin set a park-until time to reach the
+  state and confirmed the pill sits above the bottom card and *"looks good as is."* This resolves the
+  implementing agent's flagged interpretation call — it read the doc's ASCII diagrams as authoritative
+  over the terser "No change" disposition-table entries, and that reading was correct.
 
 ---
 
