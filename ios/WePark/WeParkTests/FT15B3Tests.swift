@@ -478,7 +478,7 @@ final class FT15B3InsertBlockScopedReportTests: XCTestCase {
                 return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
                         b3EvidenceInsertResponseJSON())
             case .pinsInsert:
-                let selection = canonicalSelections()[0]
+                let selection = self.canonicalSelections()[0]
                 let starts = kB3Now
                 let expires = CommunityPinService.resolvedExpiresAt(pinType: .filming, startsAt: starts, requested: nil)
                 return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
