@@ -625,20 +625,73 @@ function extractPolylineBetween(streetOsmName, ptA, ptB) {
 const INTERSECTION_SETBACK_M = 10;
 const INTERSECTION_SETBACK_FT = INTERSECTION_SETBACK_M * 3.28084; // ≈ 32.8ft
 
+// FT-19: the minimum block length (ft) trimming must always leave behind in the
+// middle. A block shorter than 2×INTERSECTION_SETBACK_FT + MIN_USABLE_BLOCK_FT can't
+// take the FULL setback at both ends without collapsing to nothing, so the setback is
+// tapered proportionally instead (see trimIntersectionSetback() below) rather than the
+// old all-or-nothing "skip the trim entirely" behavior, which is what let short blocks'
+// polylines run straight into both intersections. 10ft (~3m) is comfortably above
+// isDegenerateLine()'s 2m drop threshold, so a maximally-tapered short block still leaves
+// a real, non-degenerate stub rather than vanishing.
+const MIN_USABLE_BLOCK_FT = 10;
+
+// FT-19 measurement: how many block faces hit the short/tapered-setback path (blockLenFt
+// < 2×INTERSECTION_SETBACK_FT + MIN_USABLE_BLOCK_FT) vs the too-short-to-trim-at-all
+// path (setbackFt clamped to 0) vs the normal full-setback path. Printed in the final
+// summary — see main()'s "Intersection setback" block below.
+const SETBACK_STATS = { full: 0, tapered: 0, untrimmed: 0 };
+
+// Trims INTERSECTION_SETBACK_FT (or a tapered amount for short blocks, see
+// MIN_USABLE_BLOCK_FT above) off both ends of blockGeo's raw polyline.
+//
+// FT-14 coordinate-space contract: the returned blockGeo carries a `setbackFt` field
+// recording exactly how much RAW, intersection-relative distance was trimmed off the
+// START of the line (0 if this block wasn't trimmed at all). This is the ONLY place
+// in the file that produces a setback shift, and extractSubSegment() is the ONLY place
+// that consumes it (see its comment) — every other caller in this file (createSubSegments()
+// included) works purely in raw, untranslated distance, and extractSubSegment() is the
+// single point where raw distance gets translated into this trimmed line's own local
+// coordinate axis. That keeps the raw-vs-trimmed mismatch that caused FT-14's silent
+// zone drops structurally impossible to reintroduce at a new call site.
 function trimIntersectionSetback(blockGeo) {
   if (!blockGeo) return blockGeo;
   const { blockLenFt } = blockGeo;
-  // Skip blocks too short to safely trim (need >3× setback to leave a usable middle)
-  if (blockLenFt < INTERSECTION_SETBACK_FT * 3) return blockGeo;
-  const trimmedLine = extractSubSegment(blockGeo, INTERSECTION_SETBACK_FT, blockLenFt - INTERSECTION_SETBACK_FT);
-  if (!trimmedLine || trimmedLine.length < 2) return blockGeo;
+
+  // Full setback when the block can afford it at both ends with room to spare for
+  // MIN_USABLE_BLOCK_FT in the middle; tapered (and eventually zero) as the block gets
+  // too short to afford it. This formula is continuous with the old fixed-setback
+  // behavior: for blockLenFt >= 2×INTERSECTION_SETBACK_FT + MIN_USABLE_BLOCK_FT (i.e.
+  // ~75.6ft — comfortably below nearly every real Manhattan block), it evaluates to
+  // exactly INTERSECTION_SETBACK_FT, unchanged from before.
+  const setbackFt = Math.min(
+    INTERSECTION_SETBACK_FT,
+    Math.max(0, (blockLenFt - MIN_USABLE_BLOCK_FT) / 2)
+  );
+
+  if (setbackFt <= 0) {
+    // Degenerately short block: no room to trim without erasing it outright. Leave
+    // untrimmed (setbackFt: 0, so extractSubSegment() doesn't try to compensate for a
+    // trim that didn't happen) — it's already short enough that any overshoot into the
+    // intersection is small in absolute terms.
+    SETBACK_STATS.untrimmed++;
+    return { ...blockGeo, setbackFt: 0, rawBlockLenFt: blockLenFt };
+  }
+  if (setbackFt < INTERSECTION_SETBACK_FT - 1e-6) SETBACK_STATS.tapered++;
+  else SETBACK_STATS.full++;
+
+  const trimmedLine = extractSubSegment(blockGeo, setbackFt, blockLenFt - setbackFt);
+  if (!trimmedLine || trimmedLine.length < 2) {
+    return { ...blockGeo, setbackFt: 0, rawBlockLenFt: blockLenFt };
+  }
   const trimmedTotalLen = cumulativeDists(trimmedLine);
   const trimmedBlockLenM = trimmedTotalLen[trimmedTotalLen.length - 1];
   return {
     line: trimmedLine,
     totalLen: trimmedTotalLen,
     blockLenM: trimmedBlockLenM,
-    blockLenFt: trimmedBlockLenM * 3.28084
+    blockLenFt: trimmedBlockLenM * 3.28084,
+    setbackFt,
+    rawBlockLenFt: blockLenFt
   };
 }
 
@@ -665,6 +718,11 @@ function getBlockPolyline(block) {
   return trimIntersectionSetback(rawBlockGeo);
 }
 
+// distFt here is TRIMMED-LOCAL (blockGeo's own internal axis, starting at 0 at
+// blockGeo.line[0]) — NOT raw/intersection-relative. The only caller,
+// extractSubSegment(), is responsible for translating raw distances into this space
+// via blockGeo.setbackFt before calling in; do not call this directly with a raw
+// distance from createSubSegments() or any sign's distance_from_intersection.
 function interpolateOnBlockLine(blockGeo, distFt) {
   const distM = distFt / 3.28084;
   const { line, totalLen } = blockGeo;
@@ -683,7 +741,26 @@ function interpolateOnBlockLine(blockGeo, distFt) {
   return line[line.length - 1];
 }
 
-function extractSubSegment(blockGeo, startFt, endFt) {
+// Extracts the portion of blockGeo's line between two RAW, intersection-relative
+// distances — the same coordinate space createSubSegments() computes zone boundaries
+// in, straight off NYC's `distance_from_intersection` field. Callers NEVER pass
+// trimmed-local distances here, whether or not blockGeo has been through
+// trimIntersectionSetback(); this function is the single place that knows blockGeo may
+// carry a `setbackFt` (how much raw distance was trimmed off the line's start) and
+// compensates for it before touching blockGeo's own internal (trimmed-local) distance
+// axis. This is what makes the FT-14 raw-vs-trimmed coordinate mismatch structurally
+// impossible to reintroduce: there is no second code path that interprets raw
+// distances against blockGeo directly.
+//
+// Zones that land entirely inside the trimmed-off setback region correctly still
+// collapse to a degenerate line (both endpoints clamp to the same trimmed boundary)
+// and get dropped by the caller — that's intentional; hiding that portion of the block
+// is the setback's entire purpose. Zones that straddle the setback boundary get
+// clipped to the surviving portion instead of being dropped entirely (the FT-14 fix).
+function extractSubSegment(blockGeo, startRawFt, endRawFt) {
+  const setback = blockGeo.setbackFt || 0;
+  const startFt = startRawFt - setback;
+  const endFt = endRawFt - setback;
   const startM = startFt / 3.28084;
   const endM = endFt / 3.28084;
   const { line, totalLen } = blockGeo;
@@ -1529,6 +1606,14 @@ async function main() {
   const blockKeys = Object.keys(blocks);
   let processed = 0;
 
+  // FT-14 measurement: row-level funnel across geometry-successful blocks (same
+  // methodology as docs/qa/ft14-zone-construction-loss-investigation.md — dedup by
+  // original sign object identity, since a `both`-arrow sign can be assigned into
+  // more than one zone). A row only counts as "lost" if NONE of its zones survive.
+  let zonesAttempted = 0, zonesDroppedDegenerate = 0, blocksWithADrop = 0;
+  const rowsEntering = new Set();
+  const rowsSurviving = new Set();
+
   for (const fullKey of blockKeys) {
     processed++;
     if (processed % 500 === 0) {
@@ -1577,17 +1662,23 @@ async function main() {
       // street/from/to, so direction is constant across the block face (FT-11).
       const onewayFields = getOnewayFields(block, blockGeo);
 
+      let blockHadDrop = false;
       subSegments.forEach((zone, idx) => {
+        zonesAttempted++;
+        zone.rules.forEach(r => rowsEntering.add(r.sign));
+
         let line;
         try {
           line = extractSubSegment(blockGeo, zone.distStart, zone.distEnd);
-        } catch(e) { return; }
-        if (!line || line.length < 2) return;
+        } catch(e) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
+        if (!line || line.length < 2) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
 
         const offsetLine = offsetPolyline(line, block.side, blockCurbOffset);
-        if (!offsetLine || offsetLine.length < 2) return;
-        if (!offsetLine.every(p => isFinite(p[0]) && isFinite(p[1]))) return;
-        if (isDegenerateLine(offsetLine)) return;  // TF2-12: drop zero-length stubs
+        if (!offsetLine || offsetLine.length < 2) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
+        if (!offsetLine.every(p => isFinite(p[0]) && isFinite(p[1]))) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
+        if (isDegenerateLine(offsetLine)) { zonesDroppedDegenerate++; blockHadDrop = true; return; }  // TF2-12: drop zero-length stubs
+
+        zone.rules.forEach(r => rowsSurviving.add(r.sign));
 
         const rules = zone.rules.map(r => ({
           category: r.category,
@@ -1612,6 +1703,7 @@ async function main() {
           ...(onewayFields.oneway_toward !== undefined && { oneway_toward: onewayFields.oneway_toward })
         });
       });
+      if (blockHadDrop) blocksWithADrop++;
     } else {
       osmMisses++;
       // Skip blocks without OSM geometry (no fallback in tile mode)
@@ -1620,6 +1712,17 @@ async function main() {
 
   console.log(`   \n   OSM geometry: ${osmHits} hits, ${osmMisses} misses`);
   console.log(`   Generated ${allSegments.length} segments\n`);
+
+  // FT-14/FT-19 measurement summary (see docs/qa/ft14-zone-construction-loss-investigation.md
+  // and field-testing-log.md FT-19 for the bugs this instruments).
+  {
+    const rowsLost = [...rowsEntering].filter(s => !rowsSurviving.has(s)).length;
+    console.log('📐 Intersection-setback / zone-construction stats:');
+    console.log(`   Setback applied: full=${SETBACK_STATS.full}, tapered=${SETBACK_STATS.tapered}, untrimmed(too short)=${SETBACK_STATS.untrimmed}`);
+    console.log(`   Zones attempted: ${zonesAttempted}, dropped (degenerate/invalid): ${zonesDroppedDegenerate}`);
+    console.log(`   Geometry-successful blocks with >=1 zone drop: ${blocksWithADrop} / ${osmHits}`);
+    console.log(`   Rows entering geometry-successful blocks: ${rowsEntering.size}, surviving: ${rowsSurviving.size}, lost: ${rowsLost}\n`);
+  }
 
   // 6. Assign segments to tiles
   console.log('🧩 Assigning segments to tiles...');

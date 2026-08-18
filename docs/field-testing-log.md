@@ -31,10 +31,35 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   *after* `trimIntersectionSetback()` shifted the origin. Same function, same coordinate confusion —
   one produces missing rules (~28% of geometry-successful blocks), the other visible overshoot.
   **Fix them together; fixing one blind will likely perturb the other.**
-- **Status:** 🔴 open — **Kevin approved proceeding 2026-08-18** ("Yes I think we need accurate
-  zones"), including the tile regen this requires.
-- **Lands in:** `build/preprocess.js` + a tile regen (both `tiles/` **and** `ios/.../Resources/tiles`
-  — the #21 lesson).
+- **CANDIDATE CAUSE CONFIRMED (`@backend-data`, 2026-08-18):** measured citywide, live pull — **81 of
+  10,636 geometry-successful blocks (0.76%)** hit the short-block skip branch pre-fix, returned fully
+  untrimmed. Small in count but exactly the short cross-street blocks where overshoot is most visible.
+- **FIXED (`@backend-data`, 2026-08-18):** full write-up + citywide before/after measurement in
+  `docs/qa/ft14-ft19-zone-geometry-fix.md`. Two changes to `build/preprocess.js`, same root cause as
+  FT-14: (1) `extractSubSegment()` is now the single place that translates raw intersection-relative
+  distances into a (possibly-trimmed) block's local coordinate axis, via a new `setbackFt` field
+  `trimIntersectionSetback()` attaches to `blockGeo` — structurally closes off the raw-vs-trimmed
+  confusion, since no other code path touches raw distances against `blockGeo` directly. (2) The
+  short-block skip is replaced with a continuous, clamped taper
+  (`setbackFt = min(INTERSECTION_SETBACK_FT, max(0, (blockLenFt - 10) / 2))`) — byte-identical to the
+  old fixed setback for any block ≥75.6ft (nearly all real blocks), tapering gracefully instead of
+  skipping outright for short blocks. Lateral curb-offset geometry (`offsetPolyline`,
+  TF2-5/10/12/14 tuning) untouched.
+- **Measured citywide (live pull, before/after, same pull for both):** rows lost inside
+  geometry-successful blocks 1,624→359 (−77.9%); blocks with ≥1 dropped zone 3,015→1,842 (−38.9%);
+  tile segments 43,073→44,280 (+1,207); coverage 47%→48% (351mi→354mi), **zero neighborhood
+  regressions**; category breakdown all held/increased except `ASP_OVERNIGHT_MWF` (−1), traced to a
+  correctness fix (removal of a wrongly-positioned phantom near-intersection sliver whose underlying
+  rule survives via an adjacent zone — not an information loss, see doc). Worked example on `EAST 2ND
+  STREET (2ND AVENUE to 1ST AVENUE)` (the TF2-4 block): school-zone rule was rendering ~32.8ft
+  (~10m) further from the intersection than its true posted position — "further down toward the block
+  edge," matching Kevin's TF2-4 wording exactly. TF2-4's *position* component is resolved by this fix;
+  its *curb-side* wording remains unconfirmed/open, see TF2-4 entry below.
+- **Status:** 🟢 fixed, tile regen shipped this PR (both `tiles/` **and** `ios/.../Resources/tiles`,
+  verified `diff -rq` identical — the #21 lesson). `sw.js` `CACHE_VERSION` bumped v39→v40. ⏳ Kevin
+  on-device confirm (build 16+): lines land at the correct end of the block, no intersection overshoot.
+- **Lands in:** `build/preprocess.js`, `sw.js`, `tiles/*`, `ios/WePark/WePark/Resources/tiles/*`,
+  `docs/qa/ft14-ft19-zone-geometry-fix.md`.
 
 ## Round 5 — build 15 field observations (2026-08-12)
 
@@ -394,23 +419,21 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   mirroring the compact-spacing fallback's existing `.length===1` pattern. Proved the gate changes
   nothing today: a live-pull before/after run produced **byte-identical tile output** (1,070/1,070
   tiles, 42,975/42,975 segments, identical category counts, only the `generatedAt` timestamp differed).
-- **FOLLOW-UP #2 (open-items #15) — 1,528-row zone-construction loss, INVESTIGATED, not fixed:**
-  full write-up in `docs/qa/ft14-zone-construction-loss-investigation.md`. The original "sign at
-  distance 0 with an isolated 'away' arrow" hypothesis is **refuted** (0 of 1,621 lost rows in a fresh
-  live pull match it). Real root cause, confirmed with exact numbers: `createSubSegments()` computes
-  zone boundaries in raw (physical-intersection-relative) distance, but `extractSubSegment()` interprets
-  those same raw values against `blockGeo` **after** `trimIntersectionSetback()` has already shifted its
-  coordinate origin by the 10m/32.8ft intersection setback — so zones whose raw distance lands past the
-  trimmed block's shortened length collapse to a degenerate line and get silently dropped, taking every
-  rule assigned to that zone with them. Affects ~28% of geometry-successful blocks (3,008/10,613), ~3%
-  of rows (1,621/53,367) in this pull. **Not fixed here** — the correct fix touches
-  `trimIntersectionSetback()`'s return contract and the heavily-tuned intersection-setback/curb-offset
-  region of the file, actively changes rendered geometry (unlike the SAINT/ST gate, which only ever adds
-  a safety net), and would need its own live-pull regen + coverage-report validation before shipping —
-  a regen decision reserved for Kevin per the standing tile-regen policy. Recommended fix direction is
-  documented in the investigation doc for a future dedicated pass.
+- **FOLLOW-UP #2 (open-items #15) — 1,528-row zone-construction loss, FIXED 2026-08-18:**
+  original investigation in `docs/qa/ft14-zone-construction-loss-investigation.md`; the fix (bundled
+  with FT-19, same root cause) and full citywide before/after measurement in
+  `docs/qa/ft14-ft19-zone-geometry-fix.md`. `extractSubSegment()` is now the single place that
+  translates raw distances into a (possibly-trimmed) block's local coordinate axis, keyed off a new
+  `setbackFt` field `trimIntersectionSetback()` attaches to `blockGeo` — closes the coordinate mismatch
+  structurally rather than patching around it. **Citywide, live pull, before/after: rows lost inside
+  geometry-successful blocks 1,624→359 (−77.9%), blocks with ≥1 dropped zone 3,015→1,842 (−38.9%),
+  coverage 47%→48%, zero neighborhood regressions, zero category regressions** (one apparent
+  category decrease traced to a correctness fix, see doc). Kevin approved the tile regen this required
+  2026-08-18 ("Yes I think we need accurate zones"); regen shipped this PR, `tiles/` and
+  `ios/.../Resources/tiles` verified identical.
 - **Lands in:** `build/preprocess.js` normalizer + regen 7 (#68); SAINT/ST gate follow-up in
-  `build/preprocess.js` (no regen, see above — proven no-op on current tile output).
+  `build/preprocess.js` (no regen, see above — proven no-op on current tile output); zone-construction
+  loss fix in `build/preprocess.js` + regen 8, bundled with FT-19 (`docs/qa/ft14-ft19-zone-geometry-fix.md`).
 
 ### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
 - **Request (Kevin, 2026-07-12):** loves the Parking 101 guide ("very good"), wants it accessible
@@ -725,14 +748,22 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   offset (polyline on wrong side visually).
 - **BLOCK IDENTIFIED (Kevin, 2026-08-18):** the school zone on **E 2nd St between 2nd Ave and 1st Ave**.
   This was the missing input that stalled the item since June.
-- **Status:** 🟡 unblocked, **deliberately queued behind the FT-19/FT-14 geometry work.** That pass
-  rewrites `trimIntersectionSetback()`/`createSubSegments()` and regenerates every tile, so
-  investigating this block against tiles that are about to change would be wasted effort — and the
-  regen may resolve or alter it outright (this entry already suspected TF2-5's curb-offset rebuild
-  might have fixed it). **Re-check this exact block after the geometry regen lands**, then determine
-  whether the residue is NYC source error, a pipeline side-assignment bug, or a render offset.
-- **Lands in:** backend-data (tiles) and/or iOS (render); or deferred to Tier 2 sign-corrections if
-  it's a NYC source error.
+- **Position component RESOLVED by the FT-14/FT-19 fix, 2026-08-18** — that fix's citywide regen pulled
+  exactly this block, `EAST 2ND STREET (2ND AVENUE to 1ST AVENUE)`, as a worked example (confirms the
+  block ID above) and found the two school-zone signs (`NO STANDING SCHOOL DAYS`, dist 79ft; `AVO
+  SCHOOL FACULTY ... SCHOOL DAYS`, dist 200ft) were rendering **~32.8ft (~10m) further from the 2nd
+  Avenue intersection than their true posted position** — the pre-fix coordinate-space bug shifted
+  every zone forward by exactly the intersection-setback amount. That matches "further down toward the
+  block edge" verbatim. Full detail: `docs/qa/ft14-ft19-zone-geometry-fix.md` § worked example.
+- **Status:** 🟡 position component fixed and shipped in this regen; **the "north side... should be
+  west side, not east side" curb-side wording is still unresolved** — E 2nd St is E-W, so its sides are
+  N/S, not E/W, meaning that half of the original complaint may point at a different, separate bug (or
+  a different block/wording mismatch) not touched by this fix. **NOT closing outright** — needs Kevin's
+  on-device confirmation with build 16+ (does the school-zone rule now land at the right position AND
+  the right curb?) before this can move to 🟢 or fork into a new side-assignment investigation.
+- **Lands in:** backend-data (tiles, position component — shipped with the FT-14/FT-19 regen) and/or
+  iOS (render); or deferred to Tier 2 sign-corrections if the remaining side question is a NYC source
+  error.
 
 ### TF2-3 🟢 Arrow points the wrong way most of the time (esp. cruise / no-destination) — FIXED build 7
 - **Area:** Drive Mode heading-up rotation. `MapViewRepresentable.syncDriveHeading` + LocationService heading source.
