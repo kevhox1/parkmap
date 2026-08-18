@@ -406,6 +406,22 @@ For whichever proposal ships:
 
 ---
 
+## ✅ ON-DEVICE VALIDATION — Kevin, 2026-08-18 (simulator smoke of PR #79)
+
+- **"I do like the new button design on drive mode."** Bottom Dock validated.
+- **Recenter: labeled pill → plain blue icon.** Kevin: *"the recenter pill is gone. It's just the
+  blue icon which I think works. That's what Apple Maps does."* **APPROVED.** Recording it because
+  this was NOT one of the five rulings — it emerged during implementation and Kevin endorsed it
+  after seeing it. Do not "restore" the labeled pill in a later pass.
+- **Gear hidden in Drive Mode + exactly one mute button** (bottom card only) — confirmed.
+- **FT-17a not regressed** — *"zoom and recenter looks great."*
+- **NOT verified:** the ParkUntil-pill-above-card stacking order (§S5/S6). Kevin never entered that
+  state — the pill only appears after a park-until time is actually set, distinct from the clock icon
+  in the browse-mode ribbon. Left as a known-unverified detail rather than a blocker; it will surface
+  the first time the feature is used on-device.
+
+---
+
 ## Open Questions
 
 1. **End control placement** — top-trailing isolated icon (my recommendation) vs. literally in the
