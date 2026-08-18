@@ -38,13 +38,19 @@ struct BlockDetailView: View {
     /// FT-15/TF2-15 (§9.2): Pin service used to look up an active/upcoming block-scoped
     /// restriction covering this segment. `nil` in previews/standalone use — the banner
     /// simply doesn't render (same optional-service pattern as `onParkHere`).
-    let pinService: CommunityPinService? = nil
+    /// NOTE (`var`, not `let`): a `let` property WITH a default value is excluded from the
+    /// synthesized memberwise initializer — Swift reasons a constant already holds its value.
+    /// Declared `let` here, this compiled locally but made `BlockDetailView(… pinService:
+    /// onOpenRestriction:)` fail at the ContentView call site with "extra arguments at
+    /// positions #5, #6". `var` keeps the default AND admits the parameter. Caught by Kevin's
+    /// Mac compile, 2026-08-18.
+    var pinService: CommunityPinService? = nil
 
     /// FT-15/TF2-15 (§9.2): Called when the user taps the restriction banner. Passes the
     /// matched `CommunityPin` so the caller can present `PinDetailSheet` (reuses the
     /// existing `activeSheet = .pinDetail(pin)` pattern in ContentView — no new sheet
     /// case needed). `nil` in previews/standalone use, matching `onParkHere`'s convention.
-    let onOpenRestriction: ((CommunityPin) -> Void)? = nil
+    var onOpenRestriction: ((CommunityPin) -> Void)? = nil
 
     // Evaluate once at sheet-open time (stable reference time for the whole sheet).
     private let now: Date = .nowET
