@@ -73,19 +73,34 @@ private func makePinResponseJSON(
 
 private let kFeedbackUser = UUID(uuidString: "B0000001-0000-0000-0000-000000000001")!
 
+/// supabase-swift adoption — Stream A: shape matches the SDK's `Session`/`User` `Decodable`
+/// requirements (snake_case + expires_at, not just expires_in — see
+/// SupabaseAuthServiceTests.swift's header for the full explanation of why).
 private func feedbackAuthResponseJSON(userId: UUID = kFeedbackUser) -> Data {
-    """
+    let expiresAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+    return """
     {
       "access_token": "eyJ.feedback.token",
       "refresh_token": "refresh-feedback-token",
+      "token_type": "bearer",
       "expires_in": 3600,
-      "user": { "id": "\(userId.uuidString)" }
+      "expires_at": \(expiresAt),
+      "user": {
+        "id": "\(userId.uuidString)",
+        "aud": "authenticated",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "is_anonymous": true
+      }
     }
     """.data(using: .utf8)!
 }
 
-/// Builds a real SupabaseAuthService instance with a mock URLSession that returns
+/// Builds a real SupabaseAuthService instance wired to a mocked network that returns
 /// `feedbackAuthResponseJSON`. Equivalent to Tier3AuthReactionsTests.makeAuthenticatedPair.
+/// supabase-swift adoption — Stream A: uses SupabaseAuthService's `#if DEBUG` test-seam
+/// initializer (Foundation-only params — see SupabaseAuthServiceTests.swift's header for why)
+/// instead of the removed `urlSession:`-based initializer.
 /// @MainActor: SupabaseAuthService is @MainActor @Observable.
 @MainActor
 private func makeFeedbackAuthService() async -> SupabaseAuthService {
@@ -103,7 +118,8 @@ private func makeFeedbackAuthService() async -> SupabaseAuthService {
     let authService = SupabaseAuthService(
         supabaseURL: kFeedbackTestURL,
         supabaseAnonKey: kFeedbackAnonKey,
-        urlSession: session
+        testStorage: InMemoryAuthStorage(),
+        fetch: { try await session.data(for: $0) }
     )
     await authService.ensureSession()
     return authService
