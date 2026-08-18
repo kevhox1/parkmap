@@ -7,6 +7,35 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ---
 
+## Round 6 — build 15/16 field observations (2026-08-18)
+
+### FT-19 🔴 Lines still overshoot into intersections at road ends (GEOMETRY) — likely same root as FT-14's zone loss
+- **Area:** `build/preprocess.js` — `trimIntersectionSetback()` / `extractSubSegment()` /
+  `createSubSegments()`. Backend-data. **The most heavily-tuned geometry code in the project.**
+- **Observed (Kevin, 2026-08-18):** "Many lines are still not landing properly at the end of roads.
+  They extend into intersections."
+- **History — this is not a new class of bug:** PRs #21/#22 were the original intersection-overshoot
+  fixes (`INTERSECTION_SETBACK_M = 6`, later 10). #21 is also the one whose tiles landed only in
+  `./tiles/` and not the iOS bundle, meaning iOS ran stale tiles for days — see HANDOFF 2026-05.
+- **CANDIDATE CAUSE (orchestrator, code read, `build/preprocess.js:631-633`):**
+  ```js
+  // Skip blocks too short to safely trim (need >3× setback to leave a usable middle)
+  if (blockLenFt < INTERSECTION_SETBACK_FT * 3) return blockGeo;
+  ```
+  **Any block shorter than ~98.4ft (3 × 32.8ft) is returned COMPLETELY UNTRIMMED** — no setback at
+  either end, so its polyline runs straight into both intersections. Short blocks are precisely where
+  a driver would notice overshoot. Not verified as *the* cause; it is the first thing to measure.
+- **⚠️ LIKELY THE SAME ROOT AS FT-14's zone-construction loss.** That bug
+  (`docs/qa/ft14-zone-construction-loss-investigation.md`) is a coordinate-origin mismatch: zone
+  boundaries are built in raw intersection-relative distance, but interpreted against `blockGeo`
+  *after* `trimIntersectionSetback()` shifted the origin. Same function, same coordinate confusion —
+  one produces missing rules (~28% of geometry-successful blocks), the other visible overshoot.
+  **Fix them together; fixing one blind will likely perturb the other.**
+- **Status:** 🔴 open — **Kevin approved proceeding 2026-08-18** ("Yes I think we need accurate
+  zones"), including the tile regen this requires.
+- **Lands in:** `build/preprocess.js` + a tile regen (both `tiles/` **and** `ios/.../Resources/tiles`
+  — the #21 lesson).
+
 ## Round 5 — build 15 field observations (2026-08-12)
 
 ### FT-18 🔴 Drive Mode button layout/spacing looks bad — redesign toward Apple Maps (DESIGN)
