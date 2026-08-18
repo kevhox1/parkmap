@@ -9,6 +9,54 @@
 
 ## Amendment Log
 
+### 2026-08-13 — FT-17a: gesture-DETECTION mechanism fixed (does not further revise OQ-4)
+
+**Not a policy change.** The FT-17 amendment below (2026-08-12) settled the *policy*
+question: pan OR pinch pauses follow, tap/long-press do not. FT-17a fixes a defect in *how*
+that policy was implemented — the detection mechanism, not the decision.
+
+**Bug:** `regionWillChangeAnimated` computed `isUserGesture` by scanning
+`mapView.gestureRecognizers`. That array only ever contained the two recognizers the app
+itself adds directly to the map view — `UILongPressGestureRecognizer` (pin-drop) and
+`UITapGestureRecognizer` (block-select). MapKit's own native pan and pinch recognizers live
+on `MKMapView`'s internal subviews and are **never** present in that array. So a real pan or
+pinch was detected only when the tap or long-press recognizer happened to flicker into an
+active state concurrently with it — sporadic, not reliable. Kevin, testing the FT-17 branch:
+"pinch to zoom out and pan works great, it holds and doesn't snap back. But the recenter pill
+is sporadic. It doesn't always appear." The same latent bug existed for pan before FT-17 too;
+FT-17's widened trigger surface (pinch now also expected to pause follow) just made the
+unreliability visible.
+
+**Fix:** install two dedicated, observer-only recognizers directly on the map view —
+`UIPanGestureRecognizer` and `UIPinchGestureRecognizer` (`Coordinator.panGesture` /
+`pinchGesture`, wired in `makeUIView`) — purely to read `.state`. They participate in
+simultaneous recognition (`shouldRecognizeSimultaneouslyWith` → `true`, already the house
+pattern for the tap/long-press recognizers) so they observe alongside MapKit's native
+pan/pinch handling without ever intercepting or altering it — pinch-zoom and pan behavior is
+byte-for-byte unchanged from the user's perspective. `regionWillChangeAnimated` /
+`regionDidChangeAnimated` now read these two recognizers' `.state` instead of scanning
+`mapView.gestureRecognizers`. The state→bool mapping was extracted into a new pure function,
+`MapViewRepresentable.isUserGestureActive(panState:pinchState:)`, which has no
+MKMapView/live-recognizer dependency (unlike the code it replaces) and is fully
+unit-testable; it feeds the unchanged `shouldPauseFollow(driveModeActive:isUserGesture:)`.
+
+**Explicit decision restated (unchanged from FT-17, now correctly enforced):** pan and pinch
+pause Drive Mode follow; tap (block select) and long-press (pin drop) do NOT. FT-17a makes
+this structural, not incidental — `isUserGestureActive`'s signature has only
+`panState`/`pinchState` parameters, so tap/long-press state has no path into the result.
+
+**FT-5 free-browse guard also fixed as a side effect:** `isUserInteracting` (the pre-existing
+snap-back guard for free-browse panning outside Drive Mode) was already derived from the same
+`isUserGesture` computation in `regionWillChangeAnimated` — so it shared the identical latent
+bug (driven by tap/long-press flicker, not real pan detection). Re-pointing that computation
+at the new observer recognizers fixes both consumers from one change; not treated as a
+separate re-scoping since it's the same code path FT-5 already shared with Drive Mode's
+follow-pause logic.
+
+See `docs/field-testing-log.md` FT-17a for the full field-report and fix write-up.
+
+---
+
 ### 2026-08-12 — OQ-4 REVERSED (FT-17)
 
 **Original OQ-4 resolution (shipped, Option A):** pan pauses follow and shows the Recenter
