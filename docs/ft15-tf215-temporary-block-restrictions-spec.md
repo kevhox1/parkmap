@@ -660,6 +660,34 @@ cheap to add (one boolean, no PII exposure) if you want it now rather than as a 
 
 ---
 
+## 13b. Known limitation — blockface granularity over-reports (Kevin, 2026-08-18)
+
+**Kevin's question on first use:** *"I was kind of under the assumption that half a block could be
+blocked off for parking and the other half would be open."*
+
+**He's right about reality, and the pipeline already models it.** `createSubSegments()` builds zones
+*within* a block from NYC's per-sign distance data — that's why a baked street can change colour
+mid-block without an intersection. Sub-block restriction is real and already represented for
+open-data rules.
+
+**The crowd report deliberately does NOT support it.** Selection granularity is the whole blockface
+(`STREET|FROM|TO|SIDE`). This is a spec decision (§4), not a data constraint:
+
+- Specifying a sub-block extent means expressing "from 40ft to 180ft past the cross street" — either
+  by dragging endpoints along a polyline on a phone, or entering distances. Both are awkward on a
+  corner and worse from a car. A blockface is one unambiguous tap.
+- **The cost:** a report over-reports. A shoot taking half a blockface marks the whole thing.
+- **Accepted because it errs in the safe direction.** For a don't-get-towed product, telling a user
+  to avoid a block that's partly fine beats telling them a restricted spot is free.
+- **Kevin's own placard covered whole blockfaces** (E 2nd, 3rd Ave→1st Ave) — the common case, since
+  film permits and cones work in whole-block units.
+
+**Possible phase 2**, if real use shows over-reporting is a problem: a two-tap "from here to here"
+along a selected blockface, reusing the same distance-along-block machinery `createSubSegments()`
+already has. Not worth building speculatively.
+
+---
+
 ## 14. Out-of-Scope Follow-Ups
 
 **Persistent offline submission queue** (§8, §15). Real user value (curbside cellular is genuinely
