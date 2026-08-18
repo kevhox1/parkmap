@@ -77,6 +77,18 @@ App Store Connect, real-device drive test).
 
 ---
 
+## ⛔ BACKBURNERED — needs a design discussion with Kevin FIRST, do not start
+
+**FT-20** — dark-mode default + browse-mode chrome redesign + Apple-Maps-style bottom sheet.
+Kevin, 2026-08-18: *"Backburner this entire request… we need to discuss all of these proposed
+revisions to align on the proper path forward. But after we complete all the open ones."*
+Four distinct asks (dark mode w/ polyline contrast re-validation; browse-mode chrome; over-long
+button text; a draggable bottom sheet as primary navigation). The last one is a **re-architecture of
+app navigation**, not a tidy-up. See `docs/field-testing-log.md` FT-20. **No spec, no code, until
+that conversation happens.**
+
+---
+
 ## 🔵 BACKLOG — not started, explicitly after the above
 
 External TestFlight group (privacy URL ready) · FT-2 delete-own-pin (spec'd) · TF2-15 construction

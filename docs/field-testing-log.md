@@ -9,6 +9,41 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Round 6 — build 15/16 field observations (2026-08-18)
 
+### FT-20 ⚪️ BACKBURNERED — dark mode default + browse-mode chrome redesign (Apple Maps bottom sheet)
+- **⛔ KEVIN'S EXPLICIT INSTRUCTION (2026-08-18): DO NOT START THIS.** *"Backburner this entire
+  request because I want to make sure we finish everything on our plate besides this before starting
+  up new work… we need to discuss all of these proposed revisions to align on the proper path
+  forward. But after we complete all the open ones."* **This entry exists to preserve the request, not
+  to authorize it. It needs a design discussion with Kevin BEFORE any spec or code.**
+- **Positive signal to preserve:** *"I do like the new button design on drive mode"* — FT-18's Bottom
+  Dock is validated on-device. Whatever comes next should extend that language, not replace it.
+- **The requests, as distinct items:**
+  1. **Default the app to dark mode.** Kevin: *"I think that looks cleaner."* ⚠️ **Not a one-line
+     `.preferredColorScheme(.dark)`.** The red/amber/green polylines are the app's **load-bearing data
+     encoding** — the entire product is "is this curb legal right now." Their contrast was tuned
+     against Apple's light basemap, and TF2-18 already logged a **sunlight-legibility** problem in the
+     current scheme. Dark mode changes the basemap underneath every one of those colors and must be
+     re-validated for contrast, including in direct sun on a windshield mount. Kevin explicitly asked
+     to *"make sure the polylines are the right contrast."*
+  2. **Browse mode still has the old two-cluster chrome** — gear + `?` top-left, and a vertical rail
+     (locate / Park Until / directions) top-right. **This is expected, not a regression:** FT-18 was
+     scoped to Drive Mode chrome only. The request is to extend the cleanup to browse mode.
+  3. **Button text too long** on the drive-to-destination and find-parking-nearby controls.
+  4. **The bigger structural idea — Apple Maps' bottom sheet.** Kevin: *"everything is on the bottom
+     bar that swipes up. It appears cleaner. Can there be a search icon where someone can put in an
+     address and then underneath that the drive mode buttons, settings, park school etc?"* i.e. a
+     draggable bottom sheet as the app's primary navigation surface: address search at the top, then
+     Drive Mode entry, settings, Park Here, Parking 101 beneath it.
+- **Why this needs discussion, not a spec hand-off:** item 4 is a **re-architecture of the app's
+  primary navigation**, not a chrome tidy-up. It would absorb or replace `DriveModeDestinationView`'s
+  existing full-screen-cover search (W8.5b), interacts with the FT-15 report flow (Stream B2's map
+  tap-select needs the map unobstructed), and touches `ContentView.swift` — already the most
+  contended file in the project. Sizing is plausibly comparable to FT-15's own multi-session estimate.
+- **Status:** ⚪️ **BACKBURNERED by Kevin, pending a design discussion after the current board clears.**
+- **Lands in:** TBD after that discussion. Do not pre-empt it.
+
+
+
 ### FT-19 🔴 Lines still overshoot into intersections at road ends (GEOMETRY) — likely same root as FT-14's zone loss
 - **Area:** `build/preprocess.js` — `trimIntersectionSetback()` / `extractSubSegment()` /
   `createSubSegments()`. Backend-data. **The most heavily-tuned geometry code in the project.**
