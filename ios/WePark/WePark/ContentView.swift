@@ -675,19 +675,7 @@ struct ContentView: View {
     private func sheetContent(_ sheet: ActiveSheet) -> some View {
         switch sheet {
         case .blockDetail(let segment):
-            BlockDetailView(
-                segment: segment,
-                engine: engine,
-                onDismiss: { dismissBlockDetail() },
-                onParkHere: {
-                    // W5: Path B — segment already known; use midpoint as coordinate.
-                    initiatePathBPinDrop(from: segment)
-                }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(.regularMaterial)
-            .presentationCornerRadius(20)
+            blockDetailSheetContent(segment)
 
         case .parkConfirm(let intent):
             ParkConfirmView(
@@ -712,6 +700,10 @@ struct ContentView: View {
                 engine: engine,
                 loadedSegments: tileLoader.segments,
                 parkPinService: parkPinService,
+                // FT-15/TF2-15 (§9.2): so the sheet can look up an active block-scoped
+                // restriction covering wherever this car is parked — "the highest-value
+                // consumption point in the whole spec."
+                pinService: pinService,
                 onDismiss: {
                     activeSheet = nil
                 },
@@ -724,7 +716,11 @@ struct ContentView: View {
                     parkUntilMode = false
                     parkUntilTarget = nil
                     rebuildOverlays(at: .nowET)
-                }
+                },
+                // FT-15/TF2-15 (§9.2): tap-through to PinDetailSheet, same
+                // activeSheet-reassignment pattern as blockDetailSheetContent's
+                // onOpenRestriction (and .signCheckConfirm's onConfirm precedent).
+                onOpenRestriction: { pin in activeSheet = .pinDetail(pin) }
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -952,6 +948,35 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+    }
+
+    // MARK: - FT-15 / TF2-15: Block detail sheet content
+
+    /// Builds the content for `ActiveSheet.blockDetail`.
+    ///
+    /// Extracted for the same type-checker-complexity reason as `pinDetailSheetContent`.
+    /// FT-15/TF2-15 (§9.2) additions: `pinService` (so the sheet can look up an active
+    /// block-scoped restriction for this segment) and `onOpenRestriction` (tap-through to
+    /// `PinDetailSheet`, reusing the existing `activeSheet = .pinDetail(pin)` transition —
+    /// SwiftUI's `.sheet(item:)` handles the dismiss-then-present automatically, same
+    /// precedent as `.signCheckConfirm`'s `onConfirm` reassigning `activeSheet` directly).
+    @ViewBuilder
+    private func blockDetailSheetContent(_ segment: Segment) -> some View {
+        BlockDetailView(
+            segment: segment,
+            engine: engine,
+            onDismiss: { dismissBlockDetail() },
+            onParkHere: {
+                // W5: Path B — segment already known; use midpoint as coordinate.
+                initiatePathBPinDrop(from: segment)
+            },
+            pinService: pinService,
+            onOpenRestriction: { pin in activeSheet = .pinDetail(pin) }
+        )
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(.regularMaterial)
+        .presentationCornerRadius(20)
     }
 
     // MARK: - Overlay rebuild

@@ -8,6 +8,10 @@
 //    1. Severity color band (6pt, decorative, accessibilityHidden) — gray when no segment.
 //    2. Header row — "My Car" + block label (or "Location saved (no parking data)") + ✕ button.
 //    3. Safety label — first focusable a11y element. Omitted if no segment.
+//    3b. FT-15/TF2-15 (§9.2): "Temporary restriction reported" banner — this is the
+//        highest-value consumption point in the whole spec: telling someone whose car is
+//        already parked on an affected block. Requires a resolved segment (no segment ==
+//        no blockfaceKey to match against). Tap opens PinDetailSheet.
 //    4. Parked-at relative timestamp — "Parked 3h ago".
 //    5. [W7] Reminder toggle — "Remind me before parking changes".
 //    6. Rules list — same RuleRow component as BlockDetailView.
@@ -47,6 +51,18 @@ struct ParkedCarDetailView: View {
     /// W7: Scheduler reference — needed to cancel/reschedule when toggle is flipped.
     let scheduler: NotificationScheduler
 
+    // MARK: - FT-15 / TF2-15 (§9.2): Temporary restriction banner
+
+    /// Pin service used to look up an active/upcoming block-scoped restriction covering
+    /// the resolved segment. `nil` in previews/standalone use — the banner simply doesn't
+    /// render (same optional-service pattern as `BlockDetailView.pinService`).
+    let pinService: CommunityPinService?
+
+    /// Called when the user taps the restriction banner. Passes the matched `CommunityPin`
+    /// so the caller can present `PinDetailSheet` (reuses `activeSheet = .pinDetail(pin)`
+    /// in ContentView). `nil` in previews/standalone use.
+    let onOpenRestriction: ((CommunityPin) -> Void)?
+
     // MARK: - W7: Toggle state — initialized from the current car's persisted value.
 
     @State private var remindMe: Bool
@@ -59,16 +75,20 @@ struct ParkedCarDetailView: View {
         loadedSegments: [Segment],
         parkPinService: ParkPinService,
         scheduler: NotificationScheduler = .shared,
+        pinService: CommunityPinService? = nil,
         onDismiss: @escaping () -> Void,
-        onClearPin: @escaping () -> Void
+        onClearPin: @escaping () -> Void,
+        onOpenRestriction: ((CommunityPin) -> Void)? = nil
     ) {
         self.parkedCar = parkedCar
         self.engine = engine
         self.loadedSegments = loadedSegments
         self.parkPinService = parkPinService
         self.scheduler = scheduler
+        self.pinService = pinService
         self.onDismiss = onDismiss
         self.onClearPin = onClearPin
+        self.onOpenRestriction = onOpenRestriction
         _remindMe = State(initialValue: parkedCar.notifyOnRestriction)
     }
 
@@ -78,6 +98,14 @@ struct ParkedCarDetailView: View {
     private var resolvedSegment: Segment? {
         guard let sid = parkedCar.detectedSegmentID else { return nil }
         return loadedSegments.first { $0.id == sid }
+    }
+
+    /// FT-15/TF2-15 (§9.2): the block-scoped restriction pin covering the resolved segment,
+    /// if any. Nil when there's no resolved segment (no blockfaceKey to match against) or
+    /// no pinService injected (preview/standalone use).
+    private var blockScopedRestriction: CommunityPin? {
+        guard let seg = resolvedSegment else { return nil }
+        return pinService?.blockScopedRestriction(forBlockfaceKey: seg.blockfaceKey)
     }
 
     /// Evaluate once at sheet-open time.
@@ -98,6 +126,15 @@ struct ParkedCarDetailView: View {
                     // 3. Safety label (first focusable a11y element).
                     if let seg = resolvedSegment {
                         safetyLabelView(for: seg)
+                    }
+
+                    // 3b. FT-15/TF2-15 (§9.2): temporary restriction banner — the highest-
+                    // value consumption point per the spec: telling someone whose car is
+                    // already parked on an affected block.
+                    if let restriction = blockScopedRestriction {
+                        TemporaryRestrictionBanner(pin: restriction, now: pinService?.nowProvider() ?? now) {
+                            onOpenRestriction?(restriction)
+                        }
                     }
 
                     // 4. Parked-at relative timestamp.

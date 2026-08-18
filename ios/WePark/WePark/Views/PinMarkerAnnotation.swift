@@ -13,6 +13,8 @@
 //  Visual spec (§7.1):
 //   - filming:      video.fill symbol, Color.purple circle, 32×32pt image, 44×44pt touch target.
 //   - special_event: star.fill symbol,  Color.orange circle, 32×32pt image, 44×44pt touch target.
+//   - construction (FT-15/TF2-15 §9.1): hammer.fill symbol, distinct "safety orange" circle
+//     (not the same orange as special_event) — crowd-reported block-scoped closure.
 //
 //  Time formatting:
 //   - "Until HH:mm" if expires_at is within the current day (ET).
@@ -27,6 +29,7 @@
 
 import Foundation
 import MapKit
+import SwiftUI
 import UIKit
 
 // MARK: - CommunityPin display extensions
@@ -65,6 +68,48 @@ extension CommunityPin {
     }
 
     // MARK: - Internal helpers
+
+    /// FT-15 / TF2-15 §9.2 / AC-C2: `true` when this pin's restriction window has not yet
+    /// started (`startsAt` is in the future relative to `now`). `false` for every pin type
+    /// that predates FT-15/TF2-15 (`startsAt` is always nil there — "active immediately"
+    /// per §5.1's zero-migration-risk design).
+    ///
+    /// Used by the "Temporary restriction reported" banner (`BlockDetailView` /
+    /// `ParkedCarDetailView`) and `PinDetailSheet`'s block-scoped detail view to
+    /// distinguish "Upcoming" from "Active" — a one-line badge difference, not a new
+    /// filter. `CommunityPinService.clientSideFilter` and the Channel 3 request
+    /// (`buildCrowdBlockScopedRequest`) both deliberately still fetch/retain pins whose
+    /// window hasn't started yet — only `expiresAt` gates visibility (AC-C2).
+    ///
+    /// `now` is injectable for testability; defaults to `Date()` for live call sites,
+    /// matching the pattern already established by `PinMarkerAnnotation.timeSinceBadge(pin:now:)`.
+    /// No `Calendar.current` — plain `Date` comparison only (AC-D19 convention).
+    func isUpcoming(now: Date = Date()) -> Bool {
+        guard let startsAt else { return false }
+        return startsAt > now
+    }
+
+    /// FT-15 / TF2-15 §9.2, AC-C4: `true` when `PinDetailSheet`'s "Community Check"
+    /// reactions row (`ReactionsRow` — "Still there?" / "Gone") should render for this pin.
+    ///
+    /// Pre-FT-15: only `lifespan == .ephemeral && source == .crowd` (Tier 3
+    /// enforcement_active / sweeper_passed / broken_meter).
+    ///
+    /// FT-15/TF2-15 widens this to also cover block-scoped `filming`/`construction`
+    /// reports, which are `lifespan in (session, durable)` rather than `ephemeral` —
+    /// identified by `reportGroupId != nil` (the marker that a pin came from the
+    /// map-tap-select report flow, §3.2) rather than by `pinType`, so the gate stays
+    /// generic to whatever pin types the block-scoped flow produces (currently
+    /// filming/construction; §9.3).
+    ///
+    /// Lives here (not as a `private` computed property on `PinDetailSheet`) so it's a
+    /// pure, directly unit-testable property of the model's display semantics — same
+    /// rationale as `isUpcoming`/`displayTitle`/`displaySubtitle` above.
+    var showsReactionsRow: Bool {
+        guard source == .crowd else { return false }
+        if lifespan == .ephemeral { return true }
+        return reportGroupId != nil
+    }
 
     /// Formats an expiry Date for the subtitle / detail sheet.
     ///
@@ -368,9 +413,10 @@ final class PinMarkerAnnotation: MKAnnotationView {
                 .withTintColor(.white, renderingMode: .alwaysOriginal)
             else {
                 // Safety net (Fix 3): SF Symbol unavailable — the filled circle is the marker.
-                // This path is never reached for the four known-good symbols at iOS 17+
-                // (video.fill, star.fill, person.badge.clock.fill, truck.box.fill are all
-                // SF Symbols 5 / iOS 17+), but protects against future regressions.
+                // This path is never reached for the known-good symbols at iOS 17+
+                // (video.fill, star.fill, person.badge.clock.fill, truck.box.fill,
+                // hammer.fill are all SF Symbols 5 / iOS 17+), but protects against
+                // future regressions.
                 return
             }
 
@@ -463,6 +509,15 @@ final class PinMarkerAnnotation: MKAnnotationView {
             // Design note §3: truck.box.fill = service vehicle. systemCyan.
             // Distinct from teal (enforcement) at glance; no alarm connotation (sweeper passed = good news).
             return ("truck.box.fill", UIColor.systemCyan)
+        case .construction:
+            // FT-15/TF2-15 §9.1: crowd-reported block closures (filming reuses the existing
+            // purple video.fill case above; construction is new). A distinct "safety orange"
+            // — not `UIColor.systemOrange` (already used by `.specialEvent`) — so the two
+            // marker types don't visually collide on the map. Single source of truth in
+            // ParkingColors.constructionOrange (QA nit #4,
+            // docs/qa/ft15-b4-fetch-channel-qa.md) — bridged to UIColor here since
+            // MKAnnotationView's API is UIKit, not SwiftUI.
+            return ("hammer.fill", UIColor(ParkingColors.constructionOrange))
         default:
             // Fallback for any type that reaches this path unexpectedly.
             return ("mappin.fill", UIColor.systemGray)

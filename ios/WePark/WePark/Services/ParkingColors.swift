@@ -36,4 +36,14 @@ enum ParkingColors {
     /// Unknown — no data available for this segment.
     /// Sits outside the severity spectrum; opacity lowers visual weight.
     static let unknown = Color.gray.opacity(0.35)
+
+    /// Construction marker "safety orange" (FT-15/TF2-15 §9.1).
+    ///
+    /// Single source of truth for this color — hoisted here per QA nit #4
+    /// (docs/qa/ft15-b4-fetch-channel-qa.md) after the same RGB literal was found
+    /// duplicated across `PinMarkerAnnotation.markerStyle` (as a `UIColor`),
+    /// `PinDetailSheet.iconColor`, and `BlockDetailView.TemporaryRestrictionBanner`.
+    /// `PinMarkerAnnotation` needs a `UIColor` (MapKit annotation view API) — use
+    /// `UIColor(ParkingColors.constructionOrange)` there rather than a second literal.
+    static let constructionOrange = Color(red: 0.91, green: 0.45, blue: 0.05)
 }
