@@ -141,6 +141,30 @@
 //      (Kevin's ruling #2: "Find my car" removed during Drive Mode, not kept as a mini icon;
 //      ruling #3: gear hidden fully).
 //
+//  FT-15 / TF2-15 Stream B2 additions (block-scoped temporary restriction reports —
+//  docs/ft15-tf215-temporary-block-restrictions-spec.md §4.2):
+//    - Third confirmationDialog action, "Report closure (film shoot / construction)",
+//      alongside the two Tier 3 sub-PR #2 actions above. Entry point placement chosen
+//      per the spec's own recommendation (§4.2 step 1) — extends the existing resting
+//      long-press dialog rather than adding a toolbar button. Re-evaluated against
+//      FT-18's Bottom Dock redesign: unaffected, since this dialog only ever presents
+//      when `driveModeActive == false` (FT-18 only restructured Drive-Mode-ACTIVE chrome).
+//    - @State blockSelectModeActive / selectedBlockKeys / bothCurbsOn — block-select
+//      tap-select mode (§4.2 steps 2–4). `handleMapTap` branches into
+//      `handleBlockSelectTap` while active; `handleLongPress` no-ops while active.
+//    - `blockSelectBar` — floating bar in `bottomSafeAreaContent`'s VStack (FT-18's
+//      "Bottom Dock" structural-row pattern), Cancel/Continue + "Both curbs" toggle.
+//    - ActiveSheet.blockRestrictionReport(segments:) — presents
+//      `BlockRestrictionReportSheet` on Continue.
+//    - `MapViewRepresentable(blockSelectKeys:)` — multi-segment selection highlight
+//      overlay (additive; does not replace or recolor the existing 5-state + selectedBlock
+//      overlays — OQ-1's marker-only ruling, applied to the render step; the selection
+//      highlight required during tap-select is separate new-but-minimal overlay surface).
+//    - QA pass-1 fix: `blockSelectModeActive`/`driveModeActive` are now mutually
+//      exclusive from BOTH directions (an earlier revision only enforced one). See
+//      `blockSelectModeActive`'s doc comment, the `recenterButtonStack` gate in
+//      `mapZStack`, and the force-clear in `handleDriveModeAndCamera`.
+//
 
 import SwiftUI
 import MapKit
@@ -192,6 +216,13 @@ enum ActiveSheet: Identifiable {
     /// NavigationStack, not this case — this case exists only for the banner, which
     /// lives outside any NavigationStack context.)
     case parkingGuide
+    /// FT-15/TF2-15 Stream B2: block-scoped restriction report form (camera capture +
+    /// type/time/notes). Presented when the user taps Continue on the block-select
+    /// floating bar. `segments` is a snapshot of the tapped `Segment`s at the moment
+    /// Continue was pressed (one per entry in `selectedBlockKeys`) — the sheet reads
+    /// `blockfaceKey`/coordinates verbatim off these, never re-deriving identity from
+    /// text (spec §4.1/§4.3).
+    case blockRestrictionReport(segments: [Segment])
 
     var id: String {
         switch self {
@@ -206,6 +237,8 @@ enum ActiveSheet: Identifiable {
         case .reportPin(let coord, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
         case .signCheckConfirm(let intent): return "signCheckConfirm-\(intent.id)"
         case .parkingGuide:               return "parkingGuide"
+        case .blockRestrictionReport(let segments):
+            return "blockRestrictionReport-" + segments.map(\.id).joined(separator: ",")
         }
     }
 }
@@ -511,8 +544,45 @@ struct ContentView: View {
     @State private var pendingLongPressCoord: CLLocationCoordinate2D? = nil
 
     /// True while the resting long-press confirmationDialog is presented.
-    /// The dialog has two actions: "Park my car here" and "Report enforcement or sweeper."
+    /// The dialog has three actions: "Park my car here", "Report enforcement or
+    /// sweeper", and (FT-15/TF2-15) "Report closure (film shoot / construction)."
     @State private var showRestingActionMenu: Bool = false
+
+    // MARK: - FT-15 / TF2-15 Stream B2: Block-scoped report tap-select mode state
+
+    /// True while the map is in block-select mode (§4.2 step 2): tapping a rendered
+    /// segment toggles it into/out of `selectedBlockKeys` instead of opening
+    /// `BlockDetailView`. Entered via the resting long-press dialog's third action;
+    /// exited via the floating bar's Cancel button or by tapping Continue.
+    ///
+    /// Mutually exclusive with Drive Mode, enforced from BOTH directions (QA pass-1
+    /// finding: an earlier revision of this comment claimed mutual exclusion but only
+    /// the first of these two was actually true):
+    ///   1. Block-select → Drive Mode is blocked: `handleLongPress` only shows the
+    ///      confirmationDialog (the sole entry point that sets this `true`) when
+    ///      `driveModeActive == false`.
+    ///   2. Drive Mode → block-select is blocked/cleared: `recenterButtonStack` — the
+    ///      sole UI path to both Drive Mode entry points — is hidden whenever this is
+    ///      `true` (see `mapZStack`), AND `handleDriveModeAndCamera` force-clears this
+    ///      flag (`cancelBlockSelectMode()`) on every Drive Mode entry as a structural,
+    ///      single-funnel backstop, since ALL entry paths (`enterCruiseMode()`,
+    ///      destination mode's `onRouteReady`) converge on the one
+    ///      `.onChange(of: driveModeActive)` handler.
+    /// So this flag and `driveModeActive` are never both `true` at once.
+    @State private var blockSelectModeActive: Bool = false
+
+    /// The set of `Segment.blockfaceKey` values currently selected during block-select
+    /// mode (§4.2 step 3). Drives the `MapViewRepresentable` multi-segment highlight
+    /// overlay directly — kept populated after `blockSelectModeActive` flips back to
+    /// `false` on Continue so the highlight stays visible while
+    /// `BlockRestrictionReportSheet` is open, then cleared when that sheet dismisses
+    /// (success or cancel) via `.sheet(item:)`'s `onDismiss` closure.
+    @State private var selectedBlockKeys: Set<String> = []
+
+    /// "Both curbs" toggle (§4.2 step 4). Default ON, matching Kevin's own canonical
+    /// case (E 2nd St, 2 blocks × 2 curbs = 4 blockfaces). Reset to `true` every time
+    /// block-select mode is (re-)entered.
+    @State private var bothCurbsOn: Bool = true
 
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
@@ -600,6 +670,11 @@ struct ContentView: View {
             .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in routePendingDeepLink(carID) }
             .sheet(item: $activeSheet, onDismiss: {
                 if selectedSegmentID != nil { selectedSegmentID = nil }
+                // FT-15/TF2-15 Stream B2: clears the block-select highlight overlay on
+                // ANY dismiss path (Submit success, Cancel button inside the sheet, OR a
+                // swipe-to-dismiss that never calls the sheet's own onDismiss closure) —
+                // same catch-all role selectedSegmentID plays above.
+                if !selectedBlockKeys.isEmpty { selectedBlockKeys = [] }
             }) { sheet in sheetContent(sheet) }
             .fullScreenCover(isPresented: $showDriveModeDestination) { driveModeDestinationCover }
             .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
@@ -660,6 +735,25 @@ struct ContentView: View {
                         max: 1
                     ).first?.segment
                     activeSheet = .reportPin(coord: coord, streetName: nil, segment: reportSegment)
+                }
+                // FT-15/TF2-15 §4.2 step 1: third action, added per the spec's own
+                // recommendation to extend this existing dialog rather than add a new
+                // toolbar button (avoids further crowding the toolbar cluster — FT-13's
+                // "?" button already landed there). This dialog is unaffected by FT-18's
+                // Bottom Dock redesign: FT-18 only restructured Drive-Mode-ACTIVE chrome
+                // (`endDriveControl`, `recenterRow`, `driveActionRow`, gear visibility);
+                // this resting long-press dialog only ever presents when
+                // `driveModeActive == false` (see `handleLongPress`'s guard), so it never
+                // shares screen real estate with any FT-18-restructured element.
+                //
+                // Unlike the two actions above, this one does NOT need
+                // `pendingLongPressCoord` — block-select mode assumes the reporter is
+                // standing at/near the affected blocks (spec §4.2 point 6; the map is
+                // already centered there), so entering the mode doesn't need the
+                // long-press coordinate at all.
+                Button("Report closure (film shoot / construction)") {
+                    pendingLongPressCoord = nil
+                    enterBlockSelectMode()
                 }
                 Button("Cancel", role: .cancel) {
                     pendingLongPressCoord = nil
@@ -954,6 +1048,21 @@ struct ContentView: View {
                     }
             }
             .presentationDragIndicator(.visible)
+
+        case .blockRestrictionReport(let segments):
+            // FT-15/TF2-15 Stream B2: block-scoped restriction report form.
+            // onDismiss covers both Submit-success and the sheet's own Cancel button —
+            // the .sheet(item:) modifier's onDismiss above additionally clears
+            // selectedBlockKeys for the swipe-to-dismiss path this closure can't see.
+            BlockRestrictionReportSheet(
+                selections: segments,
+                pinService: pinService,
+                onDismiss: { activeSheet = nil }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
         }
     }
 
@@ -1149,9 +1258,21 @@ struct ContentView: View {
                 // top-trailing corner but are mutually exclusive — exactly one renders at a
                 // time, matching Proposal 1's "top of screen reduced to banner + End control"
                 // during Drive Mode (Kevin's ruling #1).
+                //
+                // FT-15/TF2-15 QA fix: `recenterButtonStack` is ALSO hidden during
+                // block-select mode — it's the sole UI path to both Drive Mode entry points
+                // (`driveEntryButton`'s "Drive to a destination" / "Find Parking nearby"),
+                // so hiding it here structurally prevents starting Drive Mode while
+                // block-select is active, rather than re-guarding each entry point
+                // individually. `handleDriveModeAndCamera` additionally force-clears
+                // block-select state on every Drive Mode entry as a self-healing backstop —
+                // see that function's doc comment for why both together, not either alone.
                 if driveModeActive {
                     endDriveControl
-                } else {
+                } else if recenterButtonStackVisible(
+                    driveModeActive: driveModeActive,
+                    blockSelectModeActive: blockSelectModeActive
+                ) {
                     recenterButtonStack
                         .padding(.top, 100)
                         .padding(.trailing, 12)
@@ -1292,6 +1413,8 @@ struct ContentView: View {
             communityPins: communityPins,
             onCommunityPinTapped: handleCommunityPinTapped(_:),
             segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
+            // FT-15/TF2-15 Stream B2: multi-segment block-select highlight (§4.2 step 3).
+            blockSelectKeys: selectedBlockKeys,
             driveHeading: effectiveDriveHeading,  // TF2-16: course, or street-snap at low confidence
             driveModeActive: driveModeActive,
             onDrivePanDetected: handleDrivePanDetected,
@@ -1339,6 +1462,13 @@ struct ContentView: View {
             if driveModeActive {
                 driveActionRow
             }
+            // FT-15/TF2-15 Stream B2: block-select floating bar (§4.2 step 5). Never
+            // coexists with any of the driveModeActive-gated rows above — enforced from
+            // both directions, see `blockSelectModeActive`'s doc comment (QA pass-1 fix:
+            // this used to be a one-directional guard).
+            if blockSelectModeActive {
+                blockSelectBar
+            }
             // W7.5 row 3: Park Until pill — carried over from browsing if already active;
             // cannot be entered mid-drive (recenterButtonStack, its only entry point, is
             // hidden while driveModeActive == true).
@@ -1362,7 +1492,9 @@ struct ContentView: View {
             // FT-12: Parking 101 first-launch prompt banner. Never shown alongside
             // the Drive Mode bottom card or the Park Until pill (AC-7) — both of the
             // guards above already make those branches mutually exclusive with this one.
-            if showParkingGuideBanner && !driveModeActive && !parkUntilMode {
+            // FT-15/TF2-15: also excluded during block-select mode, a deliberate
+            // focused task the user is mid-way through.
+            if showParkingGuideBanner && !driveModeActive && !parkUntilMode && !blockSelectModeActive {
                 ParkingGuidePromptBanner(
                     onOpenGuide: { dismissParkingGuideBanner(openGuide: true) },
                     onDismiss: { dismissParkingGuideBanner(openGuide: false) }
@@ -1665,6 +1797,74 @@ struct ContentView: View {
             .accessibilityHint("Opens a safety checklist before dropping your parked car pin.")
         }
         .padding(.horizontal, 16)
+    }
+
+    // MARK: - FT-15 / TF2-15 Stream B2: Block-select floating bar
+
+    /// Floating bottom bar shown during block-select mode (§4.2 step 5): a summary label
+    /// ("N blocks selected (M blockfaces)"), the "Both curbs" toggle, and Cancel/Continue
+    /// actions. Structural row in `bottomSafeAreaContent`'s VStack, same "Bottom Dock"
+    /// pattern FT-18 established for `recenterRow`/`driveActionRow` — this file follows
+    /// that structure per the task's explicit instruction to fit into it rather than
+    /// re-introduce an independently `Spacer()`-positioned float.
+    ///
+    /// AC-R3: Continue is disabled with zero blocks selected.
+    @ViewBuilder
+    private var blockSelectBar: some View {
+        VStack(spacing: 10) {
+            HStack {
+                Text(blockSelectSummaryLabel)
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(.primary)
+                Spacer()
+                Toggle("Both curbs", isOn: $bothCurbsOn)
+                    .toggleStyle(.switch)
+                    .font(.caption)
+                    .fixedSize()
+            }
+
+            HStack(spacing: 12) {
+                Button {
+                    cancelBlockSelectMode()
+                } label: {
+                    Text("Cancel")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Cancel selecting blocks")
+
+                Button {
+                    continueToBlockRestrictionReport()
+                } label: {
+                    Text("Continue")
+                        .font(.subheadline.weight(.semibold))
+                        .frame(maxWidth: .infinity)
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(selectedBlockKeys.isEmpty)
+                .accessibilityLabel("Continue to report form")
+                .accessibilityHint(selectedBlockKeys.isEmpty
+                    ? "Select at least one block first"
+                    : "Opens the closure report form for the selected blocks")
+            }
+        }
+        .padding(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .padding(.horizontal, 16)
+    }
+
+    /// "Tap blocks on the map to select" (empty) or "N blocks selected (M blockfaces)"
+    /// (spec §4.2 step 5's own example format, generalized to N/M).
+    private var blockSelectSummaryLabel: String {
+        guard !selectedBlockKeys.isEmpty else {
+            return "Tap blocks on the map to select"
+        }
+        let blockCount = selectedBlockCount
+        let faceCount = selectedBlockKeys.count
+        let blockWord = blockCount == 1 ? "block" : "blocks"
+        let faceWord = faceCount == 1 ? "blockface" : "blockfaces"
+        return "\(blockCount) \(blockWord) selected (\(faceCount) \(faceWord))"
     }
 
     // MARK: - CM-3: Cruise Mode entry
@@ -2260,6 +2460,15 @@ struct ContentView: View {
     // MARK: - Tap handling (unchanged from W4 — only gesture source changed)
 
     private func handleMapTap(at coordinate: CLLocationCoordinate2D) {
+        // FT-15/TF2-15 §4.2 step 3: in block-select mode, a tap toggles the closest
+        // segment's blockfaceKey in/out of the selection instead of opening
+        // BlockDetailView. Checked FIRST so none of the normal-mode tap behavior below
+        // (banner dismiss, block-detail sheet) fires while selecting.
+        if blockSelectModeActive {
+            handleBlockSelectTap(at: coordinate)
+            return
+        }
+
         // FT-12: a tap anywhere on the map counts as "first interaction" — auto-hide
         // the Parking 101 banner (spec §7 OQ-2) without opening the guide.
         if showParkingGuideBanner {
@@ -2293,6 +2502,140 @@ struct ContentView: View {
         }
     }
 
+    // MARK: - FT-15 / TF2-15 Stream B2: Block-scoped report tap-select mode
+
+    /// Entered via the resting long-press dialog's third action (§4.2 step 1–2).
+    /// Clears any current selection/sheet state and resets "Both curbs" to its default.
+    private func enterBlockSelectMode() {
+        selectedSegmentID = nil
+        activeSheet = nil
+        selectedBlockKeys = []
+        bothCurbsOn = true
+        blockSelectModeActive = true
+    }
+
+    /// Exits block-select mode without submitting anything (floating bar's Cancel button).
+    private func cancelBlockSelectMode() {
+        blockSelectModeActive = false
+        selectedBlockKeys = []
+    }
+
+    /// Floating bar's Continue action (§4.2 step 5). Snapshots the currently-selected
+    /// `Segment`s (reading `blockfaceKey` verbatim, per §4.1/§4.3 — no re-derivation from
+    /// text) and presents `BlockRestrictionReportSheet`. Exits tap-select interaction
+    /// (`blockSelectModeActive = false`) but deliberately leaves `selectedBlockKeys`
+    /// populated so the map highlight stays visible while the report sheet is open —
+    /// cleared when that sheet dismisses (see the `.sheet(item:)` `onDismiss` closure).
+    private func continueToBlockRestrictionReport() {
+        guard !selectedBlockKeys.isEmpty else { return }
+        let segments = selectedSegmentsForBlockSelect
+        blockSelectModeActive = false
+        activeSheet = .blockRestrictionReport(segments: segments)
+    }
+
+    /// FT-15/TF2-15 §4.2 step 3: finds the closest loaded segment to `coordinate` (same
+    /// haversine-distance search + `tapHitThresholdMeters` gate as `handleMapTap`'s
+    /// normal-mode block-detail lookup) and toggles its blockface into/out of the
+    /// selection. A tap that misses every segment (beyond the hit threshold) is a no-op —
+    /// no accidental selection from an imprecise tap.
+    private func handleBlockSelectTap(at coordinate: CLLocationCoordinate2D) {
+        guard !tileLoader.segments.isEmpty else { return }
+
+        var closestSegment: Segment? = nil
+        var closestDistance: Double = .infinity
+
+        for segment in tileLoader.segments {
+            let coords = segment.coordinates
+            guard coords.count >= 2 else { continue }
+            let dist = pointToPolylineDistance(from: coordinate, polyline: coords)
+            if dist < closestDistance {
+                closestDistance = dist
+                closestSegment = segment
+            }
+        }
+
+        guard closestDistance <= tapHitThresholdMeters, let segment = closestSegment else { return }
+        toggleBlockSelection(segment)
+    }
+
+    /// AC-R1/AC-R2: toggles `segment`'s blockfaceKey in/out of `selectedBlockKeys`. When
+    /// newly adding a block with "Both curbs" on, also adds the matching opposite-side
+    /// segment if one is currently loaded (AC-R2: if none is found, only the tapped side
+    /// is added — no crash, no silent no-op, surfaces as a 1-block selection).
+    private func toggleBlockSelection(_ segment: Segment) {
+        let oppositeKey = bothCurbsOn
+            ? ContentView.oppositeSideSegment(of: segment, in: tileLoader.segments)?.blockfaceKey
+            : nil
+        selectedBlockKeys = ContentView.toggledBlockSelection(
+            current: selectedBlockKeys,
+            tappedKey: segment.blockfaceKey,
+            bothCurbsOn: bothCurbsOn,
+            oppositeKey: oppositeKey
+        )
+    }
+
+    /// Pure toggle-decision function: no SwiftUI/MapViewRepresentable dependency,
+    /// directly unit-testable (AC-R1, AC-R2).
+    ///
+    /// - If `tappedKey` is already selected, it is removed (deselect — the opposite-curb
+    ///   segment, if any, is left untouched; "Both curbs" only auto-ADDS on select, per
+    ///   spec §4.2 step 4, it does not auto-remove on deselect).
+    /// - Otherwise `tappedKey` is added, and `oppositeKey` (if non-nil) is added alongside
+    ///   it — `oppositeKey` is expected to already be `nil` when `bothCurbsOn` is `false`
+    ///   or when no opposite-side segment is currently loaded (AC-R2), so this function
+    ///   doesn't need to re-check `bothCurbsOn` itself.
+    static func toggledBlockSelection(
+        current: Set<String>,
+        tappedKey: String,
+        bothCurbsOn: Bool,
+        oppositeKey: String?
+    ) -> Set<String> {
+        var result = current
+        if result.contains(tappedKey) {
+            result.remove(tappedKey)
+        } else {
+            result.insert(tappedKey)
+            if bothCurbsOn, let oppositeKey {
+                result.insert(oppositeKey)
+            }
+        }
+        return result
+    }
+
+    /// AC-R2: finds the loaded segment describing the opposite curb of the same physical
+    /// block — same street, same UNORDERED from/to pair, a DIFFERENT side. Returns nil if
+    /// no such segment is currently loaded (e.g. only one side has tiles loaded at this
+    /// zoom/viewport, or the street genuinely has only one curb in the data).
+    ///
+    /// Pure (no SwiftUI/instance dependency), directly unit-testable.
+    static func oppositeSideSegment(of segment: Segment, in segments: [Segment]) -> Segment? {
+        let pair: Set<String> = [segment.fromStreet, segment.to]
+        return segments.first { candidate in
+            candidate.side != segment.side &&
+            candidate.street == segment.street &&
+            Set([candidate.fromStreet, candidate.to]) == pair
+        }
+    }
+
+    /// The `Segment`s in `tileLoader.segments` matching `selectedBlockKeys`, in no
+    /// particular order. Used both for the floating bar's summary label and as the
+    /// Continue-time snapshot passed into `BlockRestrictionReportSheet`.
+    private var selectedSegmentsForBlockSelect: [Segment] {
+        tileLoader.segments.filter { selectedBlockKeys.contains($0.blockfaceKey) }
+    }
+
+    /// Distinct BLOCK count (street + unordered cross-street pair, ignoring side) among
+    /// the current selection — distinct from `selectedBlockKeys.count`, which counts
+    /// BLOCKFACES (one per curb). Kevin's canonical case is 2 blocks × 2 curbs = 4
+    /// blockfaces; the floating bar's summary shows both numbers (spec §4.2 step 5's
+    /// own "2 blocks selected" / "(4 blockfaces)" example distinguishes them explicitly).
+    private var selectedBlockCount: Int {
+        Set(selectedSegmentsForBlockSelect.map { seg -> String in
+            let (lo, hi) = seg.fromStreet <= seg.to ? (seg.fromStreet, seg.to) : (seg.to, seg.fromStreet)
+            return "\(seg.street)|\(lo)|\(hi)"
+        }).count
+    }
+
     // MARK: - W5 / Tier 3 sub-PR #2: Long-press handling
 
     /// Handles a long-press gesture on the map.
@@ -2308,7 +2651,11 @@ struct ContentView: View {
     ///     no wasted work if they pick "Report" (spec §4.1 note).
     private func handleLongPress(at coordinate: CLLocationCoordinate2D) {
         // While driving, long-press is intentionally a no-op (spec §4.1).
-        guard !driveModeActive else { return }
+        // FT-15/TF2-15: also a no-op while block-select mode is active — a long-press
+        // mid-selection (e.g. "Park my car here") would be a confusing second exclusive
+        // interaction mode layered on top of the first. The user exits block-select via
+        // the floating bar's Cancel/Continue before any other long-press action is available.
+        guard !driveModeActive, !blockSelectModeActive else { return }
 
         // Clear any current selection and dismiss any open sheet before showing the menu.
         selectedSegmentID = nil
@@ -2371,6 +2718,25 @@ struct ContentView: View {
     /// in ContentView or from MapKit delegate callbacks.
     private func handleDriveModeAndCamera(_ active: Bool) {
         if active {
+            // FT-15/TF2-15 QA fix: this `.onChange(of: driveModeActive)` handler is the
+            // SINGLE funnel every Drive Mode entry path runs through (destination-mode's
+            // `onRouteReady` and `enterCruiseMode()` both just set `driveModeActive = true`
+            // and let this fire) — so it's the structural place to guarantee
+            // `blockSelectModeActive`/`selectedBlockKeys` can never coexist with an active
+            // Drive Mode session, rather than re-asserting the guard at each entry site
+            // individually (that per-site pattern is exactly what QA's pass-1 finding
+            // caught: `recenterButtonStack`'s Drive-entry affordance was the only thing
+            // gating entry, and it wasn't gated against block-select mode). The
+            // `recenterButtonStack` gate below (`mapZStack`) additionally hides the
+            // Drive-entry UI entirely while block-select is active, so in practice this
+            // branch is a self-healing safety net, not the only line of defense.
+            if shouldClearBlockSelectOnDriveModeEntry(
+                active: active,
+                blockSelectModeActive: blockSelectModeActive,
+                hasSelection: !selectedBlockKeys.isEmpty
+            ) {
+                cancelBlockSelectMode()
+            }
             handleDriveModeChange(true)
             handleDriveCameraChange(true)
             // Initialize currentDriveAltitude to the FT-8 default.
@@ -2806,6 +3172,55 @@ func parkingGuideButtonVisible(driveModeActive: Bool) -> Bool {
 /// is unit-testable independent of view rendering.
 func gearButtonVisible(driveModeActive: Bool) -> Bool {
     !driveModeActive
+}
+
+// MARK: - FT-15 / TF2-15 Stream B2 QA fix: block-select ↔ Drive Mode mutual exclusion
+
+/// Returns whether `recenterButtonStack` (the sole UI path to both Drive Mode entry
+/// points — `driveEntryButton`'s "Drive to a destination" / "Find Parking nearby" menu
+/// items) should render.
+///
+/// QA pass-1 finding: an earlier revision gated this on `!driveModeActive` alone. That
+/// correctly hid the stack once Drive Mode was already active, but did nothing to stop
+/// the REVERSE transition — nothing prevented tapping the Drive-entry button while
+/// block-select mode was active, producing a stacked/competing Bottom Dock and map taps
+/// hijacked into block selection while "driving." Hiding the stack whenever EITHER flag
+/// is true closes that gap structurally, at the one call site both entry points share,
+/// rather than re-guarding each entry point (`enterCruiseMode()`, the destination-mode
+/// `onRouteReady` closure) individually.
+///
+/// Extracted as an `internal` pure function — same testability rationale as
+/// `gearButtonVisible` / `parkingGuideButtonVisible` — so this specific state-interaction
+/// bug has a regression test that doesn't require instantiating a full `ContentView`.
+func recenterButtonStackVisible(driveModeActive: Bool, blockSelectModeActive: Bool) -> Bool {
+    !driveModeActive && !blockSelectModeActive
+}
+
+/// Returns whether entering Drive Mode (`active == true`) should force-clear block-select
+/// state (`blockSelectModeActive` / `selectedBlockKeys`).
+///
+/// This is the self-healing backstop half of the QA pass-1 fix (paired with
+/// `recenterButtonStackVisible` above, which prevents the transition at the UI level in
+/// the first place): `handleDriveModeAndCamera` is the single funnel every Drive Mode
+/// entry path runs through (`.onChange(of: driveModeActive)` fires identically regardless
+/// of which entry point flipped the flag), so clearing block-select state there — guarded
+/// by this predicate — guarantees the invariant holds even for a hypothetical future entry
+/// path that doesn't route through `recenterButtonStack` at all.
+///
+/// `hasSelection` covers the case where `blockSelectModeActive` has already flipped back
+/// to `false` (Continue was tapped) but `selectedBlockKeys` is still populated to keep the
+/// map highlight visible while `BlockRestrictionReportSheet` is open — that highlight
+/// should also be cleared if Drive Mode somehow starts during that window, not just the
+/// mode flag.
+///
+/// Extracted as an `internal` pure function for the same reason as
+/// `recenterButtonStackVisible`.
+func shouldClearBlockSelectOnDriveModeEntry(
+    active: Bool,
+    blockSelectModeActive: Bool,
+    hasSelection: Bool
+) -> Bool {
+    active && (blockSelectModeActive || hasSelection)
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance
