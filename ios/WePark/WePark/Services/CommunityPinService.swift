@@ -61,6 +61,20 @@
 //   - mergeableTypes (Realtime/optimistic-add merge path) widened to include
 //     .construction, matching the read path's new coverage.
 //
+//  FT-15 / TF2-15 (docs/ft15-tf215-temporary-block-restrictions-spec.md, Stream B3):
+//   - Adds insertBlockScopedReport(...) — the write path B2's BlockRestrictionReportSheet
+//     calls on Submit. Uploads the evidence photo (via the new PinEvidenceUploader), then
+//     inserts N `pins` rows (one per selected blockface) sharing one client-generated
+//     `report_group_id`, per §3.4's write order.
+//   - See insertBlockScopedReport's own doc comment for the partial-failure decision
+//     (best-effort rollback of a partially-succeeded pins batch; the evidence row itself
+//     is left as an accepted, documented orphan on that specific failure path, matching
+//     supabase/02f-block-scoped-restrictions.sql's own accepted-gap posture).
+//   - Rate-limit rejections (PostgREST errcode 42501 / HTTP 403 from the schema's
+//     enforce_block_scoped_rate_limit() trigger) are surfaced as a distinct
+//     BlockScopedReportError.rateLimitExceeded case with clear user-facing copy, not a
+//     generic HTTP error.
+//
 
 import Foundation
 import MapKit
@@ -88,6 +102,105 @@ enum CommunityPinWriteError: Error {
     case httpError(statusCode: Int)
     /// Request body encoding failed.
     case encodingFailure
+}
+
+// MARK: - FT-15 / TF2-15: Block-scoped report write path (Stream B3)
+
+/// One blockface to include in a block-scoped restriction report.
+///
+/// Spec: `docs/ft15-tf215-temporary-block-restrictions-spec.md` §4.2, §4.3.
+///
+/// `blockfaceKey` is expected to be a `Segment.blockfaceKey` value — read verbatim off a
+/// tapped `Segment` (B2's map multi-select), never re-derived from text. `lat`/`lng` are
+/// the marker coordinate for this blockface's `pins` row; callers typically pass the
+/// tapped `Segment`'s `midpoint`. This type intentionally does not import or reference
+/// `Segment` directly, keeping `Services/CommunityPinService.swift` decoupled from the
+/// specific model B2 sources selections from — any caller that can produce a key + a
+/// coordinate can use this write path.
+struct BlockScopedReportSelection {
+    let blockfaceKey: String
+    let lat: Double
+    let lng: Double
+
+    init(blockfaceKey: String, lat: Double, lng: Double) {
+        self.blockfaceKey = blockfaceKey
+        self.lat = lat
+        self.lng = lng
+    }
+}
+
+/// Result of a successful `insertBlockScopedReport(...)` call.
+struct BlockScopedReportResult {
+    /// The client-generated UUID shared by every inserted row.
+    let reportGroupId: UUID
+    /// The N inserted `pins` rows, in the same order as the input `selections`.
+    let insertedPins: [CommunityPin]
+}
+
+/// Errors from `CommunityPinService.insertBlockScopedReport(...)`.
+enum BlockScopedReportError: Error {
+    /// No valid auth session.
+    case notAuthenticated
+    /// `selections` was empty — nothing to report. Mirrors AC-R3 ("Continue is disabled
+    /// with zero blocks selected") as a second, independent guard at the write-path
+    /// boundary; B2's UI should never actually reach this, but the write path doesn't
+    /// trust the caller to have enforced it.
+    case emptySelections
+    /// `pinType` was not `.filming` or `.construction` — the only two types this primitive
+    /// serves (§9.3).
+    case unsupportedPinType(PinType)
+    /// The evidence photo failed to upload (Storage object or `pin_evidence` row insert —
+    /// see `PinEvidenceUploadError` for which). Zero `pins` rows have been attempted at
+    /// this point.
+    case evidenceUploadFailed(underlying: Error)
+    /// The rate-limit trigger rejected an insert (PostgREST errcode `42501` /
+    /// `insufficient_privilege` — `enforce_block_scoped_rate_limit()` in
+    /// `supabase/02f-block-scoped-restrictions.sql`). Detected from the parsed response
+    /// body, not just the HTTP status, so an unrelated 403 can't misfire this case.
+    case rateLimitExceeded
+    /// A `pins` row insert failed for a reason other than the rate limit (network error,
+    /// hard-ceiling CHECK violation, etc.). Any rows already inserted for this batch have
+    /// been best-effort rolled back before this is thrown — see
+    /// `insertBlockScopedReport`'s doc comment for the full partial-failure decision.
+    case pinsInsertFailed(statusCode: Int)
+    /// The resolved end time is not strictly after `startsAt` (§5's window model; matches
+    /// `pins_block_scoped_report_group_required_chk`'s sibling constraint
+    /// `pins_starts_before_expires_chk`, which rejects this server-side too). B2's date
+    /// pickers are expected to prevent this in the UI — this is a second, defensive guard
+    /// at the write-path boundary so an obviously-inverted/zero-length window never even
+    /// reaches the network, mirroring the hard-ceiling clamp's "avoid a confusing generic
+    /// error for an obviously invalid submission" reasoning. Thrown before any network
+    /// call (evidence upload included).
+    case invalidWindow
+    /// Request body JSON encoding failed.
+    case encodingFailure
+}
+
+extension BlockScopedReportError: LocalizedError {
+    /// User-facing copy for B2's submit-error UI (mirrors `ReportSheet.submitError`'s
+    /// existing inline-error pattern). Deliberately never echoes a raw server message or
+    /// status code into user-visible text.
+    var errorDescription: String? {
+        switch self {
+        case .notAuthenticated:
+            return "You need to be signed in to submit a report. Try again in a moment."
+        case .emptySelections:
+            return "Select at least one block before continuing."
+        case .unsupportedPinType:
+            return "Something went wrong preparing your report. Try again."
+        case .evidenceUploadFailed(let underlying):
+            return (underlying as? LocalizedError)?.errorDescription
+                ?? "Couldn't upload your evidence photo. Check your connection and try again."
+        case .rateLimitExceeded:
+            return "You've reported the maximum number of closures for now — please try again later."
+        case .pinsInsertFailed:
+            return "Couldn't submit your report. Check your connection and try again."
+        case .invalidWindow:
+            return "The restriction end time must be after the start time."
+        case .encodingFailure:
+            return "Something went wrong preparing your report. Try again."
+        }
+    }
 }
 
 // MARK: - CommunityPinService
@@ -1064,6 +1177,332 @@ final class CommunityPinService {
               (200..<300).contains(http.statusCode) else {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw CommunityPinWriteError.httpError(statusCode: status)
+        }
+    }
+
+    // MARK: - Write path: Block-scoped restriction report (FT-15/TF2-15 Stream B3)
+
+    /// Per-type default window (§5.3) applied when the report's end time is left blank.
+    /// `nil` for any `pinType` other than `.filming`/`.construction` — this primitive
+    /// serves only those two (§9.3).
+    ///
+    /// OQ-2 (spec, non-blocking): these are first-pass numbers, not measured against real
+    /// permit durations — tune post-launch. Must match
+    /// `supabase/02f-block-scoped-restrictions.sql`'s `pins_block_scoped_ceiling_chk`
+    /// defaults/comments exactly; if one side of this pair is ever retuned, update both.
+    nonisolated static func defaultReportWindow(for pinType: PinType) -> TimeInterval? {
+        switch pinType {
+        case .filming:      return 24 * 3600            // 24h
+        case .construction: return 14 * 24 * 3600        // 14d
+        default:            return nil
+        }
+    }
+
+    /// Hard ceiling (§5.3) from `starts_at`. `nil` for any `pinType` other than
+    /// `.filming`/`.construction`. This is DEFENSE IN DEPTH ONLY — the actual authority is
+    /// `pins_block_scoped_ceiling_chk` in `supabase/02f-block-scoped-restrictions.sql`,
+    /// which enforces the identical values server-side regardless of what this client
+    /// computes. Clamping here just avoids a confusing generic 400/23514 for an obviously
+    /// out-of-range submission.
+    nonisolated static func hardCeiling(for pinType: PinType) -> TimeInterval? {
+        switch pinType {
+        case .filming:      return 7 * 24 * 3600         // 7d
+        case .construction: return 90 * 24 * 3600        // 90d
+        default:            return nil
+        }
+    }
+
+    /// The `lifespan` value a block-scoped report of `pinType` is inserted with, per the
+    /// two-axis model (`docs/typed-pin-schema-spec.md` §3: filming is `session`
+    /// — self-expiring, same-day-typical; construction is `durable` — does not
+    /// conventionally auto-expire, but THIS feature explicitly overrides that convention
+    /// by still setting `expires_at` on construction rows too, per §5.1/§5.3's own window
+    /// model applying to both types). `nil` for any other `pinType`.
+    nonisolated static func lifespanForBlockScopedReport(pinType: PinType) -> PinLifespan? {
+        switch pinType {
+        case .filming:      return .session
+        case .construction: return .durable
+        default:            return nil
+        }
+    }
+
+    /// Resolves the actual `expires_at` to submit: the caller-supplied value if present,
+    /// else `startsAt + defaultReportWindow(for:)`; then clamps to
+    /// `startsAt + hardCeiling(for:)` either way (defense in depth — see `hardCeiling`'s
+    /// doc comment).
+    ///
+    /// Pure and `nonisolated static` so B2's UI can call this exact function to compute
+    /// the "We'll assume this ends in X" copy (AC-R6) without risking the displayed
+    /// default ever drifting from the value this write path actually submits.
+    nonisolated static func resolvedExpiresAt(pinType: PinType, startsAt: Date, requested: Date?) -> Date {
+        let base: Date
+        if let requested {
+            base = requested
+        } else {
+            let window = defaultReportWindow(for: pinType) ?? (90 * 24 * 3600)
+            base = startsAt.addingTimeInterval(window)
+        }
+        guard let ceiling = hardCeiling(for: pinType) else { return base }
+        let ceilingDate = startsAt.addingTimeInterval(ceiling)
+        return min(base, ceilingDate)
+    }
+
+    /// Submits a block-scoped restriction report (§3.4): uploads the evidence photo, then
+    /// inserts N `pins` rows (one per selected blockface) sharing one client-generated
+    /// `report_group_id`.
+    ///
+    /// ## Partial-failure behavior — flagged for orchestrator review
+    ///
+    /// The spec explicitly hands this decision to B3 ("you own the client behavior") and
+    /// rules out a wrapping RPC (§3.4). Three cases:
+    ///
+    /// 1. **Evidence upload fails** (Storage object or `pin_evidence` row — see
+    ///    `PinEvidenceUploadError`): nothing else has been attempted. Thrown as
+    ///    `.evidenceUploadFailed`; zero `pins` rows exist.
+    ///    `PinEvidenceUploader.upload(...)` attempts a best-effort delete of the Storage
+    ///    object if the `pin_evidence` row insert fails after a successful upload — but
+    ///    see that method's doc comment for a flagged, honest limitation: the schema ships
+    ///    no Storage delete policy in phase 1, so today that attempt itself 403s, and this
+    ///    specific failure CAN leave an orphaned Storage object with zero DB trace. Low
+    ///    severity (private bucket, uploader-keyed path, no PII exposure beyond what §7
+    ///    already accepts for evidence that does have a DB row) but not silently claimed
+    ///    as solved.
+    /// 2. **Evidence succeeds, but the pins batch fails partway through** (rows `1...k` of
+    ///    `N` inserted, row `k+1` fails — rate limit, network, or a constraint): this
+    ///    method deletes the `k` already-inserted rows (author-owned, via the existing,
+    ///    unmodified `pins_delete_own` RLS — no new server capability) before rethrowing
+    ///    the triggering error. **This is a deliberate choice beyond what the schema
+    ///    explicitly mandates**: the schema's own comments accept an ORPHANED EVIDENCE row
+    ///    as inert (§3.4/§7, no automatic deletion in phase 1 either way), but say nothing
+    ///    about a partial PINS BATCH — and a report that silently covers 2 of 4 tapped
+    ///    blocks, with no UI signal that it's incomplete, is a materially worse and more
+    ///    confusing outcome than "the whole submission failed, retry." Rolling back to
+    ///    zero keeps the result binary: either all N rows are live, or none are. The
+    ///    evidence row/photo are NOT rolled back in this case (matches the schema's own
+    ///    accepted-orphan posture) — a retried submission generates a fresh
+    ///    `report_group_id` (a new call to this method), so the old evidence row simply
+    ///    becomes unreferenced, not incorrect or duplicated.
+    /// 3. **Rate limit specifically**: surfaced as `.rateLimitExceeded`, not a generic HTTP
+    ///    error, so the caller can show clear copy instead of a raw error string. Detected
+    ///    by parsing the PostgREST error body's `code` field for `"42501"` (the SQLSTATE
+    ///    `enforce_block_scoped_rate_limit()` raises), not just the HTTP status, so this
+    ///    can't misfire on some unrelated 403.
+    ///
+    /// - Parameters:
+    ///   - pinType: `.filming` or `.construction` only (§9.3). Any other value throws
+    ///     `.unsupportedPinType` before any network call is made.
+    ///   - selections: One entry per tapped blockface (§4.2's "Both curbs" toggle already
+    ///     resolved into this list by the caller — this method does not infer opposite
+    ///     sides). Must be non-empty.
+    ///   - startsAt: The report's window start (§5.2's "Restriction starts" picker).
+    ///   - expiresAt: The report's window end, or `nil` if the user left "Restriction
+    ///     ends" blank — `resolvedExpiresAt(pinType:startsAt:requested:)` fills the
+    ///     type-specific default and clamps to the hard ceiling either way.
+    ///   - notes: Optional free-text notes, shared across every row in the batch.
+    ///   - evidencePhoto: Raw captured photo bytes (required — §2/AC-R5; this method does
+    ///     not accept a nil/optional photo).
+    ///   - evidenceContentType: MIME type of `evidencePhoto`. Default `"image/jpeg"`.
+    /// - Returns: The shared `report_group_id` and the N inserted rows.
+    /// - Throws: `BlockScopedReportError`.
+    func insertBlockScopedReport(
+        pinType: PinType,
+        selections: [BlockScopedReportSelection],
+        startsAt: Date,
+        expiresAt: Date?,
+        notes: String?,
+        evidencePhoto: Data,
+        evidenceContentType: String = "image/jpeg"
+    ) async throws -> BlockScopedReportResult {
+        guard let lifespan = Self.lifespanForBlockScopedReport(pinType: pinType) else {
+            throw BlockScopedReportError.unsupportedPinType(pinType)
+        }
+        guard !selections.isEmpty else {
+            throw BlockScopedReportError.emptySelections
+        }
+        guard let authSvc = authService else {
+            throw BlockScopedReportError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken(),
+              let userId = authSvc.currentUserId else {
+            throw BlockScopedReportError.notAuthenticated
+        }
+
+        // Named distinctly from the static `resolvedExpiresAt(pinType:startsAt:requested:)`
+        // function above to avoid a local-variable/static-function name shadow.
+        let resolvedExpires = Self.resolvedExpiresAt(pinType: pinType, startsAt: startsAt, requested: expiresAt)
+        guard resolvedExpires > startsAt else {
+            throw BlockScopedReportError.invalidWindow
+        }
+
+        // §3.4: client generates report_group_id up front. The evidence row is written
+        // BEFORE any pins row exists — see this method's doc comment above for the full
+        // partial-failure decision this ordering implies.
+        let reportGroupId = UUID()
+
+        let uploader = PinEvidenceUploader(
+            supabaseURL: supabaseURL,
+            supabaseAnonKey: supabaseAnonKey,
+            urlSession: urlSession,
+            authService: authSvc
+        )
+        do {
+            _ = try await uploader.upload(
+                photoData: evidencePhoto,
+                contentType: evidenceContentType,
+                reportGroupId: reportGroupId
+            )
+        } catch {
+            throw BlockScopedReportError.evidenceUploadFailed(underlying: error)
+        }
+
+        // Insert N pins rows SEQUENTIALLY (not concurrently) — this is what makes the
+        // rollback-on-partial-failure behavior above possible: at any point we know
+        // exactly which rows of this batch have already landed.
+        var insertedPins: [CommunityPin] = []
+        var insertedIds: [UUID] = []
+
+        for selection in selections {
+            do {
+                let pin = try await insertSingleBlockScopedPin(
+                    pinType: pinType,
+                    lifespan: lifespan,
+                    selection: selection,
+                    reportGroupId: reportGroupId,
+                    startsAt: startsAt,
+                    expiresAt: resolvedExpires,
+                    notes: notes,
+                    userId: userId,
+                    jwt: jwt
+                )
+                insertedPins.append(pin)
+                insertedIds.append(pin.id)
+            } catch let error as BlockScopedReportError {
+                await rollbackBlockScopedPins(ids: insertedIds, jwt: jwt)
+                throw error
+            } catch {
+                await rollbackBlockScopedPins(ids: insertedIds, jwt: jwt)
+                throw BlockScopedReportError.pinsInsertFailed(statusCode: 0)
+            }
+        }
+
+        // Optimistic add — mirrors insertCrowdPin's Fix 1 pattern (Channel 3's read path
+        // already covers these rows going forward; this makes them appear immediately
+        // without waiting for the next periodic refresh).
+        for pin in insertedPins {
+            mergeRealtimeChange(pin: pin)
+        }
+
+        return BlockScopedReportResult(reportGroupId: reportGroupId, insertedPins: insertedPins)
+    }
+
+    /// Inserts exactly one `pins` row for a block-scoped report batch.
+    ///
+    /// Builds its own request (rather than reusing `insertCrowdPin`'s payload shape,
+    /// which is ephemeral-type-specific) so it can send `starts_at` / `report_group_id`
+    /// and read the raw response body needed for rate-limit detection.
+    private func insertSingleBlockScopedPin(
+        pinType: PinType,
+        lifespan: PinLifespan,
+        selection: BlockScopedReportSelection,
+        reportGroupId: UUID,
+        startsAt: Date,
+        expiresAt: Date,
+        notes: String?,
+        userId: UUID,
+        jwt: String
+    ) async throws -> CommunityPin {
+        var payload: [String: Any] = [
+            "pin_type":        pinType.rawValue,
+            "source":          PinSource.crowd.rawValue,
+            "lifespan":        lifespan.rawValue,
+            "lat":             selection.lat,
+            "lng":             selection.lng,
+            "segment_id":      selection.blockfaceKey,
+            "author_id":       userId.uuidString,
+            "report_group_id": reportGroupId.uuidString,
+            "starts_at":       iso8601String(from: startsAt),
+            "expires_at":      iso8601String(from: expiresAt),
+        ]
+        if let notes { payload["notes"] = notes }
+
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw BlockScopedReportError.encodingFailure
+        }
+
+        let request = buildAuthenticatedRequest(
+            path: "rest/v1/pins",
+            method: "POST",
+            jwt: jwt,
+            body: body,
+            extraHeaders: [
+                "Prefer": "return=representation",
+                "Accept": "application/json",
+            ]
+        )
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw BlockScopedReportError.pinsInsertFailed(statusCode: 0)
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            if Self.isRateLimitError(statusCode: http.statusCode, body: data) {
+                throw BlockScopedReportError.rateLimitExceeded
+            }
+            throw BlockScopedReportError.pinsInsertFailed(statusCode: http.statusCode)
+        }
+
+        guard let pins = try? decodeResponse(data: data), let pin = pins.first else {
+            throw BlockScopedReportError.pinsInsertFailed(statusCode: http.statusCode)
+        }
+        return pin
+    }
+
+    /// True if a non-2xx `pins` insert response is the rate-limit trigger's rejection.
+    ///
+    /// `enforce_block_scoped_rate_limit()` (`supabase/02f-block-scoped-restrictions.sql`)
+    /// raises `errcode = 'insufficient_privilege'` (Postgres SQLSTATE `42501`), which
+    /// PostgREST maps to HTTP 403 with a JSON body `{"code":"42501", "message":"...", ...}`.
+    /// Checking the parsed `code` field (not just the HTTP status) so this can't misfire on
+    /// some other, unrelated 403 — the only thing in this feature that raises `42501` is
+    /// this trigger.
+    private nonisolated static func isRateLimitError(statusCode: Int, body: Data) -> Bool {
+        guard statusCode == 403 else { return false }
+        guard let json = try? JSONSerialization.jsonObject(with: body) as? [String: Any] else {
+            return false
+        }
+        return (json["code"] as? String) == "42501"
+    }
+
+    /// Best-effort compensating rollback for a partially-succeeded block-scoped pins
+    /// batch — see `insertBlockScopedReport`'s doc comment (case 2) for the full
+    /// reasoning. Deletes each already-inserted row of THIS batch via the existing,
+    /// unmodified `pins_delete_own` RLS policy (author-only delete — no new server-side
+    /// capability needed).
+    ///
+    /// Failures here are swallowed: if a delete also fails (e.g. the same network outage
+    /// that caused the original insert failure), there is nothing more this method can
+    /// safely retry without risking deleting the wrong rows on some later, unrelated call.
+    /// The caller's own triggering error (rate limit / insert failure) is what gets
+    /// surfaced to the user either way, and a row left behind by a failed rollback attempt
+    /// is still author-owned and deletable later through the same existing RLS path (or a
+    /// future dispute/auto-resolve cycle, §6.1).
+    private func rollbackBlockScopedPins(ids: [UUID], jwt: String) async {
+        guard !ids.isEmpty else { return }
+        for id in ids {
+            var components = URLComponents(
+                url: supabaseURL.appendingPathComponent("rest/v1/pins"),
+                resolvingAgainstBaseURL: false
+            )
+            components?.queryItems = [URLQueryItem(name: "id", value: "eq.\(id.uuidString)")]
+            guard let url = components?.url else { continue }
+
+            var request = URLRequest(url: url)
+            request.httpMethod = "DELETE"
+            request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+            request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+            request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+
+            _ = try? await urlSession.data(for: request)
         }
     }
 
