@@ -355,7 +355,33 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   completed independent QA pass** — the QA agent was stopped mid-run (it had confirmed the 24 new
   Bleecker faces first); no report exists in `docs/qa/`. Post-merge QA on `main` still available
   before the archive. ⏳ Kevin on-device (build 15): Bleecker @ LaGuardia colored, Harlem jump.
-- **Lands in:** `build/preprocess.js` normalizer + regen 7.
+- **POST-MERGE QA (`docs/qa/ft14-normalizer-regen7-qa.md`, 2026-08-11):** ✅ safe to archive, every
+  quantitative claim re-derived exactly. One 🟡 finding: the SAINT↔ST swap's stated safety count ("OSM
+  has exactly 3 Saint-prefixed streets") was wrong — real count is 37 — with zero live wrong-street
+  collisions today but no code-level uniqueness gate backing that up.
+- **FOLLOW-UP #1 (open-items #14) — SAINT↔ST uniqueness gate, DONE:** re-derived the real count myself
+  (37, `osm_data.json`), corrected the false "3" claim in `docs/qa/ft14-join-drop-investigation.md`, and
+  added a collision/uniqueness gate to the SAINT↔ST path in `osmName()` (`build/preprocess.js`),
+  mirroring the compact-spacing fallback's existing `.length===1` pattern. Proved the gate changes
+  nothing today: a live-pull before/after run produced **byte-identical tile output** (1,070/1,070
+  tiles, 42,975/42,975 segments, identical category counts, only the `generatedAt` timestamp differed).
+- **FOLLOW-UP #2 (open-items #15) — 1,528-row zone-construction loss, INVESTIGATED, not fixed:**
+  full write-up in `docs/qa/ft14-zone-construction-loss-investigation.md`. The original "sign at
+  distance 0 with an isolated 'away' arrow" hypothesis is **refuted** (0 of 1,621 lost rows in a fresh
+  live pull match it). Real root cause, confirmed with exact numbers: `createSubSegments()` computes
+  zone boundaries in raw (physical-intersection-relative) distance, but `extractSubSegment()` interprets
+  those same raw values against `blockGeo` **after** `trimIntersectionSetback()` has already shifted its
+  coordinate origin by the 10m/32.8ft intersection setback — so zones whose raw distance lands past the
+  trimmed block's shortened length collapse to a degenerate line and get silently dropped, taking every
+  rule assigned to that zone with them. Affects ~28% of geometry-successful blocks (3,008/10,613), ~3%
+  of rows (1,621/53,367) in this pull. **Not fixed here** — the correct fix touches
+  `trimIntersectionSetback()`'s return contract and the heavily-tuned intersection-setback/curb-offset
+  region of the file, actively changes rendered geometry (unlike the SAINT/ST gate, which only ever adds
+  a safety net), and would need its own live-pull regen + coverage-report validation before shipping —
+  a regen decision reserved for Kevin per the standing tile-regen policy. Recommended fix direction is
+  documented in the investigation doc for a future dedicated pass.
+- **Lands in:** `build/preprocess.js` normalizer + regen 7 (#68); SAINT/ST gate follow-up in
+  `build/preprocess.js` (no regen, see above — proven no-op on current tile output).
 
 ### FT-13 🟡 Parking 101 "?" button on the map toolbar (FEATURE, small)
 - **Request (Kevin, 2026-07-12):** loves the Parking 101 guide ("very good"), wants it accessible

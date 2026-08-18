@@ -195,8 +195,20 @@ Ranked by recovered-coverage-per-unit-risk:
    pattern as the existing Street/St, Avenue/Ave, Place/Pl suffix variations already there). Recovers
    1,109 rows / 286 blocks, concentrated in the St Nicholas Ave/Terrace corridor (Washington
    Heights/Harlem). **Risk: very low** — the transform is a candidate string that still must
-   exact-match (case-insensitive) a real OSM key; OSM has exactly 3 "Saint"-prefixed streets citywide,
-   so there's no room for an accidental match to a wrong street.
+   exact-match (case-insensitive) a real OSM key.
+   >
+   > **Correction (2026-08-13, `docs/qa/ft14-normalizer-regen7-qa.md` Finding #1):** the "OSM has
+   > exactly 3 'Saint'-prefixed streets citywide" claim in this line was wrong — QA independently
+   > counted 37 (`Object.keys(osm_data.json).filter(k => /\bsaint\b/i.test(k))`), re-derived and
+   > confirmed by `@backend-data` on the follow-up pass. QA adversarially checked all 37 against the
+   > real join and found zero live wrong-street collisions, so nothing shipped defective — but the
+   > original risk argument ("finite key set makes wrong matches impossible") was true in outcome,
+   > false in its stated reasoning, and the SAINT/ST path had no code-level uniqueness gate to back it
+   > up (unlike recommendation #3's compact-spacing fallback, which does). Fixed: `osmName()` now
+   > gates the SAINT/ST swap the same way, via a canonicalized-key uniqueness index
+   > (`buildStSaintIndex()` in `build/preprocess.js`). Verified the gate changes nothing today: a
+   > live-pull before/after run produced byte-identical tile output (1,070/1,070 tiles, 42,975/42,975
+   > segments, identical category counts). See the follow-up PR for details.
 
 2. **8 explicit alias/co-name dictionary entries** added to `NYC_TO_OSM` (exact uppercase-key → real
    OSM name, same pattern as the 30 entries already there): `LENOX AVENUE`, `ADAM C POWELL BOULEVARD`,
