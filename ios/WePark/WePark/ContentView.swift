@@ -160,6 +160,10 @@
 //      overlay (additive; does not replace or recolor the existing 5-state + selectedBlock
 //      overlays — OQ-1's marker-only ruling, applied to the render step; the selection
 //      highlight required during tap-select is separate new-but-minimal overlay surface).
+//    - QA pass-1 fix: `blockSelectModeActive`/`driveModeActive` are now mutually
+//      exclusive from BOTH directions (an earlier revision only enforced one). See
+//      `blockSelectModeActive`'s doc comment, the `recenterButtonStack` gate in
+//      `mapZStack`, and the force-clear in `handleDriveModeAndCamera`.
 //
 
 import SwiftUI
@@ -551,10 +555,20 @@ struct ContentView: View {
     /// `BlockDetailView`. Entered via the resting long-press dialog's third action;
     /// exited via the floating bar's Cancel button or by tapping Continue.
     ///
-    /// Mutually exclusive with Drive Mode by construction — the confirmationDialog that
-    /// sets this to `true` only ever presents when `driveModeActive == false`
-    /// (`handleLongPress` already guards on that), so this flag and `driveModeActive`
-    /// are never both `true` at once.
+    /// Mutually exclusive with Drive Mode, enforced from BOTH directions (QA pass-1
+    /// finding: an earlier revision of this comment claimed mutual exclusion but only
+    /// the first of these two was actually true):
+    ///   1. Block-select → Drive Mode is blocked: `handleLongPress` only shows the
+    ///      confirmationDialog (the sole entry point that sets this `true`) when
+    ///      `driveModeActive == false`.
+    ///   2. Drive Mode → block-select is blocked/cleared: `recenterButtonStack` — the
+    ///      sole UI path to both Drive Mode entry points — is hidden whenever this is
+    ///      `true` (see `mapZStack`), AND `handleDriveModeAndCamera` force-clears this
+    ///      flag (`cancelBlockSelectMode()`) on every Drive Mode entry as a structural,
+    ///      single-funnel backstop, since ALL entry paths (`enterCruiseMode()`,
+    ///      destination mode's `onRouteReady`) converge on the one
+    ///      `.onChange(of: driveModeActive)` handler.
+    /// So this flag and `driveModeActive` are never both `true` at once.
     @State private var blockSelectModeActive: Bool = false
 
     /// The set of `Segment.blockfaceKey` values currently selected during block-select
@@ -1244,9 +1258,21 @@ struct ContentView: View {
                 // top-trailing corner but are mutually exclusive — exactly one renders at a
                 // time, matching Proposal 1's "top of screen reduced to banner + End control"
                 // during Drive Mode (Kevin's ruling #1).
+                //
+                // FT-15/TF2-15 QA fix: `recenterButtonStack` is ALSO hidden during
+                // block-select mode — it's the sole UI path to both Drive Mode entry points
+                // (`driveEntryButton`'s "Drive to a destination" / "Find Parking nearby"),
+                // so hiding it here structurally prevents starting Drive Mode while
+                // block-select is active, rather than re-guarding each entry point
+                // individually. `handleDriveModeAndCamera` additionally force-clears
+                // block-select state on every Drive Mode entry as a self-healing backstop —
+                // see that function's doc comment for why both together, not either alone.
                 if driveModeActive {
                     endDriveControl
-                } else {
+                } else if recenterButtonStackVisible(
+                    driveModeActive: driveModeActive,
+                    blockSelectModeActive: blockSelectModeActive
+                ) {
                     recenterButtonStack
                         .padding(.top, 100)
                         .padding(.trailing, 12)
@@ -1436,9 +1462,10 @@ struct ContentView: View {
             if driveModeActive {
                 driveActionRow
             }
-            // FT-15/TF2-15 Stream B2: block-select floating bar (§4.2 step 5). Browse-mode
-            // only by construction (see `blockSelectModeActive`'s doc comment) — never
-            // coexists with any of the driveModeActive-gated rows above.
+            // FT-15/TF2-15 Stream B2: block-select floating bar (§4.2 step 5). Never
+            // coexists with any of the driveModeActive-gated rows above — enforced from
+            // both directions, see `blockSelectModeActive`'s doc comment (QA pass-1 fix:
+            // this used to be a one-directional guard).
             if blockSelectModeActive {
                 blockSelectBar
             }
@@ -2691,6 +2718,25 @@ struct ContentView: View {
     /// in ContentView or from MapKit delegate callbacks.
     private func handleDriveModeAndCamera(_ active: Bool) {
         if active {
+            // FT-15/TF2-15 QA fix: this `.onChange(of: driveModeActive)` handler is the
+            // SINGLE funnel every Drive Mode entry path runs through (destination-mode's
+            // `onRouteReady` and `enterCruiseMode()` both just set `driveModeActive = true`
+            // and let this fire) — so it's the structural place to guarantee
+            // `blockSelectModeActive`/`selectedBlockKeys` can never coexist with an active
+            // Drive Mode session, rather than re-asserting the guard at each entry site
+            // individually (that per-site pattern is exactly what QA's pass-1 finding
+            // caught: `recenterButtonStack`'s Drive-entry affordance was the only thing
+            // gating entry, and it wasn't gated against block-select mode). The
+            // `recenterButtonStack` gate below (`mapZStack`) additionally hides the
+            // Drive-entry UI entirely while block-select is active, so in practice this
+            // branch is a self-healing safety net, not the only line of defense.
+            if shouldClearBlockSelectOnDriveModeEntry(
+                active: active,
+                blockSelectModeActive: blockSelectModeActive,
+                hasSelection: !selectedBlockKeys.isEmpty
+            ) {
+                cancelBlockSelectMode()
+            }
             handleDriveModeChange(true)
             handleDriveCameraChange(true)
             // Initialize currentDriveAltitude to the FT-8 default.
@@ -3126,6 +3172,55 @@ func parkingGuideButtonVisible(driveModeActive: Bool) -> Bool {
 /// is unit-testable independent of view rendering.
 func gearButtonVisible(driveModeActive: Bool) -> Bool {
     !driveModeActive
+}
+
+// MARK: - FT-15 / TF2-15 Stream B2 QA fix: block-select ↔ Drive Mode mutual exclusion
+
+/// Returns whether `recenterButtonStack` (the sole UI path to both Drive Mode entry
+/// points — `driveEntryButton`'s "Drive to a destination" / "Find Parking nearby" menu
+/// items) should render.
+///
+/// QA pass-1 finding: an earlier revision gated this on `!driveModeActive` alone. That
+/// correctly hid the stack once Drive Mode was already active, but did nothing to stop
+/// the REVERSE transition — nothing prevented tapping the Drive-entry button while
+/// block-select mode was active, producing a stacked/competing Bottom Dock and map taps
+/// hijacked into block selection while "driving." Hiding the stack whenever EITHER flag
+/// is true closes that gap structurally, at the one call site both entry points share,
+/// rather than re-guarding each entry point (`enterCruiseMode()`, the destination-mode
+/// `onRouteReady` closure) individually.
+///
+/// Extracted as an `internal` pure function — same testability rationale as
+/// `gearButtonVisible` / `parkingGuideButtonVisible` — so this specific state-interaction
+/// bug has a regression test that doesn't require instantiating a full `ContentView`.
+func recenterButtonStackVisible(driveModeActive: Bool, blockSelectModeActive: Bool) -> Bool {
+    !driveModeActive && !blockSelectModeActive
+}
+
+/// Returns whether entering Drive Mode (`active == true`) should force-clear block-select
+/// state (`blockSelectModeActive` / `selectedBlockKeys`).
+///
+/// This is the self-healing backstop half of the QA pass-1 fix (paired with
+/// `recenterButtonStackVisible` above, which prevents the transition at the UI level in
+/// the first place): `handleDriveModeAndCamera` is the single funnel every Drive Mode
+/// entry path runs through (`.onChange(of: driveModeActive)` fires identically regardless
+/// of which entry point flipped the flag), so clearing block-select state there — guarded
+/// by this predicate — guarantees the invariant holds even for a hypothetical future entry
+/// path that doesn't route through `recenterButtonStack` at all.
+///
+/// `hasSelection` covers the case where `blockSelectModeActive` has already flipped back
+/// to `false` (Continue was tapped) but `selectedBlockKeys` is still populated to keep the
+/// map highlight visible while `BlockRestrictionReportSheet` is open — that highlight
+/// should also be cleared if Drive Mode somehow starts during that window, not just the
+/// mode flag.
+///
+/// Extracted as an `internal` pure function for the same reason as
+/// `recenterButtonStackVisible`.
+func shouldClearBlockSelectOnDriveModeEntry(
+    active: Bool,
+    blockSelectModeActive: Bool,
+    hasSelection: Bool
+) -> Bool {
+    active && (blockSelectModeActive || hasSelection)
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance

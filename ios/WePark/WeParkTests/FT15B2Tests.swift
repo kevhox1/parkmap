@@ -49,6 +49,17 @@
 //      19. testSummary_multipleStreets_fallsBackToCountOnly
 //      20. testSummary_empty_returnsPlaceholder
 //
+//    QA pass-1 fix — block-select ↔ Drive Mode mutual exclusion state interaction
+//    (recenterButtonStackVisible, shouldClearBlockSelectOnDriveModeEntry):
+//      21. testRecenterButtonStackVisible_neitherActive_visible
+//      22. testRecenterButtonStackVisible_driveModeActive_hidden
+//      23. testRecenterButtonStackVisible_blockSelectModeActive_hidden
+//      24. testRecenterButtonStackVisible_bothActive_hidden
+//      25. testShouldClearBlockSelect_enteringDriveMode_whileBlockSelectModeActive_clears
+//      26. testShouldClearBlockSelect_enteringDriveMode_withLeftoverSelection_clears
+//      27. testShouldClearBlockSelect_enteringDriveMode_neitherFlagSet_noOp
+//      28. testShouldClearBlockSelect_exitingDriveMode_neverClears_evenIfBothFlagsSet
+//
 
 import XCTest
 import CoreLocation
@@ -278,5 +289,85 @@ final class BlockRestrictionSelectionSummaryTests: XCTestCase {
     func testSummary_empty_returnsPlaceholder() {
         let summary = BlockRestrictionReportSheet.selectionSummary(for: [])
         XCTAssertEqual(summary, "No blocks selected")
+    }
+}
+
+// MARK: - QA pass-1 fix: block-select ↔ Drive Mode mutual exclusion
+//
+// docs/qa/ft15-b2-tap-select-qa.md — 🟡 Significant finding: `blockSelectModeActive` and
+// `driveModeActive` were NOT actually mutually exclusive despite a doc comment claiming
+// they were. `handleLongPress` correctly blocked block-select mode from opening while
+// driving, but nothing blocked the REVERSE: `recenterButtonStack`'s Drive-entry
+// affordance stayed live during block-select mode, and neither `enterCruiseMode()` nor
+// the destination-drive path ever reset block-select state. Fixed with two pure,
+// independently-testable decision functions (`recenterButtonStackVisible` blocks the
+// transition at its one shared UI entry point; `shouldClearBlockSelectOnDriveModeEntry`
+// is a self-healing backstop at the single `.onChange(of: driveModeActive)` funnel every
+// entry path converges on) rather than re-asserting the guard at each Drive Mode entry
+// site individually — the per-site pattern is exactly what caused the original gap.
+
+/// `recenterButtonStackVisible(driveModeActive:blockSelectModeActive:)` — this is the
+/// function that structurally prevents the collision at the UI level: if the Drive-entry
+/// button can't render, the user can't tap it, regardless of which state got there first.
+final class RecenterButtonStackVisibleTests: XCTestCase {
+
+    func testRecenterButtonStackVisible_neitherActive_visible() {
+        XCTAssertTrue(recenterButtonStackVisible(driveModeActive: false, blockSelectModeActive: false))
+    }
+
+    func testRecenterButtonStackVisible_driveModeActive_hidden() {
+        XCTAssertFalse(recenterButtonStackVisible(driveModeActive: true, blockSelectModeActive: false),
+            "Pre-existing FT-18 behavior must be preserved: hidden while driving")
+    }
+
+    func testRecenterButtonStackVisible_blockSelectModeActive_hidden() {
+        XCTAssertFalse(recenterButtonStackVisible(driveModeActive: false, blockSelectModeActive: true),
+            "QA pass-1 fix: the Drive-entry affordance must be hidden during block-select mode " +
+            "— this is the reproduction QA flagged (two taps: enter block-select, then tap Drive-entry)")
+    }
+
+    /// Both flags true is not reachable in practice once the fix holds (that's the whole
+    /// point), but the predicate itself must still resolve unambiguously to "hidden" if it
+    /// were — never accidentally "visible" from some flag-combination gap.
+    func testRecenterButtonStackVisible_bothActive_hidden() {
+        XCTAssertFalse(recenterButtonStackVisible(driveModeActive: true, blockSelectModeActive: true))
+    }
+}
+
+/// `shouldClearBlockSelectOnDriveModeEntry(active:blockSelectModeActive:hasSelection:)` —
+/// the self-healing backstop half of the fix, exercised at the single
+/// `.onChange(of: driveModeActive)` funnel every Drive Mode entry path shares.
+final class ShouldClearBlockSelectOnDriveModeEntryTests: XCTestCase {
+
+    func testShouldClearBlockSelect_enteringDriveMode_whileBlockSelectModeActive_clears() {
+        XCTAssertTrue(shouldClearBlockSelectOnDriveModeEntry(
+            active: true, blockSelectModeActive: true, hasSelection: false
+        ))
+    }
+
+    /// Covers the window where `blockSelectModeActive` already flipped back to `false`
+    /// (Continue was tapped) but `selectedBlockKeys` is still populated to keep the map
+    /// highlight visible while `BlockRestrictionReportSheet` is open — that highlight must
+    /// also be cleared if Drive Mode somehow starts during that window.
+    func testShouldClearBlockSelect_enteringDriveMode_withLeftoverSelection_clears() {
+        XCTAssertTrue(shouldClearBlockSelectOnDriveModeEntry(
+            active: true, blockSelectModeActive: false, hasSelection: true
+        ))
+    }
+
+    func testShouldClearBlockSelect_enteringDriveMode_neitherFlagSet_noOp() {
+        XCTAssertFalse(shouldClearBlockSelectOnDriveModeEntry(
+            active: true, blockSelectModeActive: false, hasSelection: false
+        ), "No block-select state to clear — must not fire spuriously on every normal Drive Mode entry")
+    }
+
+    /// Drive Mode EXIT (`active == false`) must never trigger this — clearing block-select
+    /// state is only meaningful (and only correct) on ENTRY. If this ever returned `true`
+    /// on exit, `cancelBlockSelectMode()` would incorrectly fire while a user is mid-selection
+    /// after simply ending a previous Drive Mode session.
+    func testShouldClearBlockSelect_exitingDriveMode_neverClears_evenIfBothFlagsSet() {
+        XCTAssertFalse(shouldClearBlockSelectOnDriveModeEntry(
+            active: false, blockSelectModeActive: true, hasSelection: true
+        ))
     }
 }
