@@ -723,8 +723,14 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **3 possible causes:** (a) NYC SOURCE data error (city sign dataset wrong side → fix is Tier 2
   community sign-correction, not pipeline); (b) pipeline side-assignment bug (systematic); (c) render
   offset (polyline on wrong side visually).
-- **Status:** 🔴 open — NEED exact block (E 2nd between which aves) + side-vs-position clarification,
-  then backend-data pulls the segment to determine cause.
+- **BLOCK IDENTIFIED (Kevin, 2026-08-18):** the school zone on **E 2nd St between 2nd Ave and 1st Ave**.
+  This was the missing input that stalled the item since June.
+- **Status:** 🟡 unblocked, **deliberately queued behind the FT-19/FT-14 geometry work.** That pass
+  rewrites `trimIntersectionSetback()`/`createSubSegments()` and regenerates every tile, so
+  investigating this block against tiles that are about to change would be wasted effort — and the
+  regen may resolve or alter it outright (this entry already suspected TF2-5's curb-offset rebuild
+  might have fixed it). **Re-check this exact block after the geometry regen lands**, then determine
+  whether the residue is NYC source error, a pipeline side-assignment bug, or a render offset.
 - **Lands in:** backend-data (tiles) and/or iOS (render); or deferred to Tier 2 sign-corrections if
   it's a NYC source error.
 
