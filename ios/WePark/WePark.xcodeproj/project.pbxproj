@@ -343,7 +343,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSCameraUsageDescription = "WePark uses your camera to photograph posted signs (like a film shoot or construction closure notice) as evidence for a community report. The photo is never shown to other users.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend nearby parking. Your location stays on your device — except the location of community reports you choose to submit.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "WePark falls back to your photo library to attach evidence for a community report on devices without a camera. The photo is never shown to other users.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -381,7 +383,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
+				INFOPLIST_KEY_NSCameraUsageDescription = "WePark uses your camera to photograph posted signs (like a film shoot or construction closure notice) as evidence for a community report. The photo is never shown to other users.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend nearby parking. Your location stays on your device — except the location of community reports you choose to submit.";
+				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "WePark falls back to your photo library to attach evidence for a community report on devices without a camera. The photo is never shown to other users.";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;

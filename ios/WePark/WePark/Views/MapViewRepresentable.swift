@@ -51,6 +51,19 @@
 //
 //  See: docs/ios-rendering-architecture-decision.md §1, §3, §4, §5
 //
+//  FT-15 / TF2-15 Stream B2 additions (docs/ft15-tf215-temporary-block-restrictions-spec.md
+//  §4.2, §9.1): `blockSelectKeys: Set<String>` input + `OverlayTag.blockSelectHighlight` +
+//  `Coordinator.syncBlockSelectHighlight` — a 7th, additive `TaggedMultiPolyline` overlay
+//  showing every currently tap-selected blockface during a block-scoped restriction report
+//  (dashed .systemPurple, distinct from every severity color and from the existing
+//  .systemBlue `selectedBlock`/route overlays). Mechanical `updateUIView` sync only — no
+//  camera mutation (invariant I-1), same architectural discipline as
+//  `syncCommunityPinAnnotations`. This is the ONE new overlay surface OQ-1's marker-only
+//  render ruling still requires: the actual restriction render stays marker-only
+//  (`PinMarkerAnnotation`, unchanged by this stream); this overlay exists only to show the
+//  user which blockfaces they've picked WHILE picking them, and never persists past the
+//  report sheet's dismissal (`ContentView` clears `selectedBlockKeys` on dismiss).
+//
 
 import SwiftUI
 import MapKit
@@ -71,6 +84,11 @@ enum OverlayTag: Int {
     case selectedBlock           = 5
     /// W8.5b: Drive Mode route polyline (blue, above parking state overlays).
     case routePolyline           = 6
+    /// FT-15/TF2-15 Stream B2: multi-segment highlight shown during block-scoped
+    /// report tap-select mode (§4.2 step 3). Additive — does not replace or recolor
+    /// `selectedBlock` (single-segment BlockDetailView highlight); this is a distinct
+    /// overlay that can show N segments at once. See `Coordinator.syncBlockSelectHighlight`.
+    case blockSelectHighlight    = 7
 }
 
 // MARK: - Tagged MKMultiPolyline
@@ -181,6 +199,23 @@ struct MapViewRepresentable: UIViewRepresentable {
     ///
     /// Default: empty (no segments until tiles load; bearing defaults to nil = no chevron).
     var segments: [Segment] = []
+
+    // MARK: FT-15 / TF2-15 Stream B2: Block-scoped report tap-select highlight
+
+    /// The set of `Segment.blockfaceKey` values currently selected during block-scoped
+    /// report tap-select mode (§4.2). Empty when block-select mode is inactive or no
+    /// blockfaces have been tapped yet — in either case, no highlight is rendered.
+    ///
+    /// Pushed from `ContentView.selectedBlockKeys` on every SwiftUI re-render. The
+    /// Coordinator diffs this against `lastAppliedBlockSelectKeys` in `updateUIView` and
+    /// only rebuilds the overlay when the set actually changed (same cheap-equality-gate
+    /// pattern as `OverlayPayload.generation`, sized down since `Set<String>` is natively
+    /// `Equatable` — no synthetic generation counter needed).
+    ///
+    /// Mechanical sync only (add/remove one `TaggedMultiPolyline` overlay) — no camera
+    /// mutation, matching every other `updateUIView`-driven sync in this file (invariant
+    /// I-1: `communityPins`/`syncCommunityPinAnnotations` is the direct precedent).
+    var blockSelectKeys: Set<String> = []
 
     // MARK: W8.5c: Heading-up rotation
 
@@ -621,6 +656,26 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
     }
 
+    // MARK: - FT-15 / TF2-15 Stream B2: Block-select highlight coordinate lookup
+
+    /// Pure segment-filter function: no `MKMapView` dependency, directly unit-testable.
+    ///
+    /// Returns the coordinate arrays for every segment in `segments` whose `blockfaceKey`
+    /// is present in `keys`, dropping any segment with fewer than 2 coordinates (same
+    /// degenerate-segment guard used throughout this file, e.g. `applyOverlayPayload`).
+    /// Empty `keys` → empty result (no highlight — block-select mode inactive or nothing
+    /// tapped yet).
+    static func blockSelectHighlightCoordinateGroups(
+        keys: Set<String>,
+        segments: [Segment]
+    ) -> [[CLLocationCoordinate2D]] {
+        guard !keys.isEmpty else { return [] }
+        return segments
+            .filter { keys.contains($0.blockfaceKey) }
+            .map { $0.coordinates }
+            .filter { $0.count >= 2 }
+    }
+
     // MARK: - UIViewRepresentable
 
     func makeCoordinator() -> Coordinator {
@@ -910,6 +965,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         // FT-11: pass segments so the bearing for enforcement/sweeper pins can be computed.
         context.coordinator.syncCommunityPinAnnotations(communityPins, segments: segments, on: mapView)
 
+        // FT-15/TF2-15 Stream B2: Sync block-scoped report tap-select highlight.
+        // Mechanical sync only (add/remove one overlay) — no camera mutation. Same
+        // architectural contract as syncCommunityPinAnnotations above.
+        context.coordinator.syncBlockSelectHighlight(blockSelectKeys, segments: segments, on: mapView)
+
         // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11).
         // Port of setDrivingMapRotation (index.html:6584–6601) with R-1 dead-band guard.
         // Only update when heading changes > 2 degrees to prevent tight regionDidChange feedback loop.
@@ -967,6 +1027,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Current live overlays (strong refs so we can removeOverlay them later).
         private var multiPolylines: [OverlayTag: TaggedMultiPolyline] = [:]
         private var selectedPolyline: SelectedPolyline? = nil
+
+        // FT-15/TF2-15 Stream B2: block-select tap-select highlight overlay state.
+        /// The currently-rendered highlight overlay (nil if block-select mode is inactive
+        /// or nothing is selected yet).
+        private var blockSelectOverlay: TaggedMultiPolyline? = nil
+        /// The last `blockSelectKeys` set applied — cheap equality gate (Set<String> is
+        /// natively Equatable) so `syncBlockSelectHighlight` only rebuilds when the
+        /// selection actually changed.
+        private var lastAppliedBlockSelectKeys: Set<String> = []
 
         // W5: Car pin annotation state.
         static let carPinReuseID = "CarPinAnnotation"
@@ -1118,6 +1187,15 @@ struct MapViewRepresentable: UIViewRepresentable {
             // syncRoutePolyline is NOT called here because the route geometry hasn't
             // changed — only its position in the overlay stack needs refreshing.
             if let existing = routePolylineOverlay {
+                mapView.removeOverlay(existing)
+                mapView.addOverlay(existing, level: .aboveRoads)
+            }
+
+            // FT-15/TF2-15 Stream B2: same S-1-style re-insertion for the block-select
+            // highlight — applyOverlayPayload fires on every 60s tick / selection change
+            // while block-select mode may simultaneously be active, and would otherwise
+            // leave the highlight buried under the freshly-rebuilt parking-state overlays.
+            if let existing = blockSelectOverlay {
                 mapView.removeOverlay(existing)
                 mapView.addOverlay(existing, level: .aboveRoads)
             }
@@ -1299,6 +1377,47 @@ struct MapViewRepresentable: UIViewRepresentable {
             guard let segment = segmentByID[segmentId] else { return nil }
 
             return SegmentBearing.bearing(segment: segment, toward: heading)
+        }
+
+        // MARK: - FT-15 / TF2-15 Stream B2: Block-select tap-select highlight
+
+        /// Syncs the multi-segment highlight overlay to match `keys` (§4.2 step 3 — the
+        /// selection highlight required by OQ-1's marker-only ruling: "the user must see
+        /// which blockfaces they've picked").
+        ///
+        /// Mechanical sync only — remove-then-add-if-non-empty, exactly like the 5
+        /// parking-state `TaggedMultiPolyline` groups in `applyOverlayPayload`. Called from
+        /// `updateUIView`; no camera mutation (invariant I-1).
+        ///
+        /// Cheap equality gate: `Set<String>` is natively `Equatable`, so this skips the
+        /// rebuild entirely when the selection hasn't changed since the last call — no
+        /// synthetic generation counter needed (unlike `OverlayPayload`, which carries
+        /// non-Equatable `[CLLocationCoordinate2D]` arrays).
+        func syncBlockSelectHighlight(_ keys: Set<String>, segments: [Segment], on mapView: MKMapView) {
+            guard lastAppliedBlockSelectKeys != keys else { return }
+            lastAppliedBlockSelectKeys = keys
+
+            if let old = blockSelectOverlay {
+                mapView.removeOverlay(old)
+                blockSelectOverlay = nil
+            }
+
+            let coordArrays = MapViewRepresentable.blockSelectHighlightCoordinateGroups(
+                keys: keys,
+                segments: segments
+            )
+            guard !coordArrays.isEmpty else { return }
+
+            let children = coordArrays.compactMap { coords -> MKPolyline? in
+                var mutable = coords
+                return MKPolyline(coordinates: &mutable, count: mutable.count)
+            }
+            guard !children.isEmpty else { return }
+
+            let multi = TaggedMultiPolyline(children)
+            multi.overlayTag = .blockSelectHighlight
+            blockSelectOverlay = multi
+            mapView.addOverlay(multi, level: .aboveRoads)
         }
 
         // MARK: - W8.5c: Heading-up rotation
@@ -1661,6 +1780,17 @@ struct MapViewRepresentable: UIViewRepresentable {
                     // Should not be reached (route overlay uses RoutePolyline, not TaggedMultiPolyline).
                     renderer.strokeColor = UIColor.systemBlue
                     renderer.lineWidth = 5
+                case .blockSelectHighlight:
+                    // FT-15/TF2-15 Stream B2: distinct from every severity color (green/
+                    // orange/amber/red/gray) AND from the existing .systemBlue used by
+                    // both `selectedBlock` and the route polyline, so a block-select
+                    // session is never confused with either. Dashed to read as "you are
+                    // selecting" rather than "this is the current legal state" (OQ-1:
+                    // marker-only for the actual restriction render — this overlay is
+                    // ONLY the tap-select session highlight, never a persisted state).
+                    renderer.strokeColor = UIColor.systemPurple
+                    renderer.lineWidth = 7
+                    renderer.lineDashPattern = [8, 6]
                 }
                 return renderer
             }
