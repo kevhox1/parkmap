@@ -114,6 +114,33 @@
 //    - In-drive Report button (flag.fill, orange) in driveModeOverlayLayer HStack (NR1 placement).
 //    - handleVisiblePinsChange: includes enforcement_active + sweeper_passed in map marker set.
 //
+//  FT-18 additions (Drive Mode layout redesign — docs/design/ft18-drive-mode-layout.md):
+//    - `driveModeOverlayLayer` REMOVED. Its three pieces now live in two places:
+//        - `endDriveControl`: isolated top-trailing "End" pill (own corner, matches Apple
+//          Maps — Kevin's ruling #1, safety-motivated: a one-tap session-terminating
+//          action must not sit adjacent to Report/Park Here on a moving-car phone mount).
+//        - `recenterRow` + `driveActionRow`: moved INTO `bottomSafeAreaContent`'s
+//          VStack(spacing: 8) as structural rows above `DriveModeBottomCard`, replacing
+//          the old independently-`Spacer()`-positioned floats. `recenterPillBottomPadding`
+//          is no longer called from the view (kept + still tested — pure function, cheap
+//          to keep) now that stacking order alone provides clearance.
+//    - Bug F1 (dead top-right zone / trailing Spacer()) fixed: the old top-leading
+//      End/Report/Park Here row and its trailing Spacer() are gone entirely.
+//    - Bug F2 (gear button / End pill coordinate collision) fixed: gear button is now
+//      gated by `gearButtonVisible(driveModeActive:)`, hidden whenever `endDriveControl`
+//      owns the top-trailing corner.
+//    - Bug F3 (duplicate mute toggle in Cruise Mode) fixed: the top-row Cruise-only mute
+//      button is deleted. `DriveModeBottomCard.muteButton` (unconditional, both styles)
+//      is now the only mute control.
+//    - Bug F4 (Find me / Find my car using the wrong browse-mode camera pipeline mid-drive)
+//      fixed by removal, not by rewiring: `recenterButtonStack` (Find me / Find my car /
+//      Park Until entry / combined Drive entry) is now gated `if !driveModeActive` at the
+//      call site in `mapZStack`, so none of its buttons can be tapped while driving —
+//      `recenterMap(on:)` can no longer fire mid-drive. The combined Drive-entry button's
+//      former "resting icon, no action on tap" dead branch is deleted for the same reason
+//      (Kevin's ruling #2: "Find my car" removed during Drive Mode, not kept as a mini icon;
+//      ruling #3: gear hidden fully).
+//
 
 import SwiftUI
 import MapKit
@@ -551,10 +578,11 @@ struct ContentView: View {
 
     // MARK: - Derived
 
-    /// W8.5c-polish PR-1 (Feature B): Extra top padding for the End Drive pill when the ASP
-    /// banner is visible, so the pill clears the banner and doesn't obscure its text.
-    /// The ASP banner is approximately 44pt tall (subheadline font + 12pt vertical padding × 2).
-    /// Always non-zero: all three SuspensionBannerState cases render a visible banner.
+    /// W8.5c-polish PR-1 (Feature B): Extra top padding for the isolated "End" control
+    /// (FT-18: `endDriveControl`) when the ASP banner is visible, so it clears the banner
+    /// and doesn't obscure its text. The ASP banner is approximately 44pt tall (subheadline
+    /// font + 12pt vertical padding × 2). Always non-zero: all three SuspensionBannerState
+    /// cases render a visible banner.
     private var endDrivePillTopPadding: CGFloat {
         paddingForBannerState(bannerState)
     }
@@ -1116,12 +1144,25 @@ struct ContentView: View {
                     .ignoresSafeArea()
                     .safeAreaInset(edge: .top) { ASPBanner(state: bannerState) }
                     .safeAreaInset(edge: .bottom) { bottomSafeAreaContent }
-                recenterButtonStack
-                    .padding(.top, 100)
-                    .padding(.trailing, 12)
+                // FT-18: the browse-mode toolbar (Find me / Find my car / Park Until entry /
+                // combined Drive entry) and the isolated Drive Mode "End" control share this
+                // top-trailing corner but are mutually exclusive — exactly one renders at a
+                // time, matching Proposal 1's "top of screen reduced to banner + End control"
+                // during Drive Mode (Kevin's ruling #1).
+                if driveModeActive {
+                    endDriveControl
+                } else {
+                    recenterButtonStack
+                        .padding(.top, 100)
+                        .padding(.trailing, 12)
+                }
             }
-            gearButtonOverlay
-            if driveModeActive { driveModeOverlayLayer }
+            // FT-18 ruling #3: gear button hidden entirely during Drive Mode — not needed
+            // mid-drive, and resolves F2 (the pre-FT-18 gear button / End Drive pill
+            // coordinate collision, both previously at top-leading) by removal.
+            if gearButtonVisible(driveModeActive: driveModeActive) {
+                gearButtonOverlay
+            }
             GeometryReader { proxy in
                 VStack(spacing: 0) {
                     ToastHostView().padding(.top, proxy.safeAreaInsets.top)
@@ -1182,11 +1223,13 @@ struct ContentView: View {
 
                 // FT-13: Parking 101 guide entry point, always reachable from the map
                 // toolbar (not just the FT-12 first-launch banner). Hidden during Drive
-                // Mode — the drive overlay layer (End Drive / Report / Park Here pill
-                // row, see `driveModeOverlayLayer`) owns this same top-left corner then.
-                // Visibility gated through `parkingGuideButtonVisible(driveModeActive:)`
-                // so the rule is unit-testable independent of view rendering (mirrors
-                // `paddingForBannerState` / `recenterPillBottomPadding`).
+                // Mode via `parkingGuideButtonVisible(driveModeActive:)`. FT-18: this whole
+                // `gearButtonOverlay` is now also gated at its call site by
+                // `gearButtonVisible(driveModeActive:)` (same rule) — the inner check stays
+                // as an explicit, independently-testable guard rather than relying solely
+                // on the outer one, and keeps this view correct if it's ever rendered from
+                // a different call site in the future. Mirrors the `paddingForBannerState` /
+                // `recenterPillBottomPadding` "extract as a pure function" precedent.
                 if parkingGuideButtonVisible(driveModeActive: driveModeActive) {
                     Button { activeSheet = .parkingGuide } label: {
                         Image(systemName: "questionmark.circle")
@@ -1257,17 +1300,55 @@ struct ContentView: View {
         )
     }
 
-    // MARK: - W7.5 / W8.5c: Bottom safe-area content
+    // MARK: - W7.5 / W8.5c / FT-18: Bottom safe-area content ("Bottom Dock")
 
     /// Content pushed into the bottom safe area via .safeAreaInset(edge: .bottom).
-    /// Contains the Drive Mode bottom card and the Park Until filter pill.
+    ///
+    /// FT-18 (`docs/design/ft18-drive-mode-layout.md`, Proposal 1 — "Bottom Dock"): this is
+    /// now the single bottom-anchored stack for every frequent-action / live-status control
+    /// during Drive Mode, not just the card + Park Until pill. Four optional rows are
+    /// siblings in one `VStack(spacing: 8)`, in a fixed order that self-resolves for every
+    /// combination (S1–S6 in the design doc) without hand-computed clearance math:
+    ///   1. `recenterRow`    — only when Drive Mode's follow camera is paused (S4).
+    ///   2. `driveActionRow` — Report / Park Here, only during Drive Mode.
+    ///   3. `ParkUntilPill`  — only when the filter is active (carried over from browsing;
+    ///                         it cannot be entered mid-drive, see `recenterButtonStack`).
+    ///   4. `DriveModeBottomCard` — the "ground truth" slab; always the bottom-most element
+    ///                         when Drive Mode is active, edge-to-edge (unchanged), the one
+    ///                         row NOT given 16pt horizontal margins.
+    /// `ParkingGuidePromptBanner` (browse-mode only) stays mutually exclusive with all four,
+    /// as before.
+    ///
+    /// Because every row is now structural (laid out in-flow by the VStack) rather than an
+    /// independently `Spacer()`-positioned float, adding/removing a row simply pushes the
+    /// rows below it — this is what makes S6 (destination + approaching + paused + Park
+    /// Until, the worst-case stack) self-resolving instead of requiring the old hand-computed
+    /// `recenterPillBottomPadding` function.
     ///
     /// Extracted into its own @ViewBuilder property to reduce type-checker complexity
     /// in ContentView.body (W8.5c-polish PR-1 fix for "unable to type-check" error).
     @ViewBuilder
     private var bottomSafeAreaContent: some View {
-        VStack(spacing: 0) {
-            // W8.5c: Drive Mode bottom card (AC-W85c.25).
+        VStack(spacing: 8) {
+            // FT-18 row 1: Recenter — only when the custom Drive Mode follow camera is
+            // paused by a user gesture (FT-17: pan OR pinch).
+            if driveModeActive && followPaused {
+                recenterRow
+            }
+            // FT-18 row 2: Report / Park Here action row.
+            if driveModeActive {
+                driveActionRow
+            }
+            // W7.5 row 3: Park Until pill — carried over from browsing if already active;
+            // cannot be entered mid-drive (recenterButtonStack, its only entry point, is
+            // hidden while driveModeActive == true).
+            if parkUntilMode, let target = parkUntilTarget {
+                ParkUntilPill(targetDate: target) {
+                    clearParkUntilFilter()
+                }
+            }
+            // W8.5c row 4: Drive Mode bottom card (AC-W85c.25) — the anchored "ground truth"
+            // slab, always last/bottom-most when Drive Mode is active.
             // W8.5d: showApproachStrip wired — true when state is .approaching.
             // The strip lives INSIDE the card (OQ-1: option (b), no new .safeAreaInset layer).
             if driveModeActive {
@@ -1277,12 +1358,6 @@ struct ContentView: View {
                     destinationDistance: driveModeDistanceMeters,
                     showApproachStrip: finalApproachState == .approaching
                 )
-            }
-            // W7.5: Park Until pill.
-            if parkUntilMode, let target = parkUntilTarget {
-                ParkUntilPill(targetDate: target) {
-                    clearParkUntilFilter()
-                }
             }
             // FT-12: Parking 101 first-launch prompt banner. Never shown alongside
             // the Drive Mode bottom card or the Park Until pill (AC-7) — both of the
@@ -1309,7 +1384,9 @@ struct ContentView: View {
 
     // MARK: - W5.1 / Kevin 2026-06-04: Recenter + drive-entry button stack
 
-    /// Four permanently-visible vertically-stacked toolbar buttons in the top-right.
+    /// Four vertically-stacked toolbar buttons in the top-right, visible only outside Drive
+    /// Mode (FT-18: gated `if !driveModeActive` at the call site in `mapZStack` — none of
+    /// these actions are available mid-drive; `endDriveControl` owns this corner instead).
     ///
     /// Button order (top to bottom):
     ///   1. "Find me"        — location.fill, always shown
@@ -1380,23 +1457,12 @@ struct ContentView: View {
             //   - "Find Parking nearby"    → enters Cruise Mode via enterCruiseMode()
             // The system dropdown dismisses on outside tap automatically.
             //
-            // Guard: hidden while Drive Mode is active (both entry paths are unavailable
-            // when already driving). Active-state styling preserved from W8.5b.
-            if !driveModeActive {
-                driveEntryButton
-            } else {
-                // Drive Mode active: show the resting icon tinted blue (same as W8.5b).
-                // No action on tap — the "End Drive" / "End Cruise" pill is the exit control.
-                Button { } label: {
-                    Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(Color.blue)
-                }
-                .accessibilityLabel("Drive Mode active")
-                .accessibilityHint("Use the End Drive button to stop.")
-            }
+            // FT-18: `recenterButtonStack` itself is now only rendered when Drive Mode is
+            // inactive (gated at the call site in `mapZStack`), so this button can no
+            // longer render while driving — the former "resting icon, no action on tap"
+            // fallback branch (F4: a full 44×44 button that looked tappable and wasn't)
+            // is dead code under the new gating and has been removed.
+            driveEntryButton
         }
     }
 
@@ -1436,178 +1502,169 @@ struct ContentView: View {
         .accessibilityHint("Double-tap to choose destination navigation or find parking nearby.")
     }
 
-    // MARK: - W8.5b/c: Drive Mode overlay layer
+    // MARK: - FT-18: Isolated "End Drive" control (top-trailing)
 
-    /// Full-screen overlay layer visible during Drive Mode.
-    /// Contains the "End Drive" pill (top-left), optional mute toggle (cruise mode),
-    /// and the floating Recenter pill (bottom-center).
+    /// Isolated top-trailing "End" control — the sole exception to Proposal 1's "everything
+    /// on the bottom" framing (Kevin's ruling #1, `docs/design/ft18-drive-mode-layout.md`).
     ///
-    /// CM-3: In Cruise Mode, a mute toggle button (speaker icon) is shown inline with
-    /// the End Drive pill so the driver can silence callouts without leaving the mode
-    /// (AC-CM.11). The mute state persists across sessions via DrivingVoice.isMuted
-    /// (backed by UserDefaults key `wepark_dm_voice_muted`).
+    /// Ending Drive Mode is a one-tap, no-confirmation, session-terminating action
+    /// (`endDriveMode()` fires immediately, no dialog) — it deliberately does NOT sit in the
+    /// bottom action cluster next to Report/Park Here, matching Apple Maps' own turn-by-turn
+    /// view, which isolates its End control away from the buttons tapped routinely. Placing a
+    /// destructive, unconfirmed action next to frequently-tapped ones on a phone mounted for
+    /// one-handed use in a moving car is the layout most likely to produce an accidental tap.
     ///
-    /// Extracted into its own @ViewBuilder property to avoid hitting the Swift compiler's
-    /// type-check complexity limit for large SwiftUI view bodies (W8.5c-polish PR-1 lesson:
-    /// the inline version with .padding(.top, endDrivePillTopPadding) triggered
-    /// "unable to type-check expression in reasonable time" at the ContentView body level).
+    /// Visible label is the short "End" (not "End Drive Mode" / "End Cruise Mode") — the full
+    /// descriptive string lives only in `accessibilityLabel` for VoiceOver, matching the
+    /// spacing/sizing spec's "shorter chrome" instruction. `.frame(minHeight: 44)` stays at
+    /// the HIG floor deliberately (not enlarged) — this is a de-emphasized control, not a
+    /// primary action.
     @ViewBuilder
-    private var driveModeOverlayLayer: some View {
-        VStack {
-            // "End Drive" pill — top-left area, below the gear button.
-            // CM-3: In Cruise Mode, the pill is labeled "End Cruise" and the mute toggle
-            // is shown inline to the right of the pill (AC-CM.11).
-            // W8.5c-polish PR-1 (Feature B): extra top padding clears the ASP banner
-            // when the banner is visible (see endDrivePillTopPadding computed property).
-            // TF2-18 P2-1: all four buttons share one anatomy (capsule + Label(icon+text),
-            // explicit .frame(minHeight: 44)) except the icon-only mute toggle, which keeps
-            // its square glyph (a persistent toggle, not an action button) but now shares the
-            // same explicit 44pt minimum height. Spacing standardized to 10 (review finding
-            // P2-1 — "four buttons, three visual shapes... doesn't read as one toolbar").
-            HStack(spacing: 10) {
-                Button {
-                    endDriveMode()
-                } label: {
-                    Label(
-                        driveModeStyle == .cruise ? "End Cruise" : "End Drive",
-                        systemImage: "xmark.circle.fill"
-                    )
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .frame(minHeight: 44)
-                    .background(.regularMaterial, in: Capsule())
-                    .foregroundStyle(.red)
-                }
-                .accessibilityLabel(driveModeStyle == .cruise ? "End Cruise Mode" : "End Drive Mode")
-                .padding(.leading, 12)
-
-                // CM-3: Mute toggle — visible in Cruise Mode (AC-CM.11).
-                // Shared DrivingVoice.isMuted flag (backed by UserDefaults) means toggling
-                // here also gates destination-mode voice in the next session.
-                if driveModeStyle == .cruise {
-                    Button {
-                        drivingVoice.isMuted.toggle()
-                    } label: {
-                        Image(systemName: drivingVoice.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                            .font(.system(size: 17, weight: .medium))
-                            .frame(minWidth: 44, minHeight: 44)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                            .foregroundStyle(drivingVoice.isMuted ? Color.secondary : Color.accentColor)
-                    }
-                    .accessibilityLabel(drivingVoice.isMuted ? "Unmute parking announcements" : "Mute parking announcements")
-                    .accessibilityHint("Toggles voice callouts. Mute state is remembered across sessions.")
-                }
-
-                // Tier 3 sub-PR #2: In-drive Report button (NR1: inline with End pill HStack).
-                // Visible whenever driveModeActive == true (both .destination and .cruise).
-                // Tapping drops a pin at the user's CURRENT GPS — no map-picking while driving.
-                // If GPS is unavailable, the button silently no-ops (guard let loc).
-                //
-                // TF2-18 P2-1: converted from a vertical icon-over-caption2 stack to the same
-                // capsule + Label(icon+text) anatomy as End Drive / Park Here (review finding
-                // P2-1 — this was one of the three inconsistent shapes in the row).
-                //
-                // Bug #4: Pass drivingContext?.street so ReportSheet can show
-                // "Reporting on <street>" — reuses the name already resolved by
-                // DrivingContextService for the DriveModeBottomCard (no new search).
-                Button {
-                    guard let loc = locationService.userLocation else { return }
-                    // FT-11: Resolve the nearest segment so ReportSheet shows the direction
-                    // picker. Use the same haversine candidate search as the resting path
-                    // (pinDropRadiusMeters = 35m). In-drive GPS is live so this is accurate.
-                    let driveSegment = findCandidateSegments(
-                        lat: loc.latitude,
-                        lng: loc.longitude,
-                        radius: pinDropRadiusMeters,
-                        max: 1
-                    ).first?.segment
-                    activeSheet = .reportPin(
-                        coord: loc,
-                        streetName: drivingContext?.street,
-                        segment: driveSegment
-                    )
-                } label: {
-                    Label("Report", systemImage: "flag.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .frame(minHeight: 44)
-                        .background(.regularMaterial, in: Capsule())
-                        .foregroundStyle(Color.orange)
-                }
-                .accessibilityLabel("Report enforcement or sweeper")
-                .accessibilityHint("Drops a pin at your current location.")
-
-                // TF2-7: "Park here" button — visible whenever Drive Mode is active.
-                // Tapping opens SignCheckConfirmView (pre-step before ParkConfirmView).
-                // If GPS is unavailable, the tap is a no-op (same guard as Report button).
-                // No speed gate — consistent with the Report button and arrival prompt (OQ-2).
-                //
-                // Note on activeSheet interaction: if activeSheet is already set (e.g., arrival
-                // prompt is showing), this button tap produces a no-op because SwiftUI's single
-                // .sheet(item:) host only presents one sheet at a time; the guard below prevents
-                // an activeSheet overwrite while another sheet is already open.
-                Button {
-                    guard activeSheet == nil else { return }
-                    guard let loc = locationService.userLocation else { return }
-                    let candidates = findCandidateSegments(
-                        lat: loc.latitude,
-                        lng: loc.longitude,
-                        radius: pinDropRadiusMeters,
-                        max: 4
-                    )
-                    let detected = candidates.first?.segment
-                    let detectedDistance = candidates.first?.distanceMeters
-                    let alternatives = Array(candidates.dropFirst())
-                    let intent = PinDropIntent(
-                        pinLat: loc.latitude,
-                        pinLng: loc.longitude,
-                        detectedSegment: detected,
-                        detectedSegmentDistance: detectedDistance,
-                        alternativeCandidates: alternatives
-                    )
-                    activeSheet = .signCheckConfirm(intent: intent)
-                } label: {
-                    Label("Park here", systemImage: "mappin.and.ellipse")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .frame(minHeight: 44)
-                        .background(.regularMaterial, in: Capsule())
-                        .foregroundStyle(Color.accentColor)
-                }
-                .accessibilityLabel("Park here")
-                .accessibilityHint("Opens a safety checklist before dropping your parked car pin.")
-
-                Spacer()
-            }
-            .padding(.top, endDrivePillTopPadding)
-            Spacer()
-            // Option A: Recenter pill — visible when the custom Drive Mode follow is paused
-            // due to a user gesture (followPaused == true; FT-17: pan OR pinch). Tapping
-            // resumes follow and restores the FT-8 default altitude.
-            // TF2-18 P1-3: bottom padding is now a function of the actual bottom-card stack
-            // state (approach strip / Park Until pill) instead of a flat hardcoded 8pt —
-            // mirrors `paddingForBannerState` at the top of the screen (review finding P1-3).
-            if followPaused {
-                Button {
-                    recenterDriveMode()
-                } label: {
-                    Label("Recenter", systemImage: "location.fill")
-                        .font(.subheadline.weight(.semibold))
-                        .padding(.horizontal, 20)
-                        .padding(.vertical, 12)
-                        .background(.regularMaterial, in: Capsule())
-                        .foregroundStyle(Color.accentColor)
-                }
-                .accessibilityLabel("Recenter map on my location")
-                .padding(.bottom, recenterPillBottomPadding(
-                    showApproachStrip: finalApproachState == .approaching,
-                    parkUntilVisible: parkUntilMode && parkUntilTarget != nil
-                ))
-            }
+    private var endDriveControl: some View {
+        Button {
+            endDriveMode()
+        } label: {
+            Label("End", systemImage: "xmark.circle.fill")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .frame(minHeight: 44)
+                .background(.regularMaterial, in: Capsule())
+                .foregroundStyle(.red)
         }
+        .accessibilityLabel(driveModeStyle == .cruise ? "End Cruise Mode" : "End Drive Mode")
+        .padding(.top, endDrivePillTopPadding)
+        .padding(.trailing, 12)
+    }
+
+    // MARK: - FT-18: Bottom dock — Recenter row
+
+    /// Structural Recenter row — a sibling of `driveActionRow` / `ParkUntilPill` /
+    /// `DriveModeBottomCard` inside `bottomSafeAreaContent`'s `VStack(spacing: 8)`, replacing
+    /// the pre-FT-18 independently-`Spacer()`-positioned floating pill. Because it's laid out
+    /// in-flow, it pushes whatever's below it (the action row / pill / card) down the same way
+    /// adding a row to any `VStack` does — no hand-maintained clearance function needed
+    /// (`recenterPillBottomPadding` is no longer called here; kept defined + tested as a pure
+    /// function, since deleting it would mean touching its test file for a non-required
+    /// cleanup — see the spec's "code cleanup that falls out of this, not extra scope" note).
+    ///
+    /// Visible only when Drive Mode's custom follow camera is paused by a user gesture
+    /// (`followPaused == true`; FT-17: pan OR pinch). Compact circular affordance — matches
+    /// Apple Maps' own recenter control — rather than a third labeled capsule crammed into
+    /// the action row (spec's "explicitly flagged as bad ideas" section).
+    @ViewBuilder
+    private var recenterRow: some View {
+        HStack {
+            Spacer()
+            Button {
+                recenterDriveMode()
+            } label: {
+                Image(systemName: "location.fill")
+                    .font(.system(size: 20, weight: .medium))
+                    .frame(width: 48, height: 48)
+                    .background(.regularMaterial, in: Circle())
+                    .foregroundStyle(Color.accentColor)
+            }
+            .accessibilityLabel("Recenter map on my location")
+        }
+        .padding(.horizontal, 16)
+    }
+
+    // MARK: - FT-18: Bottom dock — Report / Park Here action row
+
+    /// Structural action row — Report (secondary) leading, Park Here (primary "I'm done"
+    /// action, Kevin's ruling #4) trailing. Visible whenever `driveModeActive == true`
+    /// (both `.destination` and `.cruise` styles) as a sibling row inside
+    /// `bottomSafeAreaContent`'s `VStack(spacing: 8)`, directly above `DriveModeBottomCard`.
+    ///
+    /// Button anatomy carried over unchanged from the pre-FT-18 TF2-18 P2-1 pass (capsule +
+    /// `Label(icon, text)`); only position and the spacing/sizing spec's generous-padding
+    /// bump changed (18pt horizontal / 12pt vertical / 48pt min height / 16pt inter-button
+    /// gap, up from 14pt / 10pt / 44pt / 10pt — Kevin's core complaint was spacing, so this
+    /// pass errs generous). Park Here also gains the filled `Color.accentColor` "primary CTA"
+    /// treatment (matching existing primary-action styling elsewhere in the app) since it's
+    /// the session's actual goal action; Report keeps its existing `.regularMaterial` +
+    /// `Color.orange` treatment unchanged besides the padding bump.
+    @ViewBuilder
+    private var driveActionRow: some View {
+        HStack(spacing: 16) {
+            // Tier 3 sub-PR #2: In-drive Report button. Visible whenever driveModeActive ==
+            // true. Tapping drops a pin at the user's CURRENT GPS — no map-picking while
+            // driving. If GPS is unavailable, the button silently no-ops (guard let loc).
+            //
+            // Bug #4 (pre-FT-18): Pass drivingContext?.street so ReportSheet can show
+            // "Reporting on <street>" — reuses the name already resolved by
+            // DrivingContextService for the DriveModeBottomCard (no new search).
+            Button {
+                guard let loc = locationService.userLocation else { return }
+                // FT-11: Resolve the nearest segment so ReportSheet shows the direction
+                // picker. Use the same haversine candidate search as the resting path
+                // (pinDropRadiusMeters = 35m). In-drive GPS is live so this is accurate.
+                let driveSegment = findCandidateSegments(
+                    lat: loc.latitude,
+                    lng: loc.longitude,
+                    radius: pinDropRadiusMeters,
+                    max: 1
+                ).first?.segment
+                activeSheet = .reportPin(
+                    coord: loc,
+                    streetName: drivingContext?.street,
+                    segment: driveSegment
+                )
+            } label: {
+                Label("Report", systemImage: "flag.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .frame(minHeight: 48)
+                    .background(.regularMaterial, in: Capsule())
+                    .foregroundStyle(Color.orange)
+            }
+            .accessibilityLabel("Report enforcement or sweeper")
+            .accessibilityHint("Drops a pin at your current location.")
+
+            // TF2-7: "Park here" button — visible whenever Drive Mode is active.
+            // Tapping opens SignCheckConfirmView (pre-step before ParkConfirmView).
+            // If GPS is unavailable, the tap is a no-op (same guard as Report button).
+            // No speed gate — consistent with the Report button and arrival prompt (OQ-2).
+            //
+            // Note on activeSheet interaction: if activeSheet is already set (e.g., arrival
+            // prompt is showing), this button tap produces a no-op because SwiftUI's single
+            // .sheet(item:) host only presents one sheet at a time; the guard below prevents
+            // an activeSheet overwrite while another sheet is already open.
+            Button {
+                guard activeSheet == nil else { return }
+                guard let loc = locationService.userLocation else { return }
+                let candidates = findCandidateSegments(
+                    lat: loc.latitude,
+                    lng: loc.longitude,
+                    radius: pinDropRadiusMeters,
+                    max: 4
+                )
+                let detected = candidates.first?.segment
+                let detectedDistance = candidates.first?.distanceMeters
+                let alternatives = Array(candidates.dropFirst())
+                let intent = PinDropIntent(
+                    pinLat: loc.latitude,
+                    pinLng: loc.longitude,
+                    detectedSegment: detected,
+                    detectedSegmentDistance: detectedDistance,
+                    alternativeCandidates: alternatives
+                )
+                activeSheet = .signCheckConfirm(intent: intent)
+            } label: {
+                Label("Park here", systemImage: "mappin.and.ellipse")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .frame(minHeight: 48)
+                    .background(Color.accentColor, in: Capsule())
+                    .foregroundStyle(.white)
+            }
+            .accessibilityLabel("Park here")
+            .accessibilityHint("Opens a safety checklist before dropping your parked car pin.")
+        }
+        .padding(.horizontal, 16)
     }
 
     // MARK: - CM-3: Cruise Mode entry
@@ -2723,16 +2780,31 @@ func paddingForBannerState(_ state: SuspensionBannerState) -> CGFloat {
 
 /// Returns whether the Parking 101 guide ("?") toolbar button should render.
 ///
-/// Hidden while Drive Mode is active: the drive overlay layer (`driveModeOverlayLayer`'s
-/// End Drive / Report / Park Here pill row) claims the same top-left corner the guide
-/// button shares with the gear button (`gearButtonOverlay`), matching the existing
-/// occlusion pattern for that corner rather than leaving a stray tappable control behind
-/// the drive controls.
+/// Hidden while Drive Mode is active — it shares the top-leading corner with the gear
+/// button (`gearButtonOverlay`), and FT-18 hides that whole corner during Drive Mode
+/// (see `gearButtonVisible(driveModeActive:)`); not needed mid-drive.
 ///
 /// Extracted as an `internal` pure function — same testability rationale as
 /// `paddingForBannerState` / `recenterPillBottomPadding` — so the visibility rule is
 /// covered without instantiating a full `ContentView`.
 func parkingGuideButtonVisible(driveModeActive: Bool) -> Bool {
+    !driveModeActive
+}
+
+// MARK: - FT-18: Gear (Settings) button toolbar visibility
+
+/// Returns whether the gear (Settings) toolbar button should render.
+///
+/// Hidden while Drive Mode is active (Kevin's FT-18 ruling #3, fully hidden — not
+/// dimmed-but-tappable): not needed mid-drive, and voice control stays reachable via the
+/// always-visible mute button in `DriveModeBottomCard`. This also resolves the pre-FT-18 F2
+/// bug (the gear button and the End Drive pill previously rendered at the identical
+/// top-leading coordinate) — by removal rather than relocation, now that `endDriveControl`
+/// lives in the opposite (top-trailing) corner.
+///
+/// Mirrors `parkingGuideButtonVisible`'s pattern (same gating rule) so the visibility rule
+/// is unit-testable independent of view rendering.
+func gearButtonVisible(driveModeActive: Bool) -> Bool {
     !driveModeActive
 }
 
