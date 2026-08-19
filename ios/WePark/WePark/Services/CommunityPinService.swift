@@ -486,20 +486,48 @@ final class CommunityPinService {
 
     // MARK: - Realtime subscription (supabase-swift Stream B)
 
-    /// In-flight Task wrapping `realtimeChannel.connect(...)`. Cancelled and replaced by
-    /// `disconnectRealtime()`/re-created by `startRealtime()` so at most one connect attempt
-    /// is in flight at a time (mirrors `periodicRefreshTask`'s own cancel-before-replace
-    /// convention above).
+    /// The chain "tail" — the most recently enqueued Realtime lifecycle operation, whether it
+    /// was created by `startRealtime()` or `disconnectRealtime()`. Every new lifecycle call
+    /// captures this BEFORE creating its own `Task`, and that new `Task`'s body `await`s the
+    /// captured predecessor's `.value` as its very first line, before doing any real work. That
+    /// is what actually serializes connect/disconnect/reconnect against each other (QA finding
+    /// #1, PR #84 pass 1 — see `docs/qa/realtime-stream-b-pr84.md`).
     ///
-    /// `internal` (not `private`) so tests can `await service.realtimeConnectTask?.value` to
-    /// deterministically wait for a fire-and-forget `connect()` call to actually run before
-    /// asserting on `MockRealtimePinChannel`'s captured closures — mirrors
-    /// `periodicRefreshTask`'s own existing "narrowest access widening for test assertions"
-    /// precedent above.
+    /// Why not just `Task.cancel()` (the pre-fix approach)? `Task.cancel()` is cooperative, and
+    /// neither `RealtimePinSubscribing.connect(...)` nor `.disconnect()` check
+    /// `Task.isCancelled` anywhere in their implementations — so cancelling the *wrapper* Task
+    /// does not interrupt the in-flight `await realtimeChannel.connect(...)` /
+    /// `await realtimeChannel.disconnect()` call inside it. The cancelled Task's underlying
+    /// network call kept running in the background and could complete AFTER a newly-started
+    /// operation, racing it. On a fast `.active → .background → .active` scenePhase flap (a
+    /// real app-switch, Siri, or an incoming-call banner), that let the losing `disconnect()`'s
+    /// `unsubscribe()`/`realtimeClient.disconnect()` land *after* the new `connect()`'s
+    /// `subscribeWithError()` — and `connect()`'s own idempotency guard
+    /// (`ch.status != .subscribed`, `RealtimePinChannel.swift`) could read a stale `.subscribed`
+    /// status left over from before the race and skip re-subscribing entirely, while the
+    /// trailing disconnect tore the socket down moments later. End state: this service believed
+    /// Realtime was live while the socket was actually dead, with no self-detection until a
+    /// full clean background/foreground cycle — silently defeating the whole point of this
+    /// feature during Drive Mode, when the fallback poll is also suspended.
+    ///
+    /// Chaining instead of cancelling is also the semantically correct behavior, not just the
+    /// safe one: every requested operation still runs, in the order it was requested, so a
+    /// disconnect queued right after a connect still disconnects the freshly-connected socket
+    /// rather than being silently dropped.
+    private var realtimeLifecycleTask: Task<Void, Never>?
+
+    /// The `Task` created by the most recent `startRealtime()` call. `internal` (not
+    /// `private`) so tests can `await service.realtimeConnectTask?.value` to deterministically
+    /// wait for the ENTIRE chain up to and including this connect — because this Task's body
+    /// awaits `realtimeLifecycleTask`'s prior value first, awaiting `.value` here also waits
+    /// for any predecessor `disconnectRealtime()` to have fully finished. Mirrors
+    /// `periodicRefreshTask`'s own "narrowest access widening for test assertions" precedent
+    /// above.
     var realtimeConnectTask: Task<Void, Never>? = nil
 
-    /// In-flight Task wrapping `realtimeChannel.disconnect()`. Same `internal`-for-tests
-    /// rationale as `realtimeConnectTask`.
+    /// The `Task` created by the most recent `disconnectRealtime()` call. Same `internal`-for-
+    /// tests rationale and same "awaiting `.value` waits for the whole chain up to this point"
+    /// property as `realtimeConnectTask`.
     var realtimeDisconnectTask: Task<Void, Never>? = nil
 
     /// Establishes the real Supabase Realtime WebSocket subscription on `public.pins`.
@@ -516,10 +544,14 @@ final class CommunityPinService {
     ///
     /// Called once at launch (`ContentView.performLaunchSetup`) and again by
     /// `reconnectRealtime()` on every foreground transition. Safe to call redundantly —
-    /// `RealtimePinSubscribing.connect` is documented as idempotent.
+    /// `RealtimePinSubscribing.connect` is documented as idempotent. Serialized against any
+    /// in-flight `disconnectRealtime()` via `realtimeLifecycleTask` (see its doc comment) —
+    /// this Task does not start its own `connect()` work until any prior lifecycle operation
+    /// has fully completed.
     func startRealtime() {
-        realtimeConnectTask?.cancel()
-        realtimeConnectTask = Task { [weak self] in
+        let predecessor = realtimeLifecycleTask
+        let task = Task { [weak self] in
+            await predecessor?.value
             guard let self else { return }
             await self.realtimeChannel.connect(
                 onUpsert: { [weak self] pin in
@@ -530,23 +562,30 @@ final class CommunityPinService {
                 }
             )
         }
+        realtimeLifecycleTask = task
+        realtimeConnectTask = task
     }
 
     /// Tears down the Realtime WebSocket. Wired to `ContentView`'s new `.onChange(of:
     /// scenePhase)` `.background` branch (spec §5.3) — iOS suspends/kills background socket
     /// activity for an app with no background-execution entitlement anyway; disconnecting
-    /// explicitly avoids the socket dying in an ambiguous half-open state.
+    /// explicitly avoids the socket dying in an ambiguous half-open state. Serialized against
+    /// any in-flight `startRealtime()` via `realtimeLifecycleTask` (see its doc comment).
     func disconnectRealtime() {
-        realtimeConnectTask?.cancel()
-        realtimeConnectTask = nil
-        realtimeDisconnectTask = Task { [weak self] in
+        let predecessor = realtimeLifecycleTask
+        let task = Task { [weak self] in
+            await predecessor?.value
             await self?.realtimeChannel.disconnect()
         }
+        realtimeLifecycleTask = task
+        realtimeDisconnectTask = task
     }
 
     /// Re-establishes the Realtime WebSocket. Wired to `ContentView`'s existing `.active`
     /// scenePhase branch (spec §5.3), alongside a one-shot `refetchCurrentRegion()` catch-up
     /// fetch for whatever changed on `public.pins` while backgrounded (belt-and-suspenders).
+    /// Goes through `startRealtime()`, so it inherits the same serialization against any
+    /// still-in-flight `disconnectRealtime()` from a fast scenePhase flap.
     func reconnectRealtime() {
         startRealtime()
     }

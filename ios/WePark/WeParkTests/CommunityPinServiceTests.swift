@@ -1404,4 +1404,78 @@ final class CommunityPinServiceRealtimeWiringTests: XCTestCase {
             "Periodic REST poll must still be suspended during Drive Mode (unchanged pre-existing behavior)"
         )
     }
+
+    // MARK: QA pass 1, Finding #1 (docs/qa/realtime-stream-b-pr84.md) — lifecycle race regression
+    //
+    // Every test above this point explicitly `await`s each lifecycle Task before issuing the
+    // next call (`await startAndAwaitConnect(...)`, `await service.realtimeDisconnectTask?.value`,
+    // etc.). That sidesteps the race QA flagged BY CONSTRUCTION: it never exercises the
+    // interleaving of a genuinely concurrent connect vs. disconnect, which is exactly what a
+    // fast `.background -> .active` scenePhase flap produces in production
+    // (`ContentView.handleScenePhaseChange` calls `disconnectRealtime()` then, on the very next
+    // `.active` transition, `reconnectRealtime()` — with nothing awaited in between). The test
+    // below deliberately does NOT await between `disconnectRealtime()` and `reconnectRealtime()`,
+    // reproducing that exact interleaving.
+
+    /// Reproduces the race directly: a `disconnectRealtime()` whose underlying
+    /// `realtimeChannel.disconnect()` is artificially slow (simulating a real
+    /// `unsubscribe()`/`RealtimeClientV2.disconnect()` network round-trip), immediately
+    /// followed — with no `await` in between — by `reconnectRealtime()`, mirroring
+    /// `handleScenePhaseChange(.background)` immediately followed by
+    /// `handleScenePhaseChange(.active)`.
+    ///
+    /// Pre-fix (`Task.cancel()`-based, unserialized): `disconnectRealtime()` kicks off a
+    /// `realtimeDisconnectTask` that starts sleeping inside `mock.disconnect()`.
+    /// `reconnectRealtime()` -> `startRealtime()` immediately overwrites `realtimeConnectTask`
+    /// with a brand-new Task that calls `mock.connect()` right away (no delay) — it has no
+    /// mechanism forcing it to wait for the disconnect in flight. `mock.connect()` finishes
+    /// almost instantly and sets `isConnected = true`. Only later, once the artificial delay
+    /// elapses, does the abandoned disconnect Task's `mock.disconnect()` call finally land and
+    /// set `isConnected = false` — exactly the "the trailing disconnect tears the socket down a
+    /// moment later" failure QA described. The assertion below (`isConnected` must be `true`
+    /// after the whole chain settles) FAILS pre-fix.
+    ///
+    /// Post-fix (chained via `realtimeLifecycleTask`): `disconnectRealtime()`'s Task is the new
+    /// chain tail. `reconnectRealtime()` -> `startRealtime()` captures THAT Task as its own
+    /// predecessor and its body awaits `predecessor?.value` before calling `mock.connect()` at
+    /// all — so `mock.connect()` cannot run, and cannot flip `isConnected` to `true`, until
+    /// `mock.disconnect()` has fully finished (including its artificial delay) and already set
+    /// `isConnected` to `false` first. Awaiting `service.realtimeConnectTask?.value` therefore
+    /// waits for the entire chain in the correct order, and the final state is connected.
+    func testDisconnectThenReconnectFlap_doesNotRaceAndEndsConnected() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await startAndAwaitConnect(service)
+        XCTAssertTrue(mock.isConnected)
+        XCTAssertEqual(mock.connectCallCount, 1)
+
+        // Make disconnect()'s underlying work slow relative to connect()'s, so a naive
+        // unserialized implementation lets the fast connect() "win" the race and finish first,
+        // with the slow disconnect() landing afterwards and undoing it.
+        mock.disconnectDelay = .milliseconds(200)
+
+        // The exact interleaving of a fast background -> foreground scenePhase flap: no await
+        // between the disconnect call and the reconnect call.
+        service.disconnectRealtime()
+        service.reconnectRealtime()
+
+        // Once fixed, awaiting the connect task alone is sufficient: its body awaits the
+        // disconnect task (its chain predecessor) before doing its own connect() work, so this
+        // single await spans the whole chain, in the correct order.
+        await service.realtimeConnectTask?.value
+
+        // Belt-and-suspenders: also explicitly wait past the artificial disconnect delay, so a
+        // pre-fix run can't accidentally "pass" just because this test didn't wait long enough
+        // for the abandoned disconnect Task to land and flip isConnected back to false.
+        try? await Task.sleep(for: .milliseconds(300)) // > the 200ms disconnect delay above
+
+        XCTAssertTrue(
+            mock.isConnected,
+            "A background->foreground flap must leave Realtime actually connected once the " +
+            "chain settles, not silently dead: disconnect() must fully complete BEFORE " +
+            "connect() runs, not race it and land after."
+        )
+        XCTAssertEqual(mock.disconnectCallCount, 1)
+        XCTAssertEqual(mock.connectCallCount, 2, "reconnectRealtime() must have called connect() again")
+    }
 }

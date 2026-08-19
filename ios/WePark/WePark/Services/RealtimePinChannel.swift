@@ -266,6 +266,20 @@ final class MockRealtimePinChannel: RealtimePinSubscribing {
     private(set) var connectCallCount = 0
     private(set) var disconnectCallCount = 0
 
+    /// Artificial delay injected before `connect()` does its work. Used by the lifecycle-race
+    /// regression test (`CommunityPinServiceRealtimeWiringTests
+    /// .testDisconnectThenReconnectFlap_doesNotRaceAndEndsConnected`) to simulate a slow
+    /// `RealtimeClientV2.connect()`/`subscribeWithError()` round-trip so a test can construct a
+    /// specific interleaving against a concurrent `disconnect()` — mirrors the real network
+    /// timing that makes the lifecycle race (QA finding #1, PR #84 pass 1) possible in
+    /// production. `nil` by default (existing tests are unaffected).
+    var connectDelay: Duration?
+
+    /// Same as `connectDelay`, for `disconnect()`. Together the two let a race test simulate
+    /// "disconnect's network round-trip is still in flight when a subsequent connect would run"
+    /// without needing a real socket.
+    var disconnectDelay: Duration?
+
     /// Captured on the most recent `connect(onUpsert:onDelete:)` call so tests can invoke
     /// them directly to simulate an inbound Realtime event without a live socket.
     private(set) var capturedOnUpsert: (@MainActor (CommunityPin) -> Void)?
@@ -275,6 +289,9 @@ final class MockRealtimePinChannel: RealtimePinSubscribing {
         onUpsert: @escaping @MainActor (CommunityPin) -> Void,
         onDelete: @escaping @MainActor (UUID) -> Void
     ) async {
+        if let connectDelay {
+            try? await Task.sleep(for: connectDelay)
+        }
         connectCallCount += 1
         isConnected = true
         capturedOnUpsert = onUpsert
@@ -282,6 +299,9 @@ final class MockRealtimePinChannel: RealtimePinSubscribing {
     }
 
     func disconnect() async {
+        if let disconnectDelay {
+            try? await Task.sleep(for: disconnectDelay)
+        }
         disconnectCallCount += 1
         isConnected = false
     }
