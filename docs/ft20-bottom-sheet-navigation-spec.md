@@ -1,5 +1,39 @@
 # FT-20 — Browse-Mode Bottom Sheet Navigation
 
+> ## ✅ KEVIN'S RULINGS ON §0's OPEN QUESTIONS — 2026-08-19 (settled)
+>
+> **OQ-1 — sheet mechanism: AGREED, use the system `.sheet` with `.presentationBackgroundInteraction`.**
+> Boring technology on the riskiest file in the project. No hand-rolled draggable sheet.
+>
+> **OQ-2 — Park Until: keep it top-right**, as a third floating map control beside Locate and
+> Find-my-car. The sheet's action list stays exactly three (Settings / Drive-Cruise / Parking 101).
+>
+> **OQ-3 — detent: use a CUSTOM detent, not `.medium`.** Kevin: *"if we do medium then can it be
+> pushed down to give more room of the map?"* Yes — SwiftUI supports custom height/fraction detents.
+> Size it to exactly the search bar plus three action rows and no more. **Rationale worth carrying:
+> unlike Apple Maps, where the sheet is the main event and the map is context, WePark's map IS the
+> product** — the coloured curbs are the entire reason to open the app. The sheet takes the minimum
+> space that still does its job.
+>
+> **OQ-4 — "parking near here" in the place state: INCLUDE IT.** Kevin: *"Oh then yes. I want that."*
+> A one-line summary of parking conditions around a searched destination (e.g. "Mostly metered · 2 free
+> blocks within a 3-min walk"), computed by reusing `pickBestParkingAwareRoute`'s existing scan-and-score
+> logic against a point instead of a route.
+>
+> **⚠️ OQ-4 is the first step of an already-specced flagship feature — build it with that in mind.**
+> Kevin's follow-up: *"the way it works in the future is to score parking nearby and direct the driver
+> through the optimal path (to find parking) nearby the target destination."* That is already captured in
+> **`docs/smart-parking-route-2.0-concept.md`** (his own idea, 2026-06-09 — coverage + durability
+> objectives, detour budget) and in **`docs/drive-mode-scope-spec.md`'s patrol mode (W8.5e–i)**, which
+> ports the PWA's working `generateParkingRoute` greedy traversal (`index.html:7038`). **So OQ-4's scoring
+> should be factored as reusable logic, not a one-off chip** — it is the same scoring the routing feature
+> will need, applied to a point rather than a path. Getting it in front of Kevin early also validates
+> whether the scoring *feels* right before navigation is built on top of it.
+> Dependency reminder from the concept doc: the full feature waits on the supabase-swift realtime
+> foundation, and Realtime Stream B is specced but not yet built.
+
+
+
 **Status:** SPEC — awaiting Kevin's answers to §0 Open Questions before code starts.
 **Owner:** Tech Lead (this spec) → `@designer` (interaction review) → `@ios-engineer` (build), in that order.
 **Trigger:** Kevin, `docs/field-testing-log.md` FT-20 (backburnered 2026-08-18, unblocked for spec work
