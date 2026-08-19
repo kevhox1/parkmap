@@ -25,9 +25,16 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   tweak — he's asking to *"decide how to more properly set the offset of streets and coordinates."*
   Any future pass should start by asking whether the current per-street-width heuristic is the right
   model at all, versus something derived from actual curb geometry.
+- **📸 SCREENSHOT RECEIVED (build 16, real device, dark mode, Houston × Bowery):** the failing case is
+  **the two widest streets in the historical problem set** — which narrows this considerably. TF2-10 was
+  literally *"polylines still look mid-road on WIDE streets"* and TF2-14 *"Houston (widest streets) lines
+  still mid-road."* Visible in the shot: lines sit **inside the roadway** rather than hugging either curb,
+  and a green segment on E Houston ends in a **short stub angled off the curb line** approaching the
+  intersection. Narrow one-way side streets in the same frame look far better.
+  **Implication: this is the wide/divided-street offset case specifically, not a uniform failure.** Any
+  future pass should start there rather than re-tuning the global heuristic.
 - **Status:** ⚪️ **BACKBURNERED by Kevin 2026-08-19.** Not a regression, not blocking. Needs a real
-  design decision before more tuning. ⚠️ **A screenshot was referenced but did not attach** — get it
-  before scoping.
+  design decision before more tuning.
 - **Lands in:** `build/preprocess.js` curb-offset geometry + a regen.
 
 ### FT-20 ⚪️ BACKBURNERED — dark mode default + browse-mode chrome redesign (Apple Maps bottom sheet)
