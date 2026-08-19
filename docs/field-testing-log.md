@@ -9,6 +9,27 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 
 ## Round 6 — build 15/16 field observations (2026-08-18)
 
+### FT-21 ⚪️ BACKBURNERED — curb offset still imperfect: lines not consistently parallel / on the curb
+- **Observed (Kevin, build 16 on real hardware, 2026-08-19):** *"nothing is sideways but the lines are
+  still not ending properly or aligned right on some streets… at some level we will have to decide how
+  to more properly set the offset of streets and coordinates so that we are always running parallel and
+  the lines are on the street sides (not running down the middle)."*
+- **✅ What FT-19/#80 DID fix, confirmed on-device:** no lateral shift — the curb offsets from
+  TF2-5/10/12/14 were **not** disturbed by the setback fix (the specific regression QA checked for and
+  Kevin confirmed absent). Intersection overshoot and the zone-collapse rule loss are fixed.
+- **What remains:** residual per-street offset/alignment imperfection — lines not reliably parallel to
+  the curb, some drifting toward mid-road. **This is the long-running TF2-5 → TF2-10 → TF2-12 → TF2-14
+  saga**, not a regression from #80. Four prior passes each improved it (perpendicular street-normal
+  offset, width tiers, CSCL real widths, divided-street handling) without fully solving it.
+- **Kevin's framing is architectural, and worth respecting:** he's not asking for a fifth incremental
+  tweak — he's asking to *"decide how to more properly set the offset of streets and coordinates."*
+  Any future pass should start by asking whether the current per-street-width heuristic is the right
+  model at all, versus something derived from actual curb geometry.
+- **Status:** ⚪️ **BACKBURNERED by Kevin 2026-08-19.** Not a regression, not blocking. Needs a real
+  design decision before more tuning. ⚠️ **A screenshot was referenced but did not attach** — get it
+  before scoping.
+- **Lands in:** `build/preprocess.js` curb-offset geometry + a regen.
+
 ### FT-20 ⚪️ BACKBURNERED — dark mode default + browse-mode chrome redesign (Apple Maps bottom sheet)
 - **⛔ KEVIN'S EXPLICIT INSTRUCTION (2026-08-18): DO NOT START THIS.** *"Backburner this entire
   request because I want to make sure we finish everything on our plate besides this before starting
