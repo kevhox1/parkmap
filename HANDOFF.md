@@ -248,9 +248,13 @@ so — fixed structurally from both sides. **Needs, in order:** Kevin's compile 
 that `NSCameraUsageDescription` reached the built bundle** (W8.5a class of bug; a miss here is a hard
 crash on first photo tap, not a degraded feature) → simulator smoke incl. the collision repro.
 
-**⛔ BACKBURNERED — FT-20.** Dark-mode default + browse-mode chrome + an Apple-Maps-style bottom
-sheet as primary navigation. **Kevin explicitly said do not start; discuss first, after the board
-clears.** Note dark mode is not a one-liner — the red/amber/green polylines are the product's data
+**🟡 FT-20 — BACKBURNER LIFTED 2026-08-19.** The board cleared, build 16 shipped, Kevin had the
+design discussion and settled all six decisions (see `docs/field-testing-log.md` FT-20). Bottom sheet
+confirmed as the direction; Drive Mode keeps FT-18's Bottom Dock; search → place → **Go** rather than
+auto-entering drive; locate/find-car stay as floating map controls. Dark mode split out and started
+first. **⚠️ Process note: the backburner was lifted in conversation but these docs weren't updated
+before dispatch — an agent correctly refused to start, citing them. Update the docs BEFORE
+dispatching when a standing instruction changes.** Note dark mode is not a one-liner — the red/amber/green polylines are the product's data
 encoding and TF2-18 already logged a sunlight-legibility problem. See `docs/field-testing-log.md` FT-20.
 
 **PROCESS LESSONS ADDED THIS STRETCH:**

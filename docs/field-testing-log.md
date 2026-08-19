@@ -37,12 +37,34 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   design decision before more tuning.
 - **Lands in:** `build/preprocess.js` curb-offset geometry + a regen.
 
-### FT-20 ⚪️ BACKBURNERED — dark mode default + browse-mode chrome redesign (Apple Maps bottom sheet)
-- **⛔ KEVIN'S EXPLICIT INSTRUCTION (2026-08-18): DO NOT START THIS.** *"Backburner this entire
-  request because I want to make sure we finish everything on our plate besides this before starting
-  up new work… we need to discuss all of these proposed revisions to align on the proper path
-  forward. But after we complete all the open ones."* **This entry exists to preserve the request, not
-  to authorize it. It needs a design discussion with Kevin BEFORE any spec or code.**
+### FT-20 🟡 ACTIVE — dark mode default + Apple-Maps bottom-sheet navigation (backburner LIFTED 2026-08-19)
+- **✅ BACKBURNER LIFTED 2026-08-19.** The board cleared, build 16 shipped, and Kevin had the design
+  discussion he asked for. *"I think we can proceed with the FT-20 questions."* The 2026-08-18
+  instruction below is **superseded** and retained only as history.
+  - *(Superseded)* 2026-08-18: *"Backburner this entire request because I want to make sure we finish
+    everything on our plate besides this before starting up new work."*
+
+**✅ KEVIN'S DESIGN DECISIONS — 2026-08-19 (settled, do not re-open):**
+1. **Bottom sheet is the direction**, modeled on Apple Maps.
+2. **Drive Mode keeps FT-18's Bottom Dock unchanged** — *"drive mode still looks good with the current
+   bottom dock."* The sheet is **browse-mode** navigation only.
+3. **Search is the primary element** of the sheet.
+4. **Pull-up reveals exactly three things:** Settings, Drive/Cruise Mode, Parking 101.
+5. **Locate and find-my-car stay OUT of the sheet** as floating map controls, top-right — the Apple
+   Maps pattern.
+6. **Search does NOT auto-enter Drive Mode.** search → show place → tap **Go** → drive. Kevin
+   initially proposed auto-enter, then agreed with the Apple Maps precedent. **The conceptual win
+   survives:** entering with a destination is the search→Go path, and the explicit button means
+   "drive with no destination" = **cruise**. That collapses the muddy Drive-Mode-vs-Cruise overlap
+   running through TF2-6, TF2-8, TF2-11. The intermediate "place" state is a **real, valuable state** —
+   Kevin searches addresses partly to check parking near a destination before committing — not a
+   speed bump.
+7. **Dark mode is split out as its own independent piece and goes FIRST**, in parallel with the sheet
+   spec. Kevin: *"Sure you can start dark mode."* Assumption flagged to him and not objected to:
+   **always dark** (no in-app theme setting exists); a system-following or toggleable variant is a
+   small follow-up if wanted.
+- **Items 2 and 3 of the original request (browse-mode chrome, over-long button text) are ABSORBED by
+  the bottom sheet** — the sheet replaces that chrome, so fixing it separately would be thrown away.
 - **Positive signal to preserve:** *"I do like the new button design on drive mode"* — FT-18's Bottom
   Dock is validated on-device. Whatever comes next should extend that language, not replace it.
 - **The requests, as distinct items:**

@@ -114,15 +114,15 @@ before the next build.
 
 ---
 
-## ⛔ BACKBURNERED — needs a design discussion with Kevin FIRST, do not start
+## 🟡 ACTIVE — FT-20, backburner LIFTED 2026-08-19
 
-**FT-20** — dark-mode default + browse-mode chrome redesign + Apple-Maps-style bottom sheet.
-Kevin, 2026-08-18: *"Backburner this entire request… we need to discuss all of these proposed
-revisions to align on the proper path forward. But after we complete all the open ones."*
-Four distinct asks (dark mode w/ polyline contrast re-validation; browse-mode chrome; over-long
-button text; a draggable bottom sheet as primary navigation). The last one is a **re-architecture of
-app navigation**, not a tidy-up. See `docs/field-testing-log.md` FT-20. **No spec, no code, until
-that conversation happens.**
+Kevin had the design discussion and approved. **All six design decisions are settled** — see
+`docs/field-testing-log.md` FT-20. In flight now:
+- **Dark mode default** (split out, goes first) — `@ios-engineer`, running
+- **Bottom-sheet navigation spec** — `@tech-lead`, running
+- Original items 2 (browse chrome) and 3 (long button text) are **absorbed** by the sheet.
+
+**FT-21** (wide-street curb offset) remains ⚪️ backburnered — see the field-testing log.
 
 ---
 
