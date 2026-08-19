@@ -201,6 +201,80 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-19 — CHECKPOINT. Build 16 shipped + drive-tested; FT-15 complete; dark mode in; build 17 underway
+
+**WHERE WE ARE:** `main` @ `8b2840aa`. **Zero open PRs.** Build **1.0 (16) is live on TestFlight,
+installed, and DRIVE-TESTED.** `CURRENT_PROJECT_VERSION` is **16**; build 17 has not been cut.
+**One agent running: realtime Stream B** (`@ios-engineer`, no branch pushed yet).
+
+**🗺 BUILD PLAN (decided 2026-08-19, Kevin agreed to the split):**
+- **Build 17 = dark mode (merged) + realtime WebSocket (in flight) + FT-20 bottom sheet (next).**
+- **Build 18 = patrol mode / smart parking route.**
+- Why split: `docs/smart-parking-route-2.0-concept.md` says don't start patrol until the realtime
+  foundation is **solid**, and *merged is not solid* — it means Kevin has driven Manhattan on a live
+  socket. Patrol mode is also a different **product behaviour**, judged by actually hunting a spot,
+  so it deserves its own drive test. Build 13 became unshippable because too much landed at once.
+- **Sequencing inside 17: realtime Stream B → then the FT-20 sheet.** Both touch `ContentView.swift`
+  (Stream B only a `scenePhase` branch, the sheet a large diff) so they are **serialized**.
+
+---
+
+**✅ BUILD 16 DRIVE TEST — 2026-08-19. Four long-standing items closed on real hardware:**
+
+| Item | Kevin | Note |
+|---|---|---|
+| **FT-19** | *"Lines look good"* | Lines stop short of intersections |
+| **TF2-4** | *"Yes it's good now"* | **Open since 2026-06-08.** Cause was the setback coordinate mismatch (~32.8ft off), not side-assignment or NYC data |
+| **TF2-19** | *"Metered"* | **Open since 2026-07-09** — the finding that scrapped build 13 and forced the fail-closed completeness gate |
+| **TF2-18 sunlight** | *"Yes you can read it in the sun/daytime"* | ⚠️ Resolved **on the light scheme** — so dark mode is for *cleanliness*, NOT a legibility fix, and must not regress this |
+| **FT-12 Parking 101** | *"it's there and it's good"* | |
+
+**Still unverified after that drive:** **TF2-16** (heading at intersection approaches — Kevin: *"Unsure"*,
+he didn't watch for it) and the **FT-15 end-to-end submit** (writes to production; do it somewhere
+verifiable). **FT-21** (wide-street curb offset) was **re-confirmed as still broken** while driving —
+*"lines are misaligned/placed. They appear in the middle of the road."*
+
+**✅ FT-15 IS COMPLETE AND SHIPPED.** Streams A (schema, applied to prod), B1, B2, B3, B4 all merged.
+Tap blockfaces → photograph the placard → submit → anyone parked there sees a restriction banner.
+Kevin used the tap-select on-device. Known limitation recorded in the spec §13b: **selection
+granularity is the whole blockface**, which over-reports when only part of a block is affected —
+accepted because it errs toward caution, and film permits work in whole-block units anyway.
+
+**✅ DARK MODE MERGED (#83).** Deliberately tiny: 66 insertions, **zero colour values changed**.
+`UIUserInterfaceStyle: Dark` in `Info.plist` + `.preferredColorScheme(.dark)`. `ParkingColors` was
+**audited, not edited** — restraint that was correct given Kevin had just confirmed daylight
+readability on the existing palette. Kevin smoked it: *"Everything looks good."*
+
+**🟡 FT-20 — all decisions settled, spec written** (`docs/ft20-bottom-sheet-navigation-spec.md`):
+system `.sheet` (not hand-rolled), Park Until stays top-right as a floating map control, a **custom
+detent** sized to search + three rows (not `.medium` — *WePark's map IS the product*), and search →
+place → **Go** rather than auto-entering drive. Includes a **"parking near here"** summary in the
+place state, which is deliberately the **first step of patrol mode** — factor its scoring as reusable
+logic, not a one-off chip. Sizing: **4.5–6.5 iOS sessions**, expect a follow-up round.
+
+**⚪️ BACKBURNERED:** **FT-21** (wide-street curb offset — Kevin wants an architectural decision about
+how offsets are derived, not a fifth incremental tweak) and **FT-16a** (alerting for the staleness guard).
+
+**PROCESS LESSONS ADDED:**
+- **VERIFY `git branch --show-current` BEFORE EVERY COMMIT.** An agent dispatched *with* worktree
+  isolation still left its branch checked out in the main checkout, and an orchestrator commit landed
+  on it silently. The existing mitigation was insufficient. (Recovered via cherry-pick + rebase.)
+- **Update the docs BEFORE dispatching when a standing instruction changes.** An agent correctly
+  *refused* to start dark mode, citing three source-of-truth files that still said "do not start"
+  after Kevin had lifted the backburner in conversation. Right behavior by the agent; the fault was
+  dispatching against stale docs.
+- `let` with a default value is **excluded from Swift's synthesized memberwise initializer** — broke a
+  compile that a QA read had missed.
+- Use `git checkout -B <branch> origin/<branch>`; a plain `checkout` of an existing local branch gave
+  Kevin a stale build to smoke-test once.
+- `xcodebuild test | tail` misses the summary — use `xcrun xcresulttool get test-results summary`.
+- A transient `FBSOpenApplicationServiceErrorDomain … RequestDenied` mid-run is a stale simulator app
+  instance; `TEST SUCCEEDED` after it is real — confirm via the xcresult count.
+
+**NEXT:** realtime Stream B lands → Kevin compiles → merge → FT-20 sheet → bump to 17 → archive →
+drive test. Then build 18 = patrol mode.
+
+
 ### 2026-08-18 — burn-down COMPLETE except one PR: FT-15 feature-complete, geometry regen shipped
 
 **WHERE WE ARE:** `main` @ `39230d58`+. Build **1.0 (15)** still the newest on TestFlight; `CURRENT_PROJECT_VERSION`
