@@ -114,6 +114,29 @@ before the next build.
 
 ---
 
+## 🗺 BUILD PLAN — decided 2026-08-19
+
+**Build 17 = dark mode + realtime WebSocket + FT-20 bottom sheet.**
+**Build 18 = patrol mode / smart parking route.**
+
+Kevin initially wanted all three in build 17; agreed to the split. The reasoning that decided it:
+
+1. **`docs/smart-parking-route-2.0-concept.md` says not to start patrol mode until the realtime
+   foundation is *solid* — and merged is not solid.** Solid means Kevin has driven Manhattan with a
+   live WebSocket and it held. Shipping realtime in 17 and drive-testing it answers that *before* the
+   flagship feature is built on top of it.
+2. **Patrol mode is a different product behaviour, not a better app.** It's judged by actually hunting
+   for a spot, which is a different drive test from "do the lines look right." Bundling it with two
+   large UI changes confounds everything.
+3. A testable build lands weeks sooner. **Build 13 became unshippable partly because too much landed
+   at once.**
+
+**Sequencing inside build 17:** realtime Stream B first (running), then the FT-20 sheet. Both touch
+`ContentView.swift` — Stream B only a single `scenePhase` branch, the sheet a large diff — so they are
+**serialized, not parallel.** This VPS has 2 cores; concurrent agents contend rather than parallelize.
+
+---
+
 ## 🖥 PENDING KEVIN'S MAC — surface this the moment he says he's back on a Mac
 
 **PR #83 — dark mode default.** Compiles unverified; needs `xcodebuild test` + a simulator smoke.
