@@ -35,6 +35,10 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   future pass should start there rather than re-tuning the global heuristic.
 - **Status:** ⚪️ **BACKBURNERED by Kevin 2026-08-19.** Not a regression, not blocking. Needs a real
   design decision before more tuning.
+- **✅ RE-CONFIRMED ON-DEVICE — build 16 drive, 2026-08-19.** Kevin: *"The lines are misaligned/placed.
+  They appear in the middle of the road."* Observed while driving, not just from a static screenshot —
+  so this is real-world confirmed, not a rendering artifact of a zoomed screenshot. Combined with the
+  Houston×Bowery screenshot, the diagnosis holds: **wide/divided streets specifically.**
 - **Lands in:** `build/preprocess.js` curb-offset geometry + a regen.
 
 ### FT-20 🟡 ACTIVE — dark mode default + Apple-Maps bottom-sheet navigation (backburner LIFTED 2026-08-19)
@@ -566,6 +570,9 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   screenshot is unexercisable in sandbox (no gesture injection) — covered by the stronger gate.
   ⏳ Kevin on-device drive-test (build 14) = the gate: heading locks to street at intersection
   approaches, no spin/hunt, hands back to GPS course through turns.
+- **⏳ STILL UNVERIFIED after the build 16 drive (2026-08-19).** Kevin: *"Unsure"* — he did not
+  specifically watch for heading behaviour at intersection approaches. Needs a deliberate check on a
+  future drive rather than being marked verified by omission.
 - **Nits → tech-debt batch:** `snappedHeading` `lastGoodHeading` doc comment overstates
   ("last trustworthy EMA before confidence dropped" vs actual live current-tick EMA); cosmetic.
 - **Lands in:** iOS (new `Services/DriveHeadingSnap.swift`, `LocationService.swift`,
@@ -640,6 +647,8 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   ⏳ **Kevin on-device pass items (nobody could tap-through in sandbox):** (1) Settings →
   "Parking 101" row opens the guide; (2) FAQ cross-link; (3) ladder plates at large Dynamic Type;
   (4) fresh-install banner shows once, non-blocking, ~8s auto-hide.
+- **✅ CONFIRMED ON-DEVICE — build 16, 2026-08-19.** Kevin, on Parking 101: *"yeah it's there and it's
+  good."* Settings row, `?` toolbar button (FT-13), and content all working.
 - **Lands in:** iOS UI + bundled content/assets; no backend.
 
 ## Map rebuild (native MapKit) — `docs/map-rebuild-native-mapkit-spec.md`
