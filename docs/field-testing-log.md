@@ -33,8 +33,40 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   intersection. Narrow one-way side streets in the same frame look far better.
   **Implication: this is the wide/divided-street offset case specifically, not a uniform failure.** Any
   future pass should start there rather than re-tuning the global heuristic.
-- **Status:** ⚪️ **BACKBURNERED by Kevin 2026-08-19.** Not a regression, not blocking. Needs a real
-  design decision before more tuning.
+- **✅ KEVIN'S ARCHITECTURAL RULING — 2026-08-19 (settled, this is the decision the entry was waiting
+  for).** Kevin: *"it sounds like we should try A first and then go for B. If neither work then we can
+  declare cosmetic."* The escalation ladder, in order:
+  1. **(A) FIRST — keep deriving the offset from street width, but model divided streets honestly.**
+     Today a divided street is one centerline plus a fudge (`7m + width/2`) gated by a five-name
+     allow-list (Houston / Bowery / Allen / Forsyth / Delancey). **CSCL models divided streets as
+     separate carriageways** — so treat each carriageway as its own centerline with its own curb line,
+     which is the real version of what the allow-list approximates. No new dataset. Targets exactly the
+     wide/divided case the screenshot and the build-16 drive both point at.
+  2. **(B) IF A FAILS — stop deriving from width entirely; use real curb geometry.** NYC publishes
+     planimetric sidewalk polygons; the curb is their edge. Ground truth instead of "centerline ± half
+     a guessed width." New dataset, new ingestion, new join, full regen — the big one, but it would
+     likely close the whole class permanently rather than the wide-street case.
+  3. **(C) IF NEITHER WORKS — declare it cosmetic and stop.** The lines are on the correct side of the
+     correct block; nothing about legality is wrong. This is an acceptable terminal state, not a
+     failure.
+- **⚠️ BEFORE STARTING A: one tech-lead session to confirm CSCL's carriageway modeling actually
+  supports (A) cleanly.** Don't dispatch the pipeline work until that's verified — the whole point of
+  this ruling is to stop doing incremental tweaks on an unverified model.
+- **🔗 FT-21's regen is the natural vehicle for the parked backend tech debt.** Whenever (A) or (B)
+  triggers a tile regen, bundle: the duplicate-adjacent-vertex hygiene fix (12.4%→22.7%, `open-items`
+  #9 — the standing recommendation is explicitly "fold into the next regen rather than spend a regen
+  cycle on vertex hygiene alone") and, if in scope, the **359 still-lost zone rows** (`open-items` #10).
+  Three items, one regen, one validation pass.
+- **⏳ SEQUENCING — Kevin agreed 2026-08-19: this sits until FT-20 and build 17 are done.**
+  **FT-21 must NOT ship in build 17.** A geometry change means a tile regen, and build 17 exists to
+  drive-test **realtime** — if pins misbehave on that drive, bundling a regen makes it impossible to
+  tell whether the cause is the WebSocket or the map data underneath. Same reasoning that split builds
+  17 and 18; build 13 is the cautionary tale. FT-21's code lands in **build 18 at the earliest**,
+  regardless of when it's written. The investigation/spec can be written during a natural gap (while
+  Kevin is compiling, smoking, or drive-testing 17) — not in parallel with the FT-20 streams, because
+  this VPS has 2 cores and FT-20 is what gates the next build.
+- **Status:** ⚪️ **BACKBURNERED, but no longer undecided.** The architecture question that was blocking
+  it is **answered** (A → B → C above). What remains is scheduling, not a decision.
 - **✅ RE-CONFIRMED ON-DEVICE — build 16 drive, 2026-08-19.** Kevin: *"The lines are misaligned/placed.
   They appear in the middle of the road."* Observed while driving, not just from a static screenshot —
   so this is real-world confirmed, not a rendering artifact of a zoomed screenshot. Combined with the

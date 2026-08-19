@@ -42,7 +42,7 @@ verified the fix and returned MERGE.)*
 |---|---|---|---|
 | 5 | **TF2-16** — heading at intersection approaches | **phone** | **Still unverified after the build-16 drive** — Kevin: *"Unsure,"* he didn't watch for it. Carry into the build-17 drive as a named thing to look for |
 | 6 | **FT-15 end-to-end submit** | **phone** | The one FT-15 path never exercised live. **Writes to production** — do it somewhere verifiable |
-| 7 | **FT-21** — wide-street curb offset, lines mid-road on Houston/Bowery-class streets | VPS (decision) → **phone** | ⚪️ **Backburnered by Kevin.** **Re-confirmed still broken on the build-16 drive:** *"lines are misaligned/placed. They appear in the middle of the road."* Kevin wants an **architectural decision about how offsets are derived — not a fifth incremental tweak** |
+| 7 | **FT-21** — wide-street curb offset, lines mid-road on Houston/Bowery-class streets | VPS (spec) → VPS (impl + regen) → **phone** | ⚪️ Backburnered but **NO LONGER UNDECIDED.** Kevin ruled 2026-08-19: **(A) per-carriageway offset from CSCL's own divided-street modeling first → (B) real curb geometry from NYC planimetric sidewalk polygons if A fails → (C) declare cosmetic.** Start with one tech-lead session to confirm CSCL supports (A). **Must NOT ship in build 17** — a regen would confound the realtime drive test. Build 18 at the earliest. See `field-testing-log.md` FT-21 |
 
 ---
 
@@ -65,8 +65,8 @@ Four long-standing items died on real hardware. Recorded here so nobody re-opens
 | # | Item | Where | Notes |
 |---|---|---|---|
 | 8 | **FT-16a** — alerting for the staleness guard (nothing polls `ingest_runs.probe_status`) | VPS | ⚪️ Deferred by Kevin, named so it isn't lost |
-| 9 | **Duplicate-adjacent-vertex tech debt** — see below | VPS | Fold into the next regen, don't spend a cycle on it alone |
-| 10 | **359 still-lost zone rows** — the residue after the FT-14/FT-19 fix took 1,624 → 359 (−77.9%) | VPS | Not scheduled. The natural pairing for #9 |
+| 9 | **Duplicate-adjacent-vertex tech debt** — see below | VPS | Fold into the next regen, don't spend a cycle on it alone. **That regen is now most likely FT-21's** (#7) — bundle them |
+| 10 | **359 still-lost zone rows** — the residue after the FT-14/FT-19 fix took 1,624 → 359 (−77.9%) | VPS | Not scheduled. The natural pairing for #9 — **same FT-21 regen, three items one validation pass** |
 
 **Duplicate-adjacent-vertex points in tile polylines: 12.4% → 22.7%** — a real, previously-undisclosed
 side effect of the FT-14/FT-19 geometry fix (#80, merged). Found by QA re-running
