@@ -142,6 +142,30 @@ struct WeParkApp: App {
                     // The app stays in read-only mode until auth is available.
                     await authService.ensureSession()
                 }
+                // FT-20 (2026-08-19): app defaults to dark mode, always, regardless of the
+                // device's system appearance setting. Kevin: "I think that looks cleaner."
+                // No in-app theme setting exists — this is a hard override, not a default
+                // that a user can flip back to light. A system-following or user-toggleable
+                // variant is a small, separate follow-up if he wants one later
+                // (docs/field-testing-log.md FT-20).
+                //
+                // This modifier sets the SwiftUI environment's colorScheme for the whole
+                // view hierarchy, including MKMapView hosted via MapViewRepresentable
+                // (UIViewRepresentable) — SwiftUI cascades the resolved appearance to the
+                // window's overrideUserInterfaceStyle, which MKMapView (and every other
+                // UIKit view in the hierarchy) reads from its trait collection. No
+                // MapViewRepresentable-side change is needed; MKMapView was already
+                // rendering its dark basemap correctly whenever the device was in system
+                // Dark Mode (confirmed on a build-16 device screenshot) — this just makes
+                // that the permanent state instead of a system-setting-dependent one.
+                //
+                // Also set at the Info.plist level (`UIUserInterfaceStyle: Dark`) as the
+                // authoritative whole-app switch — that key is what actually forces
+                // system-presented UIKit chrome (share sheets, alerts, the keyboard) dark,
+                // which this SwiftUI-scoped modifier does not reliably reach on its own.
+                // Both together, not an either/or: SwiftUI Previews and any future
+                // programmatic window creation still read this environment modifier.
+                .preferredColorScheme(.dark)
         }
     }
 }
