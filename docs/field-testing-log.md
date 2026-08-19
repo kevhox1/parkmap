@@ -143,6 +143,9 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
 - **Status:** 🟢 fixed, tile regen shipped this PR (both `tiles/` **and** `ios/.../Resources/tiles`,
   verified `diff -rq` identical — the #21 lesson). `sw.js` `CACHE_VERSION` bumped v39→v40. ⏳ Kevin
   on-device confirm (build 16+): lines land at the correct end of the block, no intersection overshoot.
+- **✅ ON-DEVICE CONFIRMED — build 16 drive test, 2026-08-19.** Kevin: *"Lines look good."* Lines now
+  stop short of intersections on real hardware, including the short EV/LES cross-street blocks that
+  previously received no trim at all.
 - **Lands in:** `build/preprocess.js`, `sw.js`, `tiles/*`, `ios/WePark/WePark/Resources/tiles/*`,
   `docs/qa/ft14-ft19-zone-geometry-fix.md`.
 
@@ -429,6 +432,9 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   (old fetch had no `$order` → every prior regen plausibly missed rows). QA: pass 1 SHIP WITH
   CAVEATS → fail-closed fix `139f738` → pass 2 SHIP CLEAN (`docs/qa/tf2-19-regen6-qa.md`).
   ⏳ Kevin on-device: Houston/Bowery should read metered/no-standing daytime (build 14 / PWA now).
+- **✅ ON-DEVICE CONFIRMED — build 16 drive test, 2026-08-19.** Kevin, asked whether Bowery/Houston read
+  metered in-window: *"Metered."* **CLOSED after being open since 2026-07-09** — the finding that caused
+  build 13 to be scrapped and forced the fail-CLOSED completeness gate.
 - **Follow-up (pwa-maintainer, minor):** `index.html` `APP_VERSION` stuck at v36 vs sw.js v38 —
   cosmetic debug-chip drift, QA pass-1 Finding #2.
 - **Lands in:** `build/preprocess.js` + tiles regen 6 (PWA + iOS Resources) + sw.js. No engine change.
@@ -607,6 +613,10 @@ FT-12 all 7 OQ recommendations accepted → engineering started (file-disjoint, 
   toolbar-cluster offsets (44 vs 100pt), 3 uncoordinated bottom card systems, amber collision
   (ASP banner vs metered chips), chip capacity vs TF2-17's longer copy. Suggested single engineer
   PR bundling TF2-17. Awaiting Kevin approval of scope.
+- **✅ SUNLIGHT LEGIBILITY CONFIRMED — build 16 drive test, 2026-08-19.** Kevin: *"Yes you can read it
+  in the sun/daytime."* The long-standing daylight-readability concern is **resolved on the current
+  (light) scheme**. Note this means the in-flight dark-mode work is being done for *cleanliness*, per
+  Kevin's stated reason, **not** to fix a legibility defect — dark mode must not regress this.
 - **Lands in:** iOS views (post-review).
 
 ### FT-12 🟡 Beginner's manual — "free parking in NYC 101" education (FEATURE)
@@ -846,6 +856,11 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   a different block/wording mismatch) not touched by this fix. **NOT closing outright** — needs Kevin's
   on-device confirmation with build 16+ (does the school-zone rule now land at the right position AND
   the right curb?) before this can move to 🟢 or fork into a new side-assignment investigation.
+- **✅ ON-DEVICE CONFIRMED — build 16 drive test, 2026-08-19.** Kevin: *"Yes it's good now."*
+  **CLOSED after being open since 2026-06-08.** The cause was never a side-assignment bug or NYC source
+  error — it was the intersection-setback coordinate mismatch fixed in #80, which rendered the rule one
+  setback (~32.8ft) off. Queuing this behind the geometry pass instead of investigating separately was
+  the right call.
 - **Lands in:** backend-data (tiles, position component — shipped with the FT-14/FT-19 regen) and/or
   iOS (render); or deferred to Tier 2 sign-corrections if the remaining side question is a NYC source
   error.
