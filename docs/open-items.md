@@ -16,22 +16,23 @@ App Store Connect, real-device drive test).
 
 | # | Item | Where | State |
 |---|---|---|---|
-| 1 | **Realtime Stream B** — WebSocket replaces the 8s poll + the Drive-Mode polling suspension | VPS (impl) → **MAC** (compile) | `@ios-engineer` **running**, ~11h in and actively writing. Worktree `agent-afee88c5a2f073a68`, branch `ios/supabase-realtime-stream-b`. **Uncommitted, unpushed.** New: `RealtimePinChannel.swift`, `RealtimeMergeGate.swift`; +724/−93 across 7 tracked files; currently in the test-writing phase |
-| 2 | **FT-20 bottom sheet** — the build-17 payload after realtime | VPS → **MAC** | **Specced and cleared, NOT started.** Serialized behind #1 — both touch `ContentView.swift` |
+| 1 | **FT-20 bottom sheet** — the remaining build-17 payload | VPS → **MAC** | **Specced, all 6 decisions + all 4 OQs settled and re-confirmed by Kevin 2026-08-19. Unblocked** — `#84` merged, so `ContentView.swift` is free. **4.5–6.5 iOS sessions + budget a follow-up round** (spec §11). Streams: design review → A (container, ~1) → B (search/place, ~1.5) → C (`ContentView` integration, ~1.5–2, mandatory live-UI smoke) → QA (~1–1.5 over 2 passes) |
 
 ---
 
-## 🖥 PENDING KEVIN'S MAC — surface the moment he says he's back on a Mac
+## 🖥 PENDING KEVIN'S MAC
 
 | # | Item | Notes |
 |---|---|---|
-| 3 | **Realtime Stream B compile + test** | Not yet available — branch isn't pushed. The moment #1 lands, hand Kevin the fetch + `xcodebuild test` block **unprompted** |
-| 4 | **Build 17 archive → TestFlight** | `CURRENT_PROJECT_VERSION` is still **16**. Bump to 17 only after realtime **and** the FT-20 sheet are both merged |
+| 2 | **Build 17 archive → TestFlight** | `CURRENT_PROJECT_VERSION` is still **16**. Bump to 17 only after the FT-20 sheet merges — dark mode and realtime are already in |
 
 Kevin (2026-08-19): *"I will commit later. Not on Mac. When I mention I am back on Mac next please
 remind me and send me the code."* **Honor that — don't wait to be asked.**
 
 *(Closed: PR #83 dark mode — merged `8b2840aa`, Kevin smoked it on-device, "Everything looks good.")*
+*(Closed: PR #84 realtime Stream B — merged `5d4604a6`. Kevin compiled on his Mac: **730/730 passed,
+0 failed, 0 skipped**, iPhone 17 / iOS 26.5. Two QA passes; pass 1 found a lifecycle race, pass 2
+verified the fix and returned MERGE.)*
 
 ---
 

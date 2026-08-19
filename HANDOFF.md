@@ -201,6 +201,57 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-19 (later) — Realtime Stream B MERGED. Build 17 is now one item from done.
+
+**WHERE WE ARE:** `main` @ `5d4604a6`. **Zero open PRs.** `CURRENT_PROJECT_VERSION` still **16**.
+Build 17's payload: dark mode ✅ (#83) + realtime ✅ (#84) + **FT-20 bottom sheet ⬜ — the only
+thing left.**
+
+**✅ PR #84 — supabase-swift Stream B, real WebSocket Realtime.** Replaces the 8s poll with a
+table-wide `public.pins` subscription; poll retuned 8s→45s as a silent-failure backstop. New
+`RealtimePinChannel.swift` (the only file importing `Realtime`) + `RealtimeMergeGate.swift`.
+`MapViewRepresentable.swift` zero diff; `ContentView.swift` a 52-line `scenePhase`-only change,
+deliberately small because the FT-20 sheet lands in that same file next.
+**Kevin's Mac: 730/730 passed, 0 failed, 0 skipped** (iPhone 17, iOS 26.5) — first try, no compile
+errors, on Swift written blind with no toolchain on the VPS.
+
+**🔴 THE FINDING THAT JUSTIFIED THE PROCESS — QA pass 1 caught a lifecycle race.**
+`startRealtime()` cancelled `realtimeConnectTask` but never awaited an outstanding
+`realtimeDisconnectTask`; `Task.cancel()` is cooperative and `connect()` never checked
+`Task.isCancelled`. On a fast background→foreground flap the trailing `disconnect()` could land
+*after* the new `connect()`, and `connect()`'s own idempotency guard would read a stale
+`.subscribed` and skip re-subscribing. **End state: the service believes Realtime is live, the
+socket is dead, nothing self-detects it** — and it compounds with the Drive-Mode poll suspension,
+so pins freeze silently at 30mph. Fixed by chained-Task serialization (each lifecycle op awaits its
+predecessor). QA pass 2 independently traced the causal chain and confirmed the stale-status window
+is now *structurally unreachable*, not merely narrowed, and specifically hunted for the failure
+modes chaining introduces (unbounded retain, self-await deadlock, stranded work) and found none.
+
+**Deliberate trade-off now in the code, worth remembering:** rapid multi-flapping now **serializes**
+(sum of round-trips) rather than racing. Always eventually correct, occasionally a beat slower. If
+anyone ever reports pins taking a moment to catch up after switching apps repeatedly, that's this.
+
+**PROCESS NOTES:**
+- **A green total is not proof the new test ran.** Verified `testDisconnectThenReconnectFlap_…`
+  exists on the branch *and* that the run reported 0 skipped, before believing the race was covered.
+- **Verify a post-compile push is docs-only before merging on an earlier compile.** QA pass 2's
+  report commit landed after Kevin's test run; diffed `0000b636`→tip to confirm zero code change.
+- **Kevin's Mac has no iPhone 15 simulator** — it's the iPhone 17 family on iOS 26.4.1/26.5, each
+  device present at *both* OS versions. Pass a **UDID** to `-destination`, never a bare name.
+- **`docs/open-items.md` had gone six days stale in its top half** while its lower half was kept
+  current, and `field-testing-log.md`'s FT-20 `Status:` line still read "BACKBURNERED … do not
+  pre-empt it" under an ACTIVE header. Both fixed (`f4e0b259`). Re-stamp the snapshot date and prune
+  closed rows in the same commit that closes them.
+
+**✅ FT-20 DECISIONS RE-CONFIRMED BY KEVIN 2026-08-19** — all six design decisions and all four OQ
+rulings still stand. Note he recalled the top-right as two icons (locate chevron + find-my-car key);
+it is **three** — Park Until joins them per his own OQ-2 ruling. He confirmed on being told.
+
+**NEXT:** FT-20 sheet (design review → A → B → C → QA) → bump to 17 → archive → drive test.
+Then build 18 = patrol mode, gated on that drive proving realtime holds.
+
+---
+
 ### 2026-08-19 — CHECKPOINT. Build 16 shipped + drive-tested; FT-15 complete; dark mode in; build 17 underway
 
 **WHERE WE ARE:** `main` @ `8b2840aa`. **Zero open PRs.** Build **1.0 (16) is live on TestFlight,
