@@ -78,6 +78,25 @@ App Store Connect, real-device drive test).
 
 ---
 
+## ⏳ BUILD 16 — SHIPPED, INSTALLED, **DRIVE TEST NOT YET DONE**
+
+Build 1.0 (16) is on Kevin's phone and **statically verified** (FT-15 tap-select, FT-18 layout, FT-17a
+Recenter, dark rendering, geometry inspected from a device screenshot). **He has NOT driven it yet
+(as of 2026-08-19).** Everything below still needs a real drive:
+
+| | |
+|---|---|
+| **FT-21** | Wide-street curb offset — lines mid-road on Houston/Bowery-class streets |
+| **FT-19** | Do lines now stop short of intersections on short EV/LES cross-streets? (37 newly-trimmed blocks) |
+| **TF2-4** | E 2nd @ 2nd–1st school zone — should sit ~33ft closer to the intersection |
+| **TF2-16** | Heading locks at intersection approaches |
+| **TF2-17/18** | "Free until X" chips + **sunlight legibility** (also the real gate for dark mode) |
+| **TF2-19** | Bowery/Houston reading metered/no-standing **in-window** — weekday or Saturday; Sunday green is correct per TF2-20 |
+| **Parking 101** | Settings row, large text sizes, fresh-install banner |
+| **FT-15** | An end-to-end report submit — writes to production, do it somewhere verifiable |
+
+---
+
 ## 🟢 NEW — tech debt discovered by QA, tracked not silently dropped
 
 **Duplicate-adjacent-vertex points in tile polylines: 12.4% → 22.7%** — a real, previously-undisclosed
