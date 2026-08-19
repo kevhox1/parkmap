@@ -239,11 +239,33 @@ host and one dismiss mechanic — the W5.1 doc comment at the top of the file is
 into one enum-driven ActiveSheet binding"* (`ContentView.swift:48–51`). Add `.browseNav` as a new case.
 Configure it with:
 ```swift
-.presentationDetents([.height(96), .medium, .large], selection: $sheetDetent)
-.presentationBackgroundInteraction(.enabled(upThrough: .medium))
+// ⚠️ CORRECTED 2026-08-19 (design review B1). An earlier draft of this block used system
+// `.medium` as the middle detent, contradicting OQ-3's ruling at the top of this file.
+// DO NOT use `.medium` here. All 11 existing `.presentationDetents` call sites in
+// ContentView.swift use `.medium`/`[.medium, .large]`, so copying the local convention is the
+// easy mistake — and `.medium` is ~50% of the screen, which is precisely the "sheet eats the
+// map" outcome Kevin rejected. WePark's map IS the product.
+
+@State private var browseSheetMediumHeight: CGFloat = 260   // measured, see below
+private let browseSheetPeekHeight: CGFloat = 96
+
+.presentationDetents(
+    [.height(browseSheetPeekHeight), .height(browseSheetMediumHeight), .large],
+    selection: $sheetDetent
+)
+.presentationBackgroundInteraction(.enabled(upThrough: .height(browseSheetMediumHeight)))
 .presentationDragIndicator(.visible)
 .interactiveDismissDisabled(true)   // Apple Maps' sheet is never fully dismissible, only collapsible
 ```
+
+**Both heights must be MEASURED, not hardcoded (design review B2).** The peek and medium values
+above are starting points, not final numbers. Size the medium detent from the actual rendered
+content — search field + exactly three rows + padding — and feed the measured value into
+`.height(...)`, so the "search + three rows and no more" promise survives Dynamic Type instead of
+silently breaking at accessibility text sizes. Peek must clear a full 44pt touch target plus the
+grabber. Measure via `.onGeometryChange` (iOS 16+) or a `GeometryReader` background preference on
+the content stack; clamp the result so a runaway text size can't drive the medium detent past
+`.large`.
 `.presentationBackgroundInteraction` is the iOS 16.4+ API Apple built for exactly this "Maps-style
 persistent search sheet" pattern — this is the supported path, not a workaround. `.interactiveDismissDisabled`
 keeps it from being swiped away to nothing, matching Apple Maps (there is always at least a peek).
