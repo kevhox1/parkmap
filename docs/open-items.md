@@ -114,6 +114,21 @@ before the next build.
 
 ---
 
+## 🖥 PENDING KEVIN'S MAC — surface this the moment he says he's back on a Mac
+
+**PR #83 — dark mode default.** Compiles unverified; needs `xcodebuild test` + a simulator smoke.
+The distinctive check: **set the simulator to Light appearance and confirm the app still renders
+dark** — that's the actual behavior under test. Command is in the session; regenerate if needed.
+
+```
+git fetch origin && git checkout -B ios/ft20-dark-mode-default origin/ios/ft20-dark-mode-default
+```
+
+Kevin (2026-08-19): *"I will commit later. Not on Mac. When I mention I am back on Mac next please
+remind me and send me the code."* **Honor that — don't wait to be asked.**
+
+---
+
 ## 🟡 ACTIVE — FT-20, backburner LIFTED 2026-08-19
 
 Kevin had the design discussion and approved. **All six design decisions are settled** — see
