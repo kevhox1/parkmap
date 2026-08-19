@@ -70,11 +70,17 @@ enum BrowseSheetDetentMath {
     /// separately via `@ScaledMetric` — see `BrowseNavigationSheet.actionListHeight` — this
     /// covers only the chrome AROUND the rows, not the rows themselves).
     ///
-    /// [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK] This is an estimate of
-    /// `.insetGrouped`'s real section top/bottom inset, not something read off rendered
-    /// UIKit chrome (no simulator available to measure it precisely). If Kevin's on-device
-    /// smoke shows the 3rd row clipped, or a sliver of dead space below it, adjust this one
-    /// constant — `BrowseSheetDetentMath`'s own tests don't (and can't) pin its exact value.
+    /// ⚠️ [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK — this is a GUESS, not a measured
+    /// constant]. `24` is an unverified estimate of `.insetGrouped`'s real section
+    /// top/bottom inset, not something read off rendered UIKit chrome — this machine has no
+    /// simulator to measure it precisely, and real-world `.insetGrouped` section insets are
+    /// commonly larger than this (often 35–50pt combined top+bottom, depending on iOS
+    /// version). Do NOT treat this value as trustworthy until Kevin's on-device smoke
+    /// explicitly confirms it: check that the 3rd row (Parking 101) isn't clipped and there
+    /// is no dead space below it, at default Dynamic Type, before relying on this number for
+    /// anything. If the smoke shows either symptom, adjust this one constant —
+    /// `BrowseSheetDetentMath`'s own unit tests don't (and structurally can't) pin its exact
+    /// value, since it's a physical UIKit layout constant, not derivable logic.
     static let listSectionChromeAllowance: CGFloat = 24
 
     /// Peek height = grabber/inset allowance + the measured height of the persistent
@@ -310,8 +316,19 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     /// size (e.g., AX3) before merge" — this machine has no simulator. Kevin/QA: please
     /// confirm at AX3 that the medium detent still reads as "search + three rows," not a
     /// clipped or scroll-required list, before sign-off.
+    ///
+    /// Reads the height off the app's active `UIWindowScene` rather than `UIScreen.main`
+    /// (QA docs/qa/ft20-stream-a-pr85.md Finding #5 — `UIScreen.main` is on Apple's
+    /// deprecation-direction path since iOS 13; per-scene sizing is the supported
+    /// replacement). Falls back to `UIScreen.main` only if no window scene is connected yet
+    /// (e.g. a very early launch timing edge case), which this single-window/single-scene
+    /// app should never actually hit in practice.
     private static var maxAllowedMediumHeight: CGFloat {
-        UIScreen.main.bounds.height * 0.75
+        let screenHeight = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first?.screen.bounds.height
+            ?? UIScreen.main.bounds.height
+        return screenHeight * 0.75
     }
 }
 

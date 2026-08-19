@@ -224,11 +224,17 @@ enum ActiveSheet: Identifiable {
     /// text (spec §4.1/§4.3).
     case blockRestrictionReport(segments: [Segment])
     /// FT-20 Stream A: browse mode's persistent bottom-sheet rest state (spec §4.1, Option
-    /// A). Unlike every other case above, this one is NOT transient — under the sheet
-    /// model, dismissing any other case returns `activeSheet` to `.browseNav`, not `nil`
-    /// (see the `.sheet(item:)` `onDismiss` closure and each case's own dismiss target
-    /// below). `nil` is reserved for the two states where the sheet must be fully hidden:
-    /// Drive Mode active, or FT-15 block-select mode active (spec §5/§6 — wired by Stream C).
+    /// A). Unlike every other case above, this one is designed to NOT be transient — under
+    /// the end-state sheet model, dismissing any other case returns `activeSheet` to
+    /// `.browseNav`, not `nil` (see the `.sheet(item:)` `onDismiss` closure and each case's
+    /// own dismiss target below). `nil` is reserved for the two states where the sheet must
+    /// be fully hidden: Drive Mode active, or FT-15 block-select mode active (spec §5/§6 —
+    /// wired by Stream C).
+    ///
+    /// That end-state behavior is gated behind `ft20BrowseSheetEnabled` (see its doc comment
+    /// near `dismissTargetOutsideBrowseNav`) until Stream C lands the safety net this rest
+    /// state depends on. While the gate is `false`, this case is defined but genuinely
+    /// unreachable — every dismiss resolves to `nil`, same as before this case existed.
     case browseNav
 
     var id: String {
@@ -329,9 +335,17 @@ struct ContentView: View {
     ///
     /// FT-20 Stream A note: the default stays `nil` here — flipping the app's cold-launch
     /// rest state to `.browseNav` is Stream C's "mount the sheet" work, not Stream A's.
-    /// Until Stream C lands, `.browseNav` is unreachable (nothing yet sets `activeSheet =
-    /// .browseNav` as an entry point) and every existing sheet flow behaves exactly as
-    /// before.
+    ///
+    /// ⚠️ CORRECTED 2026-08-19 (QA docs/qa/ft20-stream-a-pr85.md Finding #1): an earlier
+    /// version of this comment claimed `.browseNav` was simply "unreachable until Stream C
+    /// lands." That was false — Stream A's own mechanical dismiss-target sweep
+    /// (`dismissTargetOutsideBrowseNav`) made `.browseNav` reachable from every ordinary
+    /// sheet dismissal in the app immediately, trapping users behind an inescapable,
+    /// half-built sheet. The claim is true again now only because of an explicit gate,
+    /// `ft20BrowseSheetEnabled` (see its doc comment, near `dismissTargetOutsideBrowseNav`
+    /// below) — while that gate is `false`, `.browseNav` genuinely cannot be reached by any
+    /// code path, and every existing sheet flow behaves exactly as it did on `main` before
+    /// this PR. Stream C flips the gate.
     @State private var activeSheet: ActiveSheet? = nil
 
     /// FT-20 Stream A (spec §4.1, design-review finding B1/B2): the two CUSTOM
@@ -732,7 +746,13 @@ struct ContentView: View {
                 // `.pinDetail` via `onOpenRestriction`), this closure must NOT clobber that
                 // transition — it only fires for a genuine "nothing is showing anymore"
                 // dismissal.
-                if activeSheet == nil, !driveModeActive, !blockSelectModeActive {
+                //
+                // Also guarded on `ft20BrowseSheetEnabled` (see its doc comment near
+                // `dismissTargetOutsideBrowseNav` below) — this is the SECOND of the two
+                // places in the file that can assign `.browseNav`, and both must be gated
+                // for `.browseNav` to be genuinely unreachable while Stream C hasn't landed
+                // (QA docs/qa/ft20-stream-a-pr85.md Finding #1).
+                if Self.ft20BrowseSheetEnabled, activeSheet == nil, !driveModeActive, !blockSelectModeActive {
                     activeSheet = .browseNav
                 }
             }) { sheet in sheetContent(sheet) }
@@ -845,6 +865,45 @@ struct ContentView: View {
         )
     }
 
+    // MARK: - FT-20 Stream C activation gate
+
+    /// **Stream C flips this to `true`.** Added in response to QA docs/qa/ft20-stream-a-pr85.md
+    /// Finding #1 (blocking): Stream A's mechanical "dismiss → `.browseNav`, not `nil`" sweep
+    /// (§4.1) is correct against the END STATE of this spec, but the end state assumes Stream
+    /// C's safety net — cold-launch mount, the Drive-Mode boundary, the FT-15 block-select
+    /// boundary — already exists. It doesn't yet. Landing the sweep un-gated made `.browseNav`
+    /// (an `.interactiveDismissDisabled(true)` sheet with no dismiss path Stream A builds)
+    /// reachable from every ordinary sheet dismissal in the shipped app — Settings, Cancel on
+    /// `ParkConfirmView`, Skip on `ParkUntilSheet`, Done on Parking 101, etc. — trapping the
+    /// user with no way back to the map short of a force-quit.
+    ///
+    /// While `false` (Stream A's shipped state): `.browseNav` is genuinely, exhaustively
+    /// unreachable — not just "usually" unreachable. There are exactly two places in this file
+    /// that can ever assign `activeSheet = .browseNav`, and both check this gate:
+    ///   1. `dismissTargetOutsideBrowseNav`, immediately below — every one of the 14 existing
+    ///      sheet-case dismiss closures, plus `dismissBlockDetail()`, reads this.
+    ///   2. The `.sheet(item: $activeSheet, onDismiss:)` backstop in `body` above, which
+    ///      otherwise assigns `.browseNav` for cases with no dismiss closure of their own
+    ///      (`.settings`) and for interactive swipe-dismiss.
+    /// (Verified exhaustive via `grep -n "= \.browseNav" ContentView.swift` — no third site.)
+    /// With the gate `false`, every dismiss in the app resolves to plain `nil`, i.e. exactly
+    /// today's `main` behavior — merging Stream A alone is a no-op for the running app.
+    ///
+    /// **Flipping this to `true` is NOT a one-line change.** Stream C must land ALL of the
+    /// following in the SAME change that flips it, or this regresses to Finding #1's
+    /// trapped-sheet bug:
+    ///   1. Mount `.browseNav` as browse mode's cold-launch rest state (today `activeSheet`
+    ///      defaults to `nil` unconditionally — see its own `@State` doc comment above).
+    ///   2. Wire the Drive-Mode boundary (spec §6, AC-28/AC-29a, design-review S3): force-hide
+    ///      `.browseNav` the instant `driveModeActive` flips `true`; restore it the instant it
+    ///      flips back to `false`, with no frame showing both the outgoing Bottom Dock and the
+    ///      reappearing browse sheet.
+    ///   3. Wire the FT-15 block-select boundary (spec §5.1, AC-23–27, design-review S4):
+    ///      force-hide `.browseNav` the instant `blockSelectModeActive` flips `true` (already
+    ///      partly true — `enterBlockSelectMode()` sets `activeSheet = nil` unconditionally,
+    ///      by design, unaffected by this gate); restore it on exit.
+    private static let ft20BrowseSheetEnabled = false
+
     // MARK: - FT-20 Stream A: sheet-case dismiss target
 
     /// The correct dismiss target for any `ActiveSheet` case OTHER than `.browseNav`
@@ -860,8 +919,12 @@ struct ContentView: View {
     /// spec §5.1) — this property is for sheets DISMISSING back to browse mode's rest
     /// state, not for the FT-15/Drive-Mode boundary's force-hide transitions, which are
     /// Stream C's wiring.
+    ///
+    /// Gated on `ft20BrowseSheetEnabled` (above) — while `false`, always resolves to `nil`,
+    /// so this behaves exactly as it did before this PR's dismiss-target sweep.
     private var dismissTargetOutsideBrowseNav: ActiveSheet? {
-        (driveModeActive || blockSelectModeActive) ? nil : .browseNav
+        guard Self.ft20BrowseSheetEnabled else { return nil }
+        return (driveModeActive || blockSelectModeActive) ? nil : .browseNav
     }
 
     /// True when no sheet is blocking a NEW sheet/mode-entry presentation — i.e.
@@ -1756,7 +1819,15 @@ struct ContentView: View {
     private var driveEntryButton: some View {
         Menu {
             Button {
-                guard activeSheet == nil else { return }
+                // FT-20 Stream A fix (QA docs/qa/ft20-stream-a-pr85.md Finding #2): this
+                // used to guard on `activeSheet == nil`, which was correct when "no sheet
+                // is open" and "activeSheet is nil" meant the same thing. Once
+                // `ft20BrowseSheetEnabled` flips true, they no longer do — `.browseNav` is
+                // non-nil while browse mode is at rest, so a bare `== nil` check would
+                // silently no-op this tap the first time the user dismisses anything.
+                // `noBlockingSheetPresented` treats `.browseNav` the same as `nil`, same
+                // fix already applied to `enterCruiseMode()`.
+                guard noBlockingSheetPresented else { return }
                 showDriveModeDestination = true
             } label: {
                 Label("Drive to a destination", systemImage: "arrow.triangle.turn.up.right.diamond")
@@ -1908,8 +1979,18 @@ struct ContentView: View {
             // prompt is showing), this button tap produces a no-op because SwiftUI's single
             // .sheet(item:) host only presents one sheet at a time; the guard below prevents
             // an activeSheet overwrite while another sheet is already open.
+            //
+            // FT-20 Stream A fix (QA docs/qa/ft20-stream-a-pr85.md Finding #2): this used to
+            // guard on `activeSheet == nil`, which stops being equivalent to "no blocking
+            // sheet is open" once `ft20BrowseSheetEnabled` flips true (`.browseNav` is
+            // non-nil while browse mode is at rest). This is the more serious of the two
+            // stale guards Finding #2 identified: "Park here" is a safety-relevant action
+            // (recording where the driver parked), and a bare `== nil` check would have
+            // silently no-op'd it — no error, no feedback — the first time this fires after
+            // an ordinary sheet dismiss. `noBlockingSheetPresented` treats `.browseNav` the
+            // same as `nil`, same fix already applied to `enterCruiseMode()`.
             Button {
-                guard activeSheet == nil else { return }
+                guard noBlockingSheetPresented else { return }
                 guard let loc = locationService.userLocation else { return }
                 let candidates = findCandidateSegments(
                     lat: loc.latitude,

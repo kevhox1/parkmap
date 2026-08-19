@@ -13,11 +13,17 @@
 //  in this repo and is out of reach on this Linux VPS — it's covered by Kevin's on-device
 //  live-UI smoke per this project's standing protocol, not by these tests.
 //
+//  Also covers `browseSheetDetentSelectionBinding` (QA docs/qa/ft20-stream-a-pr85.md
+//  Finding #4) — its get/set classification logic operates on plain `PresentationDetent`/
+//  `CGFloat` values, not views, so it's unit-testable via `Binding(get:set:)` against a
+//  simple reference-type stand-in for `@State`, with no SwiftUI rendering required either.
+//
 //  [COMPILE-UNVERIFIED] Written with no Xcode/simulator on this machine — Kevin verifies
 //  compile + test pass on his Mac per HANDOFF.md's environment split.
 //
 
 import XCTest
+import SwiftUI
 @testable import WePark
 
 final class BrowseSheetDetentMathTests: XCTestCase {
@@ -164,5 +170,140 @@ final class BrowseSheetDetentMathTests: XCTestCase {
             "because the computed value crept up near ~400pt+, check for an accidental " +
             "reintroduction of `.medium`-shaped sizing (design-review finding B1)."
         )
+    }
+}
+
+// MARK: - browseSheetDetentSelectionBindingTests
+
+/// QA docs/qa/ft20-stream-a-pr85.md Finding #4: `browseSheetDetentSelectionBinding`'s
+/// get/set classification logic is pure Swift operating on `PresentationDetent`/`CGFloat`
+/// values, not views — it doesn't need SwiftUI rendering or a simulator to unit test, unlike
+/// `BrowseNavigationSheet`'s own on-screen behavior. This suite covers the get/set round-trip
+/// and, specifically, the edge case QA flagged as highest-risk: a `newValue` reported to
+/// `set` that doesn't exactly match either measured custom height (e.g. a Dynamic Type change
+/// re-measures `peekHeight`/`mediumHeight` between `get` and the next `set` call).
+///
+/// A minimal reference-type wrapper stands in for `@State` here — `Binding(get:set:)` doesn't
+/// require SwiftUI's property-wrapper machinery, only a place to read/write from, so no view
+/// hosting or ViewInspector-style tooling is needed.
+final class BrowseSheetDetentSelectionBindingTests: XCTestCase {
+
+    private final class KindBox {
+        var kind: BrowseSheetDetentKind
+        init(_ kind: BrowseSheetDetentKind) { self.kind = kind }
+    }
+
+    private func makeBinding(
+        box: KindBox,
+        peekHeight: CGFloat,
+        mediumHeight: CGFloat
+    ) -> Binding<PresentationDetent> {
+        browseSheetDetentSelectionBinding(
+            kind: Binding(get: { box.kind }, set: { box.kind = $0 }),
+            peekHeight: peekHeight,
+            mediumHeight: mediumHeight
+        )
+    }
+
+    // MARK: get
+
+    func testGet_peekKindReturnsHeightDetentAtPeekHeight() {
+        let box = KindBox(.peek)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        XCTAssertEqual(binding.wrappedValue, .height(96))
+    }
+
+    func testGet_mediumKindReturnsHeightDetentAtMediumHeight() {
+        let box = KindBox(.medium)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        XCTAssertEqual(binding.wrappedValue, .height(260))
+    }
+
+    func testGet_largeKindReturnsSystemLarge() {
+        let box = KindBox(.large)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        XCTAssertEqual(binding.wrappedValue, .large)
+    }
+
+    // MARK: set — exact matches
+
+    func testSet_largeValueClassifiesAsLargeKind() {
+        let box = KindBox(.peek)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        binding.wrappedValue = .large
+        XCTAssertEqual(box.kind, .large)
+    }
+
+    func testSet_exactMediumHeightValueClassifiesAsMediumKind() {
+        let box = KindBox(.peek)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        binding.wrappedValue = .height(260)
+        XCTAssertEqual(box.kind, .medium)
+    }
+
+    func testSet_exactPeekHeightValueClassifiesAsPeekKind() {
+        let box = KindBox(.large)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        binding.wrappedValue = .height(96)
+        XCTAssertEqual(box.kind, .peek)
+    }
+
+    // MARK: set — round-trip
+
+    func testSetThenGet_roundTripsForAllThreeKinds() {
+        let box = KindBox(.peek)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+
+        binding.wrappedValue = .large
+        XCTAssertEqual(binding.wrappedValue, .large)
+
+        binding.wrappedValue = .height(260)
+        XCTAssertEqual(binding.wrappedValue, .height(260))
+
+        binding.wrappedValue = .height(96)
+        XCTAssertEqual(binding.wrappedValue, .height(96))
+    }
+
+    // MARK: set — the remeasurement edge case (QA Finding #4's highest-risk scenario)
+
+    /// If a Dynamic Type change re-measures `peekHeight`/`mediumHeight` between when SwiftUI
+    /// last read this binding's `get` and the next `set` callback (e.g. mid-drag, or a
+    /// remeasurement racing a detent-change notification), `newValue` may not exactly equal
+    /// either `.height(peekHeight)` or `.height(mediumHeight)` as currently measured.
+    ///
+    /// This pins the CURRENT (documented, not necessarily desirable) behavior: the `set`
+    /// closure's three-way branch has no explicit "unrecognized value" case — anything that
+    /// isn't `.large` and doesn't exactly equal the current `mediumHeight` falls into the
+    /// `else` branch and is classified as `.peek`. Concretely: a value close to (but not
+    /// exactly) `mediumHeight` — e.g. the medium height as measured a moment ago, before a
+    /// Dynamic Type change nudged it — silently misclassifies a user's medium-detent
+    /// selection as peek. This test exists so a future change to this fallback behavior is a
+    /// deliberate, visible diff here, not a silent behavior change.
+    func testSet_valueNotMatchingEitherCustomHeightFallsBackToPeekKind() {
+        let box = KindBox(.large)
+        // Binding constructed with a STALE mediumHeight (260), simulating the get/set race:
+        // the reported newValue reflects a value from BEFORE a remeasurement changed
+        // mediumHeight, so it no longer exactly equals the binding's current mediumHeight.
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 300)
+        binding.wrappedValue = .height(260)  // close to, but not exactly, the current mediumHeight (300)
+        XCTAssertEqual(
+            box.kind, .peek,
+            "Current (documented) behavior: a newValue that doesn't exactly match `.large` " +
+            "or the current mediumHeight falls through to `.peek`, even when it's a stale " +
+            "medium-detent value rather than a genuine peek selection. See QA " +
+            "docs/qa/ft20-stream-a-pr85.md Finding #4 — flagged as a real misclassification " +
+            "risk, not fixed here (no behavior change), only pinned so a regression (or a " +
+            "future fix) is a visible diff against this test."
+        )
+    }
+
+    /// Same scenario as above but for an arbitrary, unrelated height value (not close to
+    /// either detent) — confirms the fallback-to-`.peek` behavior isn't specific to
+    /// "near-miss" values.
+    func testSet_arbitraryUnmatchedHeightFallsBackToPeekKind() {
+        let box = KindBox(.medium)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        binding.wrappedValue = .height(500)
+        XCTAssertEqual(box.kind, .peek)
     }
 }
