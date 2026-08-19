@@ -22,13 +22,14 @@
 //  (`init(supabaseURL:supabaseAnonKey:testStorage:fetch:)`) exists specifically so this file
 //  never needs to name an `Auth`-module type — every parameter here is `Foundation`/WePark-local.
 //
-//  Test inventory (6 tests):
+//  Test inventory (7 tests):
 //    1. testEnsureSession_noPersistedSession_signsInAnonymously        (AC-A1)
 //    2. testEnsureSession_validPersistedSession_doesNotHitNetwork      (AC-A2)
-//    3. testEnsureSession_httpFailure_staysUnauthenticated             (AC-A4, fail-silently)
-//    4. testValidAccessToken_returnsCurrentSessionToken                (AC-A1 support)
-//    5. testAutoResignOnSignedOut_reestablishesAnonymousSession        (AC-A3)
-//    6. testKeychainNotUserDefaults_noLegacyKeysWritten                (AC-A2, negative half)
+//    3. testEnsureSession_expiredToken_callsRefresh                    (AC-A2 support — see below)
+//    4. testEnsureSession_httpFailure_staysUnauthenticated             (AC-A4, fail-silently)
+//    5. testValidAccessToken_returnsCurrentSessionToken                (AC-A1 support)
+//    6. testAutoResignOnSignedOut_reestablishesAnonymousSession        (AC-A3)
+//    7. testKeychainNotUserDefaults_noLegacyKeysWritten                (AC-A2, negative half)
 //
 //  AC-A4's "no Calendar.current usage introduced" is verified by code review of the diff
 //  (SupabaseAuthService.swift / SupabaseClients.swift contain zero Calendar references — all
@@ -36,9 +37,17 @@
 //  are Date()-based, not Calendar-based), not by a test in this file.
 //
 //  Baseline before this file existed: the 5 tests removed from Tier3AuthReactionsTests.swift's
-//  old SupabaseAuthServiceTests class. This file replaces them 1:1 in intent and adds AC-A3
-//  (auto-resign on .signedOut, new — the old raw-URLSession implementation had no auth-state
-//  stream to test) and an explicit AC-A2 negative-half check.
+//  old SupabaseAuthServiceTests class. This file originally replaced 4 of those 5 in intent and
+//  added AC-A3 (auto-resign on .signedOut, new — the old raw-URLSession implementation had no
+//  auth-state stream to test) and an explicit AC-A2 negative-half check — but silently DROPPED
+//  the 5th (`testEnsureSession_expiredToken_callsRefresh`, the "session exists, is expired,
+//  refresh succeeds" path — the single most common non-first-launch session state in
+//  production), a real coverage loss flagged by QA
+//  (docs/qa/supabase-auth-keychain-stream-a-qa.md, Finding #1: net test count went +1, which
+//  masked the loss unless you diffed test *names*, not just counts). Test #3 above
+//  (`testEnsureSession_expiredToken_callsRefresh`) restores equivalent coverage — added during
+//  supabase-swift Stream B (Realtime) since that pass is in the same SDK context, per the QA
+//  report's own recommendation to fold the fix in there rather than opening a separate PR.
 //
 //  COMPILE-UNVERIFIED — see SupabaseAuthService.swift's header for the full disclosure. The
 //  Session/User JSON shape below was verified against supabase-swift's actual Decodable
@@ -233,6 +242,74 @@ final class SupabaseAuthServiceTests: XCTestCase {
             "AC-A2: must not touch the network when a valid session is already in storage")
         XCTAssertEqual(secondLaunch.currentUserId, kUser1,
             "AC-A2: must restore the persisted userId, not create a new anonymous one")
+    }
+
+    // MARK: Restored coverage (QA Finding #1): session exists, is expired, refresh succeeds
+
+    /// The "session exists, is expired, refresh succeeds" path — the single most common
+    /// non-first-launch session state in production (every time the app is reopened after the
+    /// ~1hr access-token lifetime has passed, but the refresh token is still valid). This is
+    /// DISTINCT from `testAutoResignOnSignedOut_reestablishesAnonymousSession`, which exercises
+    /// the refresh-FAILS case: here the refresh endpoint succeeds and the EXISTING session must
+    /// be restored, not replaced with a new anonymous identity.
+    ///
+    /// Same "seed via a real signup round-trip, then construct a second instance sharing that
+    /// storage to simulate a relaunch" technique as
+    /// `testEnsureSession_validPersistedSession_doesNotHitNetwork` above (see that test's doc
+    /// comment for why this file never hand-crafts the storage JSON shape directly) — the seed
+    /// session's `expiresInSeconds` is set to 10s, inside the SDK's own `defaultExpiryMargin`
+    /// (30s, `Internal/Constants.swift` — confirmed via `Session.isExpired`,
+    /// `Sources/Auth/Types.swift:143-146`: "expired or will expire within the next 30 seconds"),
+    /// so `AuthClient.session`'s `SessionManager.session()` treats it as needing a refresh on
+    /// the very next `ensureSession()` call, without waiting for outright wall-clock expiry.
+    func testEnsureSession_expiredToken_callsRefresh() async {
+        let storage = InMemoryAuthStorage()
+
+        let seedSession = seamMockSession()
+        SeamMockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             sessionJSON(userId: kUser1, expiresInSeconds: 10))
+        }
+        let seeder = SupabaseAuthService(
+            supabaseURL: kURL,
+            supabaseAnonKey: kAnonKey,
+            testStorage: storage,
+            fetch: { try await seedSession.data(for: $0) }
+        )
+        await seeder.ensureSession()
+        XCTAssertEqual(seeder.currentUserId, kUser1, "sanity: the near-expiry seed session should have applied once")
+
+        // "Relaunch": a fresh service instance reading the same (now within-refresh-margin)
+        // storage. The refresh endpoint SUCCEEDS this time (the distinguishing factor vs.
+        // testAutoResignOnSignedOut_reestablishesAnonymousSession's refresh-fails fixture).
+        var capturedPaths: [String] = []
+        let session = seamMockSession()
+        SeamMockURLProtocol.requestHandler = { request in
+            capturedPaths.append(request.url?.path ?? "")
+            // Refresh succeeds: same user, fresh token/expiry.
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    sessionJSON(userId: kUser1, expiresInSeconds: 3600))
+        }
+        let service = SupabaseAuthService(
+            supabaseURL: kURL,
+            supabaseAnonKey: kAnonKey,
+            testStorage: storage,
+            fetch: { try await session.data(for: $0) }
+        )
+
+        // Unlike the .signedOut auto-resign path, a successful refresh is applied directly
+        // within ensureSession()'s own call stack (authClient.session returns the refreshed
+        // Session synchronously to its caller) — no polling needed here.
+        await service.ensureSession()
+
+        XCTAssertTrue(capturedPaths.contains { $0.contains("/token") },
+            "A near-expiry session must trigger a refresh call (POST /auth/v1/token?grant_type=refresh_token), got paths: \(capturedPaths)")
+        XCTAssertFalse(capturedPaths.contains { $0.contains("/signup") },
+            "A successful refresh must restore the EXISTING session, not fall back to a new anonymous signup")
+        XCTAssertEqual(service.currentUserId, kUser1,
+            "A successful refresh must restore the same userId, not create a new anonymous identity")
+        XCTAssertTrue(service.isAuthenticated,
+            "isAuthenticated must be true after a successful refresh")
     }
 
     // MARK: AC-A4: HTTP failure on sign-in → fails silently, stays unauthenticated

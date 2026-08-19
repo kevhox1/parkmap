@@ -2,21 +2,14 @@
 //  SupabaseClients.swift
 //  WePark
 //
-//  supabase-swift adoption — Stream A (Auth/Keychain).
-//  Spec: docs/supabase-swift-realtime-spec.md §3.4, §4, §11 (Stream A scope).
+//  supabase-swift adoption — Stream A (Auth/Keychain) + Stream B (Realtime).
+//  Spec: docs/supabase-swift-realtime-spec.md §3.4, §4, §11.
 //
-//  App-lifetime holder for the supabase-swift SDK client instances used by WePark. This PR
-//  (Stream A) wires only `AuthClient` (the `Auth` product, linked in Phase 0 — commit
-//  `5e33c141`). Stream B (Realtime wiring, sequenced behind FT-15's CommunityPinService.swift
-//  changes landing on main per spec §11) is expected to extend this file with a
-//  `realtimeClient: RealtimeClientV2` property, built the same way and injected into
-//  CommunityPinService alongside SupabaseAuthService's authClient.
-//
-//  NOT added here: a `RealtimeClientV2` property/construction. Guessing at Realtime's exact
-//  2.55.0 init signature is out of Stream A's scope, and this PR is COMPILE-UNVERIFIED as it
-//  stands (no Xcode/simulator in this environment) — better to leave that surface for whoever
-//  picks up Stream B to verify against the real SDK docs/compiler at that time, per the
-//  "flag uncertainty, don't guess" norm (.claude/agents/ios-engineer.md).
+//  App-lifetime holder for the supabase-swift SDK client instances used by WePark. Constructed
+//  ONCE in `WeParkApp.swift` and injected into `SupabaseAuthService` (`authClient`) and
+//  `CommunityPinService` (`realtimeClient`, via `makeRealtimePinChannel()`) — matches
+//  `RealtimeClientV2`'s own doc comment: "Create one client per Supabase project and reuse it
+//  across your app."
 //
 //  Session storage: Keychain-backed by default via `AuthClient.Configuration.defaultLocalStorage`
 //  — the SDK's own platform-appropriate default, which resolves to `KeychainLocalStorage()` on
@@ -26,9 +19,28 @@
 //  SupabaseAuthService.swift's header for the no-migration-shim decision (Kevin is the sole
 //  TestFlight user; a fresh anonymous session on upgrade is acceptable).
 //
+//  Stream B (Realtime): `realtimeClient: RealtimeClientV2` is constructed with ONLY the
+//  `apikey` header — no `accessToken`/`Authorization` — deliberately mirroring the REST fetch
+//  path's own "no Authorization header, anon key only" convention for reads (AC-D21,
+//  `CommunityPinService.buildOpenDataRequest`'s doc comment). `pins_select_public` already
+//  permits anonymous SELECT on non-`parked_car` pins; Realtime authorizes each subscribed row
+//  against the same RLS using the anon key's own embedded `role: anon` claim (Supabase's anon
+//  key IS itself a signed JWT), so no per-user JWT plumbing is needed here. If a future write
+//  path ever needs Realtime to see the authenticated user's identity, wire
+//  `RealtimeClientOptions.accessToken` to `authClient.session.accessToken` at that time — not
+//  done now, to keep this PR's read-path behavior byte-consistent with the existing REST read
+//  path's own documented invariant.
+//
+//  `makeRealtimePinChannel()` returns the `RealtimePinSubscribing` PROTOCOL type (declared in
+//  `Services/RealtimePinChannel.swift`), not the concrete `SupabasePinRealtimeChannel` class —
+//  this is deliberate so `WeParkApp.swift` / `ContentView.swift` never need `import Realtime`
+//  themselves just to wire the pin service up (same reasoning `makeAuthService()` applies to
+//  keep those files `import Auth`-free).
+//
 
 import Foundation
 import Auth
+import Realtime
 
 /// App-lifetime holder for the supabase-swift SDK client instances used by WePark.
 ///
@@ -40,6 +52,11 @@ struct SupabaseClients: Sendable {
     /// The SDK's Auth client. Keychain-backed session storage by default, `apikey` header
     /// attached to every request (matches the prior raw-URLSession implementation's header).
     let authClient: AuthClient
+
+    /// The SDK's Realtime client — one WebSocket connection shared for this Supabase
+    /// project's lifetime (Stream B). `apikey` header only — see this file's header comment
+    /// for why no `accessToken`/JWT is wired here.
+    let realtimeClient: RealtimeClientV2
 
     // MARK: - Production init
 
@@ -80,5 +97,48 @@ struct SupabaseClients: Sendable {
             localStorage: localStorage,
             fetch: fetch
         )
+        // NOT changed here: `emitLocalSessionAsInitialSession` (Stream A QA Finding #2,
+        // docs/qa/supabase-auth-keychain-stream-a-qa.md) stays at the SDK default (`false`).
+        // Evaluated flipping it to `true` while touching this file for Stream B — traced
+        // `AuthClient.emitInitialSession`'s actual implementation at the pinned revision
+        // (Sources/Auth/AuthClient.swift:1527-1560) and confirmed the "no persisted session"
+        // case is identical either way, but the "persisted, EXPIRED session" case genuinely
+        // changes shape: `true` emits `.initialSession` with the STALE session first
+        // (synchronously), then refreshes in a background Task — vs. today's `false` behavior,
+        // which only ever emits `.initialSession` with an already-fresh (or already-cleaned-up)
+        // session. `validAccessToken()` itself isn't affected (it always re-checks via
+        // `authClient.session`, never trusts the cached `accessToken` property), but this is a
+        // real behavioral change to auth-internals timing, not a pure no-op silence-the-warning
+        // toggle. QA's own note flagged it as "worth re-examining if it's changed later" — this
+        // is exactly that re-examination, and the conclusion is: defer. Out of scope for a
+        // Realtime PR to also change Auth event-ordering semantics without a dedicated review.
+        // Stream B: one RealtimeClientV2 for the app's lifetime, `apikey` header only — see
+        // this file's header comment for why no accessToken/JWT is wired here. `/realtime/v1`
+        // matches RealtimeClientV2's own doc-comment example
+        // (`https://<project>.supabase.co/realtime/v1`).
+        self.realtimeClient = RealtimeClientV2(
+            url: supabaseURL.appendingPathComponent("realtime/v1"),
+            options: RealtimeClientOptions(headers: ["apikey": supabaseAnonKey])
+        )
+    }
+
+    // MARK: - Factory methods
+
+    /// Builds a `SupabaseAuthService` wrapping this instance's shared `authClient`. Returns the
+    /// concrete type directly (not a protocol) — `SupabaseAuthService`'s public API is already
+    /// stable and byte-identical (AC-A1), so no test-seam abstraction is needed at this
+    /// boundary. Exists so `WeParkApp.swift` never needs `import Auth` itself just to
+    /// construct this.
+    func makeAuthService() -> SupabaseAuthService {
+        SupabaseAuthService(authClient: authClient)
+    }
+
+    /// Builds a `RealtimePinSubscribing`-conforming channel wrapping this instance's shared
+    /// `realtimeClient`. Returns the PROTOCOL type (declared in
+    /// `Services/RealtimePinChannel.swift`), not the concrete `SupabasePinRealtimeChannel`
+    /// class — so `WeParkApp.swift` / `ContentView.swift` never need `import Realtime`
+    /// themselves just to wire `CommunityPinService` up.
+    func makeRealtimePinChannel() -> RealtimePinSubscribing {
+        SupabasePinRealtimeChannel(realtimeClient: realtimeClient)
     }
 }

@@ -12,11 +12,14 @@
 //       1. filming / asp_suspended_today / special_event (source = open_data, not expired, not resolved)
 //       2. enforcement_active / sweeper_passed (source = crowd, lifespan = ephemeral, not expired, not resolved)
 //       3. filming / construction (source = crowd, block-scoped reports, not expired, not resolved) — FT-15/TF2-15
-//   - Periodic refresh (pinRefreshIntervalSeconds) re-fetches the last visible region so
-//     new pins from self + others appear, and expired pins drop, without manual panning.
-//     This is the TF1 stand-in for WebSocket Realtime. The timer fires only when a region
-//     has been fetched at least once and is cancelled/suspended when driveModeActive.
-//   - Realtime subscription stub (activated in sub-PR #1 for crowd ephemeral pins).
+//   - Periodic refresh (pinRefreshIntervalSeconds) re-fetches the last visible region — now a
+//     RECONCILIATION FALLBACK behind real Realtime (below), not the primary freshness
+//     mechanism. Retuned 8s → 45s accordingly (supabase-swift Stream B, spec §6.1). Still
+//     suspended entirely during Drive Mode — see the Realtime section below for why that
+//     remains safe.
+//   - Real WebSocket Realtime subscription on `public.pins` (supabase-swift Stream B — see
+//     "Realtime" section below). STAYS CONNECTED through Drive Mode — this is what replaces
+//     the periodic-refresh suspension as the live-update mechanism while driving (spec §7).
 //   - Client-side expiry filter: removes pins where expiresAt != nil && expiresAt <= nowProvider().
 //   - Publishes `visiblePins: [CommunityPin]` — ContentView observes this.
 //   - Write path: insertCrowdPin / upsertVote / callExtendPinExpiry (authenticated, sub-PR #1).
@@ -26,7 +29,8 @@
 //  Architectural invariants (HANDOFF.md Changelog 2026-05-26, spec §5):
 //   - @MainActor: all visiblePins mutations run on the main actor so SwiftUI reads are safe.
 //   - No Calendar.current — all time math uses nowProvider() (injectable for tests).
-//   - Network path: raw URLSession + Codable (no supabase-swift SPM dep; see spec §9 note).
+//   - REST network path: raw URLSession + Codable (no supabase-swift SPM dep for reads/writes —
+//     spec §2 Out, §6.1, §14: deliberately not migrated to the SDK's PostgREST client).
 //   - Supabase URL + anon key injected at init (read from Config.xcconfig → Info.plist at runtime).
 //   - The key is NEVER hardcoded here. See Config.xcconfig.example for the key names.
 //
@@ -38,11 +42,24 @@
 //   - inject() replaces visiblePins directly with caller-supplied fixtures.
 //   - Used by CommunityPinServiceTests and by ContentView for the sim smoke gate.
 //
-//  Realtime note:
-//   - startRealtime() is ACTIVATED in sub-PR #1 for ephemeral crowd pins.
-//   - Two channels: open_data (Tier 1) + ephemeral crowd (Tier 3).
-//   - Without the supabase-swift SDK, Realtime uses Supabase's REST polling supplement
-//     (the poll path handles live updates; full WebSocket Realtime is the SDK adoption path).
+//  Realtime (supabase-swift Stream B — docs/supabase-swift-realtime-spec.md §5, §7, §8):
+//   - startRealtime() establishes ONE table-wide WebSocket subscription on `public.pins`
+//     (INSERT/UPDATE/DELETE), via the injected `realtimeChannel: RealtimePinSubscribing`
+//     (real impl: `Services/RealtimePinChannel.swift`'s `SupabasePinRealtimeChannel`, wrapping
+//     the supabase-swift SDK's `RealtimeClientV2`/`RealtimeChannelV2`).
+//   - NOT two channels split by `source=eq.open_data` / `lifespan=eq.ephemeral` — an earlier
+//     TODO comment here sketched that design; it was WRONG (§5.1: `postgres_changes` filters
+//     can't express the REST channels' compound predicates) and has been replaced. See the
+//     spec for the full reasoning if this needs revisiting.
+//   - Every event is gated through `RealtimeMergeGate` (pin-type eligibility + viewport,
+//     against `lastFetchedRegion`) before reaching the existing, unmodified
+//     `mergeRealtimeChange(pin:)` (upsert) or the new `removePin(id:)` (delete).
+//   - Stays connected through Drive Mode — the periodic REST poll stays suspended during
+//     Drive Mode (unchanged), but that's now safe because Realtime is the live mechanism, not
+//     the poll (spec §7 — the headline win: enforcement pins used to go fully stale while
+//     circling/driving; they no longer do).
+//   - `disconnectRealtime()`/`reconnectRealtime()` are wired to ContentView's `.background`/
+//     `.active` scenePhase transitions (spec §5.3).
 //
 //  Write-path read path:
 //   - Read path remains raw URLSession with no Authorization header (anon read, AC-D21).
@@ -256,16 +273,25 @@ final class CommunityPinService {
     /// Tests that only exercise the read path can leave this nil.
     let authService: SupabaseAuthService?
 
+    /// Realtime subscription abstraction (supabase-swift Stream B). Injectable so tests can
+    /// substitute `MockRealtimePinChannel` (`Services/RealtimePinChannel.swift`, `#if DEBUG`)
+    /// without a live socket. Production call sites (`ContentView`, via `WeParkApp`'s shared
+    /// `SupabaseClients.makeRealtimePinChannel()`) inject a real `SupabasePinRealtimeChannel`
+    /// sharing the app-lifetime `RealtimeClientV2`.
+    let realtimeChannel: RealtimePinSubscribing
+
     // MARK: - Internal state
 
     // MARK: - Periodic refresh interval constant
 
-    /// Interval for the periodic region re-fetch (Fix 2 / TF1 Realtime stand-in).
-    /// Set to 8s so other users' fresh reports appear in <10s instead of ~25–35s.
-    /// This is still the TF1 polling stand-in; real-time push via the supabase-swift
-    /// SDK WebSocket Realtime is the TF2 upgrade path that will replace this timer.
+    /// Interval for the periodic region re-fetch (Fix 2).
+    /// Retuned 8s → 45s (supabase-swift Stream B, spec §6.1) now that real WebSocket
+    /// Realtime (below) is the PRIMARY freshness mechanism — this poll is a reconciliation
+    /// fallback: it catches anything a dropped/reconnecting socket missed, at a much lower
+    /// cadence than when it was the only live-update path. First-pass number, not measured
+    /// (spec §13 OQ-1) — tune post-launch same as every other named constant in this codebase.
     /// Named constant so it can be referenced in tests without magic numbers.
-    static let pinRefreshIntervalSeconds: TimeInterval = 8
+    static let pinRefreshIntervalSeconds: TimeInterval = 45
 
     /// In-flight debounce task. Cancelled and replaced on each `onRegionChanged` call.
     private var fetchTask: Task<Void, Never>? = nil
@@ -307,18 +333,30 @@ final class CommunityPinService {
     ///     NEVER hardcode this value in source.
     ///   - nowProvider: Injectable time source. Default `{ Date() }`.
     ///   - urlSession: Injectable URL session. Default `URLSession.shared`.
+    ///   - realtimeChannel: Injectable Realtime subscription. Default `nil`, in which case a
+    ///     standalone `SupabasePinRealtimeChannel` is constructed from `supabaseURL`/
+    ///     `supabaseAnonKey` (mirrors `authService`'s own "default nil, real value can't be a
+    ///     plain default-argument expression" pattern — a real Realtime channel needs
+    ///     `supabaseURL`/`supabaseAnonKey`, which aren't available in a default-argument
+    ///     expression referencing sibling parameters). Production call sites should prefer
+    ///     passing `SupabaseClients.makeRealtimePinChannel()` instead, so the app shares one
+    ///     `RealtimeClientV2` for its whole lifetime rather than each service standing up its
+    ///     own socket.
     init(
         supabaseURL: URL,
         supabaseAnonKey: String,
         nowProvider: @escaping () -> Date = { Date() },
         urlSession: URLSession = .shared,
-        authService: SupabaseAuthService? = nil
+        authService: SupabaseAuthService? = nil,
+        realtimeChannel: RealtimePinSubscribing? = nil
     ) {
         self.supabaseURL = supabaseURL
         self.supabaseAnonKey = supabaseAnonKey
         self.nowProvider = nowProvider
         self.urlSession = urlSession
         self.authService = authService
+        self.realtimeChannel = realtimeChannel
+            ?? SupabasePinRealtimeChannel(supabaseURL: supabaseURL, supabaseAnonKey: supabaseAnonKey)
     }
 
     /// Convenience initializer that reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` from
@@ -335,11 +373,21 @@ final class CommunityPinService {
     /// Note: This convenience init no longer creates a default SupabaseAuthService
     /// internally (AC-A5: single SupabaseClient/auth instance per app lifetime).
     /// The authService is injected to ensure the same session is shared across all callers.
-    convenience init(authService: SupabaseAuthService? = nil) {
+    ///
+    /// - Parameter realtimeChannel: See the designated init's doc comment. `ContentView`
+    ///   passes `SupabaseClients.makeRealtimePinChannel()` explicitly rather than relying on
+    ///   this convenience init's `nil` default, so the app's one shared `RealtimeClientV2` is
+    ///   reused (spec §3.4) instead of a second, standalone socket being opened.
+    convenience init(authService: SupabaseAuthService? = nil, realtimeChannel: RealtimePinSubscribing? = nil) {
         let urlString = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String ?? ""
         let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String ?? ""
         let resolvedURL = URL(string: urlString) ?? URL(string: "https://placeholder.supabase.co")!
-        self.init(supabaseURL: resolvedURL, supabaseAnonKey: key, authService: authService)
+        self.init(
+            supabaseURL: resolvedURL,
+            supabaseAnonKey: key,
+            authService: authService,
+            realtimeChannel: realtimeChannel
+        )
     }
 
     // MARK: - Region change entry point
@@ -436,27 +484,147 @@ final class CommunityPinService {
         periodicRefreshTask = nil
     }
 
-    // MARK: - Realtime subscription (activated in sub-PR #1)
+    // MARK: - Realtime subscription (supabase-swift Stream B)
 
-    /// Activates Supabase Realtime subscriptions for community pins.
+    /// The chain "tail" — the most recently enqueued Realtime lifecycle operation, whether it
+    /// was created by `startRealtime()` or `disconnectRealtime()`. Every new lifecycle call
+    /// captures this BEFORE creating its own `Task`, and that new `Task`'s body `await`s the
+    /// captured predecessor's `.value` as its very first line, before doing any real work. That
+    /// is what actually serializes connect/disconnect/reconnect against each other (QA finding
+    /// #1, PR #84 pass 1 — see `docs/qa/realtime-stream-b-pr84.md`).
     ///
-    /// Sub-PR #1 activates this for two channels:
-    ///   - Channel 1: open_data pins (Tier 1 — filming, special_event, asp_suspended_today).
-    ///   - Channel 2: ephemeral crowd pins (Tier 3 — enforcement_active, sweeper_passed).
+    /// Why not just `Task.cancel()` (the pre-fix approach)? `Task.cancel()` is cooperative, and
+    /// neither `RealtimePinSubscribing.connect(...)` nor `.disconnect()` check
+    /// `Task.isCancelled` anywhere in their implementations — so cancelling the *wrapper* Task
+    /// does not interrupt the in-flight `await realtimeChannel.connect(...)` /
+    /// `await realtimeChannel.disconnect()` call inside it. The cancelled Task's underlying
+    /// network call kept running in the background and could complete AFTER a newly-started
+    /// operation, racing it. On a fast `.active → .background → .active` scenePhase flap (a
+    /// real app-switch, Siri, or an incoming-call banner), that let the losing `disconnect()`'s
+    /// `unsubscribe()`/`realtimeClient.disconnect()` land *after* the new `connect()`'s
+    /// `subscribeWithError()` — and `connect()`'s own idempotency guard
+    /// (`ch.status != .subscribed`, `RealtimePinChannel.swift`) could read a stale `.subscribed`
+    /// status left over from before the race and skip re-subscribing entirely, while the
+    /// trailing disconnect tore the socket down moments later. End state: this service believed
+    /// Realtime was live while the socket was actually dead, with no self-detection until a
+    /// full clean background/foreground cycle — silently defeating the whole point of this
+    /// feature during Drive Mode, when the fallback poll is also suspended.
     ///
-    /// Without the supabase-swift SDK, full WebSocket Realtime is not wired here.
-    /// The polling path (onRegionChanged, 800ms debounce) serves as the live-update
-    /// mechanism for TF1. Full WebSocket Realtime is the SDK-adoption fast-follow (see PR §9).
+    /// Chaining instead of cancelling is also the semantically correct behavior, not just the
+    /// safe one: every requested operation still runs, in the order it was requested, so a
+    /// disconnect queued right after a connect still disconnects the freshly-connected socket
+    /// rather than being silently dropped.
+    private var realtimeLifecycleTask: Task<Void, Never>?
+
+    /// The `Task` created by the most recent `startRealtime()` call. `internal` (not
+    /// `private`) so tests can `await service.realtimeConnectTask?.value` to deterministically
+    /// wait for the ENTIRE chain up to and including this connect — because this Task's body
+    /// awaits `realtimeLifecycleTask`'s prior value first, awaiting `.value` here also waits
+    /// for any predecessor `disconnectRealtime()` to have fully finished. Mirrors
+    /// `periodicRefreshTask`'s own "narrowest access widening for test assertions" precedent
+    /// above.
+    var realtimeConnectTask: Task<Void, Never>? = nil
+
+    /// The `Task` created by the most recent `disconnectRealtime()` call. Same `internal`-for-
+    /// tests rationale and same "awaiting `.value` waits for the whole chain up to this point"
+    /// property as `realtimeConnectTask`.
+    var realtimeDisconnectTask: Task<Void, Never>? = nil
+
+    /// Establishes the real Supabase Realtime WebSocket subscription on `public.pins`.
     ///
-    /// TODO (SDK fast-follow): Replace stub with supabase-swift RealtimeChannel subscriptions:
-    ///   Channel 1 filter: "source=eq.open_data"
-    ///   Channel 2 filter: "lifespan=eq.ephemeral"
-    ///   Both fire mergeRealtimeChange(pin:) on INSERT/UPDATE events.
-    ///   The mergeRealtimeChange path (below) handles both channels identically.
+    /// Design (spec §5.1): ONE table-wide subscription, `event: *` (insert/update/delete) —
+    /// NOT the two-channel `source=eq.open_data` / `lifespan=eq.ephemeral` split an earlier
+    /// version of this comment sketched. `postgres_changes` filters can only express
+    /// single-column comparisons — they cannot reproduce the REST channels' compound
+    /// predicates (`resolved_at IS NULL AND (expires_at IS NULL OR expires_at > now())`), so
+    /// that two-channel design would have silently pushed resolved/expired rows straight into
+    /// `visiblePins`. All filtering (pin-type eligibility, viewport, expiry, resolved-at)
+    /// happens client-side instead, via `RealtimeMergeGate` in front of the existing,
+    /// unmodified `mergeRealtimeChange(pin:)` and the new `removePin(id:)`.
+    ///
+    /// Called once at launch (`ContentView.performLaunchSetup`) and again by
+    /// `reconnectRealtime()` on every foreground transition. Safe to call redundantly —
+    /// `RealtimePinSubscribing.connect` is documented as idempotent. Serialized against any
+    /// in-flight `disconnectRealtime()` via `realtimeLifecycleTask` (see its doc comment) —
+    /// this Task does not start its own `connect()` work until any prior lifecycle operation
+    /// has fully completed.
     func startRealtime() {
-        // Polling path is the active update mechanism for TF1 (onRegionChanged).
-        // Full WebSocket Realtime requires the supabase-swift SDK (SPM adoption fast-follow).
-        // mergeRealtimeChange(pin:) is implemented and tested below — ready for activation.
+        let predecessor = realtimeLifecycleTask
+        let task = Task { [weak self] in
+            await predecessor?.value
+            guard let self else { return }
+            await self.realtimeChannel.connect(
+                onUpsert: { [weak self] pin in
+                    self?.handleRealtimeUpsert(pin)
+                },
+                onDelete: { [weak self] id in
+                    self?.removePin(id: id)
+                }
+            )
+        }
+        realtimeLifecycleTask = task
+        realtimeConnectTask = task
+    }
+
+    /// Tears down the Realtime WebSocket. Wired to `ContentView`'s new `.onChange(of:
+    /// scenePhase)` `.background` branch (spec §5.3) — iOS suspends/kills background socket
+    /// activity for an app with no background-execution entitlement anyway; disconnecting
+    /// explicitly avoids the socket dying in an ambiguous half-open state. Serialized against
+    /// any in-flight `startRealtime()` via `realtimeLifecycleTask` (see its doc comment).
+    func disconnectRealtime() {
+        let predecessor = realtimeLifecycleTask
+        let task = Task { [weak self] in
+            await predecessor?.value
+            await self?.realtimeChannel.disconnect()
+        }
+        realtimeLifecycleTask = task
+        realtimeDisconnectTask = task
+    }
+
+    /// Re-establishes the Realtime WebSocket. Wired to `ContentView`'s existing `.active`
+    /// scenePhase branch (spec §5.3), alongside a one-shot `refetchCurrentRegion()` catch-up
+    /// fetch for whatever changed on `public.pins` while backgrounded (belt-and-suspenders).
+    /// Goes through `startRealtime()`, so it inherits the same serialization against any
+    /// still-in-flight `disconnectRealtime()` from a fast scenePhase flap.
+    func reconnectRealtime() {
+        startRealtime()
+    }
+
+    /// Gates an incoming Realtime upsert (INSERT or UPDATE) event through
+    /// `RealtimeMergeGate` before it reaches the existing, unmodified
+    /// `mergeRealtimeChange(pin:)` (spec §8.2 gap #1 — Realtime has no server-side
+    /// bounding-box filter, so every change to `public.pins` city-wide reaches every
+    /// subscribed client; this is the client-side stand-in).
+    ///
+    /// A `nil` `lastFetchedRegion` (no region fetched yet — e.g. Realtime connects before the
+    /// first `onRegionChanged` debounce fires) is treated as "not within region": there is
+    /// nothing on-screen yet to update, and admitting pins before any viewport is known would
+    /// defeat the gate's purpose. The next `onRegionChanged` → `fetchPins` cycle populates
+    /// `visiblePins` from REST as usual once a region is known.
+    private func handleRealtimeUpsert(_ pin: CommunityPin) {
+        guard RealtimeMergeGate.mergeablePinTypes.contains(pin.pinType) else { return }
+        guard let region = lastFetchedRegion,
+              RealtimeMergeGate.isWithinRegion(lat: pin.lat, lng: pin.lng, region: region) else { return }
+        mergeRealtimeChange(pin: pin)
+    }
+
+    /// Removes a pin by ID — the DELETE-event counterpart to `mergeRealtimeChange(pin:)`
+    /// (spec §8.2 gap #2). A Postgres Realtime DELETE payload, without `REPLICA IDENTITY FULL`
+    /// (deliberately not set — spec §2 Out), only reliably carries the deleted row's primary
+    /// key, so this cannot reuse `mergeRealtimeChange`'s `CommunityPin`-typed signature. No-op
+    /// if `id` is not currently present in `visiblePins` (e.g. it was never in the fetched
+    /// viewport, or Kevin's manual SQL cleanup deleted a row no client had loaded).
+    func removePin(id: UUID) {
+        visiblePins.removeAll { $0.id == id }
+    }
+
+    /// One-shot re-fetch of the last-known viewport, bypassing the 800ms debounce. Used by
+    /// `ContentView`'s `.active` scenePhase branch as a belt-and-suspenders catch-up for
+    /// whatever changed on `public.pins` while the Realtime socket was disconnected
+    /// (backgrounded) — spec §5.3, §5.4. No-op if no region has been fetched yet.
+    func refetchCurrentRegion() async {
+        guard let region = lastFetchedRegion else { return }
+        await fetchPins(for: region)
     }
 
     // MARK: - Fixture injection (TF1 build + test gate)
@@ -900,12 +1068,15 @@ final class CommunityPinService {
         return trampoline.pins.compactMap { $0 }
     }
 
-    // MARK: - Realtime merge (stub — activated post-prod-apply)
+    // MARK: - Realtime merge core (unchanged by supabase-swift Stream B — see spec §8.1)
 
     /// Merges a Realtime INSERT or UPDATE event into `visiblePins`.
     ///
-    /// Called by the Realtime subscription handler (SDK activation path) or directly
-    /// in tests. Exported as `internal` so tests can exercise the merge logic.
+    /// Called by `handleRealtimeUpsert(_:)` (real Realtime WebSocket path, gated through
+    /// `RealtimeMergeGate` first — supabase-swift Stream B) or directly in tests. Also reused
+    /// by the optimistic-add paths after a successful write (`insertCrowdPin`,
+    /// `insertBlockScopedReport`). Exported as `internal` so tests can exercise the merge
+    /// logic directly.
     ///
     /// On INSERT: append pin (if it passes client-side filter and is a mergeable type).
     /// On UPDATE: replace existing pin by ID; remove if resolved_at is now non-nil.
@@ -918,12 +1089,11 @@ final class CommunityPinService {
         // crowd block-scoped pins. asp_suspended_today is handled via banner supplement,
         // not as a map marker (spec §3), but is still merged into visiblePins for the
         // banner supplement.
-        let mergeableTypes: Set<PinType> = [
-            .filming, .specialEvent, .aspSuspendedToday,    // Tier 1
-            .enforcementActive, .sweeperPassed, .brokenMeter, // Tier 3
-            .construction  // FT-15/TF2-15 — filming is already covered by the Tier 1 line above
-        ]
-        guard mergeableTypes.contains(pin.pinType) else { return }
+        //
+        // Pulled out to `RealtimeMergeGate.mergeablePinTypes` (supabase-swift Stream B, spec
+        // §8.3) — single source of truth shared with `handleRealtimeUpsert(_:)`'s own gate, so
+        // a future pin type is a one-line addition in ONE place, not a re-derivation here too.
+        guard RealtimeMergeGate.mergeablePinTypes.contains(pin.pinType) else { return }
 
         // If resolved: remove.
         if pin.resolvedAt != nil {
