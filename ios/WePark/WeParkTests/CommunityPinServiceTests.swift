@@ -1091,3 +1091,317 @@ final class PinMockURLProtocol: URLProtocol {
 
     override func stopLoading() {}
 }
+
+// MARK: - RealtimeMergeGate tests (supabase-swift Stream B, AC-R2)
+
+/// Pure-function tests for `RealtimeMergeGate` — no `CommunityPinService`, no socket, no
+/// `@MainActor` needed (the gate itself is plain `Foundation`/`MapKit`).
+final class RealtimeMergeGateTests: XCTestCase {
+
+    /// Matches `makeFixturePin`'s hardcoded coordinate (lat 40.7505, lng -73.9965) so gate
+    /// tests and merge-integration tests below can share the same mental model of "the pin".
+    private let region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 40.7505, longitude: -73.9965),
+        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+    )
+
+    /// AC-R2: a pin at the exact center of the viewport is included.
+    func testIsWithinRegion_pinAtCenter_included() {
+        XCTAssertTrue(
+            RealtimeMergeGate.isWithinRegion(
+                lat: region.center.latitude, lng: region.center.longitude, region: region
+            )
+        )
+    }
+
+    /// AC-R2: a pin clearly outside the padded viewport (Los Angeles vs. Manhattan) is excluded.
+    func testIsWithinRegion_pinFarOutside_excluded() {
+        XCTAssertFalse(
+            RealtimeMergeGate.isWithinRegion(lat: 34.0522, lng: -118.2437, region: region)
+        )
+    }
+
+    /// A pin outside the EXACT (unpadded) viewport, but inside the default 1.5x padding, is
+    /// still included — the whole point of padding (spec §3.4: "a pin just outside the
+    /// visible edge doesn't pop in/out on every micro-pan"). Exact half-span here is 0.005°;
+    /// padded (1.5x) half-span is 0.0075°.
+    func testIsWithinRegion_insidePaddingButOutsideExactViewport_included() {
+        let lat = region.center.latitude + 0.006
+        XCTAssertTrue(
+            RealtimeMergeGate.isWithinRegion(lat: lat, lng: region.center.longitude, region: region),
+            "A pin within the 1.5x padded viewport but outside the exact unpadded viewport must still be included"
+        )
+    }
+
+    /// A pin just past the padded boundary is excluded.
+    func testIsWithinRegion_justOutsidePadding_excluded() {
+        let lat = region.center.latitude + 0.0076
+        XCTAssertFalse(
+            RealtimeMergeGate.isWithinRegion(lat: lat, lng: region.center.longitude, region: region)
+        )
+    }
+
+    /// `paddingFactor: 1.0` tests the exact (unpadded) viewport boundary directly.
+    func testIsWithinRegion_exactViewport_paddingFactorOne() {
+        let justInside = region.center.latitude + 0.0049
+        let justOutside = region.center.latitude + 0.0051
+        XCTAssertTrue(
+            RealtimeMergeGate.isWithinRegion(
+                lat: justInside, lng: region.center.longitude, region: region, paddingFactor: 1.0
+            )
+        )
+        XCTAssertFalse(
+            RealtimeMergeGate.isWithinRegion(
+                lat: justOutside, lng: region.center.longitude, region: region, paddingFactor: 1.0
+            )
+        )
+    }
+
+    /// `mergeablePinTypes` mirrors `mergeRealtimeChange`'s pre-existing set (spec §8.3) — a
+    /// personal-only type (`parked_car`) or a durable/non-community type must never be
+    /// Realtime-mergeable.
+    func testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypes() {
+        let expectedIncluded: [PinType] = [
+            .filming, .specialEvent, .aspSuspendedToday,
+            .enforcementActive, .sweeperPassed, .brokenMeter,
+            .construction,
+        ]
+        for type in expectedIncluded {
+            XCTAssertTrue(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must be mergeable")
+        }
+        let expectedExcluded: [PinType] = [.parkedCar, .signCorrection, .blockNote]
+        for type in expectedExcluded {
+            XCTAssertFalse(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must NOT be mergeable")
+        }
+    }
+}
+
+// MARK: - CommunityPinService Realtime wiring tests (supabase-swift Stream B, AC-R1/R3–R7)
+
+/// Exercises `startRealtime()` / `disconnectRealtime()` / `reconnectRealtime()` /
+/// `handleRealtimeUpsert(_:)` / `removePin(id:)` end-to-end against `MockRealtimePinChannel`
+/// (`Services/RealtimePinChannel.swift`, `#if DEBUG`) — no live socket. Actual event delivery
+/// over a real WebSocket is a QA-owned live/simulator check (spec §11, AC-R1), not something
+/// this mock can stand in for.
+@MainActor
+final class CommunityPinServiceRealtimeWiringTests: XCTestCase {
+
+    /// Region centered on `makeFixturePin`'s hardcoded coordinate (lat 40.7505, lng -73.9965).
+    private let manhattanRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 40.7505, longitude: -73.9965),
+        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+    )
+
+    /// Somewhere clearly outside the padded Manhattan viewport.
+    private let losAngelesRegion = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 34.0522, longitude: -118.2437),
+        span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+    )
+
+    /// Builds a `CommunityPinService` wired to `mock` and a `PinMockURLProtocol`-backed
+    /// session that always returns an empty PostgREST array — used by tests that need
+    /// `lastFetchedRegion` populated via a real (mocked) `onRegionChanged` → `fetchPins` cycle,
+    /// since `handleRealtimeUpsert`'s viewport gate reads `lastFetchedRegion` directly rather
+    /// than a separately-injectable value.
+    private func makeService(realtimeChannel: MockRealtimePinChannel) -> CommunityPinService {
+        PinMockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             "[]".data(using: .utf8)!)
+        }
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [PinMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+
+        return CommunityPinService(
+            supabaseURL: kServiceURL,
+            supabaseAnonKey: kAnonKey,
+            nowProvider: { kNow },
+            urlSession: session,
+            realtimeChannel: realtimeChannel
+        )
+    }
+
+    /// Seeds `lastFetchedRegion` via a real (mocked) REST fetch triggered through
+    /// `onRegionChanged`'s normal 800ms-debounced path.
+    private func seedLastFetchedRegion(_ service: CommunityPinService, region: MKCoordinateRegion) async {
+        service.onRegionChanged(region)
+        try? await Task.sleep(for: .milliseconds(1000))
+    }
+
+    /// Starts Realtime and awaits the in-flight connect Task so `MockRealtimePinChannel`'s
+    /// captured closures are guaranteed to be set before the test proceeds — avoids a
+    /// `Task.yield()` timing race against the fire-and-forget `Task { }` inside
+    /// `startRealtime()`.
+    private func startAndAwaitConnect(_ service: CommunityPinService) async {
+        service.startRealtime()
+        await service.realtimeConnectTask?.value
+    }
+
+    // MARK: AC-R1 (unit-testable slice)
+
+    /// `startRealtime()` actually calls `realtimeChannel.connect(...)`.
+    func testStartRealtime_callsConnectOnRealtimeChannel() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+
+        await startAndAwaitConnect(service)
+
+        XCTAssertEqual(mock.connectCallCount, 1)
+        XCTAssertTrue(mock.isConnected)
+    }
+
+    // MARK: AC-R3: eligible, in-viewport upsert reaches mergeRealtimeChange
+
+    func testRealtimeUpsert_eligibleType_inViewport_appearsInVisiblePins() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await seedLastFetchedRegion(service, region: manhattanRegion)
+        await startAndAwaitConnect(service)
+
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture)
+        mock.simulateUpsert(pin)
+
+        XCTAssertTrue(
+            service.visiblePins.contains { $0.id == pin.id },
+            "AC-R3: an INSERT for an eligible, in-viewport pin type must reach mergeRealtimeChange and appear in visiblePins"
+        )
+    }
+
+    // MARK: AC-R4: ineligible type OR out-of-viewport is dropped before mergeRealtimeChange
+
+    func testRealtimeUpsert_ineligibleType_dropped() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await seedLastFetchedRegion(service, region: manhattanRegion)
+        await startAndAwaitConnect(service)
+
+        // parked_car is a personal, non-community pin type — must never arrive via Realtime.
+        let pin = makeFixturePin(pinType: .parkedCar, expiresAt: kFuture)
+        mock.simulateUpsert(pin)
+
+        XCTAssertFalse(
+            service.visiblePins.contains { $0.id == pin.id },
+            "AC-R4: a pin type not in RealtimeMergeGate.mergeablePinTypes must be dropped before reaching mergeRealtimeChange"
+        )
+    }
+
+    func testRealtimeUpsert_eligibleType_outOfViewport_dropped() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        // Seed lastFetchedRegion far from the fixture pin's Manhattan coordinate.
+        await seedLastFetchedRegion(service, region: losAngelesRegion)
+        await startAndAwaitConnect(service)
+
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture)
+        mock.simulateUpsert(pin)
+
+        XCTAssertFalse(
+            service.visiblePins.contains { $0.id == pin.id },
+            "AC-R4: a pin outside the fetched viewport must be dropped before reaching mergeRealtimeChange"
+        )
+    }
+
+    func testRealtimeUpsert_noRegionFetchedYet_dropped() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        // No onRegionChanged call — lastFetchedRegion is nil.
+        await startAndAwaitConnect(service)
+
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture)
+        mock.simulateUpsert(pin)
+
+        XCTAssertFalse(
+            service.visiblePins.contains { $0.id == pin.id },
+            "A Realtime event arriving before any viewport is known must be dropped, not admitted"
+        )
+    }
+
+    // MARK: AC-R5: DELETE removes by ID via removePin, no CommunityPin decode required
+
+    func testRealtimeDelete_removesMatchingPin() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture)
+        service.inject(fixtures: [pin])
+        XCTAssertEqual(service.visiblePins.count, 1)
+
+        await startAndAwaitConnect(service)
+        mock.simulateDelete(id: pin.id)
+
+        XCTAssertTrue(
+            service.visiblePins.isEmpty,
+            "AC-R5: a DELETE event must remove the corresponding pin from visiblePins by ID"
+        )
+    }
+
+    func testRealtimeDelete_unknownId_noOp() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture)
+        service.inject(fixtures: [pin])
+
+        await startAndAwaitConnect(service)
+        mock.simulateDelete(id: UUID())
+
+        XCTAssertEqual(service.visiblePins.count, 1, "removePin(id:) must be a no-op for an ID not currently present")
+    }
+
+    /// Direct unit test of `removePin(id:)` itself, bypassing the mock/Realtime plumbing
+    /// entirely — confirms the primary-key-only removal path (AC-R5's "without requiring a
+    /// fully-decoded CommunityPin") independent of how the ID reaches it.
+    func testRemovePin_directCall_removesById() {
+        let service = CommunityPinService(supabaseURL: kServiceURL, supabaseAnonKey: kAnonKey, nowProvider: { kNow })
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture)
+        service.inject(fixtures: [pin])
+
+        service.removePin(id: pin.id)
+
+        XCTAssertTrue(service.visiblePins.isEmpty)
+    }
+
+    // MARK: AC-R6: disconnectRealtime() / reconnectRealtime() call through to the channel
+
+    func testDisconnectRealtime_callsDisconnectOnRealtimeChannel() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await startAndAwaitConnect(service)
+        XCTAssertTrue(mock.isConnected)
+
+        service.disconnectRealtime()
+        await service.realtimeDisconnectTask?.value
+
+        XCTAssertEqual(mock.disconnectCallCount, 1)
+        XCTAssertFalse(mock.isConnected)
+    }
+
+    func testReconnectRealtime_callsConnectAgain() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await startAndAwaitConnect(service)
+        XCTAssertEqual(mock.connectCallCount, 1)
+
+        service.reconnectRealtime()
+        await service.realtimeConnectTask?.value
+
+        XCTAssertEqual(mock.connectCallCount, 2, "reconnectRealtime() must call connect() again")
+        XCTAssertTrue(mock.isConnected)
+    }
+
+    // MARK: AC-R7: Drive Mode leaves Realtime connected, still suspends the periodic poll
+
+    func testSetDriveModeActive_true_leavesRealtimeConnected_suspendsPeriodicPoll() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await startAndAwaitConnect(service)
+        XCTAssertTrue(mock.isConnected)
+
+        service.setDriveModeActive(true)
+
+        XCTAssertTrue(mock.isConnected, "AC-R7: Realtime must stay connected through Drive Mode")
+        XCTAssertEqual(mock.disconnectCallCount, 0, "AC-R7: setDriveModeActive(true) must never disconnect Realtime")
+        XCTAssertNil(
+            service.periodicRefreshTask,
+            "Periodic REST poll must still be suspended during Drive Mode (unchanged pre-existing behavior)"
+        )
+    }
+}

@@ -485,8 +485,10 @@ final class PeriodicRefreshSchedulingTests: XCTestCase {
             "Fix 2: pinRefreshIntervalSeconds must be <= 300s (too infrequent for live crowd feedback)")
         // Verify exact current value as a regression guard. If this changes intentionally,
         // update this assertion alongside the constant.
-        XCTAssertEqual(interval, 8,
-            "Fix 2: pinRefreshIntervalSeconds must be 8s (TF1 polling stand-in; real-time push is the TF2 SDK path)")
+        // supabase-swift Stream B (spec §6.1): retuned 8s → 45s now that real WebSocket
+        // Realtime is the primary freshness mechanism; this poll is a reconciliation fallback.
+        XCTAssertEqual(interval, 45,
+            "supabase-swift Stream B: pinRefreshIntervalSeconds must be 45s (reconciliation fallback behind real Realtime, spec §6.1)")
     }
 }
 

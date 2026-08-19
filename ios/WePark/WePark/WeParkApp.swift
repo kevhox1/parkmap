@@ -27,12 +27,17 @@
 //
 //  supabase-swift adoption — Stream A (Auth/Keychain), docs/supabase-swift-realtime-spec.md §9:
 //    - SupabaseAuthService's internals now wrap the SDK's AuthClient (Keychain-backed session
-//      storage) instead of raw URLSession + UserDefaults. The AuthClient instance itself is
-//      built inside SupabaseAuthService()'s own convenience init (via a SupabaseClients value —
-//      see that file + SupabaseAuthService.swift's headers), so this file's authService
-//      property declaration is textually unchanged from pre-SDK. authService's public API and
-//      this file's .task wiring are unchanged (AC-A1): ContentView / CommunityPinService need
+//      storage) instead of raw URLSession + UserDefaults. authService's public API and this
+//      file's .task wiring are unchanged (AC-A1): CommunityPinService's write callers need
 //      zero changes.
+//
+//  supabase-swift adoption — Stream B (Realtime), docs/supabase-swift-realtime-spec.md §3.4, §11:
+//    - ONE shared `SupabaseClients` instance is now constructed here (app lifetime) and
+//      injected into both `SupabaseAuthService` (via `makeAuthService()`) and
+//      `CommunityPinService` (via `ContentView`'s init, using `makeRealtimePinChannel()`) —
+//      matches `RealtimeClientV2`'s own doc: "Create one client per Supabase project and reuse
+//      it across your app." Neither factory method requires this file to `import Auth` or
+//      `import Realtime` itself — see `SupabaseClients.swift`'s header for why.
 //
 
 import SwiftUI
@@ -113,7 +118,13 @@ struct WeParkApp: App {
 
     @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
 
-    // MARK: - Tier 3 sub-PR #1: Anonymous auth identity (AC-A5 singleton)
+    // MARK: - supabase-swift: shared SDK clients + anonymous auth identity (AC-A5 singleton)
+
+    /// Single `SupabaseClients` instance for the app lifetime — one `AuthClient` and one
+    /// `RealtimeClientV2` reused everywhere (spec §3.4). Neither `SupabaseAuthService` nor
+    /// `CommunityPinService` construct their own SDK clients in production anymore; both are
+    /// handed pieces of this one instance below.
+    @State private var supabaseClients: SupabaseClients
 
     /// Single SupabaseAuthService instance for the app lifetime.
     ///
@@ -124,18 +135,22 @@ struct WeParkApp: App {
     /// Note: @State on App body properties is the Swift-idiomatic way to hold a single
     /// service instance at the app root without escaping it into a global. The instance is
     /// alive for the full app lifetime.
-    ///
-    /// supabase-swift Stream A: SupabaseAuthService()'s convenience init builds its own
-    /// SupabaseClients (and that struct's own AuthClient) internally — see
-    /// SupabaseClients.swift. This keeps WeParkApp.swift's diff minimal for this stream; when
-    /// Stream B wires CommunityPinService to the SDK's Realtime client, this property likely
-    /// becomes a shared `@State private var supabaseClients = SupabaseClients()` injected into
-    /// both services (spec §3.4) — deferred to that PR rather than speculatively added now.
-    @State private var authService = SupabaseAuthService()
+    @State private var authService: SupabaseAuthService
+
+    /// Explicit init required because `authService` (a `@State` property) depends on
+    /// `supabaseClients.authClient` — Swift stored properties can't reference sibling stored
+    /// properties in their default-expression form (same reasoning as `ContentView.init`'s own
+    /// explicit init, below). `supabaseClients.makeAuthService()` keeps this file free of
+    /// `import Auth` — see `SupabaseClients.swift`'s header.
+    init() {
+        let clients = SupabaseClients()
+        _supabaseClients = State(initialValue: clients)
+        _authService = State(initialValue: clients.makeAuthService())
+    }
 
     var body: some Scene {
         WindowGroup {
-            ContentView(appDelegate: appDelegate, authService: authService)
+            ContentView(appDelegate: appDelegate, authService: authService, supabaseClients: supabaseClients)
                 .task {
                     // Non-blocking: the map loads while auth completes in the background.
                     // ensureSession() fails silently if the network is unavailable (AC-A4).

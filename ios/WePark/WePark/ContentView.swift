@@ -283,6 +283,12 @@ struct ContentView: View {
     /// SwiftUI observes its published properties automatically without @ObservedObject.
     var authService: SupabaseAuthService
 
+    /// supabase-swift Stream B: injected from `WeParkApp` (one shared `RealtimeClientV2` for
+    /// the app's lifetime — spec §3.4). Used at init time to build `pinService`'s Realtime
+    /// channel via `supabaseClients.makeRealtimePinChannel()`, which returns the
+    /// `RealtimePinSubscribing` protocol type — this file never needs `import Realtime`.
+    let supabaseClients: SupabaseClients
+
     // MARK: - Environment
 
     @Environment(\.scenePhase) private var scenePhase
@@ -615,21 +621,28 @@ struct ContentView: View {
 
     // MARK: - Init
 
-    /// Initializes ContentView with the shared AppDelegate and SupabaseAuthService.
+    /// Initializes ContentView with the shared AppDelegate, SupabaseAuthService, and
+    /// SupabaseClients.
     ///
     /// The explicit init is required because `pinService` (a `@State` property) depends on
-    /// `authService`, and Swift stored properties cannot reference sibling stored properties
-    /// in their default expressions. Wrapping `State` manually lets us pass `authService`
-    /// into `CommunityPinService.init(authService:)` at init time.
+    /// `authService` and `supabaseClients`, and Swift stored properties cannot reference
+    /// sibling stored properties in their default expressions. Wrapping `State` manually lets
+    /// us pass both into `CommunityPinService.init(authService:realtimeChannel:)` at init time.
     ///
     /// All other `@State` properties retain their inline default-expression initializers;
     /// those do not depend on injected values.
-    init(appDelegate: AppDelegate, authService: SupabaseAuthService) {
+    init(appDelegate: AppDelegate, authService: SupabaseAuthService, supabaseClients: SupabaseClients) {
         self.appDelegate = appDelegate
         self.authService = authService
-        // CommunityPinService reads SUPABASE_URL + SUPABASE_ANON_KEY from Bundle.main
-        // and attaches the shared authService for authenticated writes.
-        self._pinService = State(initialValue: CommunityPinService(authService: authService))
+        self.supabaseClients = supabaseClients
+        // CommunityPinService reads SUPABASE_URL + SUPABASE_ANON_KEY from Bundle.main,
+        // attaches the shared authService for authenticated writes, and shares the app's one
+        // RealtimeClientV2 via supabaseClients.makeRealtimePinChannel() (supabase-swift
+        // Stream B, spec §3.4) instead of standing up a second, standalone socket.
+        self._pinService = State(initialValue: CommunityPinService(
+            authService: authService,
+            realtimeChannel: supabaseClients.makeRealtimePinChannel()
+        ))
     }
 
     // MARK: - Constants
@@ -2375,7 +2388,8 @@ struct ContentView: View {
         // FT-12: Show the Parking 101 first-launch prompt banner at most once per install.
         showParkingGuideBanner = ParkingGuidePromptGate().shouldShow()
 
-        // Community 1.0 / Tier 1: wire Realtime subscription stub (no-op until prod schema live).
+        // supabase-swift Stream B: establishes the real WebSocket Realtime subscription on
+        // public.pins (spec §5.1). Stays connected through Drive Mode (spec §7).
         pinService.startRealtime()
 
         tileLoader.loadTiles(forRegion: region)
@@ -2430,7 +2444,19 @@ struct ContentView: View {
     ///
     /// Extracted from the `.onChange(of: scenePhase)` closure to reduce type-checker
     /// expression complexity in ContentView.body (W8.5c-polish PR-1 fix).
+    ///
+    /// supabase-swift Stream B (spec §5.3) adds exactly ONE new branch here — `.background` —
+    /// per the standing "one scenePhase branch only, no camera/overlay surface" constraint for
+    /// this file (FT-20's bottom-sheet redesign lands here next). The existing `.active`
+    /// branch below is extended with two calls at the end, not restructured.
     private func handleScenePhaseChange(_ newPhase: ScenePhase) {
+        if newPhase == .background {
+            // iOS suspends/kills background socket activity for an app with no
+            // background-execution entitlement anyway; disconnecting explicitly avoids the
+            // Realtime socket dying in an ambiguous half-open state.
+            pinService.disconnectRealtime()
+            return
+        }
         guard newPhase == .active else { return }
         bannerState = aspService.suspensionState(at: .nowET)
         // Re-sync mute state in case it changed while backgrounded (edge case).
@@ -2447,6 +2473,11 @@ struct ContentView: View {
         }
         // W6.1: Replay any buffered deep-link that arrived during the foreground transition.
         routePendingDeepLink(appDelegate.pendingDeepLinkCarID)
+        // supabase-swift Stream B (spec §5.3): reconnect the Realtime socket, plus a one-shot
+        // catch-up re-fetch of the last-known viewport (belt-and-suspenders alongside the
+        // reconnect for whatever changed on public.pins while backgrounded).
+        pinService.reconnectRealtime()
+        Task { await pinService.refetchCurrentRegion() }
     }
 
     // MARK: - Dismiss helpers
@@ -3254,5 +3285,6 @@ func recenterPillBottomPadding(showApproachStrip: Bool, parkUntilVisible: Bool) 
 }
 
 #Preview {
-    ContentView(appDelegate: AppDelegate(), authService: SupabaseAuthService())
+    let clients = SupabaseClients()
+    ContentView(appDelegate: AppDelegate(), authService: clients.makeAuthService(), supabaseClients: clients)
 }
