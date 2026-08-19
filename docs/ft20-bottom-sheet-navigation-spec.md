@@ -95,6 +95,53 @@ adds, or defer to a follow-up (§10).
 
 ---
 
+## §0b — Design-review amendments (BINDING, 2026-08-19)
+
+From `docs/design/ft20-bottom-sheet-review.md`. Kevin approved folding all six Significant findings
+into the build rather than deferring them to a follow-up round. **These are spec, not suggestions.**
+Owning stream in brackets.
+
+- **S1 [Stream A] — the medium detent's 3-item list gets an explicit visual spec.** Build the rows as
+  `List` rows matching `recentDestinationsList`'s anatomy verbatim
+  (`DriveModeDestinationView.swift:269–362`, `List` + `Section`, `.listStyle(.insetGrouped)`) — SF
+  Symbol leading icon + label. **Do NOT invent capsule/pill rows** borrowed from FT-18's Bottom Dock:
+  that language is for floating chrome over a live map, and these rows live *inside* sheet content one
+  scroll away from the suggestions list. Reuse `car.front.waves.right.fill` from the deleted
+  `driveEntryButton`, plus `gearshape` and `questionmark.circle`.
+- **S2 [Stream B] — "Parking near here" carries semantic colour.** Render the bucketed word
+  ("mostly free" / "mixed" / "mostly restricted") in the matching **existing** `ParkingColors`
+  green/amber/red — do not define new colours. Plain `.secondary` grey would break the app's own
+  most-established convention, where those three colours already mean something specific everywhere
+  else. Amends §3.2 and AC-10.
+- **S3 [Stream C] — new AC-29a, mirroring AC-28 for Drive-Mode EXIT.** "The instant `driveModeActive`
+  flips false, no frame shows both the outgoing Bottom Dock and the reappearing browse sheet." AC-28
+  already guards entry; the mirror case was dropped, and transition-timing bugs are this file's
+  documented failure mode (FT-17a, FT-18, W8.5c-polish), not static layout bugs.
+- **S4 [Stream C] — new AC for the FT-15 block-select boundary.** Entering block-select overlaps
+  *three* presentation animations (the `.confirmationDialog` dismissing, the browse sheet dismissing,
+  `blockSelectBar` appearing) — see `ContentView.swift:2536–2546`. The very next user action is a
+  precision multi-tap on the map, so a residual tap-intercepting overlay would make the first
+  blockface selection silently miss. Either sequence `blockSelectModeActive = true` so it doesn't race
+  the dialog's dismissal, or document a settling window and confirm the map ignores taps during it.
+- **S5 [Stream B] — add `.scrollDismissesKeyboard(.interactively)`** to `suggestionsList` /
+  `recentDestinationsList` when they relocate. §4.3's table says they move "verbatim"; this is the one
+  addition. Removing the `NavigationStack`'s `Cancel` button is correct and matches Apple Maps, but
+  **none of the existing sheets in this codebase set this modifier**, so the standard iOS
+  scroll-to-dismiss gesture has no guarantee of working — a user who starts typing and changes their
+  mind would get a stuck keyboard.
+- **S6 [QA / Kevin's smoke, not code] — sunlight check.** When Kevin does his on-device pass, ask
+  explicitly about the top-right rail and the sheet's peek/medium chrome **in direct sun**, not just
+  indoors. Carry-over risk, not introduced by FT-20: TF2-18 logged a real sunlight-legibility problem,
+  and the always-dark default (#83) shipped for *cleanliness* and was explicitly **not** a legibility
+  fix. No simulator smoke can test this.
+
+**Estimate impact:** the reviewer judged S1–S6 to be spec-tightening rather than new surface area —
+S3/S4/S6 add no code at all (ACs and a smoke question), and S2/S5 are one-liners. S1 is the only one
+with real content, and specifying it *reduces* risk by removing an invent-it-yourself decision.
+Treat 4.5–6.5 sessions as unchanged, with the spec's standing advice to budget a follow-up round.
+
+---
+
 ## 1. Problem & user story
 
 Browse-mode chrome grew feature-by-feature across nine months of shipped work (W5.1 recenter buttons → W7
