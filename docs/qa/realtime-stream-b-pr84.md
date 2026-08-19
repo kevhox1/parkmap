@@ -231,3 +231,216 @@ sidesteps the race by construction).
   notice — good cross-PR QA hygiene.
 - Honest, specific COMPILE-UNVERIFIED disclosure with the exact SDK revision and files inspected,
   not a vague disclaimer.
+
+---
+
+# Pass 2 — 2026-08-19
+
+**Reviewed:** branch `ios/supabase-realtime-stream-b` at `0000b636`, scoped to the fix commit
+`0000b636` ("fix(ios): serialize Realtime connect/disconnect/reconnect lifecycle (QA #84 Finding
+#1)") against Pass 1's Finding #1. Not a re-review of the whole feature.
+**Environment:** Linux VPS, no Xcode/simulator — static read only, same constraint as Pass 1.
+Per the task brief, Kevin's Mac run (iPhone 17, iOS 26.5) is accepted as given: **730/730 passed,
+0 failed, 0 skipped**, including the new `testDisconnectThenReconnectFlap_doesNotRaceAndEndsConnected`
+(`CommunityPinServiceTests.swift:1465`). Compile is proven; this pass is about whether the fix is
+*correct* and whether chaining introduces a new failure mode, not whether it builds.
+**Verdict:** ✅ **MERGE**
+
+## Summary
+
+The fix replaces `Task.cancel()`-and-replace with a chained-Task serial queue
+(`realtimeLifecycleTask`), and it genuinely closes Pass 1 Finding #1 — traced by hand against both
+the real `SupabasePinRealtimeChannel` (`RealtimePinChannel.swift:160`'s idempotency guard, which
+is otherwise unchanged) and the new test. The chaining pattern is a well-known, correct concurrency
+idiom (an async serial queue via task-linking); I could not construct a cycle, deadlock, or
+unbounded-retain scenario against it, and the regression test reproduces the exact previously-
+broken interleaving rather than a synthetic one. One real, intentional behavioral trade-off is
+introduced (a rapid multi-flap now costs the *sum* of each queued op's round-trip time before the
+final state lands, instead of racing them), which is the correct trade for this feature but is
+worth Kevin knowing about explicitly. No blocking findings.
+
+## What I verified
+
+**1. Does the fix close Finding #1?** Yes. Traced the full causal chain:
+
+- `CommunityPinService.swift` is `@MainActor`-isolated at the class level, and
+  `startRealtime()`/`disconnectRealtime()` are synchronous, non-`async` methods — so
+  `let predecessor = realtimeLifecycleTask` followed by `realtimeLifecycleTask = task` inside each
+  of them cannot be interleaved by a concurrent call to the other; there is no await between those
+  two lines, and both methods only ever run on the main actor. This means the *property itself* is
+  race-free, and the ordering of who becomes whose `predecessor` is fully deterministic and matches
+  call order.
+- Each new `Task`'s body unconditionally does `await predecessor?.value` as its literal first
+  line, before touching `realtimeChannel` at all. Since `predecessor`'s own body did the same thing
+  for *its* predecessor, this recurses back to the start of the chain — awaiting any single task's
+  `.value` transitively waits for every earlier queued operation to have fully finished, not just
+  the immediately preceding one. Confirmed this holds for the specific two-deep case exercised by
+  the new test and holds by induction for arbitrary chain depth.
+- Because `disconnect()`'s real implementation (`RealtimePinChannel.swift:172-183`) unsubscribes
+  and disconnects the client *before* returning, and a subsequent `connect()` cannot start until
+  that full disconnect has returned, the stale-`.subscribed` read at `RealtimePinChannel.swift:160`
+  that Pass 1 identified is no longer reachable via the flap path — not narrowed, actually
+  eliminated, because by the time `connect()` runs, `ch.status` has already been driven to
+  unsubscribed by the disconnect that necessarily ran first.
+- The new test (`CommunityPinServiceTests.swift:1465`,
+  `testDisconnectThenReconnectFlap_doesNotRaceAndEndsConnected`) reproduces the *exact* interleaving
+  from Pass 1's repro steps — `disconnectRealtime()` immediately followed by `reconnectRealtime()`
+  with no `await` in between, i.e. `handleScenePhaseChange(.background)` immediately followed by
+  `handleScenePhaseChange(.active)` — with an artificial 200ms `disconnectDelay` to make the old
+  race's failure mode observable, plus a 300ms wall-clock buffer that's belt-and-suspenders (see
+  §3 below on why it's not load-bearing for the fixed code, only for demonstrating the pre-fix
+  failure). This is not a synthetic strawman test; it targets the real bug.
+
+**2. New failure modes from chaining — this was the priority.**
+
+- **Unbounded chain growth / retain: not present.** `realtimeLifecycleTask` only ever holds the
+  current tail (each call unconditionally overwrites it). A given `Task`'s closure captures only
+  its immediate `predecessor`, not the whole history — so memory is bounded to O(1) per link, and
+  once a task's body has passed its `await predecessor?.value` line, nothing in that closure
+  references the ancestor chain further back. This is the standard "async serial queue via
+  task-linking" pattern, not an accumulating list.
+- **Deadlock / self-await: not possible.** `predecessor` is bound to the *old* value of
+  `realtimeLifecycleTask` before the new `Task` closure is even constructed, so a task can never
+  end up as its own predecessor, and there's no shared-lock/semaphore construct here that could
+  form a cycle — just plain `await`, which yields cooperatively and cannot deadlock the way a
+  blocking primitive could.
+- **Cancellation semantics — the engineer's claim is accurate, with one trade-off worth
+  surfacing explicitly.** Every requested op does now run, in request order, and — this is the
+  part that matters — because each op fully replaces the app's belief of Realtime state, the *final*
+  state after a chain settles is always correct regardless of chain depth: if the flap sequence
+  ends on `.active`, the last queued op is a connect and the channel ends up connected; if it ends
+  on `.background`, it ends up disconnected. I verified this isn't just true for the 2-deep case
+  the test covers — it's a structural property of the "each task awaits only its immediate
+  predecessor, in call order" design and generalizes to N-deep flapping. **The trade-off**: a rapid
+  5x background/foreground flap (Kevin's example in the task brief) now executes five full
+  connect/disconnect round trips *serially* rather than racing them, so the fifth operation's
+  latency is the sum of the previous four's round-trip times, not just its own. Pre-fix, the racing
+  behavior could in theory "finish faster" but land in a wrong/inconsistent state (that was the
+  whole bug). This is a deliberate and correct trade of latency for correctness, appropriate for a
+  background socket the user isn't watching in real time — but it does mean an extreme flap
+  scenario (rapid app-switcher spam) could delay the Realtime socket coming back for a couple of
+  seconds after the user settles on the foreground. Not a bug; a real-and-worth-knowing consequence.
+- **Removed `Task.cancel()` — stranding / lifetime check.** `CommunityPinService` is instantiated
+  exactly once, as a `State`-owned property in `ContentView` (`ContentView.swift:642`), and lives
+  for the entire process — there is no `deinit` on this class before or after this fix, and no
+  code path that creates a second instance mid-session. So there is nothing to "strand" on genuine
+  app termination that wouldn't already be terminated with the process; this precedent already
+  existed for `realtimeConnectTask`/`realtimeDisconnectTask` pre-fix (no cancel-on-deinit there
+  either) and is unchanged by this commit. `[weak self]` is used consistently in both new `Task`
+  closures (`startRealtime()`'s body does `guard let self else { return }` after the predecessor
+  await; `disconnectRealtime()`'s body uses `self?.realtimeChannel.disconnect()`), so a
+  hypothetical future teardown wouldn't crash or retain the service artificially — it would just
+  silently no-op the tail of the chain, which is the right behavior.
+
+**3. Test honesty — confirmed, not flaky-by-construction.**
+
+- `connectDelay`/`disconnectDelay` are declared inside `MockRealtimePinChannel`, and the entire
+  class is wrapped in `#if DEBUG` (`RealtimePinChannel.swift:255-320`) — this is a test-only seam,
+  matching the pre-existing `#if DEBUG` precedent already used for
+  `SupabaseAuthService.swift`'s `InMemoryAuthStorage`. No production code path branches on these
+  properties; `SupabasePinRealtimeChannel` (the real implementation) has no delay knobs at all.
+- The 200ms mock `disconnectDelay` + 300ms wall-clock buffer are **not load-bearing for the fixed
+  code's correctness**, which is a good thing, not a gap: the primary assertion path is gated by
+  Swift concurrency's causal guarantee (`await service.realtimeConnectTask?.value` cannot return
+  until the connect task's body has finished, and that body's first line is
+  `await predecessor?.value`, i.e. the disconnect task) — not by wall-clock timing. The extra
+  300ms sleep only matters for making the *pre-fix* regression observable (per the test's own
+  inline comment) and is otherwise inert on the fixed code; it cannot cause a false pass under
+  timing pressure, and on a slower CI machine it can only add latency to the test run, not flip an
+  assertion. I don't see a flake risk here.
+- One test-suite gap worth naming (not blocking): the new test covers exactly one flap (a 2-deep
+  chain — one disconnect, one connect). Deeper flapping (3+) is not directly exercised, though the
+  mechanism generalizes by the same induction argument in §2 above. Logged as a minor follow-up,
+  not a blocker, since the mechanism being tested is depth-independent by construction.
+
+**4. Scope regression check — clean.**
+`git diff main...ios/supabase-realtime-stream-b --stat` shows no `MapViewRepresentable.swift`
+entry at all (zero diff, same as Pass 1), and `ContentView.swift` is still the same 52-line,
+scenePhase-only diff Pass 1 characterized — the fix commit did not touch `ContentView.swift`. The
+`.background`/`.active` scenePhase wiring at `ContentView.swift:2452-2481` is unchanged from Pass 1
+and still confined to the documented single new branch plus two appended lines.
+
+**5. Synthesized-init trap.** No new `struct` was introduced by this fix commit (it only adds
+properties/methods to the existing `final class CommunityPinService` and `final class
+MockRealtimePinChannel`, both classes with no memberwise-init reliance). Not applicable —
+informational only, as instructed.
+
+## Findings
+
+### 🟢 Minor / nit
+
+- **#4: New race test only exercises a 2-deep chain (one flap), not deeper rapid flapping.**
+  - Where: `CommunityPinServiceTests.swift:1465`,
+    `testDisconnectThenReconnectFlap_doesNotRaceAndEndsConnected`.
+  - What: The test proves the mechanism for a single disconnect→reconnect flap. A 3+ deep chain
+    (e.g. background→active→background→active→active within a fraction of a second) is not
+    directly tested, though the serialization mechanism is depth-independent by construction (see
+    Pass 2 §2) and I'm confident it generalizes.
+  - Suggested: a follow-up test with 3+ queued ops and mixed delays, for extra confidence — not
+    blocking.
+  - Owner: `@ios-engineer` (follow-up, non-blocking).
+
+### 💡 Out of scope (logged, not fixed)
+
+- **Latency trade-off of serialization vs. racing is real and worth Kevin knowing before merge,
+  even though it's the correct trade.** Under extreme rapid app-switcher flapping (5+ flaps in
+  under a second — an edge case, not a normal user action), the Realtime socket now takes the sum
+  of all queued round trips to settle into its final state, rather than potentially settling
+  faster-but-wrong under the old racing code. This is the right trade for a background socket, and
+  is not a bug, but it's a behavioral change from "fast and sometimes silently broken" to "possibly
+  a couple seconds slower and always eventually correct" that's worth having in mind if anyone ever
+  reports "pins took a moment to catch up after switching apps a bunch."
+- **Pass 1 Findings #2 (reconnect-gap test) and #3 (antimeridian) are unchanged by this commit** and
+  remain deliberately not actioned per the task brief — not re-raised here.
+
+## Smoke tests run
+
+- **Read `git show 0000b636`** in full against all three touched files
+  (`CommunityPinService.swift`, `RealtimePinChannel.swift`, `CommunityPinServiceTests.swift`).
+- **Hand-traced the causal chain** of `realtimeLifecycleTask` / `predecessor` capture across
+  `startRealtime()`/`disconnectRealtime()`, confirming: no data race on the property (both callers
+  are synchronous `@MainActor` methods, no intervening `await`), no self-await/cycle (`predecessor`
+  is bound to the old value before the new `Task` is constructed), and transitive-wait-spans-whole-
+  chain by induction.
+- **Re-read `RealtimePinChannel.swift:128-183`** (the real `SupabasePinRealtimeChannel.connect()`/
+  `.disconnect()`) to confirm the stale-`.subscribed` guard at line 160 is genuinely unreachable
+  post-fix, not just narrowed — confirmed unchanged by this commit, and confirmed the ordering
+  guarantee from the chain is what closes the window, not a change to the guard itself.
+- **Confirmed `#if DEBUG` scope** of `MockRealtimePinChannel` and its new `connectDelay`/
+  `disconnectDelay` knobs — test-only, no production branching added.
+- **Grepped for lingering `.cancel()` calls** on the three realtime task properties — none remain,
+  confirmed the old `realtimeConnectTask?.cancel()` / `= nil` lines were fully removed, not
+  half-migrated.
+- **Checked `CommunityPinService` instantiation site** (`ContentView.swift:642`) — single instance,
+  app-lifetime `State` property, no `deinit` before or after this commit — confirmed the "no
+  cancel-on-deinit" observation isn't a new gap introduced by this fix.
+- **Checked existing tests around the new one** (`testDisconnectRealtime_callsDisconnectOnRealtimeChannel`
+  at line 1364, `testReconnectRealtime_callsConnectAgain` at line 1377,
+  `testSetDriveModeActive_true_leavesRealtimeConnected_suspendsPeriodicPoll` at line 1392) — none
+  assert `realtimeConnectTask == nil` after a disconnect, so removing the old
+  `realtimeConnectTask = nil` line inside `disconnectRealtime()` doesn't silently break them.
+- **`git diff main...ios/supabase-realtime-stream-b --stat`** — confirmed `MapViewRepresentable.swift`
+  absent (zero diff) and `ContentView.swift` unchanged at 52 lines from Pass 1 (this fix commit
+  touched only the three files it claims to).
+- **Did NOT and could NOT run**: `xcodebuild`, XCTest, or a simulator — same Linux-VPS constraint
+  as Pass 1. Per the task brief, Kevin's Mac run (730/730 passed) is accepted as given and not
+  re-verified here; this pass is a logical/adversarial trace of the fix's correctness, not a
+  compile check.
+
+## What's working
+
+- The fix is a textbook-correct application of task-chaining as a serial queue — a well-established
+  Swift concurrency idiom — applied precisely at the point Pass 1 identified as broken, with no
+  scope creep into other files.
+- The regression test targets the *actual* previously-broken interleaving (no-await-between-calls),
+  not a synthetic stand-in, and its inline commentary honestly explains both the pre-fix failure
+  mechanism and why the post-fix assertion holds — genuinely useful for the next reader.
+- `[weak self]` discipline is maintained in both new `Task` closures, consistent with the rest of
+  the file's precedent.
+- The commit message is unusually good bug-tracking hygiene: it cites the exact QA finding it
+  closes, explains why the old approach failed (cooperative cancellation not being observed by the
+  SDK calls), and explicitly documents the one thing it deliberately did NOT do (the reconnect-gap
+  test from Pass 1 Finding #2) with a stated reason, rather than silently dropping it.
+- Doc comments on `realtimeLifecycleTask`/`realtimeConnectTask`/`realtimeDisconnectTask` correctly
+  explain the "awaiting either now spans the whole chain" property, which I independently verified
+  is true rather than just asserted.
