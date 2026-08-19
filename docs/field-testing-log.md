@@ -93,8 +93,13 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   existing full-screen-cover search (W8.5b), interacts with the FT-15 report flow (Stream B2's map
   tap-select needs the map unobstructed), and touches `ContentView.swift` — already the most
   contended file in the project. Sizing is plausibly comparable to FT-15's own multi-session estimate.
-- **Status:** ⚪️ **BACKBURNERED by Kevin, pending a design discussion after the current board clears.**
-- **Lands in:** TBD after that discussion. Do not pre-empt it.
+- **Status:** 🟡 **ACTIVE.** Backburner **LIFTED 2026-08-19** after the design discussion; all six
+  decisions above are settled. **Dark mode is DONE and merged (#83).** The **bottom sheet is specced
+  and cleared to build** — `docs/ft20-bottom-sheet-navigation-spec.md`, 4.5–6.5 iOS sessions.
+  *(The prior "BACKBURNERED, pending a design discussion" status was stale — the discussion happened
+  on 2026-08-19 and is transcribed above. Corrected 2026-08-19.)*
+- **Lands in:** **build 17**, sequenced **after** realtime Stream B — both touch `ContentView.swift`,
+  so they are serialized, not parallel.
 
 
 
