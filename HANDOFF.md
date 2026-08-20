@@ -201,6 +201,48 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-20 (later) — FT-20 Stream A merged, gated OFF. Sheet container exists but is invisible.
+
+**`main` @ `37aa8c01`. Zero open PRs.** Kevin's Mac: **748/748 passed, 0 failed, 0 skipped** (iPhone
+17 / iOS 26.5) — exactly +18 over the 730 baseline, matching the 18 new test functions on the branch,
+so every new test demonstrably ran. **Live smoke passed.**
+
+**⚠️ THE ONE THING A FUTURE SESSION MUST NOT MISS: `ft20BrowseSheetEnabled` is `false`.** Stream A is
+merged but **completely inert** — no user can see the sheet. `.browseNav` is unreachable. This was
+deliberate, and **Stream C owns flipping it**, in the same change that lands the cold-launch mount,
+the Drive-Mode boundary (AC-28/29a) and the FT-15 block-select boundary (AC-23–27/S4). The gate's own
+doc comment says so; grep `ft20BrowseSheetEnabled`.
+
+**🔴 WHY THE GATE EXISTS — QA pass 1 caught a trap state that would have shipped.** Stream A's
+dismiss-site sweep was *exhaustively correct for the end state*: every sheet dismissal routes to
+`.browseNav`. But Stream C wasn't there to mount the sheet, so in the intermediate state every
+ordinary dismissal — Settings, ParkConfirmView Cancel, ParkUntil Skip, Parking-101 Done — landed the
+user in a `.interactiveDismissDisabled(true)` sheet containing only a placeholder, with nothing ever
+clearing it. **Force-quit was the only exit.** Repro: long-press → "Park my car here" → Cancel.
+
+**The lesson is sharper than "QA caught a bug":** every piece was individually correct, and the
+author's own doc comment asserted `.browseNav` was "unreachable until Stream C lands" — a **false
+invariant stated as fact**, which is exactly what made it invisible to self-review. When serializing
+a feature across PRs, the intermediate states are their own acceptance criteria. The fix's bar was
+*"merging this must be a user-visible no-op,"* and QA pass 2 proved that semantically against `main`
+rather than spot-checking.
+
+**Also fixed in the same pass:** two stale `guard activeSheet == nil` blocking guards — the old
+"Drive to a destination" menu item and, more seriously, the in-Drive **"Park here"** button, a
+safety-relevant action that would have silently no-op'd once the gate flipped.
+
+**Design review earned its keep before any code existed.** It found that spec §4.1's own code sample
+used system `.medium` as the middle detent — contradicting Kevin's OQ-3 ruling at the top of the same
+document — and all 11 pre-existing `.presentationDetents` sites in `ContentView.swift` use `.medium`,
+so both the spec and the local convention pointed at the outcome Kevin explicitly rejected. Corrected
+in the spec with the trap named inline. Its six Significant findings were folded into the build as
+spec §0b rather than deferred.
+
+**NEXT:** Stream B (search/place relocation + Go + the "parking near here" summary) → Stream C
+(integration + flip the gate) → QA → bump to 17 → archive → drive test.
+
+---
+
 ### 2026-08-20 — 🚀 WEPARK IS PUBLIC. Build 16 passed Beta App Review; external TestFlight link is live.
 
 **Kevin is no longer the only user.** Build 1.0 (16) cleared Apple's Beta App Review and is

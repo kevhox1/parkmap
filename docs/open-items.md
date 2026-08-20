@@ -16,7 +16,8 @@ App Store Connect, real-device drive test).
 
 | # | Item | Where | State |
 |---|---|---|---|
-| 1 | **FT-20 bottom sheet** — the remaining build-17 payload | VPS → **MAC** | **Specced, all 6 decisions + all 4 OQs settled and re-confirmed by Kevin 2026-08-19. Unblocked** — `#84` merged, so `ContentView.swift` is free. **4.5–6.5 iOS sessions + budget a follow-up round** (spec §11). Streams: design review → A (container, ~1) → B (search/place, ~1.5) → C (`ContentView` integration, ~1.5–2, mandatory live-UI smoke) → QA (~1–1.5 over 2 passes) |
+| 1 | **FT-20 bottom sheet** — the remaining build-17 payload | VPS → **MAC** | Design review ✅ · **Stream A ✅ MERGED `37aa8c01`** (748/748 on Kevin's Mac, live smoke passed) · **Stream B ⬜ NEXT** (search/place, ~1.5) · Stream C ⬜ (`ContentView` integration, ~1.5–2, **owns flipping `ft20BrowseSheetEnabled`**) · QA ~1–1.5 over 2 passes |
+| 1a | ⚠️ **`ft20BrowseSheetEnabled` is `false` on `main`** | VPS | Stream A is merged but **inert** — the sheet is invisible to users until Stream C flips the gate. This is deliberate: it kept `main` shippable while A landed. **Stream C must flip it and land the cold-launch mount + both boundaries in the same change.** Greppable: `ft20BrowseSheetEnabled` in `ContentView.swift` |
 
 ---
 
