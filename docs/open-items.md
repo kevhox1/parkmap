@@ -82,8 +82,28 @@ not rule loss.** But it roughly doubles the pre-existing "~6.8% degenerate segme
 
 ## 🗺 BUILD PLAN — decided 2026-08-19
 
-**Build 17 = dark mode (✅ merged) + realtime WebSocket (🟡 in flight) + FT-20 bottom sheet (⬜ next).**
-**Build 18 = patrol mode / smart parking route.**
+**Build 17 = dark mode ✅ + realtime WebSocket ✅ + FT-20 bottom sheet (🟡 Stream A ✅ / B in flight / C next).**
+**Build 18 = patrol mode / smart parking route + iCloud parked-car sync + FT-2 delete-own-pin.**
+
+**🆕 BUILD 18 SCOPE ADDED 2026-08-20 — both driven by WePark now having external users:**
+- **iCloud key-value sync for the parked car** (`NSUbiquitousKeyValueStore`). Today the parked car is
+  a JSON blob in `UserDefaults.standard` (`ParkPinService.swift:45`) — **device-local**, so a user
+  cannot see their car on a second device and **loses it permanently on delete-and-reinstall.** Kevin
+  chose this over an account system: no login, no UI, no sign-up friction, tied to the user's Apple
+  ID rather than the app container, and close to a drop-in replacement for the existing read/write.
+  **Explicitly NOT building accounts** — the zero-friction "open it and see the map" onboarding is
+  worth protecting, and accounts are build-sized (sign-up, reset, Sign in with Apple, anon→account
+  migration, RLS rework). The long-term shape if ever needed: anonymous by default, *optional* Sign
+  in with Apple that **links** the existing anonymous identity rather than replacing it.
+- **FT-2 — delete your own pin.** Spec exists: `docs/ft2-delete-own-pin-spec.md`. Now a real gap
+  rather than a nicety: strangers are using the app and someone will misreport a block with no way to
+  retract it. ⚠️ **Needs an RLS policy change (delete where `reporter_id = auth.uid()`) — Kevin
+  applies all Supabase migrations to production by hand. Agents write the migration file and stop.**
+
+**⚠️ BUILD 18 IS ACCUMULATING AND IS STILL UNSIZED.** It now holds patrol mode (5 sub-PRs, W8.5e–i,
+never estimated) **plus** two new items. Build 13 became unshippable because too much landed at once —
+the same risk applies here. **Size patrol mode before starting it**, and be willing to split 18 rather
+than let it grow the way 13 did.
 
 Kevin initially wanted all three in build 17; agreed to the split. The reasoning that decided it:
 

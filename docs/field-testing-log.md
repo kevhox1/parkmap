@@ -1136,7 +1136,14 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Proposed fix:** Let the pin author delete (or retract) their own pin. Anonymous-auth means we
   identify the author by their anon `user_id` (the reporter). Tapping your own pin should offer a
   "Delete / I was wrong" action. Needs RLS policy allowing delete where `reporter_id = auth.uid()`.
-- **Lands in:** backend (RLS + RPC) + iOS pin-detail UI. Tech-lead spec.
+- **Lands in:** **BUILD 18** (scheduled 2026-08-20). Backend (RLS + RPC) + iOS pin-detail UI. Spec
+  already written: `docs/ft2-delete-own-pin-spec.md`.
+- **⬆️ PRIORITY RAISED 2026-08-20 — this stopped being a nicety.** Build 16 is now distributed to
+  external TestFlight users. A stranger will misreport a block and have **no way to retract it**, and
+  a wrong report is visible to every other driver looking at that curb. It was cheap to defer when
+  Kevin was the only user and could just not do that; it isn't now.
+- ⚠️ **Requires a Supabase RLS policy change** (delete where `reporter_id = auth.uid()`). **Kevin
+  applies all production migrations by hand** — an agent writes the migration file and stops.
 
 ### FT-3 🔴 Up/down-vote on pins should be easy (may already partially work)
 - **Area:** Tier 3 reactions (confirm/dispute).
