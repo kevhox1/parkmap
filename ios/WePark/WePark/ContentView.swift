@@ -1243,15 +1243,39 @@ struct ContentView: View {
     /// 11 `.presentationDetents` call sites above uses `.medium`/`[.medium, .large]`; this
     /// is the one deliberate exception. See `BrowseSheetDetentMath`'s doc comment.
     ///
-    /// `searchArea` is Stream A's stub (`BrowseSheetSearchAreaStub`) — Stream B (§4.3)
-    /// replaces this argument with the real relocated search field. Row actions call
-    /// through to the same functions/case-assignments the (soon-to-be-deleted, per Stream
-    /// C) `gearButtonOverlay`/`driveEntryButton` already use today — no new entry-path
-    /// logic, only new UI leading into it (spec §3.1).
+    /// `searchArea` is FT-20 Stream B's real relocated search/place content
+    /// (`BrowseSearchAreaView`, §4.3) — replaces Stream A's stub
+    /// (`BrowseSheetSearchAreaStub`). Per Stream A's own contract ("Only `searchArea`
+    /// should change"), this is the only argument that changed here; row actions still
+    /// call through to the same functions/case-assignments the (soon-to-be-deleted, per
+    /// Stream C) `gearButtonOverlay`/`driveEntryButton` already use today — no new
+    /// entry-path logic, only new UI leading into it (spec §3.1).
+    ///
+    /// `onRouteReady` duplicates `driveModeDestinationCover`'s closure body (AC-11)
+    /// rather than sharing it — that cover/`showDriveModeDestination`/`driveEntryButton`
+    /// are still the LIVE entry path today (Stream C hasn't deleted them yet), and this
+    /// whole property is unreachable while `ft20BrowseSheetEnabled == false`, so there is
+    /// no way to consolidate the two without either touching the still-live cover (out of
+    /// scope for Stream B) or leaving genuinely dead code half-wired. Stream C should
+    /// collapse these into one call site when it deletes `driveModeDestinationCover`.
     @ViewBuilder
     private var browseNavigationSheetContent: some View {
         BrowseNavigationSheet(
-            searchArea: { BrowseSheetSearchAreaStub() },
+            searchArea: {
+                BrowseSearchAreaView(
+                    currentRegion: region,
+                    segments: tileLoader.segments,
+                    userLocation: locationService.userLocation,
+                    locationService: locationService,
+                    detentKind: $browseSheetDetentKind,
+                    onRouteReady: { route, destination in
+                        driveModeStyle = .destination
+                        activeRoute = route
+                        driveDestinationCoordinate = destination
+                        driveModeActive = true
+                    }
+                )
+            },
             onSettingsTapped: { activeSheet = .settings },
             onCruiseTapped: { enterCruiseMode() },
             onParkingGuideTapped: { activeSheet = .parkingGuide },
