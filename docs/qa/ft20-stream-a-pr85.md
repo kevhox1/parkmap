@@ -287,3 +287,215 @@ and cross-referencing against the pre-PR commit (`HEAD~1`) and the design-review
   it (Stream C) exists.
 - **The two flagged spec inaccuracies are real and worth fixing** — good calibration from the engineer to
   flag rather than silently work around them.
+
+---
+
+## Pass 2 — 2026-08-20
+
+**Reviewed:** branch `ios/ft20-stream-a-sheet-container` at `7f545054` (fix commit only, scoped review —
+Pass 1's findings on `807770b5` are not re-litigated here), against Pass 1's two 🔴 Blocking findings.
+**Environment:** Linux VPS — no Xcode, no simulator, no `xcodebuild`. Static code read plus a semantic
+diff of `origin/main` vs. `HEAD` for `ContentView.swift`; nothing below is a compile or runtime claim.
+**Verdict:** ✅ **MERGE.** The fix commit resolves both Pass 1 Blocking findings correctly and completely.
+The gate (`ft20BrowseSheetEnabled`, `private static let = false`) is checked at exactly the two sites that
+can ever assign `.browseNav`, both converted guards (`driveEntryButton`, in-Drive "Park here") are
+correct, and — critically — **merging this branch with the gate off is a genuine, provable no-op against
+`main`'s current behavior**, not an approximation of one. See the direct answer at the end of this section.
+
+### What I verified (against the task's 6 numbered asks)
+
+**1. Semantic diff against `origin/main` — proving, not spot-checking, the no-op.**
+Ran `git diff origin/main...HEAD -- ContentView.swift` and read all 477 lines. Every hunk falls into one of
+three categories, and none of them changes runtime behavior while the gate is `false`:
+- Pure `activeSheet = nil` → `activeSheet = dismissTargetOutsideBrowseNav` substitutions at all 14
+  case-dismiss closures + `dismissBlockDetail()` + `handleLongPress` + `initiatePathBPinDrop`. No closure
+  was restructured, no control flow reordered, no guard's evaluation order changed beyond adding the
+  gate-check as the *first* condition in `dismissTargetOutsideBrowseNav`'s body (a `guard ... else { return
+  nil }`, which short-circuits before the `driveModeActive`/`blockSelectModeActive` reads — those reads are
+  pure state, no side effects, so short-circuiting them changes nothing observable).
+- The `.sheet(item:, onDismiss:)` backstop gained a new trailing `if Self.ft20BrowseSheetEnabled, ... {
+  activeSheet = .browseNav }` block. On `main`, this closure never assigned `activeSheet` at all (confirmed
+  by re-reading `origin/main:ContentView.swift:683–691` directly — it only clears
+  `selectedSegmentID`/`selectedBlockKeys`). With the gate `false`, this new `if` never executes (Swift
+  evaluates the four comma-separated conditions left-to-right and stops at the first `false`), so the
+  closure's *observable* behavior is byte-for-byte identical to `main`'s.
+- New `@State` vars (`browseSheetPeekHeight`, `browseSheetMediumHeight`, `browseSheetDetentKind`) and the
+  new `.browseNav` switch case in `sheetContent`/`ActiveSheet.id` are additive and read only from
+  `browseNavigationSheetContent`, which itself is only reachable via `activeSheet == .browseNav` — proven
+  unreachable below. Dead but harmless.
+
+**2. The fix's own failure modes.**
+- *Dead-code / warnings-as-errors risk:* Checked `project.pbxproj` for
+  `SWIFT_TREAT_WARNINGS_AS_ERRORS`/`GCC_TREAT_WARNINGS_AS_ERRORS` — neither is set anywhere in the file.
+  Separately, `guard Self.ft20BrowseSheetEnabled else { return nil }` against a `private static let`
+  boolean is not a pattern Swift's diagnostics engine constant-folds into an "unreachable code" warning
+  (unlike a literal `if false { }` or `#if` branch) — this is standard, widely-used feature-flag idiom, not
+  a novel risk. I could not compile to confirm zero new warnings (no toolchain on this VPS); this is a
+  reasoned-correct, not compiled-verified, claim — flagging explicitly per the "no silent passes" rule.
+  Kevin's Mac build is the actual confirmation.
+- *Read-paths for `.browseNav`:* Grepped every reference to `.browseNav` in `ContentView.swift` (`grep -n
+  "browseNav"`, 30 hits). Two read-paths exist: `ActiveSheet.id`'s switch (`case .browseNav: return
+  "browseNav"`, line 255) and `sheetContent`'s switch (`case .browseNav: browseNavigationSheetContent`,
+  line 1231). Both are ordinary exhaustive-switch cases over an enum value that literally cannot be
+  produced at runtime while the gate is off (see next point) — they compile fine and are inert, not a
+  reachable-content risk.
+- *`noBlockingSheetPresented` vs. old `activeSheet == nil`:* `private var noBlockingSheetPresented: Bool {
+  switch activeSheet { case nil, .browseNav: return true; default: return false } }`
+  (`ContentView.swift:937–942`). Since `.browseNav` is provably unreachable with the gate off (see below),
+  this switch's `.browseNav` arm can never fire, and `noBlockingSheetPresented` reduces to exactly
+  `activeSheet == nil` for every real runtime state — identical to the pre-PR guard it replaces at
+  `driveEntryButton` and the in-Drive "Park here" button.
+
+**3. The two converted guards.**
+- `driveEntryButton`'s "Drive to a destination" (`ContentView.swift:1830`) and the in-Drive "Park here"
+  button (`ContentView.swift:1993`) both now read `guard noBlockingSheetPresented else { return }` in place
+  of the stale `guard activeSheet == nil else { return }`. Confirmed both conversions are pure guard-clause
+  swaps — no other logic in either closure changed (traced full closure bodies at
+  `ContentView.swift:1820–1850` and `1975–2020`).
+- Confirmed `enterCruiseMode()`'s `noBlockingSheetPresented` guard was **already present in the original
+  Stream A commit `807770b5`** (`git show 807770b5:.../ContentView.swift` — line 2038), not newly added by
+  this fix commit. This fix commit's diff for `enterCruiseMode()` is comment-only. The commit message's
+  claim ("enterCruiseMode()'s guard was already fixed; these two weren't") is accurate, not inflated.
+- **No third stale guard:** `grep -n "activeSheet == nil\|activeSheet != nil"` across the file returns
+  exactly one hit outside doc comments — the backstop's own gated `if` at line 755, which is a legitimate
+  "genuinely nothing is showing" check (distinct in kind from a "no *blocking* sheet" entry guard,
+  correctly documented as such), not a missed conversion. Independently confirms the commit message's claim
+  of "no third instance found."
+- **Safety-relevance of "Park here":** correctly the more serious of the two per the commit message — it's
+  the only one of the pair tied to recording where the driver parked. With the fix, and given
+  `noBlockingSheetPresented` collapsing to `activeSheet == nil` while the gate is off, this guard's
+  behavior is provably identical to `main`'s today. This was the single highest-stakes correctness claim in
+  this review and it holds.
+
+**4. New tests (`BrowseSheetDetentSelectionBindingTests`, 12 tests total including the 2 edge-case
+pins).**
+Read all 12 tests in full (`FT20StreamATests.swift:175–309`). These are real behavior tests, not
+tautologies: `makeBinding` wires `browseSheetDetentSelectionBinding` (the actual function under test)
+through a `Binding<PresentationDetent>` backed by a reference-type `KindBox` standing in for `@State` — no
+part of the assertion path is mocked out or short-circuited. The get tests (3), exact-match set tests (3),
+and the round-trip test exercise real branches with real values. The two fall-through tests
+(`testSet_valueNotMatchingEitherCustomHeightFallsBackToPeekKind`,
+`testSet_arbitraryUnmatchedHeightFallsBackToPeekKind`) are legitimate pinning tests, not a bug getting
+quietly blessed: the test name, the inline comment, and the assertion's own failure message all explicitly
+say "current, documented, not necessarily desirable behavior," cross-reference this QA finding by number,
+and state the purpose is to make a future regression *or* a future fix a visible diff. That is the correct
+way to handle a known, deferred limitation — it does not misrepresent the fallback-to-`.peek` behavior as
+correct, and it doesn't block anything since `.browseNav` (and therefore this binding) is currently
+unreachable in the running app regardless.
+
+**5. `MapViewRepresentable.swift` / scope leakage.**
+`git diff origin/main...HEAD -- MapViewRepresentable.swift` returns empty — confirmed zero-diff. `git diff
+origin/main...HEAD --name-status` shows exactly 4 files touched across the whole branch: the Pass 1 QA doc
+(added), `ContentView.swift`, `Views/BrowseNavigationSheet.swift`, `WeParkTests/FT20StreamATests.swift`.
+No Stream B or Stream C files, and no unrelated files, are present in the diff.
+
+**6. `UIScreen.main` → `UIWindowScene` change (Finding #5).**
+`BrowseNavigationSheet.swift:326–332`:
+```swift
+private static var maxAllowedMediumHeight: CGFloat {
+    let screenHeight = UIApplication.shared.connectedScenes
+        .compactMap { $0 as? UIWindowScene }
+        .first?.screen.bounds.height
+        ?? UIScreen.main.bounds.height
+    return screenHeight * 0.75
+}
+```
+Correct and non-hazardous. This is only ever called from `reportHeights()`, which fires from `.onAppear`
+and `.onChange` inside `BrowseNavigationSheet.body` — i.e., only once the view is already being laid out
+and attached to a live window scene, so `connectedScenes` cannot legitimately be empty at that call site in
+this single-window app; the `UIScreen.main` fallback is a defensive no-op, not a load-bearing path. It
+degrades to exactly the prior (Pass 1 Finding #5-flagged, but "not wrong today") behavior in the
+never-expected case it fires, so there's no "clamp is nonsensical at launch" scenario — and moot regardless
+today, since `browseNavigationSheetContent` (the only call site of anything in this file) is unreachable
+while the gate is off.
+
+### Findings
+
+No new 🔴 or 🟡 findings against the fix commit itself.
+
+**🟢 #8 — The `UIWindowScene` fallback path (`BrowseNavigationSheet.swift:326–332`) has no unit test and,
+being screen/scene-dependent, can't easily get one; correctness rests on the same "no simulator to verify"
+constraint as Finding #3.** Low priority: not reachable in the shipped app until Stream C flips the gate,
+at which point it becomes exactly as verifiable as the rest of the detent math (Kevin's on-device smoke).
+Not a merge blocker.
+
+**🟢 #9 — Compile/warnings status for this fix is reasoned, not compiled.** Per the "no silent passes"
+rule: I did not run `swiftc`/`xcodebuild` (no toolchain on this Linux VPS) to confirm the `private static
+let` gate pattern produces zero new warnings. My assessment (no `TREAT_WARNINGS_AS_ERRORS` setting present,
+and this pattern isn't one Swift's diagnostics constant-fold into "unreachable code") is a reasoned
+judgment, not a verified one. Standard next step, already this project's established protocol — Kevin's
+Mac build is the actual confirmation, not a gap introduced by this fix.
+
+### Smoke tests run
+
+- `git diff origin/main...HEAD -- ios/WePark/WePark/ContentView.swift` (477 lines) read in full; every hunk
+  classified as (a) pure `nil`→`dismissTargetOutsideBrowseNav` substitution, (b) the gated backstop
+  addition, or (c) additive/inert new state — no hunk found that restructures control flow beyond the
+  gate-check itself.
+- `git show origin/main:ios/WePark/WePark/ContentView.swift` (lines 650–700) read directly to confirm the
+  pre-PR `.sheet(onDismiss:)` closure never touched `activeSheet`, so the gated-off backstop addition is a
+  true no-op, not just "usually a no-op."
+- `git show 807770b5:.../ContentView.swift` grepped for `enterCruiseMode` to confirm its
+  `noBlockingSheetPresented` guard predates this fix commit (was not part of Finding #2's fix) —
+  distinguishes "already correct" from "newly fixed" per the commit message's own claim.
+- `grep -n "activeSheet == nil\|activeSheet != nil\|noBlockingSheetPresented\|activeSheet =="` across the
+  full file — confirmed exactly 3 call sites read `noBlockingSheetPresented` (`enterCruiseMode`,
+  `driveEntryButton`, in-Drive "Park here") and exactly 1 legitimate remaining `activeSheet == nil` literal
+  (the backstop's own "genuinely nothing showing" check, correctly distinct in kind).
+- `grep -n "= \.browseNav\|activeSheet = "` across the full file — confirmed exactly one literal
+  `activeSheet = .browseNav` assignment (line 756, inside the gated backstop) and every other `.browseNav`
+  path funnels through the gated `dismissTargetOutsideBrowseNav` computed property. No third assignment
+  site.
+- Read `sheetContent`'s and `ActiveSheet.id`'s exhaustive switches in full to confirm the `.browseNav` read
+  arms are inert dead code, not a second reachability path.
+- `git diff origin/main...HEAD -- ios/WePark/WePark/MapViewRepresentable.swift` — empty, confirming
+  zero-diff.
+- `git diff origin/main...HEAD --name-status` — confirmed exactly 4 files touched, no Stream B/C leakage.
+- Read `BrowseNavigationSheet.swift`'s full `maxAllowedMediumHeight` diff and its two call sites
+  (`reportHeights`, called from `.onAppear`/`.onChange`) to confirm the `UIWindowScene` fallback can't fire
+  with a zero/garbage scene at the point it's actually invoked.
+- Read all 12 new tests in `BrowseSheetDetentSelectionBindingTests` line by line, including the two
+  fall-through-to-`.peek` pinning tests' assertion messages, to confirm they exercise real logic (not
+  tautological) and correctly frame the pinned behavior as a known, deferred limitation rather than a
+  silently-blessed bug.
+- Naive brace/paren balance check (`{`/`}`, `(`/`)` counts) on all three touched Swift files as a structural
+  sanity check in the absence of a compiler — `ContentView.swift` (340/340, 1301/1301),
+  `BrowseNavigationSheet.swift` (33/33, 128/128), `FT20StreamATests.swift` (27/27, 119/119). This is not a
+  substitute for compilation and is flagged as such — Kevin's Mac build remains the real gate.
+- Grepped `HANDOFF.md` for FT-20/PR #85 references to confirm no conflicting narrative or invariant.
+- Checked `project.pbxproj` for `PBXFileSystemSynchronizedRootGroup` — confirmed this project uses modern
+  file-system-synchronized groups, so the new/modified Swift files don't need explicit pbxproj membership
+  entries (no risk of a file silently not being compiled).
+
+### What's working
+
+- **The gate is exactly where it needs to be, and only there.** There are exactly two `activeSheet =
+  .browseNav`-capable sites in the entire file, and this fix demonstrably found and gated both — matching
+  its own doc comment's claim ("verified exhaustive via `grep`"), which I independently re-verified rather
+  than trusting.
+- **The fix is a genuinely minimal, surgical patch.** It does not touch the dismiss-site sweep's plumbing
+  (every `dismissTargetOutsideBrowseNav` call site is untouched); it only inserts the gate check at the two
+  points that matter and converts the two guard sites Finding #2 identified. This is exactly the right
+  shape of fix for "make this a no-op without ripping out work that's correct against the end state."
+  Diffing the actual result against `main` confirms this claim rather than just the intent.
+- **The new detent-selection-binding tests are honest about a known limitation instead of hiding it.** The
+  fall-through-to-`.peek` pinning tests put the QA finding they're addressing directly in the assertion
+  failure message, so a future reader hits the context immediately rather than having to go dig up this
+  report.
+- **The doc comments are unusually good discipline for a flag like this** — `ft20BrowseSheetEnabled`'s
+  comment spells out, in the code itself, the exact three things Stream C must land atomically before
+  flipping the gate (cold-launch mount, Drive-Mode boundary, FT-15 block-select boundary), which
+  meaningfully reduces the odds of a future agent flipping the flag without the safety net and reintroducing
+  Finding #1.
+
+### Direct answer: is merging with the gate off a genuine user-visible no-op?
+
+**Yes.** This was verified, not assumed: every `nil`→`.browseNav`-capable code path in `ContentView.swift`
+was enumerated (2 assignment sites, both gated; 3 guard sites converted to a helper that provably collapses
+to the pre-PR check while the gate is off; 2 inert read-paths in exhaustive switches) and each was traced
+against `origin/main`'s literal behavior at the same site. No path exists, gate off, where `activeSheet` can
+take any value it couldn't already take on `main` today. I did not run the app or the test suite (no
+toolchain on this Linux VPS) — the claim is a static-analysis proof of the state-machine's reachable set,
+not a live-UI observation. Kevin's Mac build/compile/test-suite pass and a basic smoke (open app, drop a
+pin, cancel it — Pass 1's own repro) remain the standard next step before this is fully closed out, but
+nothing in this fix commit gives QA reason to expect that smoke to surface anything.
