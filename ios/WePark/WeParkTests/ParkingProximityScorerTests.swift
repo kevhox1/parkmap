@@ -208,6 +208,87 @@ final class ParkingProximityScorerTests: XCTestCase {
         XCTAssertEqual(result.bucket, .mixed, "A 50/50 free/restricted split should not tip to either extreme.")
     }
 
+    func testScore_evenSplitRestrictedWithFreeAndMeteredRemainder_bucketsMixed() {
+        // 50% restricted, remainder split free/metered (2 restricted, 1 free, 1 metered —
+        // restrictedFraction is exactly 0.5). Fully half the block is drivable in some
+        // form, so "mostly restricted" would be wrong even though restricted is the
+        // single largest category — this must land in `.mixed`, not `.mostlyRestricted`.
+        let aspRule = ParkingRule(
+            category: .aspDaily, description: "ASP", days: [0, 1, 2, 3, 4, 5, 6],
+            timeRanges: [TimeRange(start: 0, end: 1439)], anytime: true, arrow: nil
+        )
+        let restricted = (0..<2).map { i -> Segment in
+            segment(
+                street: "ASP ST \(i)", from: "A\(i)", to: "B\(i)", category: .aspDaily,
+                coordinate: near(20), rulesOverride: [aspRule]
+            )
+        }
+        let free = segment(street: "FREE ST", from: "C", to: "D", category: .free, coordinate: near(20))
+        let metered = segment(street: "METER ST", from: "E", to: "F", category: .metered, coordinate: near(20))
+        let result = ParkingProximityScorer.score(
+            near: anchor, segments: restricted + [free, metered], engine: engine, now: now
+        )
+        XCTAssertEqual(result.bucket, .mixed)
+    }
+
+    func testScore_evenSplitFreeAndMeteredNoRestricted_bucketsMixed() {
+        // 50% free, remainder entirely metered (no restricted) — freeFraction is exactly
+        // 0.5. Consistent with the all-metered case: metered is parkable but not "free,"
+        // so this must land in `.mixed`, not `.mostlyFree`.
+        let free = segment(street: "FREE ST", from: "A", to: "B", category: .free, coordinate: near(20))
+        let metered = segment(street: "METER ST", from: "C", to: "D", category: .metered, coordinate: near(20))
+        let result = ParkingProximityScorer.score(
+            near: anchor, segments: [free, metered], engine: engine, now: now
+        )
+        XCTAssertEqual(result.bucket, .mixed)
+    }
+
+    func testScore_justOverHalfRestricted_bucketsMostlyRestricted() {
+        // 3 restricted, 2 free — restrictedFraction = 0.6, a strict majority, so this
+        // should tip to `.mostlyRestricted`. Pins the "just above 0.5" edge distinct from
+        // the exact-tie tests above.
+        let aspRule = ParkingRule(
+            category: .aspDaily, description: "ASP", days: [0, 1, 2, 3, 4, 5, 6],
+            timeRanges: [TimeRange(start: 0, end: 1439)], anytime: true, arrow: nil
+        )
+        let restricted = (0..<3).map { i -> Segment in
+            segment(
+                street: "ASP ST \(i)", from: "A\(i)", to: "B\(i)", category: .aspDaily,
+                coordinate: near(20), rulesOverride: [aspRule]
+            )
+        }
+        let free = (0..<2).map { i in
+            segment(street: "FREE ST \(i)", from: "C\(i)", to: "D\(i)", category: .free, coordinate: near(20))
+        }
+        let result = ParkingProximityScorer.score(
+            near: anchor, segments: restricted + free, engine: engine, now: now
+        )
+        XCTAssertEqual(result.bucket, .mostlyRestricted)
+    }
+
+    func testScore_justUnderHalfRestricted_bucketsMostlyFree() {
+        // 2 restricted, 3 free — restrictedFraction = 0.4, freeFraction = 0.6 > 0.5, so
+        // this tips to `.mostlyFree` — pins the "just below 0.5 restricted" edge as a
+        // sanity check that the strict majority on the free side still fires normally.
+        let aspRule = ParkingRule(
+            category: .aspDaily, description: "ASP", days: [0, 1, 2, 3, 4, 5, 6],
+            timeRanges: [TimeRange(start: 0, end: 1439)], anytime: true, arrow: nil
+        )
+        let restricted = (0..<2).map { i -> Segment in
+            segment(
+                street: "ASP ST \(i)", from: "A\(i)", to: "B\(i)", category: .aspDaily,
+                coordinate: near(20), rulesOverride: [aspRule]
+            )
+        }
+        let free = (0..<3).map { i in
+            segment(street: "FREE ST \(i)", from: "C\(i)", to: "D\(i)", category: .free, coordinate: near(20))
+        }
+        let result = ParkingProximityScorer.score(
+            near: anchor, segments: restricted + free, engine: engine, now: now
+        )
+        XCTAssertEqual(result.bucket, .mostlyFree)
+    }
+
     func testScore_majorityFreeWithSomeRestricted_bucketsMostlyFree() {
         let frees = (0..<3).map { i in
             segment(street: "FREE ST \(i)", from: "A\(i)", to: "B\(i)", category: .free, coordinate: near(20))

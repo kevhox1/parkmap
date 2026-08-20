@@ -119,6 +119,43 @@ struct ParkingProximityScore: Equatable {
 /// Pure, UIKit/SwiftUI-independent scan-and-score logic (SwiftUI is only used for
 /// `Color`/`ParkingColors`, never `UIScreen`/`GeometryProxy`/etc.) — fully unit-testable
 /// without a simulator.
+///
+/// ## Bucket boundary contract
+///
+/// This is a contract, not an implementation detail — build 18's patrol mode
+/// (`docs/smart-parking-route-2.0-concept.md`, W8.5e–i) calls `score(near:...)` once per
+/// candidate node in its greedy traversal, so the bucket boundaries below need to hold up
+/// under arbitrary free/metered/restricted mixes, not just the "typical" ones.
+///
+/// `.mostlyFree` and `.mostlyRestricted` require a STRICT majority (> 50%) of the scored
+/// (non-skip-category, non-`.unknown`) blockfaces. **A tie — exactly 50% — always resolves
+/// to `.mixed`, regardless of the other 50%'s makeup.** Reasoned through explicitly:
+///
+///   - 50% free / 50% restricted (no metered): the textbook tie. Neither fraction exceeds
+///     0.5, so `.mixed`. This is the only honest answer — calling it "mostly restricted"
+///     (the pre-fix bug: restricted was checked first and `>=` let a 0.5 tie win)
+///     talks a driver out of a street where half the curb is genuinely free; calling it
+///     "mostly free" overstates how usable the block is.
+///   - 50% restricted / remainder split across free + metered (e.g. 50/25/25): restricted
+///     fraction is exactly 0.5, not `> 0.5` → `.mixed`. Correct: fully half the block is
+///     drivable in some form (free or paid), so "mostly restricted" would be wrong even
+///     though restricted is the single largest category.
+///   - 50% free / remainder entirely metered (no restricted): free fraction is exactly
+///     0.5, not `> 0.5` → `.mixed`. Consistent with the all-metered case below — metered
+///     is parkable but not "free," so a 50/50 free/metered split reads as `.mixed` rather
+///     than `.mostlyFree`.
+///   - 100% metered: neither fraction is ever `> 0.5` (both are 0), so `.mixed` — metered
+///     parking is genuinely available, so it must never read as `.mostlyRestricted`, but
+///     it isn't literally "free" either. (Pinned by an existing test; unaffected by this
+///     boundary fix since 0 was never `>= 0.5` either.)
+///   - Because free/metered/restricted fractions of the same total sum to 1, at most one
+///     of `freeFraction`/`restrictedFraction` can exceed 0.5 at a time — so the strict
+///     `>` check on both branches can never disagree with itself regardless of check order.
+///   - `total == 0` (no scoreable segments at all — everything skip-categoried, out of
+///     radius, or `.unknown`) is `.noData`, always evaluated before the fraction math and
+///     never reachable via any free/metered/restricted ratio. `.noData` must stay distinct
+///     from `.mixed`: reporting "mixed" when we simply have no data would claim a
+///     three-way split that was never observed.
 enum ParkingProximityScorer {
 
     /// Radius scan default per spec §3.2's OQ-4 cheap version: "radius scan (100m)."
@@ -198,9 +235,18 @@ enum ParkingProximityScorer {
         } else {
             let restrictedFraction = Double(restrictedCount) / Double(total)
             let freeFraction = Double(freeCount) / Double(total)
-            if restrictedFraction >= 0.5 {
+            // Tie-break rule (see the doc comment on `ParkingProximityScorer` for the
+            // full case-by-case reasoning): a bucket only tips to an extreme on a STRICT
+            // majority (> 0.5). An exact 50% split — in either direction, with any
+            // makeup of the other 50% — lands in `.mixed`. Reporting a tied split as
+            // leaning either way is actively misleading in both directions: calling an
+            // exact 50/50 free/restricted split "mostly restricted" talks a driver out
+            // of a street where half the curb is genuinely free; calling it "mostly
+            // free" overstates how much of the curb is actually usable. `.mixed` is the
+            // only honest answer at the boundary.
+            if restrictedFraction > 0.5 {
                 bucket = .mostlyRestricted
-            } else if freeFraction >= 0.5 {
+            } else if freeFraction > 0.5 {
                 bucket = .mostlyFree
             } else {
                 bucket = .mixed
