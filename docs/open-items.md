@@ -104,7 +104,8 @@ Kevin initially wanted all three in build 17; agreed to the split. The reasoning
 
 ## 🔵 BACKLOG — not started, explicitly after the above
 
-External TestFlight group (privacy URL ready) · FT-2 delete-own-pin (spec'd) · TF2-15 construction
+~~External TestFlight group~~ ✅ **DONE 2026-08-20 — build 16 passed Beta App Review, public link
+live** · FT-2 delete-own-pin (spec'd) · TF2-15 construction
 layer (folded into FT-15's primitive) · tech-debt batch · FT-14's remaining gaps (~800 dead-end/ramp
 rows unfixable by renaming; the larger "NYC posts no signs on many blocks" gap) · PWA `APP_VERSION`
 label drift (cosmetic).
@@ -113,12 +114,25 @@ label drift (cosmetic).
 
 ## Notes that affect sequencing
 
-- **Kevin is the ONLY TestFlight user** (confirmed 2026-08-13). No external testers yet — the
-  external TestFlight group is still a backlog item. This makes breaking changes *cheap*: data
-  migrations, session resets, and state-dropping schema changes cost nothing right now and get
-  expensive the moment external testers exist. Don't build migration shims for hypothetical users
-  (this already saved the realtime Stream A work a `UserDefaults`→Keychain session shim). Revisit
-  this assumption the moment the external group is created.
+- **🔴 SUPERSEDED 2026-08-20 — KEVIN IS NO LONGER THE ONLY TESTFLIGHT USER.** Build 16 passed Beta
+  App Review and is **distributed externally with a public TestFlight link.** The assumption below
+  held from 2026-08-13 to 2026-08-20 and is now **void**. What changes:
+  - **Breaking changes are no longer free.** Data migrations, session resets, and state-dropping
+    schema changes now cost real users their data. The old note said to revisit this "the moment the
+    external group is created" — that moment has arrived.
+  - **Anonymous identity is now load-bearing for people who aren't Kevin.** `SupabaseAuthService`'s
+    reasoning that "the worst case on upgrade is a fresh anonymous identity" was costed against a
+    single user who could shrug it off. An external tester losing their session loses their saved car
+    and their report history with no way to recover it — there is no account to sign back into.
+  - **Migration shims are no longer hypothetical.** The old advice not to build them was correct
+    *then*; re-evaluate per change now rather than defaulting either way.
+  - **FT-21 and the coverage gaps are now visible to strangers.** Both are named as known issues in
+    the What-to-Test copy so they don't generate duplicate reports.
+  - **TestFlight crash reports and feedback start arriving.** Nothing polls them today. Worth a
+    habit, not a feature.
+  - *(Historical, for context — the assumption this replaces: Kevin was the only TestFlight user,
+    confirmed 2026-08-13, which made breaking changes cheap and saved the realtime Stream A work a
+    `UserDefaults`→Keychain session shim. That saving was correctly banked at the time.)*
 - **File contention is the real bottleneck, not agent capacity.** `MapViewRepresentable.swift`,
   `ContentView.swift`, and `CommunityPinService.swift` are each wanted by 2-3 streams. They must be
   serialized.

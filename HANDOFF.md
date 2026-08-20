@@ -201,6 +201,44 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-20 — 🚀 WEPARK IS PUBLIC. Build 16 passed Beta App Review; external TestFlight link is live.
+
+**Kevin is no longer the only user.** Build 1.0 (16) cleared Apple's Beta App Review and is
+distributed externally via a **public TestFlight link**. This is the first time anyone outside Kevin
+has run WePark.
+
+**🔴 THE STANDING ASSUMPTION THAT JUST DIED.** From 2026-08-13 to 2026-08-20 the docs said, in four
+places, *"Kevin is the ONLY TestFlight user — breaking changes stay cheap until an external group
+exists,"* with an explicit instruction to revisit it the moment that group existed. **It exists.**
+Consequences, in order of how easy they are to forget:
+- **Breaking changes now cost real people their data.** Data migrations, session resets and
+  state-dropping schema changes were free; they aren't now.
+- **The anonymous identity is load-bearing for strangers.** `SupabaseAuthService` reasons that "the
+  worst case on upgrade is a fresh anonymous identity" — costed against one user who could shrug it
+  off. An external tester who loses their session loses their saved car and their report history,
+  **with no account to sign back into.** That is now a real product risk, not a shrug.
+- **Migration shims stop being hypothetical.** The old "don't build them" advice was right at the
+  time and banked a real saving on realtime Stream A. Decide per change now.
+- **Nothing polls TestFlight crash reports or feedback.** No tooling, no alerting. Worth a habit.
+- **FT-21 (mid-road lines on wide streets) and the ~50% coverage gap are now visible to strangers.**
+  Both are named as known issues in the What-to-Test copy specifically to suppress duplicate reports.
+
+**What external testers are getting:** build 16 — FT-15 film-shoot reports, FT-18's Bottom Dock,
+FT-17a Recenter, the FT-14/FT-19 geometry fixes, Parking 101. **NOT dark mode and NOT realtime** —
+those are build 17, still in progress. So the first external impression is the light scheme and the
+8-second poll.
+
+**Beta App Review notes worth keeping for next time:** the app has **no user-facing sign-in**
+(`signInAnonymously()` runs silently, there is no LoginView), so App Store Connect's "Sign-in
+required" box must be **unchecked** — checking it makes the reviewer expect credentials that don't
+exist. And because coverage is NYC-only, the review notes explicitly tell the reviewer to simulate
+Manhattan (40.7250, -73.9900); a reviewer in Cupertino sees an empty map and can reasonably call the
+app broken.
+
+**Build 17 is unaffected and continues** — one item from done (the FT-20 sheet).
+
+---
+
 ### 2026-08-19 (later) — Realtime Stream B MERGED. Build 17 is now one item from done.
 
 **WHERE WE ARE:** `main` @ `5d4604a6`. **Zero open PRs.** `CURRENT_PROJECT_VERSION` still **16**.
