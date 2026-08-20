@@ -165,6 +165,31 @@ unavoidable while two presentation contexts coexist.
 Leaving the duplication un-consolidated is the failure mode to watch: two search implementations that
 drift apart is worse than either one alone.
 
+### §0d — Stream B QA carry-forwards (BINDING on Stream C, 2026-08-20)
+
+From `docs/qa/ft20-stream-b-pr86.md`. Both are unreachable today (gate off) and were correctly not
+blocking for Stream B's merge — but **both become live the instant Stream C flips
+`ft20BrowseSheetEnabled`**, so C owns them.
+
+- **C1 [Significant] — `BrowseNavigationSheet.searchArea` has no frame constraint, which
+  reintroduces the `List`-greedy-sizing trap Stream A explicitly solved.** Stream A hit this and fixed
+  it for `actionList` by deriving a row height via `@ScaledMetric` and constraining with
+  `.frame(height:)`, rather than measuring the `List` (UIKit-bridged and greedy — it reports whatever
+  slice of the `.large` layout pass it was handed). Stream B's real content can now put a `List`
+  (recents/suggestions) in `searchArea` at `.large`, which **corrupts the `searchAreaHeight`
+  measurement that drives peek and medium detent sizing.** Since OQ-3's whole point is a custom detent
+  sized to "search + three rows and no more," a corrupted measurement defeats Kevin's ruling directly.
+  Constrain `searchArea` the same way `actionList` is constrained; do not measure the `List`.
+- **C2 [Minor] — the inline error banner is gated behind `detentKind == .large`.** A search or route
+  failure that arrives after the user has collapsed the sheet is invisible — the user sees nothing
+  happen and has no idea why. This is an undocumented behavior change from
+  `DriveModeDestinationView`, where the banner was always visible in the full-screen cover. Either
+  surface errors at every detent, or auto-expand to `.large` when one arrives. Not acceptable to ship
+  as-is once the sheet is the only search path.
+
+*(QA finding #3 — `ParkingProximityScorerTests` never exercises the `.freeButRestrictionSoon` branch —
+is logged, not assigned. Worth adding whenever that file is next touched; it does not gate Stream C.)*
+
 ---
 
 **Estimate impact:** the reviewer judged S1–S6 to be spec-tightening rather than new surface area —

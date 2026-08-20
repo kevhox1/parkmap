@@ -16,7 +16,8 @@ App Store Connect, real-device drive test).
 
 | # | Item | Where | State |
 |---|---|---|---|
-| 1 | **FT-20 bottom sheet** — the remaining build-17 payload | VPS → **MAC** | Design review ✅ · **Stream A ✅ MERGED `37aa8c01`** (748/748 on Kevin's Mac, live smoke passed) · **Stream B ⬜ NEXT** (search/place, ~1.5) · Stream C ⬜ (`ContentView` integration, ~1.5–2, **owns flipping `ft20BrowseSheetEnabled`**) · QA ~1–1.5 over 2 passes |
+| 1 | **FT-20 bottom sheet** — the remaining build-17 payload | VPS → **MAC** | Design review ✅ · **Stream A ✅ MERGED `37aa8c01`** (748/748, live smoke passed) · **Stream B ✅ MERGED `c1d2f60d`** (776/776 after a Mac-caught 50/50 tie-break bug in the scorer) · **Stream C ⬜ NEXT** (~1.5–2, the big one) · QA ~1–1.5 over 2 passes |
+| 1b | **Stream C's definition of done** — it has grown; all of it lands in ONE change | VPS → **MAC** | Mount the sheet at cold launch · delete `gearButtonOverlay`/`driveEntryButton`/`driveModeDestinationCover` · delete `DriveModeDestinationView.swift` · collapse the duplicated `onRouteReady` · relocate Park Until to the top-right rail · wire the Drive-Mode boundary (AC-28/29a) and the FT-15 block-select boundary (AC-23–27/S4) · fix spec §0d's **C1** (`searchArea` frame constraint — the `List`-greedy-sizing trap) and **C2** (error banner invisible below `.large`) · **flip `ft20BrowseSheetEnabled`**. ⚠️ **First stream whose result is visible — needs a real live smoke, not just a green build** |
 | 1a | ⚠️ **`ft20BrowseSheetEnabled` is `false` on `main`** | VPS | Stream A is merged but **inert** — the sheet is invisible to users until Stream C flips the gate. This is deliberate: it kept `main` shippable while A landed. **Stream C must flip it and land the cold-launch mount + both boundaries in the same change.** Greppable: `ft20BrowseSheetEnabled` in `ContentView.swift` |
 
 ---
