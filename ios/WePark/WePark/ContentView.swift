@@ -165,6 +165,38 @@
 //      `blockSelectModeActive`'s doc comment, the `recenterButtonStack` gate in
 //      `mapZStack`, and the force-clear in `handleDriveModeAndCamera`.
 //
+//  FT-20 Stream C additions (browse-mode bottom sheet — the sheet goes LIVE, replacing the
+//  toolbar chrome piecemeal — docs/ft20-bottom-sheet-navigation-spec.md §6/§9):
+//    - `ft20BrowseSheetEnabled` flipped `true`; `activeSheet`'s default is `.browseNav`, not
+//      `nil` — the sheet is browse mode's persistent cold-launch rest state (§4.1).
+//    - `gearButtonOverlay` (gear + Parking 101 "?" buttons) and `driveEntryButton` (the
+//      combined Drive/Cruise `Menu`) DELETED — absorbed into the sheet's medium-detent
+//      action list. `driveModeDestinationCover`/`showDriveModeDestination`
+//      (`DriveModeDestinationView`'s `.fullScreenCover`) DELETED along with
+//      `Views/DriveModeDestinationView.swift` itself — `BrowseSearchAreaView` (Stream B) is
+//      now the only search entry point. `SearchCompleterDelegate`/`SearchTimeoutError`
+//      relocated to `Services/SearchCompleterDelegate.swift` (§0c).
+//    - Park Until's toolbar button needed no relocation — it already lived in
+//      `recenterButtonStack` alongside Find me / Find my car (OQ-2's "third floating
+//      control" ruling); deleting `driveEntryButton` (the stack's 4th button) is what
+//      leaves it as the natural 3rd/last button in a now-3-button stack.
+//    - Drive Mode boundary (§6, AC-28/AC-29a): `browseSheetBoundaryTarget(_:)` — a pure
+//      decision function — plus its call site in `handleDriveModeAndCamera` force-hide the
+//      sheet on entry and restore it to `.browseNav` at PEEK on exit, batched into the SAME
+//      `.onChange(of: driveModeActive)` transaction that also drives the Bottom Dock's
+//      appearance/disappearance (no separate render pass, no overlap frame).
+//    - FT-15 block-select boundary (§5.1, design-review S4): `cancelBlockSelectMode()` now
+//      restores `.browseNav` on exit (previously left `activeSheet` untouched — AC-25 gap).
+//      `blockSelectEntryGuardUntil` + `blockSelectTapShouldBeIgnored(now:guardUntil:)` guard
+//      the first ~0.35s after block-select entry against a fast tap landing during the
+//      three-overlapping-animations window (confirmationDialog dismiss, sheet force-hide,
+//      `blockSelectBar` appear) — see `enterBlockSelectMode()`'s doc comment.
+//    - QA §0d C1/C2 fixes (`docs/qa/ft20-stream-b-pr86.md`): `BrowseSheetSearchAreaHeightPreferenceKey`
+//      (`BrowseNavigationSheet.swift`) replaces measuring the whole `searchArea` slot, so a
+//      `List` mounted inside it at `.large` can never corrupt the peek/medium detent math;
+//      `BrowseSearchAreaView` auto-expands to `.large` when an error arrives so it's never
+//      invisible behind a collapsed sheet.
+//
 
 import SwiftUI
 import MapKit
@@ -333,20 +365,20 @@ struct ContentView: View {
     /// Replaces the three separate sheet vars (isSheetPresented/pinDropIntent/parkedCarDetailItem)
     /// that triggered "Currently, only presenting a single sheet is supported" warnings.
     ///
-    /// FT-20 Stream A note: the default stays `nil` here — flipping the app's cold-launch
-    /// rest state to `.browseNav` is Stream C's "mount the sheet" work, not Stream A's.
+    /// FT-20 Stream C: browse mode's cold-launch rest state is `.browseNav`, not `nil` —
+    /// per spec §4.1/§7 AC-1/AC-3, the sheet is always visible at one of its three detents
+    /// while browsing (peek by default). `nil` is reserved for the two states where the
+    /// sheet must be fully hidden: Drive Mode active, or FT-15 block-select mode active
+    /// (spec §5/§6 — both wired below, see `browseSheetBoundaryTarget` and
+    /// `enterBlockSelectMode`).
     ///
-    /// ⚠️ CORRECTED 2026-08-19 (QA docs/qa/ft20-stream-a-pr85.md Finding #1): an earlier
-    /// version of this comment claimed `.browseNav` was simply "unreachable until Stream C
-    /// lands." That was false — Stream A's own mechanical dismiss-target sweep
-    /// (`dismissTargetOutsideBrowseNav`) made `.browseNav` reachable from every ordinary
-    /// sheet dismissal in the app immediately, trapping users behind an inescapable,
-    /// half-built sheet. The claim is true again now only because of an explicit gate,
-    /// `ft20BrowseSheetEnabled` (see its doc comment, near `dismissTargetOutsideBrowseNav`
-    /// below) — while that gate is `false`, `.browseNav` genuinely cannot be reached by any
-    /// code path, and every existing sheet flow behaves exactly as it did on `main` before
-    /// this PR. Stream C flips the gate.
-    @State private var activeSheet: ActiveSheet? = nil
+    /// History: Streams A/B shipped this defaulting to `nil` behind `ft20BrowseSheetEnabled
+    /// == false` (see that gate's doc comment) specifically because mounting `.browseNav` at
+    /// cold launch without the Drive-Mode/block-select force-hide wiring already in place
+    /// would have traded one bug (QA Finding #1's trapped sheet) for another (the browse
+    /// sheet fighting Drive Mode's Bottom Dock on the very first launch). Both are wired
+    /// now, in this same change, so the default flips safely.
+    @State private var activeSheet: ActiveSheet? = .browseNav
 
     /// FT-20 Stream A (spec §4.1, design-review finding B1/B2): the two CUSTOM
     /// `.presentationDetents` heights for `.browseNav`, measured from the sheet's own
@@ -473,9 +505,6 @@ struct ContentView: View {
 
     /// Destination coordinate for the route pin. Nil when Drive Mode inactive.
     @State private var driveDestinationCoordinate: CLLocationCoordinate2D? = nil
-
-    /// Controls presentation of the full-screen destination search cover.
-    @State private var showDriveModeDestination: Bool = false
 
     // MARK: - W8.5c: Drive Mode active layer state
 
@@ -634,6 +663,15 @@ struct ContentView: View {
     /// block-select mode is (re-)entered.
     @State private var bothCurbsOn: Bool = true
 
+    /// FT-20 Stream C / design-review S4: the wall-clock deadline before which a
+    /// block-select tap is ignored, set on every `enterBlockSelectMode()` call. Guards
+    /// against a fast first tap landing during the ~3-animation settling window (the
+    /// resting `.confirmationDialog` dismissing, the browse sheet force-hiding, `blockSelectBar`
+    /// appearing) that all fire from the same synchronous entry action. `nil` outside
+    /// block-select mode (or once the guard has served its purpose — cleared on exit).
+    /// See `blockSelectTapShouldBeIgnored(now:guardUntil:)` for the pure comparison logic.
+    @State private var blockSelectEntryGuardUntil: Date? = nil
+
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
     /// Community pin service. Fetches filming / asp_suspended_today / special_event pins
@@ -703,6 +741,16 @@ struct ContentView: View {
     /// W5: Radius for candidate-segment search (matches PWA findCandidateSegments).
     private let pinDropRadiusMeters: Double = 35.0
 
+    /// FT-20 Stream C / design-review S4: how long a block-select tap is ignored after
+    /// `enterBlockSelectMode()`, giving the three overlapping dismiss/appear animations
+    /// (confirmationDialog, browse sheet, `blockSelectBar`) time to visually settle before
+    /// the map starts accepting the precision multi-tap sequence block-select depends on.
+    /// 0.35s is a reasoned starting point (comfortably longer than a standard ~0.3s sheet
+    /// dismiss animation), not a measured value — this machine has no simulator to time the
+    /// actual animation. Kevin's live smoke (PR checklist: "immediate fast tap on a
+    /// blockface" right after entering block-select) is what confirms or corrects it.
+    private static let blockSelectEntrySettlingDuration: TimeInterval = 0.35
+
     // MARK: - Derived
 
     /// W8.5c-polish PR-1 (Feature B): Extra top padding for the isolated "End" control
@@ -749,14 +797,13 @@ struct ContentView: View {
                 //
                 // Also guarded on `ft20BrowseSheetEnabled` (see its doc comment near
                 // `dismissTargetOutsideBrowseNav` below) — this is the SECOND of the two
-                // places in the file that can assign `.browseNav`, and both must be gated
-                // for `.browseNav` to be genuinely unreachable while Stream C hasn't landed
-                // (QA docs/qa/ft20-stream-a-pr85.md Finding #1).
+                // places in the file that can assign `.browseNav` as a dismiss target. Kept
+                // even though the gate is permanently `true` now: it's the same defensive
+                // shape as `dismissTargetOutsideBrowseNav`'s own guard, and costs nothing.
                 if Self.ft20BrowseSheetEnabled, activeSheet == nil, !driveModeActive, !blockSelectModeActive {
                     activeSheet = .browseNav
                 }
             }) { sheet in sheetContent(sheet) }
-            .fullScreenCover(isPresented: $showDriveModeDestination) { driveModeDestinationCover }
             .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
                 Button("Got It", role: .cancel) {}
             } message: {
@@ -841,68 +888,42 @@ struct ContentView: View {
             }
     }
 
-    // MARK: - W8.5b: Full-screen destination search cover
-
-    /// Presents `DriveModeDestinationView` as a full-screen cover (OQ-2: Option C).
-    /// This modifier is separate from `.sheet(item:)` and can coexist with it,
-    /// but the Drive button guard ensures they are never simultaneously presented.
-    @ViewBuilder
-    private var driveModeDestinationCover: some View {
-        DriveModeDestinationView(
-            currentRegion: region,
-            segments: tileLoader.segments,
-            userLocation: locationService.userLocation,
-            locationService: locationService,
-            onRouteReady: { route, destination in
-                // W8.5b: Route ready — enter Destination Mode.
-                // CM-3: Set driveModeStyle = .destination BEFORE driveModeActive = true
-                // so handleDriveModeChange reads the correct style when it fires.
-                driveModeStyle = .destination
-                activeRoute = route
-                driveDestinationCoordinate = destination
-                driveModeActive = true
-            }
-        )
-    }
-
     // MARK: - FT-20 Stream C activation gate
 
-    /// **Stream C flips this to `true`.** Added in response to QA docs/qa/ft20-stream-a-pr85.md
-    /// Finding #1 (blocking): Stream A's mechanical "dismiss → `.browseNav`, not `nil`" sweep
-    /// (§4.1) is correct against the END STATE of this spec, but the end state assumes Stream
-    /// C's safety net — cold-launch mount, the Drive-Mode boundary, the FT-15 block-select
-    /// boundary — already exists. It doesn't yet. Landing the sweep un-gated made `.browseNav`
-    /// (an `.interactiveDismissDisabled(true)` sheet with no dismiss path Stream A builds)
-    /// reachable from every ordinary sheet dismissal in the shipped app — Settings, Cancel on
-    /// `ParkConfirmView`, Skip on `ParkUntilSheet`, Done on Parking 101, etc. — trapping the
-    /// user with no way back to the map short of a force-quit.
+    /// **FLIPPED TO `true` BY STREAM C**, in the same change that lands every piece of the
+    /// safety net this rest state depends on — per QA docs/qa/ft20-stream-a-pr85.md Finding
+    /// #1 (blocking), landing the flip WITHOUT all three of the following would regress to
+    /// an inescapable, half-built sheet:
+    ///   1. Mount `.browseNav` as browse mode's cold-launch rest state — `activeSheet`'s
+    ///      `@State` default is `.browseNav`, not `nil` (see its own doc comment above).
+    ///   2. The Drive-Mode boundary (spec §6, AC-28/AC-29a, design-review S3): force-hide
+    ///      `.browseNav` the instant `driveModeActive` flips `true`; restore it to
+    ///      `.browseNav` at PEEK the instant it flips back to `false` — both from the same
+    ///      synchronous `.onChange(of: driveModeActive)` funnel
+    ///      (`browseSheetBoundaryTarget(driveModeBecameActive:)`, called from
+    ///      `handleDriveModeAndCamera`) that also drives the Bottom Dock's appearance, so
+    ///      the two land in the SAME SwiftUI render pass — no frame shows both.
+    ///   3. The FT-15 block-select boundary (spec §5.1, AC-23–27, design-review S4):
+    ///      `enterBlockSelectMode()`'s pre-existing unconditional `activeSheet = nil`
+    ///      force-hide is kept as-is (Streams A/B correctly left it alone); `cancelBlockSelectMode()`
+    ///      now restores `.browseNav` on exit (previously left `activeSheet` untouched —
+    ///      AC-25 was unimplemented until this change), and `blockSelectEntryGuardUntil`
+    ///      guards the first fast tap against the three-animation entry race (design-review
+    ///      S4) — see `enterBlockSelectMode()`'s doc comment.
     ///
-    /// While `false` (Stream A's shipped state): `.browseNav` is genuinely, exhaustively
-    /// unreachable — not just "usually" unreachable. There are exactly two places in this file
-    /// that can ever assign `activeSheet = .browseNav`, and both check this gate:
+    /// There are exactly two places in this file that can ever assign
+    /// `activeSheet = .browseNav` as a DISMISS target (as opposed to a force-restore at a
+    /// mode boundary, which is separate, deliberate code):
     ///   1. `dismissTargetOutsideBrowseNav`, immediately below — every one of the 14 existing
     ///      sheet-case dismiss closures, plus `dismissBlockDetail()`, reads this.
     ///   2. The `.sheet(item: $activeSheet, onDismiss:)` backstop in `body` above, which
     ///      otherwise assigns `.browseNav` for cases with no dismiss closure of their own
     ///      (`.settings`) and for interactive swipe-dismiss.
-    /// (Verified exhaustive via `grep -n "= \.browseNav" ContentView.swift` — no third site.)
-    /// With the gate `false`, every dismiss in the app resolves to plain `nil`, i.e. exactly
-    /// today's `main` behavior — merging Stream A alone is a no-op for the running app.
-    ///
-    /// **Flipping this to `true` is NOT a one-line change.** Stream C must land ALL of the
-    /// following in the SAME change that flips it, or this regresses to Finding #1's
-    /// trapped-sheet bug:
-    ///   1. Mount `.browseNav` as browse mode's cold-launch rest state (today `activeSheet`
-    ///      defaults to `nil` unconditionally — see its own `@State` doc comment above).
-    ///   2. Wire the Drive-Mode boundary (spec §6, AC-28/AC-29a, design-review S3): force-hide
-    ///      `.browseNav` the instant `driveModeActive` flips `true`; restore it the instant it
-    ///      flips back to `false`, with no frame showing both the outgoing Bottom Dock and the
-    ///      reappearing browse sheet.
-    ///   3. Wire the FT-15 block-select boundary (spec §5.1, AC-23–27, design-review S4):
-    ///      force-hide `.browseNav` the instant `blockSelectModeActive` flips `true` (already
-    ///      partly true — `enterBlockSelectMode()` sets `activeSheet = nil` unconditionally,
-    ///      by design, unaffected by this gate); restore it on exit.
-    private static let ft20BrowseSheetEnabled = false
+    /// (Verified exhaustive via `grep -n "= \.browseNav" ContentView.swift` at the time this
+    /// gate was still `false` — no third dismiss-target site; the Drive-Mode/block-select
+    /// boundary assignments added by this change are force-RESTORE sites, a different kind
+    /// of write, not a third dismiss target.)
+    private static let ft20BrowseSheetEnabled = true
 
     // MARK: - FT-20 Stream A: sheet-case dismiss target
 
@@ -1243,21 +1264,17 @@ struct ContentView: View {
     /// 11 `.presentationDetents` call sites above uses `.medium`/`[.medium, .large]`; this
     /// is the one deliberate exception. See `BrowseSheetDetentMath`'s doc comment.
     ///
-    /// `searchArea` is FT-20 Stream B's real relocated search/place content
-    /// (`BrowseSearchAreaView`, §4.3) — replaces Stream A's stub
-    /// (`BrowseSheetSearchAreaStub`). Per Stream A's own contract ("Only `searchArea`
-    /// should change"), this is the only argument that changed here; row actions still
-    /// call through to the same functions/case-assignments the (soon-to-be-deleted, per
-    /// Stream C) `gearButtonOverlay`/`driveEntryButton` already use today — no new
-    /// entry-path logic, only new UI leading into it (spec §3.1).
+    /// `searchArea` is `BrowseSearchAreaView` (§4.3) — the sheet's real search/place
+    /// content. Row actions call through to the same functions/case-assignments the
+    /// deleted `gearButtonOverlay`/`driveEntryButton` used to (no new entry-path logic,
+    /// only new UI leading into it, spec §3.1).
     ///
-    /// `onRouteReady` duplicates `driveModeDestinationCover`'s closure body (AC-11)
-    /// rather than sharing it — that cover/`showDriveModeDestination`/`driveEntryButton`
-    /// are still the LIVE entry path today (Stream C hasn't deleted them yet), and this
-    /// whole property is unreachable while `ft20BrowseSheetEnabled == false`, so there is
-    /// no way to consolidate the two without either touching the still-live cover (out of
-    /// scope for Stream B) or leaving genuinely dead code half-wired. Stream C should
-    /// collapse these into one call site when it deletes `driveModeDestinationCover`.
+    /// `onRouteReady` (spec §0c item 3): this is now the ONLY copy of the
+    /// "route ready → enter Destination Mode" sequence — the old
+    /// `driveModeDestinationCover`'s duplicate closure body (byte-for-byte identical, per
+    /// Stream B QA) was deleted along with the cover itself. `driveModeStyle = .destination`
+    /// is still set BEFORE `driveModeActive = true` (CM-3: so `handleDriveModeChange` reads
+    /// the correct style when it fires via `.onChange(of: driveModeActive)`).
     @ViewBuilder
     private var browseNavigationSheetContent: some View {
         BrowseNavigationSheet(
@@ -1484,20 +1501,21 @@ struct ContentView: View {
                     .ignoresSafeArea()
                     .safeAreaInset(edge: .top) { ASPBanner(state: bannerState) }
                     .safeAreaInset(edge: .bottom) { bottomSafeAreaContent }
-                // FT-18: the browse-mode toolbar (Find me / Find my car / Park Until entry /
-                // combined Drive entry) and the isolated Drive Mode "End" control share this
-                // top-trailing corner but are mutually exclusive — exactly one renders at a
-                // time, matching Proposal 1's "top of screen reduced to banner + End control"
-                // during Drive Mode (Kevin's ruling #1).
+                // FT-18: the browse-mode toolbar (Find me / Find my car / Park Until) and
+                // the isolated Drive Mode "End" control share this top-trailing corner but
+                // are mutually exclusive — exactly one renders at a time, matching Proposal
+                // 1's "top of screen reduced to banner + End control" during Drive Mode
+                // (Kevin's ruling #1).
                 //
-                // FT-15/TF2-15 QA fix: `recenterButtonStack` is ALSO hidden during
-                // block-select mode — it's the sole UI path to both Drive Mode entry points
-                // (`driveEntryButton`'s "Drive to a destination" / "Find Parking nearby"),
-                // so hiding it here structurally prevents starting Drive Mode while
-                // block-select is active, rather than re-guarding each entry point
-                // individually. `handleDriveModeAndCamera` additionally force-clears
-                // block-select state on every Drive Mode entry as a self-healing backstop —
-                // see that function's doc comment for why both together, not either alone.
+                // FT-15/TF2-15 QA fix (comment updated by FT-20 Stream C): `recenterButtonStack`
+                // is ALSO hidden during block-select mode. Historically this was the sole UI
+                // path to both Drive Mode entry points; FT-20 moved those into the browse
+                // sheet (already force-hidden during block-select — `enterBlockSelectMode()`'s
+                // `activeSheet = nil`), so this is now belt-and-suspenders decluttering for a
+                // focused task rather than the only thing preventing a Drive-Mode-entry tap.
+                // `handleDriveModeAndCamera` additionally force-clears block-select state on
+                // every Drive Mode entry as a self-healing backstop — see that function's doc
+                // comment for why both together, not either alone.
                 if driveModeActive {
                     endDriveControl
                 } else if recenterButtonStackVisible(
@@ -1509,12 +1527,12 @@ struct ContentView: View {
                         .padding(.trailing, 12)
                 }
             }
-            // FT-18 ruling #3: gear button hidden entirely during Drive Mode — not needed
-            // mid-drive, and resolves F2 (the pre-FT-18 gear button / End Drive pill
-            // coordinate collision, both previously at top-leading) by removal.
-            if gearButtonVisible(driveModeActive: driveModeActive) {
-                gearButtonOverlay
-            }
+            // FT-20 Stream C: the gear + Parking 101 "?" buttons that used to float here
+            // (`gearButtonOverlay`) are deleted — both are absorbed into the browse sheet's
+            // medium-detent action list (Settings / Parking 101 rows,
+            // `BrowseNavigationSheet.actionList`). `gearButtonVisible`/
+            // `parkingGuideButtonVisible` are left defined + tested (dead but harmless —
+            // no call site left) rather than deleted, to avoid unrelated test-file churn.
             GeometryReader { proxy in
                 VStack(spacing: 0) {
                     ToastHostView().padding(.top, proxy.safeAreaInsets.top)
@@ -1550,54 +1568,6 @@ struct ContentView: View {
             // visiblePinsGeneration increments on every visiblePins assignment.
             .onChange(of: pinService.visiblePinsGeneration) { _, _ in handleVisiblePinsChange(pinService.visiblePins) }
             .onReceive(parkPinService.firstPinDropped) { handleFirstPinDropped() }
-    }
-
-    // MARK: - W7: Gear button overlay
-
-    /// Gear button (top-left, same vertical offset as recenter buttons).
-    /// Extracted from `body` ZStack to reduce type-checker expression complexity.
-    ///
-    /// FT-13: also hosts the Parking 101 guide ("?") button, placed immediately to the
-    /// gear's right. Same anatomy (44x44, .regularMaterial RoundedRectangle, .secondary
-    /// tint) so the pair reads as one utility cluster per the TF2-18 button-anatomy pass.
-    @ViewBuilder
-    private var gearButtonOverlay: some View {
-        VStack {
-            HStack(spacing: 8) {
-                Button { activeSheet = .settings } label: {
-                    Image(systemName: "gearshape.fill")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(.secondary)
-                }
-                .accessibilityLabel("Open settings")
-
-                // FT-13: Parking 101 guide entry point, always reachable from the map
-                // toolbar (not just the FT-12 first-launch banner). Hidden during Drive
-                // Mode via `parkingGuideButtonVisible(driveModeActive:)`. FT-18: this whole
-                // `gearButtonOverlay` is now also gated at its call site by
-                // `gearButtonVisible(driveModeActive:)` (same rule) — the inner check stays
-                // as an explicit, independently-testable guard rather than relying solely
-                // on the outer one, and keeps this view correct if it's ever rendered from
-                // a different call site in the future. Mirrors the `paddingForBannerState` /
-                // `recenterPillBottomPadding` "extract as a pure function" precedent.
-                if parkingGuideButtonVisible(driveModeActive: driveModeActive) {
-                    Button { activeSheet = .parkingGuide } label: {
-                        Image(systemName: "questionmark.circle")
-                            .font(.system(size: 17, weight: .medium))
-                            .frame(width: 44, height: 44)
-                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                            .foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Parking 101 guide")
-                }
-            }
-            Spacer()
-        }
-        .padding(.top, 100)
-        .padding(.leading, 12)
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     // MARK: - Map representable callbacks (extracted for type-checker budget)
@@ -1745,28 +1715,27 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - W5.1 / Kevin 2026-06-04: Recenter + drive-entry button stack
+    // MARK: - W5.1 / Kevin 2026-06-04: Recenter + Park Until button stack
 
-    /// Four vertically-stacked toolbar buttons in the top-right, visible only outside Drive
+    /// Three vertically-stacked toolbar buttons in the top-right, visible only outside Drive
     /// Mode (FT-18: gated `if !driveModeActive` at the call site in `mapZStack` — none of
     /// these actions are available mid-drive; `endDriveControl` owns this corner instead).
     ///
     /// Button order (top to bottom):
     ///   1. "Find me"        — location.fill, always shown
     ///   2. "Find my car"    — car.fill, only when a pin exists
-    ///   3. Park Until       — clock.fill, always shown
-    ///   4. Combined Drive   — arrow.triangle.turn.up.right.diamond.fill, replaces the former
-    ///                         separate Drive + "Find Parking" buttons (Kevin design decision
-    ///                         2026-06-04: one combined entry scales to patrol-mode addition).
+    ///   3. Park Until       — clock.fill, always shown (OQ-2: "a third floating map
+    ///                         control beside Locate and Find-my-car" — its own filter
+    ///                         behavior, framing, and toolbar position are all unchanged by
+    ///                         FT-20; it's simply the last button once the 4th one is gone).
     ///
-    /// The combined Drive button expands IN PLACE (no full-screen cover) into a compact
-    /// two-option picker ("Drive to…" / "Find Parking"). Tapping an option collapses the
-    /// picker and activates the selected mode. Tapping elsewhere collapses with no action.
-    ///
-    /// Invariant compliance: the drive entry uses a native SwiftUI Menu; no camera
-    /// mutation happens here. Both entry paths continue to activate via their existing mechanisms:
-    ///   - "Drive to a destination" → showDriveModeDestination = true → DriveModeDestinationView.onRouteReady
-    ///   - "Find Parking nearby"    → enterCruiseMode() → driveModeActive = true → handleDriveModeAndCamera
+    /// FT-20 Stream C: the former 4th button — the combined Drive/Cruise entry `Menu`
+    /// (`driveEntryButton`) — is DELETED. Its two former options are now reached via search
+    /// (`BrowseSearchAreaView`'s place state → Go, destination path) and the sheet's
+    /// medium-detent "Cruise" row (`enterCruiseMode()`, no destination path) — no menu, per
+    /// Kevin's terminology ruling (spec §3.1). This is a net reduction from FOUR buttons to
+    /// THREE (design-review "what's working": Locate/Find-my-car/Park Until were already
+    /// the only three that needed to stay outside the sheet — decision 5).
     @ViewBuilder
     private var recenterButtonStack: some View {
         VStack(spacing: 8) {
@@ -1811,66 +1780,7 @@ struct ContentView: View {
             }
             .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
             .accessibilityHint("Shows only blocks where you can park until a chosen time.")
-
-            // Button 4: Combined Drive/Cruise entry — native SwiftUI Menu.
-            //
-            // Menu label: single icon button (arrow.triangle.turn.up.right.diamond.fill).
-            // Menu items:
-            //   - "Drive to a destination" → opens DriveModeDestinationView
-            //   - "Find Parking nearby"    → enters Cruise Mode via enterCruiseMode()
-            // The system dropdown dismisses on outside tap automatically.
-            //
-            // FT-18: `recenterButtonStack` itself is now only rendered when Drive Mode is
-            // inactive (gated at the call site in `mapZStack`), so this button can no
-            // longer render while driving — the former "resting icon, no action on tap"
-            // fallback branch (F4: a full 44×44 button that looked tappable and wasn't)
-            // is dead code under the new gating and has been removed.
-            driveEntryButton
         }
-    }
-
-    // MARK: - Combined drive-entry button (native Menu)
-
-    /// The combined Drive/Cruise entry button as a native SwiftUI Menu.
-    ///
-    /// Extracted into its own @ViewBuilder property to avoid hitting the Swift compiler's
-    /// type-check complexity limit for large SwiftUI view bodies.
-    ///
-    /// The Menu label matches the resting toolbar button style (regularMaterial pill,
-    /// accentColor icon). The system presents a native dropdown on tap — labels never
-    /// truncate, dismiss on outside tap is automatic, and accessibility is free.
-    @ViewBuilder
-    private var driveEntryButton: some View {
-        Menu {
-            Button {
-                // FT-20 Stream A fix (QA docs/qa/ft20-stream-a-pr85.md Finding #2): this
-                // used to guard on `activeSheet == nil`, which was correct when "no sheet
-                // is open" and "activeSheet is nil" meant the same thing. Once
-                // `ft20BrowseSheetEnabled` flips true, they no longer do — `.browseNav` is
-                // non-nil while browse mode is at rest, so a bare `== nil` check would
-                // silently no-op this tap the first time the user dismisses anything.
-                // `noBlockingSheetPresented` treats `.browseNav` the same as `nil`, same
-                // fix already applied to `enterCruiseMode()`.
-                guard noBlockingSheetPresented else { return }
-                showDriveModeDestination = true
-            } label: {
-                Label("Drive to a destination", systemImage: "arrow.triangle.turn.up.right.diamond")
-            }
-
-            Button {
-                enterCruiseMode()
-            } label: {
-                Label("Find Parking nearby", systemImage: "car.front.waves.right.fill")
-            }
-        } label: {
-            Image(systemName: "arrow.triangle.turn.up.right.diamond.fill")
-                .font(.system(size: 17, weight: .medium))
-                .frame(width: 44, height: 44)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                .foregroundStyle(Color.accentColor)
-        }
-        .accessibilityLabel("Start Drive Mode")
-        .accessibilityHint("Double-tap to choose destination navigation or find parking nearby.")
     }
 
     // MARK: - FT-18: Isolated "End Drive" control (top-trailing)
@@ -2786,24 +2696,50 @@ struct ContentView: View {
     /// Entered via the resting long-press dialog's third action (§4.2 step 1–2).
     /// Clears any current selection/sheet state and resets "Both curbs" to its default.
     ///
-    /// FT-20 Stream A note: `activeSheet = nil` here is left as a literal `nil`, NOT
+    /// FT-20 Stream C: `activeSheet = nil` here is left as a literal `nil`, NOT
     /// `dismissTargetOutsideBrowseNav` — this is FT-15/§5.1's deliberate FORCE-hide on
     /// block-select entry (peek would still sit over the precision multi-tap area block-
-    /// select needs), not an ordinary sheet dismiss back to browse mode's rest state. The
-    /// restore-to-`.browseNav` half of this boundary (on Cancel / report-sheet dismiss) is
-    /// Stream C's wiring (spec §5.1, AC-25) — out of Stream A's scope.
+    /// select needs), not an ordinary sheet dismiss back to browse mode's rest state.
+    /// Streams A and B correctly left this alone (a force-hide, not a dismiss); Stream C
+    /// decision: keep it exactly as-is. The restore-to-`.browseNav` half of this boundary
+    /// (AC-25) is `cancelBlockSelectMode()`, below.
+    ///
+    /// Design-review S4 / spec §5's binding AC: entering block-select overlaps THREE
+    /// presentation animations fired from this SAME synchronous button action (the
+    /// resting-menu `.confirmationDialog` dismissing, this force-hide of the browse sheet,
+    /// `blockSelectBar` appearing via `blockSelectModeActive = true` below) — all three
+    /// state changes ARE already sequenced together (same function call, same SwiftUI
+    /// transaction), so there is no ordering race between them. The remaining risk is pure
+    /// wall-clock animation-settling time: the very next user action is a precision
+    /// multi-tap sequence on the map, so a fast first tap landing before the outgoing
+    /// chrome has visually cleared could hit residual chrome instead of the map.
+    /// `blockSelectEntryGuardUntil` (below) guards exactly that window —
+    /// `handleBlockSelectTap` ignores taps until it elapses. Kevin's live smoke (PR
+    /// checklist) is what confirms the actual on-screen settling time this duration models.
     private func enterBlockSelectMode() {
         selectedSegmentID = nil
         activeSheet = nil
         selectedBlockKeys = []
         bothCurbsOn = true
         blockSelectModeActive = true
+        blockSelectEntryGuardUntil = Date().addingTimeInterval(Self.blockSelectEntrySettlingDuration)
     }
 
     /// Exits block-select mode without submitting anything (floating bar's Cancel button).
+    ///
+    /// FT-20 Stream C / AC-25: restores the sheet to `.browseNav` — previously this left
+    /// `activeSheet` untouched (still `nil` from `enterBlockSelectMode()`'s force-hide),
+    /// which meant Cancel silently left the user with no sheet at all until their next
+    /// dismiss-driven restore. `dismissTargetOutsideBrowseNav` resolves to `.browseNav` here
+    /// (block-select just flipped false, Drive Mode is never active concurrently) and
+    /// reuses whatever `browseSheetDetentKind` was already set to — AC-25's "at whatever
+    /// detent it was at before block-select was entered" holds for free, since nothing in
+    /// block-select mode touches that state.
     private func cancelBlockSelectMode() {
         blockSelectModeActive = false
         selectedBlockKeys = []
+        blockSelectEntryGuardUntil = nil
+        activeSheet = dismissTargetOutsideBrowseNav
     }
 
     /// Floating bar's Continue action (§4.2 step 5). Snapshots the currently-selected
@@ -2816,6 +2752,7 @@ struct ContentView: View {
         guard !selectedBlockKeys.isEmpty else { return }
         let segments = selectedSegmentsForBlockSelect
         blockSelectModeActive = false
+        blockSelectEntryGuardUntil = nil
         activeSheet = .blockRestrictionReport(segments: segments)
     }
 
@@ -2824,7 +2761,12 @@ struct ContentView: View {
     /// normal-mode block-detail lookup) and toggles its blockface into/out of the
     /// selection. A tap that misses every segment (beyond the hit threshold) is a no-op —
     /// no accidental selection from an imprecise tap.
+    ///
+    /// FT-20 Stream C / design-review S4: also ignores taps arriving inside the entry
+    /// settling window (`blockSelectEntryGuardUntil`) — see `enterBlockSelectMode()`'s doc
+    /// comment for why.
     private func handleBlockSelectTap(at coordinate: CLLocationCoordinate2D) {
+        guard !blockSelectTapShouldBeIgnored(now: .now, guardUntil: blockSelectEntryGuardUntil) else { return }
         guard !tileLoader.segments.isEmpty else { return }
 
         var closestSegment: Segment? = nil
@@ -3013,6 +2955,39 @@ struct ContentView: View {
     /// happens inside updateUIView. All camera mutations are driven from .onChange handlers
     /// in ContentView or from MapKit delegate callbacks.
     private func handleDriveModeAndCamera(_ active: Bool) {
+        // FT-20 Stream C (spec §6, AC-28/AC-29a, design-review S3): apply the browse-sheet
+        // Drive Mode boundary FIRST, in this SAME synchronous handler — this is the single
+        // funnel every Drive Mode entry/exit path runs through (`.onChange(of:
+        // driveModeActive)`), so batching the sheet's hide/restore into the same call that
+        // also flips `driveModeActive`-dependent chrome (the Bottom Dock's rows in
+        // `bottomSafeAreaContent`, all gated on `driveModeActive` reads) guarantees both land
+        // in the SAME SwiftUI render pass. AC-28/AC-29a's "no frame shows both" holds because
+        // there is no intermediate render where one has updated and the other hasn't — see
+        // `browseSheetBoundaryTarget`'s doc comment.
+        switch browseSheetBoundaryTarget(driveModeBecameActive: active) {
+        case .hidden:
+            activeSheet = nil
+        case .browseNavAtPeek:
+            // Detent resets to peek unconditionally (AC-29a's "not wherever it was left"),
+            // even in the guarded-out branch below — so IF the browse sheet does eventually
+            // reappear (once whatever claimed activeSheet in its place dismisses), it's
+            // already at peek.
+            browseSheetDetentKind = .peek
+            // Guard: only claim `activeSheet` if nothing else in this SAME transaction
+            // already has. W8.5d's arrival-prompt "Park Here" flow calls `endDriveMode()`
+            // then immediately sets `activeSheet = .parkUntil` in the SAME closure,
+            // synchronously — SwiftUI batches every state write within one synchronous
+            // scope into a single transaction and fires `.onChange` once afterward, so by
+            // the time THIS handler runs, `activeSheet` already holds `.parkUntil`. That
+            // deliberate auto-fire must win, not get silently overwritten back to
+            // `.browseNav`. Same "don't clobber an already-reassigned sheet" guard the
+            // top-level `.sheet(item:, onDismiss:)` backstop already uses for the identical
+            // reason (see that closure's own comment in `body`).
+            if activeSheet == nil {
+                activeSheet = .browseNav
+            }
+        }
+
         if active {
             // FT-15/TF2-15 QA fix: this `.onChange(of: driveModeActive)` handler is the
             // SINGLE funnel every Drive Mode entry path runs through (destination-mode's
@@ -3026,6 +3001,12 @@ struct ContentView: View {
             // `recenterButtonStack` gate below (`mapZStack`) additionally hides the
             // Drive-entry UI entirely while block-select is active, so in practice this
             // branch is a self-healing safety net, not the only line of defense.
+            //
+            // Note: if this branch fires, `cancelBlockSelectMode()` redundantly re-applies
+            // `activeSheet = nil` (it resolves the same way while `driveModeActive == true`)
+            // — harmless, and keeps `cancelBlockSelectMode()`'s own AC-25 restore-to-
+            // `.browseNav` logic correct for its OTHER caller (the Cancel button, where
+            // Drive Mode is never active) without needing a special case here.
             if shouldClearBlockSelectOnDriveModeEntry(
                 active: active,
                 blockSelectModeActive: blockSelectModeActive,
@@ -3472,18 +3453,19 @@ func gearButtonVisible(driveModeActive: Bool) -> Bool {
 
 // MARK: - FT-15 / TF2-15 Stream B2 QA fix: block-select ↔ Drive Mode mutual exclusion
 
-/// Returns whether `recenterButtonStack` (the sole UI path to both Drive Mode entry
-/// points — `driveEntryButton`'s "Drive to a destination" / "Find Parking nearby" menu
-/// items) should render.
+/// Returns whether `recenterButtonStack` (Find me / Find my car / Park Until — FT-20 Stream
+/// C moved the Drive/Cruise entry points that used to live here into the browse sheet)
+/// should render.
 ///
-/// QA pass-1 finding: an earlier revision gated this on `!driveModeActive` alone. That
-/// correctly hid the stack once Drive Mode was already active, but did nothing to stop
-/// the REVERSE transition — nothing prevented tapping the Drive-entry button while
-/// block-select mode was active, producing a stacked/competing Bottom Dock and map taps
-/// hijacked into block selection while "driving." Hiding the stack whenever EITHER flag
-/// is true closes that gap structurally, at the one call site both entry points share,
-/// rather than re-guarding each entry point (`enterCruiseMode()`, the destination-mode
-/// `onRouteReady` closure) individually.
+/// QA pass-1 finding (predates FT-20): an earlier revision gated this on `!driveModeActive`
+/// alone. That correctly hid the stack once Drive Mode was already active, but did nothing
+/// to stop the REVERSE transition — nothing prevented tapping the then-present Drive-entry
+/// button while block-select mode was active, producing a stacked/competing Bottom Dock and
+/// map taps hijacked into block selection while "driving." Hiding the stack whenever EITHER
+/// flag is true closed that gap structurally. The Drive-entry button itself is gone now
+/// (FT-20), but the mutual-exclusion rule stays — this is still the right visibility rule
+/// for a floating toolbar during a focused block-select task, independent of what used to
+/// motivate it.
 ///
 /// Extracted as an `internal` pure function — same testability rationale as
 /// `gearButtonVisible` / `parkingGuideButtonVisible` — so this specific state-interaction
@@ -3517,6 +3499,47 @@ func shouldClearBlockSelectOnDriveModeEntry(
     hasSelection: Bool
 ) -> Bool {
     active && (blockSelectModeActive || hasSelection)
+}
+
+// MARK: - FT-20 Stream C / design-review S4: block-select entry tap-settling guard
+
+/// Pure comparison backing `handleBlockSelectTap`'s settling-window guard (see
+/// `enterBlockSelectMode()`'s doc comment for the full "three overlapping animations"
+/// reasoning). `guardUntil` is `nil` whenever block-select mode hasn't just been entered
+/// (or the guard has already been cleared on exit) — in that case nothing is ignored.
+///
+/// Extracted as a pure function — `Date` comparison, no SwiftUI/view dependency — so the
+/// boundary logic is unit-testable without a live view hierarchy, same discipline as
+/// `recenterButtonStackVisible` / `shouldClearBlockSelectOnDriveModeEntry`.
+func blockSelectTapShouldBeIgnored(now: Date, guardUntil: Date?) -> Bool {
+    guard let guardUntil else { return false }
+    return now < guardUntil
+}
+
+// MARK: - FT-20 Stream C: Drive Mode boundary (spec §6, AC-28/AC-29a, design-review S3)
+
+/// What the browse sheet should become the instant `driveModeActive` flips, in either
+/// direction. A pure decision enum — not `ActiveSheet` itself, which isn't `Equatable`
+/// (several cases carry non-Equatable associated payloads like `Segment`/`CLLocationCoordinate2D`)
+/// — so this boundary rule is unit-testable without constructing a live view hierarchy,
+/// same discipline as `recenterButtonStackVisible` / `shouldClearBlockSelectOnDriveModeEntry`.
+enum BrowseSheetDriveBoundaryTarget: Equatable {
+    /// AC-28: force-hide unconditionally on Drive Mode ENTRY — the same "hide, don't peek"
+    /// precedent FT-15's block-select boundary already established (§5.1); FT-18's Bottom
+    /// Dock owns the bottom safe area for the whole Drive Mode session.
+    case hidden
+    /// AC-29a: restore to `.browseNav` at PEEK on Drive Mode EXIT — not wherever the sheet
+    /// was left (spec §6: "a completed drive session, stale search state").
+    case browseNavAtPeek
+}
+
+/// Returns the target for `driveModeActive`'s new value. Trivial as a ternary, but named
+/// and extracted for the same reason `shouldClearBlockSelectOnDriveModeEntry` is: it's the
+/// one place this specific product decision (hide on entry / peek on exit, not "wherever it
+/// was") lives, independently testable and independently readable from the call site that
+/// applies it.
+func browseSheetBoundaryTarget(driveModeBecameActive: Bool) -> BrowseSheetDriveBoundaryTarget {
+    driveModeBecameActive ? .hidden : .browseNavAtPeek
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance

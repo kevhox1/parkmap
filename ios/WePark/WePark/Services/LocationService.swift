@@ -103,7 +103,8 @@ final class LocationService: NSObject {
 
     /// Raw CoreLocation authorization status. Exposed for dependency-injection seam
     /// in auth-gate tests (M-1 fix: replaces transient CLLocationManager() reads in
-    /// DriveModeDestinationView so the injected service is the single source of truth).
+    /// BrowseSearchAreaView, formerly DriveModeDestinationView, so the injected service
+    /// is the single source of truth).
     private(set) var authorizationStatus: CLAuthorizationStatus = .notDetermined
 
     // MARK: - W8.5c: Drive Mode state

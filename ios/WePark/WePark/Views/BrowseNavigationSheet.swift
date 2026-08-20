@@ -2,20 +2,23 @@
 //  BrowseNavigationSheet.swift
 //  WePark
 //
-//  FT-20 Stream A — browse-mode bottom sheet CONTAINER.
-//  docs/ft20-bottom-sheet-navigation-spec.md §4.1/§4.2, §0b findings B1/B2/S1.
+//  FT-20 — browse-mode bottom sheet CONTAINER. Built in Stream A, real content wired by
+//  Stream B, mounted live by Stream C (`ft20BrowseSheetEnabled == true`).
+//  docs/ft20-bottom-sheet-navigation-spec.md §4.1/§4.2, §0b findings B1/B2/S1, §0d C1.
 //
 //  This file owns:
 //    - `BrowseSheetDetentMath`: pure, UIKit-free computation of the two CUSTOM detent
 //      heights (peek + medium). Kevin ruled OQ-3 (spec §0): NOT system `.medium` — a
 //      custom height sized to "search field + exactly three rows and no more," measured
 //      from actual rendered content (§0b finding B2), not hardcoded.
+//    - `BrowseSheetSearchAreaHeightPreferenceKey`: the QA §0d C1 fix — how the search
+//      field's own height reaches this container without ever measuring the large-detent-
+//      only `List` content mounted alongside it. See its own doc comment below.
 //    - `BrowseNavigationSheet`: the sheet's content view. Persistent search-area row on
-//      top (Stream A ships a stub, `BrowseSheetSearchAreaStub` — Stream B replaces it,
-//      see the note on `searchArea` below) + the medium-detent 3-item action list
-//      (Settings / Cruise / Parking 101), built per design-review finding S1 as `List`
-//      rows matching `recentDestinationsList`'s anatomy verbatim
-//      (`DriveModeDestinationView.swift:269–302`) — NOT the capsule/pill anatomy of
+//      top (`Views/BrowseSearchAreaView.swift`, Stream C's live entry point — see the note
+//      on `searchArea` below) + the medium-detent 3-item action list (Settings / Cruise /
+//      Parking 101), built per design-review finding S1 as `List` rows matching
+//      `recentDestinationsList`'s anatomy verbatim — NOT the capsule/pill anatomy of
 //      FT-18's Bottom Dock, which is floating chrome over a live map and doesn't apply to
 //      content living *inside* this sheet.
 //
@@ -24,14 +27,6 @@
 //  the "dismiss returns to `.browseNav`, not `nil`" rest-state change across every other
 //  `ActiveSheet` case) live in `ContentView.swift`, per the existing
 //  `ActiveSheet`/`.sheet(item:)` single-host pattern — this file only builds the content.
-//
-//  Not in this file (Stream B / Stream C, per the spec's §9 work-stream split):
-//    - The real search field, `MKLocalSearchCompleter` suggestions, recent-destinations
-//      list, the "place" state, and the Go button (Stream B — relocates out of
-//      `DriveModeDestinationView`).
-//    - Mounting this sheet into `ContentView`'s body, deleting `gearButtonOverlay` /
-//      `driveEntryButton`, relocating Park Until, and the Drive-Mode / FT-15 block-select
-//      boundary wiring (Stream C).
 //
 
 import SwiftUI
@@ -105,6 +100,45 @@ enum BrowseSheetDetentMath {
     }
 }
 
+// MARK: - BrowseSheetSearchAreaHeightPreferenceKey
+
+/// FT-20 Stream C fix for QA §0d Finding C1 (`docs/qa/ft20-stream-b-pr86.md`): the height
+/// that drives `BrowseSheetDetentMath.peekHeight`/`.mediumHeight` must come from ONLY the
+/// sheet's always-visible top row (the search field), never from `searchArea`'s full
+/// rendered content.
+///
+/// Why not `.onGeometryChange` on the whole `searchArea` slot (Stream A's original
+/// approach)? Because Stream B's real content (`BrowseSearchAreaView`) conditionally
+/// renders a `List` (recents/suggestions) inside `searchArea` once `detentKind == .large`
+/// — and, per `actionList`'s own doc comment below, a system sheet's content is laid out
+/// against the FULL `.large`-sized container regardless of which detent is *currently
+/// selected* (the detent only crops what's exposed). So the moment the user is at
+/// `.large`, measuring the whole `searchArea` view's geometry reports something close to
+/// the full container height, not "the search field alone" — corrupting
+/// `peekHeight`/`mediumHeight` for however long that inflated value is live, exactly the
+/// `List`-greedy-sizing trap `actionListHeight` was already built to avoid, reintroduced in
+/// a spot Stream A never anticipated (Stream B's real content didn't exist yet).
+///
+/// The fix: `BrowseSearchAreaView.searchField` (the one node that's ALWAYS visible,
+/// regardless of detent) reports its own intrinsic height directly via this
+/// `PreferenceKey`, which bubbles up through the view tree to `BrowseNavigationSheet.body`
+/// unaffected by whatever large-detent-only content (`List`, place-state card, error
+/// banner) happens to be mounted alongside it. This is the textbook use case for
+/// `PreferenceKey` — communicating a value up an arbitrary intermediate view hierarchy that
+/// the ancestor (`BrowseNavigationSheet`, generic over `SearchArea: View`) has no structural
+/// knowledge of. No `List` is ever measured by this mechanism; `actionListHeight`'s own
+/// `@ScaledMetric`-derived "constrain, don't measure" technique is untouched below.
+struct BrowseSheetSearchAreaHeightPreferenceKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    /// Exactly one reporter is expected in the tree (the search field's own `.background`
+    /// probe) — `reduce` still must be total per `PreferenceKey`'s protocol requirement, so
+    /// this takes the newest report rather than summing/maxing, which would silently
+    /// misbehave if a future caller nested a second reporter.
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = nextValue()
+    }
+}
+
 // MARK: - BrowseSheetDetentKind
 
 /// FT-20 Stream A: which of `.browseNav`'s three detents is currently selected, tracked as
@@ -153,16 +187,15 @@ func browseSheetDetentSelectionBinding(
 /// The `.browseNav` sheet's content.
 ///
 /// **Public interface Stream B builds against:**
-///   - `searchArea`: a `@ViewBuilder` slot for the sheet's persistent top row. Stream A
-///     passes `BrowseSheetSearchAreaStub()` at the `ContentView.swift` call site. Stream B
-///     relocates `DriveModeDestinationView`'s real `searchField` (+ suggestions/recents/
-///     place-state content, shown only at the `.large` detent per spec §4.2) into that same
-///     slot — no other change to this type is required for that swap. The slot's rendered
-///     height directly drives the peek detent (`BrowseSheetDetentMath.peekHeight`), so
-///     Stream B's real search field should stay close in height to the stub's single-line
-///     row at rest; if the real content is taller for structural reasons (e.g. wrapping at
-///     large Dynamic Type), that's fine — the peek detent grows with it automatically,
-///     which is the point of measuring rather than hardcoding.
+///   - `searchArea`: a `@ViewBuilder` slot for the sheet's persistent top row. Stream C
+///     mounts `BrowseSearchAreaView` here (Stream A's stub, `BrowseSheetSearchAreaStub`, is
+///     gone — the real content has been live since Stream B). The peek/medium detent math
+///     does NOT measure this slot's overall geometry (QA C1 fix — see
+///     `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment): `BrowseSearchAreaView`'s
+///     own always-visible `searchField` node reports its intrinsic height directly via that
+///     preference key, so the large-detent-only content (recents/suggestions/place state/
+///     error banner) mounted alongside it can never corrupt `peekHeight`/`mediumHeight`,
+///     no matter how tall a `List` inside it gets asked to lay out.
 ///   - `onSettingsTapped` / `onCruiseTapped` / `onParkingGuideTapped`: the 3-item list's row
 ///     actions. `ContentView` wires these to `activeSheet = .settings`, `enterCruiseMode()`
 ///     (AC-18 — no intermediate menu), and `activeSheet = .parkingGuide` respectively.
@@ -238,17 +271,21 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     var body: some View {
         VStack(spacing: 0) {
             searchArea
-                .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
-                    searchAreaHeight = newHeight
-                }
 
             actionList
                 .frame(height: actionListHeight)
         }
+        // FT-20 Stream C / QA C1 fix: read the search field's OWN reported height via the
+        // preference key above, not `searchArea`'s overall geometry — see
+        // `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment for why measuring the
+        // whole slot is unsafe once it can contain a `List`.
+        .onPreferenceChange(BrowseSheetSearchAreaHeightPreferenceKey.self) { newHeight in
+            searchAreaHeight = newHeight
+        }
         // Re-report on every measured change (initial layout, Dynamic Type change, device
-        // rotation) — `.onGeometryChange`'s action already fires on first layout, so this
-        // covers all subsequent changes too. `actionListHeight` is computed (not measured
-        // via geometry), so it's covered by watching `singleActionRowHeight` instead.
+        // rotation) — the preference fires on first layout, so this covers all subsequent
+        // changes too. `actionListHeight` is computed (not measured via geometry), so it's
+        // covered by watching `singleActionRowHeight` instead.
         .onChange(of: searchAreaHeight) { _, _ in reportHeights() }
         .onChange(of: singleActionRowHeight) { _, _ in reportHeights() }
         .onAppear { reportHeights() }
@@ -332,33 +369,7 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     }
 }
 
-// MARK: - BrowseSheetSearchAreaStub
-
-/// FT-20 Stream A placeholder for the sheet's persistent top row. Visually modeled on
-/// `DriveModeDestinationView.searchField` (`DriveModeDestinationView.swift:218–242`) so the
-/// measured peek height Stream A ships with is a realistic approximation of what Stream B's
-/// real search field will measure to — not a guess.
-///
-/// Stream B (§4.3) replaces this stub with the real relocated search field + suggestions/
-/// recents/place-state content passed via `BrowseNavigationSheet`'s generic `searchArea:`
-/// parameter. This type itself is not part of the public interface Stream B needs to keep;
-/// it exists only so Stream A's container has something real to render and measure, and so
-/// Stream C has something to mount before Stream B lands.
-struct BrowseSheetSearchAreaStub: View {
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .foregroundStyle(.secondary)
-            Text("Search for a destination")
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .padding(10)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Search for a destination")
-        .accessibilityHint("Stream A placeholder — Stream B replaces this with the real search field.")
-    }
-}
+// Note: `BrowseSheetSearchAreaStub` (Stream A's placeholder search row) is gone — Stream B
+// replaced it at the `ContentView.swift` call site with the real `BrowseSearchAreaView`,
+// and Stream C is what makes that call site live. Nothing referenced the stub anymore, so
+// it was deleted rather than left as dead code.

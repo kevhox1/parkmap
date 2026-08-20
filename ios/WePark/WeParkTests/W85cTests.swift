@@ -540,24 +540,28 @@ final class AuthGateTests: XCTestCase {
 
     // Test 1: notDetermined status — button should be disabled (spinner shows).
     // We test the view instantiation doesn't crash with notDetermined behavior.
+    //
+    // FT-20 Stream C: ported from `DriveModeDestinationView` (deleted — see §0c) to
+    // `BrowseSearchAreaView`, the sole remaining view exercising this auth-gate path.
     func testStartDrive_notDetermined_disablesButton() {
-        // The view's handleStartDriveTap reads CLLocationManager().authorizationStatus.
+        // The view's handleGoTap reads CLLocationManager().authorizationStatus.
         // In test environment, this is typically .notDetermined.
-        // We verify the DriveModeDestinationView renders without crash.
+        // We verify BrowseSearchAreaView renders without crash.
         let locationService = LocationService()
         let region = MKCoordinateRegion(
             center: w85cAnchor,
             span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
         )
-        let view = DriveModeDestinationView(
+        let view = BrowseSearchAreaView(
             currentRegion: region,
             segments: [],
             userLocation: w85cAnchor,
             locationService: locationService,
+            detentKind: .constant(.large),
             onRouteReady: { _, _ in }
         )
         let host = UIHostingController(rootView: view)
-        XCTAssertNotNil(host.view, "DriveModeDestinationView should render without crash with notDetermined auth")
+        XCTAssertNotNil(host.view, "BrowseSearchAreaView should render without crash with notDetermined auth")
     }
 
     // Test 2: denied status → alert gate fires via injected LocationService seam (M-1 fix).
@@ -580,14 +584,15 @@ final class AuthGateTests: XCTestCase {
             center: w85cAnchor,
             span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
         )
-        // Build the view with the denied-status service. handleStartDriveTap() reads
+        // Build the view with the denied-status service. handleGoTap() reads
         // locationService.authorizationStatus (not a new CLLocationManager()), so it
         // will reach the .denied/.restricted branch and set showLocationDeniedAlert = true.
-        let view = DriveModeDestinationView(
+        let view = BrowseSearchAreaView(
             currentRegion: region,
             segments: [],
             userLocation: w85cAnchor,
             locationService: locationService,
+            detentKind: .constant(.large),
             onRouteReady: { _, _ in }
         )
         let host = UIHostingController(rootView: view)
@@ -605,11 +610,12 @@ final class AuthGateTests: XCTestCase {
         )
         // With a mock that throws .network, the route fetch is "initiated" (the mock is called)
         // but returns an error (shown in error banner). This verifies the fetch path is reached.
-        let view = DriveModeDestinationView(
+        let view = BrowseSearchAreaView(
             currentRegion: region,
             segments: [],
             userLocation: w85cAnchor,
             locationService: locationService,
+            detentKind: .constant(.large),
             onRouteReady: { _, _ in },
             routeService: mockRoute
         )
@@ -648,24 +654,26 @@ final class MockRouteServiceThrowingNetwork: RouteServicing {
 final class RouteServicingProtocolTests: XCTestCase {
 
     // AC-W85c.3: Injecting a mock that throws .network causes error state, not crash.
-    func testDriveModeDestinationView_routeError_doesNotCrash() async {
+    // FT-20 Stream C: ported from `DriveModeDestinationView` (deleted) to `BrowseSearchAreaView`.
+    func testBrowseSearchAreaView_routeError_doesNotCrash() async {
         let mockRoute = MockRouteServiceThrowingNetwork()
         let locationService = LocationService()
         let region = MKCoordinateRegion(
             center: w85cAnchor,
             span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
         )
-        let view = DriveModeDestinationView(
+        let view = BrowseSearchAreaView(
             currentRegion: region,
             segments: [],
             userLocation: w85cAnchor,
             locationService: locationService,
+            detentKind: .constant(.large),
             onRouteReady: { _, _ in },
             routeService: mockRoute
         )
         let host = UIHostingController(rootView: view)
         XCTAssertNotNil(host.view,
-                        "DriveModeDestinationView with mock throwing .network should not crash")
+                        "BrowseSearchAreaView with mock throwing .network should not crash")
 
         // Verify that the protocol is typed correctly — mockRoute conforms to RouteServicing.
         let service: any RouteServicing = mockRoute

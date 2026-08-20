@@ -2,40 +2,21 @@
 //  BrowseSearchAreaView.swift
 //  WePark
 //
-//  FT-20 Stream B — search relocated into the browse-mode bottom sheet, per
-//  docs/ft20-bottom-sheet-navigation-spec.md §3.2/§3.3/§4.3.
+//  FT-20 — search relocated into the browse-mode bottom sheet, per
+//  docs/ft20-bottom-sheet-navigation-spec.md §3.2/§3.3/§4.3. Built additively in Stream B
+//  alongside the still-live `DriveModeDestinationView.swift`/`.fullScreenCover` path (see
+//  §0c); Stream C deleted that file and its call site once this became the ONLY search
+//  entry point (`ft20BrowseSheetEnabled == true`), and relocated its shared,
+//  non-SwiftUI-specific types (`SearchCompleterDelegate`, `SearchTimeoutError`) to
+//  `Services/SearchCompleterDelegate.swift` — `RecentDestinationsStore` already lived in
+//  its own `Services/` file since W8.5c's N-1 lift.
 //
-//  ⚠️ DELIBERATELY A NEW, ADDITIVE FILE — does NOT touch, gut, or otherwise modify
-//  `Views/DriveModeDestinationView.swift`. Read this before "helpfully" consolidating the
-//  two:
-//
-//  The spec's §9 work-stream table lists `DriveModeDestinationView.swift` as something
-//  Stream B "guts" (NavigationStack/toolbar removed, sub-views relocated). That's the
-//  correct END STATE — but only once Stream C ALSO lands and deletes the ContentView call
-//  site that presents it (`driveModeDestinationCover` / `showDriveModeDestination` /
-//  `driveEntryButton`, ContentView.swift ~478/759/850/1819-1831). **That call site is
-//  still live today** — `driveEntryButton`'s "Drive to a destination" menu item still sets
-//  `showDriveModeDestination = true` and nothing has deleted it (that's explicitly Stream
-//  C's job, spec §9). Gutting `DriveModeDestinationView.swift` now — before Stream C lands
-//  — would strip the Cancel button and NavigationStack chrome out from under a flow real
-//  users can reach RIGHT NOW, a live regression, not a hypothetical one.
-//
-//  That's exactly the class of mistake Stream A's own QA pass caught and fixed (see
-//  HANDOFF.md's "FT-20 Stream A merged, gated OFF" entry — "every piece was individually
-//  correct... the intermediate states are their own acceptance criteria"). This file
-//  applies the same lesson: it's new, purely additive code, reachable ONLY through the
-//  still-gated `.browseNav` sheet (`ContentView.ft20BrowseSheetEnabled == false`), so
-//  merging it is a user-visible no-op — exactly like Stream A.
-//
-//  The logic below is a faithful, near-verbatim behavioral port of
+//  The logic below is a faithful, near-verbatim behavioral port of the deleted
 //  `DriveModeDestinationView`'s sub-views (completer delegate reuse, recents list,
 //  suggestions list, error banner, auth gate, out-of-coverage toast, timeout-guarded
-//  MKLocalSearch resolution) — see that file's own doc comment for the original W8.5b/c
-//  design notes this inherits. Stream C should collapse the duplication described above
-//  when it deletes the old fullScreenCover call site; until then, both coexist safely
-//  because only one is ever reachable at a time.
+//  MKLocalSearch resolution).
 //
-//  Deltas from `DriveModeDestinationView`, per spec §4.3 / §3.2 / §3.3:
+//  Deltas from the original `DriveModeDestinationView`, per spec §4.3 / §3.2 / §3.3:
 //    - NavigationStack + "Where to?" title + toolbar Cancel button: REMOVED. This is sheet
 //      content, not a modal — collapsing the sheet or clearing the query replaces Cancel
 //      (§4.3's own reasoning; design-review finding S5 is the one deliberate addition in
@@ -56,6 +37,13 @@
 //      sheet CONTENT, not a `.fullScreenCover`. The sheet's disappearance on Go is driven
 //      by `driveModeActive` flipping true (spec §6, AC-11/AC-28), wired at ContentView's
 //      Drive-Mode boundary (Stream C), not by this view dismissing itself.
+//    - QA §0d C2 fix (Stream C): auto-expands `detentKind` to `.large` the instant
+//      `errorMessage` is set, so a search/route failure is never invisible behind a
+//      collapsed sheet — see the `.onChange(of: errorMessage)` handler below.
+//    - QA §0d C1 fix (Stream C): `searchField` reports its OWN intrinsic height via
+//      `BrowseSheetSearchAreaHeightPreferenceKey` rather than the whole view being measured
+//      — see `searchField`'s own doc comment and `BrowseNavigationSheet.swift`'s preference
+//      key doc comment.
 //
 
 import SwiftUI
@@ -191,6 +179,20 @@ struct BrowseSearchAreaView: View {
                 detentKind = .large
             }
         }
+        // FT-20 Stream C / QA §0d C2 fix: the error banner only renders at `.large` (it's
+        // inside the `if detentKind == .large` block below), so a search/route failure
+        // arriving while the user has collapsed the sheet to peek/medium would otherwise be
+        // completely invisible — the request just silently stops, with no feedback. Rather
+        // than surface a second, cramped error affordance at peek/medium (there's no room —
+        // OQ-3's whole point is "search field alone" at that height), auto-expand to
+        // `.large` the instant an error arrives, matching `DriveModeDestinationView`'s
+        // original behavior where the banner was always visible (it lived inside a
+        // full-screen cover, so there was no smaller state to hide behind).
+        .onChange(of: errorMessage) { _, newValue in
+            if newValue != nil {
+                detentKind = .large
+            }
+        }
         // W8.5c auth gate: when authorization resolves while spinner is shown, clear the
         // spinner and attempt route fetch if now authorized. Verbatim from
         // `DriveModeDestinationView`.
@@ -240,6 +242,22 @@ struct BrowseSearchAreaView: View {
         .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
+        // FT-20 Stream C / QA §0d C1 fix: this is the ONLY node in `BrowseSearchAreaView`
+        // that reports its height for `BrowseNavigationSheet`'s peek/medium detent math —
+        // never the whole view (which can contain a greedy `List` at `.large`). A
+        // `GeometryReader` in `.background` measures this HStack's own intrinsic size
+        // (padding included) regardless of how much vertical space its parent offers, since
+        // nothing inside it forces vertical expansion — see
+        // `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment in
+        // `BrowseNavigationSheet.swift` for the full reasoning.
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: BrowseSheetSearchAreaHeightPreferenceKey.self,
+                    value: proxy.size.height
+                )
+            }
+        }
     }
 
     // MARK: - Inline error banner (kept verbatim from DriveModeDestinationView)
@@ -679,8 +697,6 @@ struct BrowseSearchAreaView: View {
     }
 }
 
-// Note: reuses `SearchTimeoutError` (defined in `DriveModeDestinationView.swift`, file-
-// scope internal, "not private so the M-1 unit test can reference it via `@testable
-// import WePark`") rather than defining a second sentinel type — it's a trivial,
-// zero-coupling marker struct, so referencing it here doesn't touch that file at all and
-// avoids an unnecessary duplicate type.
+// Note: reuses `SearchTimeoutError` (defined in `Services/SearchCompleterDelegate.swift`,
+// internal, "not private so the M-1 unit test can reference it via `@testable import
+// WePark`") rather than defining a second sentinel type.

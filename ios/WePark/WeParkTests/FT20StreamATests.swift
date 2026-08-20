@@ -152,7 +152,7 @@ final class BrowseSheetDetentMathTests: XCTestCase {
     /// would be caught here.
     func testMediumHeight_realisticContentIsFarShorterThanSystemMediumFraction() {
         // Rough measured values for "search field (single line) + 3 List rows at default
-        // Dynamic Type" — see BrowseSheetSearchAreaStub / actionList's row count.
+        // Dynamic Type" — see BrowseSearchAreaView.searchField / actionList's row count.
         let realisticSearchHeight: CGFloat = 60
         let realisticListHeight: CGFloat = 170   // ~3 rows × ~44pt insetGrouped row + section insets
         let result = BrowseSheetDetentMath.mediumHeight(
