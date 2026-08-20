@@ -135,6 +135,38 @@ Owning stream in brackets.
   and the always-dark default (#83) shipped for *cleanliness* and was explicitly **not** a legibility
   fix. No simulator smoke can test this.
 
+### §0c — CORRECTION to §9's work-stream table (2026-08-20, found during Stream B)
+
+**§9 assigns "gut `DriveModeDestinationView.swift`" to Stream B. That is wrong given the actual serial
+order (B → C), and Stream B correctly refused it.**
+
+That file's `.fullScreenCover` (`driveModeDestinationCover` / `showDriveModeDestination` /
+`driveEntryButton`) is **still the live destination-search entry path today** — Stream C is what
+deletes it. Gutting it during Stream B would have stripped the `NavigationStack`/Cancel chrome out
+from under a flow users can reach in the shipped app: a live regression, and the same class of
+"correct for the end state, broken in the intermediate state" mistake that produced Stream A's trap
+state. §9's table implicitly assumed B lands *after* C's cover deletion; it doesn't.
+
+**What Stream B did instead:** left `DriveModeDestinationView.swift` at **zero diff** and built the
+relocated content additively as `Views/BrowseSearchAreaView.swift`, reachable only through the gated
+`.browseNav` sheet. It **reuses** `SearchCompleterDelegate`, `RecentDestinationsStore` and
+`SearchTimeoutError` from the untouched file — only the SwiftUI view layer is duplicated, which is
+unavoidable while two presentation contexts coexist.
+
+**⚠️ STREAM C INHERITS THE CONSOLIDATION — this is now part of C's definition of done:**
+1. Delete `driveModeDestinationCover`, `showDriveModeDestination`, and `driveEntryButton`.
+2. Delete `DriveModeDestinationView.swift` once nothing references it.
+3. Collapse the duplicated `onRouteReady` closure body — Stream B duplicated
+   `driveModeDestinationCover`'s body (AC-11) rather than sharing it, because sharing would have
+   required touching the still-live cover. One call site after C.
+4. Do all of the above **in the same change that flips `ft20BrowseSheetEnabled`**, so there is never a
+   build with two live search paths.
+
+Leaving the duplication un-consolidated is the failure mode to watch: two search implementations that
+drift apart is worse than either one alone.
+
+---
+
 **Estimate impact:** the reviewer judged S1–S6 to be spec-tightening rather than new surface area —
 S3/S4/S6 add no code at all (ACs and a smoke question), and S2/S5 are one-liners. S1 is the only one
 with real content, and specifying it *reduces* risk by removing an invent-it-yourself decision.
