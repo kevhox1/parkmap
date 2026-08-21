@@ -108,21 +108,55 @@ enum BrowseSheetDetentMath {
     /// chrome ends up costing on top of whatever `.height(_:)` value is presented. See
     /// `peekHeight`'s doc comment for the construction, and
     /// `BrowseSheetPeekInvariantTests` for the regression test this bug now has.
+    ///
+    /// ⚠️ ROUND 4 UPDATE (2026-08-21, PR #87 4th pass): the clamp above was necessary but
+    /// NOT sufficient. Kevin's next screenshot showed the OPPOSITE failure — at peek there
+    /// was no visible search field AT ALL, just the grabber and a clipped sliver of the
+    /// "Find a Spot" button. Root cause, found by inspection (no device available): this
+    /// file's `body` VStack lays out THREE children — `searchArea` (intrinsic size, no
+    /// frame), `interSectionGutter` (a HARD `.frame(height:)`, fully fixed), and
+    /// `actionColumn` (also a HARD `.frame(height:)`, fully fixed). When the container
+    /// offers less total height than the two FIXED children alone need (gutter + full
+    /// actionColumn, ~110pt — bigger than any realistic peek height), SwiftUI's layout
+    /// negotiation honors the fixed-size children's exact request FIRST and gives the one
+    /// flexible/intrinsic child (`searchArea`) whatever's left over — which, once the fixed
+    /// siblings already exceed the offered height, is nothing. `searchArea` was being
+    /// squeezed to near-zero, and the fixed `actionColumn` below it was still claiming (and
+    /// rendering into) its full 100+pt regardless, with the outer sheet simply clipping the
+    /// overflow from the bottom. That is why NO peek-height arithmetic could ever have
+    /// fixed this: the bug wasn't in what number `peekHeight` computed, it was that
+    /// `actionColumn` and its gutter were unconditionally IN THE LAYOUT TREE at peek,
+    /// competing with `searchArea` for space it needed and losing. The real fix is in
+    /// `BrowseNavigationSheet.body` — `actionColumn`/the gutter are now only mounted when
+    /// `BrowseSheetDetentKind.showsActionContent` is true (i.e. never at `.peek`), which
+    /// both (a) makes the action content structurally impossible to render at peek
+    /// (Task 1's invariant) and (b) frees the space `searchArea` needs to render at its
+    /// real, full height (Task 2's fix) — the two problems shared one cause.
 
     /// Vertical gap, authored and rendered directly by this file (not a guess about
     /// external system chrome), between the search area and the action content in
-    /// `BrowseNavigationSheet.body`'s `VStack`. Gives the peek/medium boundary genuine
-    /// visual breathing room and — more importantly — a real, testable margin the
-    /// `peekHeight` clamp below can rely on.
+    /// `BrowseNavigationSheet.body`'s `VStack`. Only actually occupies space when the
+    /// action content is mounted (`BrowseSheetDetentKind.showsActionContent`) — see the
+    /// round-4 doc comment above. Gives the peek/medium boundary genuine visual breathing
+    /// room and — more importantly — a real, testable margin the `peekHeight` clamp below
+    /// can rely on.
     static let interSectionGutter: CGFloat = 8
 
-    /// Safety margin subtracted from the measured search-area height before flooring, so
-    /// that even in the "no clamp needed" branch of `peekHeight` (realistic, non-degenerate
-    /// content), peek sits comfortably under `searchAreaHeight` rather than flush against
-    /// it — cheap, additional insurance against the system's own grabber chrome (whatever
-    /// its true footprint turns out to be) nudging the visible window a few points past
-    /// where our content ends.
-    static let peekSafetyMargin: CGFloat = 8
+    /// Extra headroom ADDED on top of the measured search-area height when computing the
+    /// peek candidate (see `peekHeight` below), so the full search field — not a
+    /// bottom-cropped sliver of it — sits comfortably inside the peek window with a couple
+    /// points to spare. This is safe to be generous with now, unlike the removed
+    /// `grabberAndInsetAllowance`: `peekHeight`'s hard clamp against
+    /// `actionContentTopOffset` still applies (belt-and-braces), AND — as of round 4 —
+    /// `actionColumn` is no longer even mounted at peek, so there is nothing for a generous
+    /// peek height to reveal even if this constant is bigger than it needs to be.
+    ///
+    /// Deliberately kept SMALLER than `interSectionGutter` (rather than equal to it), so
+    /// `minimumPeekHeight`'s floor stays reachable for genuinely small measured inputs
+    /// instead of the ceiling clamp always winning outright — see `peekHeight`'s own doc
+    /// comment for the three-way priority ordering (floor / candidate / ceiling) this value
+    /// participates in.
+    static let peekBreathingRoom: CGFloat = 4
 
     /// The minimum gap, below `actionContentTopOffset`, that `peekHeight`'s hard clamp
     /// enforces — i.e. how far "strictly less than" must be, not just "less than or equal
@@ -138,29 +172,35 @@ enum BrowseSheetDetentMath {
         searchAreaHeight + interSectionGutter
     }
 
-    /// Peek height: derived from the measured search-area height, floored at
-    /// `minimumPeekHeight` for a realistic 44pt-plus-grabber touch target, but HARD-CLAMPED
-    /// so it can never reach `actionContentTopOffset` — i.e. it is now structurally
-    /// impossible for peek to reveal any of the action content, regardless of what the
-    /// system's own (unmeasurable, from this environment) grab-indicator chrome costs on
-    /// top of the presented `.height(_:)` value. See `BrowseSheetDetentMath`'s removed-
-    /// constant doc comment (above `interSectionGutter`) for the two-live-smoke-round
-    /// history this construction replaces.
+    /// Peek height: derived from the measured search-area height PLUS `peekBreathingRoom`
+    /// (round 4 — see that constant's doc comment for why this flipped from subtractive to
+    /// additive), floored at `minimumPeekHeight` for a realistic 44pt-plus-grabber touch
+    /// target, but HARD-CLAMPED so it can never reach `actionContentTopOffset` — i.e. it is
+    /// structurally impossible for peek's presented HEIGHT to reach into the action
+    /// content's region, regardless of what the system's own (unmeasurable, from this
+    /// environment) grab-indicator chrome costs on top of the presented `.height(_:)`
+    /// value. This clamp is now BELT-AND-BRACES, not the only line of defense: as of round
+    /// 4, `BrowseNavigationSheet.body` also never MOUNTS `actionColumn` at peek at all (see
+    /// `BrowseSheetDetentKind.showsActionContent`), so there is nothing in that region to
+    /// reveal even if this clamp were somehow bypassed. See `BrowseSheetDetentMath`'s
+    /// removed-constant doc comment (above `interSectionGutter`) for the two-live-smoke-
+    /// round history this construction replaces, and its round-4 addendum for why a pure
+    /// height-arithmetic fix could never have been sufficient on its own.
     ///
     /// Priority ordering, stated explicitly because the two goals can conflict at
-    /// pathologically small inputs: "never reveal action content" wins over "meet the
-    /// nominal `minimumPeekHeight` floor." This is deliberate and safe in practice —
-    /// `searchAreaHeight` values small enough to trigger the clamp (roughly ≤56pt) are not
-    /// reachable from a real rendered search field (its own fixed `.padding(10)` +
-    /// `.padding(.vertical, 12)`, `BrowseSearchAreaView.swift:241–244`, put its realistic
-    /// minimum well above that), and the true degenerate case — `searchAreaHeight == 0`,
-    /// the unmeasured `@State` default — never reaches a live `.presentationDetents` call
-    /// in the first place: `BrowseNavigationSheet`'s own `isGenuineMeasurement` guard
-    /// refuses to report it, and `ContentView`'s initial placeholder is hardcoded straight
-    /// to `minimumPeekHeight`, bypassing this function entirely (`ContentView.swift`'s
-    /// `browseSheetPeekHeight` `@State` default).
+    /// pathologically small inputs: "never reach the action content's region" wins over
+    /// "meet the nominal `minimumPeekHeight` floor." This is deliberate and safe in
+    /// practice — `searchAreaHeight` values small enough to trigger the clamp (roughly
+    /// ≤56pt) are not reachable from a real rendered search field (its own fixed
+    /// `.padding(10)` + `.padding(.vertical, 12)`, `BrowseSearchAreaView.swift:241–244`,
+    /// put its realistic minimum well above that), and the true degenerate case —
+    /// `searchAreaHeight == 0`, the unmeasured `@State` default — never reaches a live
+    /// `.presentationDetents` call in the first place: `BrowseNavigationSheet`'s own
+    /// `isGenuineMeasurement` guard refuses to report it, and `ContentView`'s initial
+    /// placeholder is hardcoded straight to `minimumPeekHeight`, bypassing this function
+    /// entirely (`ContentView.swift`'s `browseSheetPeekHeight` `@State` default).
     static func peekHeight(searchAreaHeight: CGFloat) -> CGFloat {
-        let candidate = max(minimumPeekHeight, searchAreaHeight - peekSafetyMargin)
+        let candidate = max(minimumPeekHeight, searchAreaHeight + peekBreathingRoom)
         let ceiling = actionContentTopOffset(searchAreaHeight: searchAreaHeight)
             - peekToActionContentMinimumGap
         return max(0, min(candidate, ceiling))
@@ -298,6 +338,19 @@ struct BrowseSheetSearchAreaHeightPreferenceKey: PreferenceKey {
 enum BrowseSheetDetentKind: Equatable {
     case peek, medium, large
 
+    /// FT-20 Stream C, PR #87 round 4: whether `BrowseNavigationSheet`'s medium-detent
+    /// action content (the "Find a Spot" button + "New to parking?" link) should be MOUNTED
+    /// in the view tree at all for this detent kind — `false` only at `.peek`. This is a
+    /// conditional-rendering gate, not a visual/opacity one: at peek the action content is
+    /// not merely invisible, it doesn't exist in the layout tree, so (a) it is structurally
+    /// impossible for it to render regardless of any height-math error (three prior
+    /// arithmetic-only attempts each moved the bug instead of killing it — see
+    /// `BrowseSheetDetentMath`'s round-4 doc comment), and (b) the search field is no
+    /// longer squeezed for layout space by fixed-height siblings it doesn't need to share
+    /// space with at peek in the first place. See `BrowseNavigationSheet.body`'s own doc
+    /// comment for the full reasoning and the layout-squeeze root cause this also fixes.
+    var showsActionContent: Bool { self != .peek }
+
     /// FT-20 Stream C bugfix (QA live-smoke, two-bug report): classifies a
     /// `PresentationDetent` reported back by the system (via `.presentationDetents`'s
     /// `selection` binding's `set` callback) into a `BrowseSheetDetentKind`, given the
@@ -390,6 +443,11 @@ func browseSheetDetentSelectionBinding(
 ///     changes (initial layout, Dynamic Type change, etc.) with the two already-computed,
 ///     already-clamped detent heights. `ContentView` stores these into the `@State` it
 ///     feeds into `.presentationDetents([.height(peek), .height(medium), .large], ...)`.
+///   - `detentKind`: (round 4, PR #87) the CURRENT `BrowseSheetDetentKind` selection —
+///     `ContentView`'s own `browseSheetDetentKind` `@State`, read-only here. Drives whether
+///     `actionColumn` is mounted at all (`BrowseSheetDetentKind.showsActionContent`) — see
+///     `body`'s own doc comment for why this is a conditional-rendering gate, not a
+///     `.presentationDetents` height problem.
 struct BrowseNavigationSheet<SearchArea: View>: View {
 
     // MARK: Public interface
@@ -403,6 +461,7 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     // the unambiguous, universally-supported one.
 
     let searchArea: SearchArea
+    let detentKind: BrowseSheetDetentKind
     let onCruiseTapped: () -> Void
     let onParkingGuideTapped: () -> Void
     let onPeekHeightChange: (CGFloat) -> Void
@@ -410,12 +469,14 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
 
     init(
         @ViewBuilder searchArea: () -> SearchArea,
+        detentKind: BrowseSheetDetentKind,
         onCruiseTapped: @escaping () -> Void,
         onParkingGuideTapped: @escaping () -> Void,
         onPeekHeightChange: @escaping (CGFloat) -> Void,
         onMediumHeightChange: @escaping (CGFloat) -> Void
     ) {
         self.searchArea = searchArea()
+        self.detentKind = detentKind
         self.onCruiseTapped = onCruiseTapped
         self.onParkingGuideTapped = onParkingGuideTapped
         self.onPeekHeightChange = onPeekHeightChange
@@ -469,23 +530,73 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
 
     // MARK: Body
 
+    /// ⚠️ PR #87 ROUND 4 (2026-08-21) — read this before touching peek/medium layout again.
+    ///
+    /// Three prior rounds tried to fix "peek reveals the action content" purely by tuning
+    /// `BrowseSheetDetentMath.peekHeight`'s arithmetic (a guessed grabber allowance, then
+    /// `24 → 12`, then a hard clamp against `actionContentTopOffset`). All three were
+    /// locally correct and the bug survived every one — because `actionColumn` and its
+    /// gutter were unconditionally IN THIS VStack regardless of detent, and a system
+    /// `.sheet`'s custom `.height(_:)` detent is a genuine LAYOUT CONSTRAINT, not just a
+    /// crop window: when the offered height is smaller than the sum of this stack's FIXED-
+    /// size children (`interSectionGutter` + `actionColumn`, both hard `.frame(height:)`,
+    /// together comfortably bigger than any realistic peek height), SwiftUI's layout
+    /// negotiation satisfies those fixed children first and gives `searchArea` — the one
+    /// child with no hard frame of its own — whatever's left over, which at peek was
+    /// nothing. That is the root cause of BOTH symptoms Kevin's 4th screenshot showed at
+    /// once: the search field disappearing (squeezed to ~0) AND the "Find a Spot" button
+    /// still rendering, clipped (its fixed frame was honored regardless of the tiny offered
+    /// height).
+    ///
+    /// The fix: `actionColumn`/the gutter are now only MOUNTED
+    /// (`BrowseSheetDetentKind.showsActionContent`, i.e. never at `.peek`) — not merely
+    /// hidden. This is a conditional-rendering gate, not an opacity one, deliberately:
+    /// opacity/`.hidden()` still RESERVE the same fixed layout space, which would leave the
+    /// exact space-squeeze bug above intact even with the button invisible. Removing the
+    /// nodes from the tree is what both (a) makes the action content structurally
+    /// impossible to reveal at peek regardless of any future height-math change, and (b)
+    /// frees the room `searchArea` needs to render at its real size. `searchArea` also
+    /// carries a defensive `.frame(minHeight:)` floor below, independent of this fix, so a
+    /// future regression that reintroduces a competing fixed sibling can't silently squeeze
+    /// it below a usable touch target again.
     var body: some View {
         VStack(spacing: 0) {
             searchArea
+                // Defensive floor (Task 2): guarantees `searchArea` is never laid out
+                // shorter than a usable touch target, independent of whatever else shares
+                // this VStack. Belt-and-braces alongside the conditional-rendering fix
+                // above — `minHeight` only raises the floor, it never shrinks a genuinely
+                // taller measurement (Dynamic Type, etc.).
+                .frame(minHeight: BrowseSheetDetentMath.minimumPeekHeight)
 
-            // Fixed-height spacer, NOT `Spacer()` — a greedy `Spacer()` here would expand
-            // to fill the sheet's full `.large`-sized layout pass (this file's content is
-            // laid out at full size regardless of the currently-selected detent — see
-            // `BrowseSheetDetentMath.peekHeight`'s doc comment) and push `actionColumn` to
-            // the BOTTOM of a near-screen-height container instead of directly beneath
-            // `searchArea`. `Color.clear.frame(height:)` has a fixed intrinsic size, so it
-            // sits exactly where `BrowseSheetDetentMath.interSectionGutter` says it should.
-            Color.clear
-                .frame(height: BrowseSheetDetentMath.interSectionGutter)
+            // Gutter + actionColumn are ONLY mounted when NOT at peek — see this property's
+            // own doc comment above for why this must be conditional rendering, not opacity.
+            if detentKind.showsActionContent {
+                // Fixed-height spacer, NOT `Spacer()` — a greedy `Spacer()` here would
+                // expand to fill the sheet's full `.large`-sized layout pass and push
+                // `actionColumn` to the BOTTOM of a near-screen-height container instead of
+                // directly beneath `searchArea`. `Color.clear.frame(height:)` has a fixed
+                // intrinsic size, so it sits exactly where
+                // `BrowseSheetDetentMath.interSectionGutter` says it should.
+                Color.clear
+                    .frame(height: BrowseSheetDetentMath.interSectionGutter)
 
-            actionColumn
-                .frame(height: actionColumnHeight)
+                actionColumn
+                    .frame(height: actionColumnHeight)
+            }
         }
+        #if DEBUG
+        // ============================================================================
+        // FT-20 DEBUG READOUT — PR #87 round 4. TO REMOVE: delete this `#if DEBUG`
+        // block (through its matching `#endif` below) and the `debugReadout` computed
+        // property further down (also wrapped in its own `#if DEBUG`/`#endif`). Nothing
+        // else references either. Wrapped in `#if DEBUG` so it can never reach a
+        // TestFlight/App Store build regardless of forgetting to remove it.
+        // ============================================================================
+        .overlay(alignment: .topTrailing) {
+            debugReadout
+        }
+        #endif
         // FT-20 Stream C / QA C1 fix: read the search field's OWN reported height via the
         // preference key above, not `searchArea`'s overall geometry — see
         // `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment for why measuring the
@@ -526,6 +637,52 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
             reportHeights()
         }
     }
+
+    #if DEBUG
+    // ================================================================================
+    // FT-20 DEBUG READOUT — PR #87 round 4, requested explicitly so the NEXT round (if
+    // there is one) is driven by real on-device numbers instead of a 5th guess. Small,
+    // high-contrast, monospaced overlay of the live values driving peek/medium sizing.
+    //
+    // TO REMOVE: delete this entire `#if DEBUG` ... `#endif` block, plus the
+    // `.overlay(alignment: .topTrailing) { debugReadout }` call (also `#if DEBUG`-
+    // wrapped) in `body` above. Nothing else in this file or `ContentView.swift`
+    // references `debugReadout`. Both are `#if DEBUG`-gated so this can never ship in
+    // a TestFlight/release build even if the deletion is forgotten.
+    // ================================================================================
+
+    /// Live readout of the exact values driving this file's peek/medium detent math —
+    /// screenshot this instead of guessing. Positioned top-trailing so it sits clear of
+    /// the search field (top-leading/center) and the action column (bottom half).
+    private var debugReadout: some View {
+        // `String(format:)` rather than `Text(_:specifier:)` — matches this codebase's
+        // existing numeric-formatting convention (`BlockDetailView.swift`,
+        // `ParkingRulesEngine.swift`) and avoids relying on an unverified
+        // `Text`/`CGFloat` `specifier:` overload on a machine with no compiler to check it.
+        let peek = BrowseSheetDetentMath.peekHeight(searchAreaHeight: searchAreaHeight)
+        let medium = BrowseSheetDetentMath.mediumHeight(
+            searchAreaHeight: searchAreaHeight,
+            actionColumnHeight: actionColumnHeight,
+            maxAllowedHeight: Self.maxAllowedMediumHeight
+        )
+        let actionTop = BrowseSheetDetentMath.actionContentTopOffset(searchAreaHeight: searchAreaHeight)
+        return VStack(alignment: .trailing, spacing: 1) {
+            Text("FT20 DEBUG")
+                .fontWeight(.bold)
+            Text("kind: \(String(describing: detentKind))")
+            Text("searchH: \(String(format: "%.1f", searchAreaHeight))")
+            Text("peek: \(String(format: "%.1f", peek))")
+            Text("medium: \(String(format: "%.1f", medium))")
+            Text("actionTop: \(String(format: "%.1f", actionTop))")
+        }
+        .font(.system(size: 9, weight: .semibold, design: .monospaced))
+        .foregroundStyle(.white)
+        .padding(6)
+        .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 6))
+        .padding(6)
+        .allowsHitTesting(false)
+    }
+    #endif
 
     // MARK: - §0f Ruling 1: the rebuilt medium-detent action column
 

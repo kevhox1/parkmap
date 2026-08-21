@@ -1290,6 +1290,13 @@ struct ContentView: View {
     /// cause of Kevin's "dark field on the sheet's dark blurred material, barely visible" —
     /// see `BrowseSearchAreaView.searchField`'s doc comment for the field-fill half of the
     /// fix.
+    ///
+    /// `detentKind: browseSheetDetentKind` (PR #87 round 4): plumbs the current detent
+    /// selection into `BrowseNavigationSheet` so it can conditionally MOUNT (not just hide)
+    /// its action column only when `detentKind.showsActionContent` — see
+    /// `BrowseNavigationSheet.body`'s doc comment for the full root-cause writeup of why
+    /// three prior peek-height-arithmetic-only fixes never killed the "peek reveals the
+    /// action content" bug.
     @ViewBuilder
     private var browseNavigationSheetContent: some View {
         BrowseNavigationSheet(
@@ -1309,6 +1316,7 @@ struct ContentView: View {
                     onSettingsTapped: { activeSheet = .settings }
                 )
             },
+            detentKind: browseSheetDetentKind,
             onCruiseTapped: { enterCruiseMode() },
             onParkingGuideTapped: { activeSheet = .parkingGuide },
             onPeekHeightChange: { browseSheetPeekHeight = $0 },

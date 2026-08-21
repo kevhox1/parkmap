@@ -39,31 +39,57 @@ final class BrowseSheetDetentMathTests: XCTestCase {
     // hard-clamped below `actionContentTopOffset`. See `BrowseSheetDetentMath.peekHeight`'s
     // doc comment for the full construction, and `BrowseSheetPeekInvariantTests` below for
     // the invariant test this history specifically asked for.
+    //
+    // ⚠️ PR #87 ROUND 4 (2026-08-21): the formula flipped AGAIN — `peekHeight` now ADDS
+    // `peekBreathingRoom` on top of `searchAreaHeight` instead of subtracting
+    // `peekSafetyMargin` from it. This is a DELIBERATE behavior change, not a formula
+    // detail: Kevin's 4th screenshot showed the search field missing ENTIRELY at peek, and
+    // round-4's root cause (see `BrowseSheetDetentMath`'s and `BrowseNavigationSheet.body`'s
+    // own doc comments) was that `actionColumn` was unconditionally in the layout tree,
+    // squeezing `searchArea` for space. Subtracting a margin from `searchAreaHeight` made
+    // that worse, not better — it guaranteed peek's presented height was always LESS than
+    // the field's own real size. Now that `actionColumn` is conditionally removed from the
+    // tree at peek (so it can never bleed through regardless of this number), peek height
+    // can safely be generous: it now guarantees the FULL search field fits, with a few
+    // points to spare, rather than deliberately under-shooting it. The two tests below are
+    // rewritten (not just re-pinned) to match; the invariant suite further down
+    // (`BrowseSheetPeekInvariantTests`) is UNCHANGED — "peek strictly below
+    // actionContentTopOffset" still holds under the new formula, it's still the load-
+    // bearing regression guard, just no longer the ONLY line of defense.
 
-    func testPeekHeight_isBelowMeasuredSearchHeightForRealisticContent() {
-        // Realistic case (a real rendered search field, e.g. ~66pt tall at default Dynamic
-        // Type): peek must sit UNDER the search field's own measured height, never over it
-        // — the old formula ADDED to searchAreaHeight; this one never does.
+    func testPeekHeight_isAtOrAboveMeasuredSearchHeightForRealisticContent() {
+        // DELIBERATE BEHAVIOR CHANGE from the round-3 formula (see this section's own
+        // comment above): a realistic rendered search field (~66pt at default Dynamic
+        // Type) must now be FULLY CONTAINED in the peek window, not bottom-cropped. The
+        // round-3 formula asserted the opposite (`result < 66`) — that under-shoot is
+        // exactly what round 4's screenshot showed going wrong (no visible search field at
+        // peek at all).
         let result = BrowseSheetDetentMath.peekHeight(searchAreaHeight: 66)
-        XCTAssertLessThan(
+        XCTAssertGreaterThan(
             result, 66,
-            "Peek height must never exceed the measured search-area height for realistic " +
-            "content — the removed `grabberAndInsetAllowance` used to add on top of it, " +
-            "which is exactly the mechanism behind the 'buttons peeking' live-smoke bug."
+            "Peek height must comfortably exceed the measured search-area height for " +
+            "realistic content, now that `actionColumn` can never be mounted at peek to " +
+            "bleed through a generous peek height (BrowseSheetDetentKind.showsActionContent)."
         )
     }
 
-    func testPeekHeight_flooredAtMinimumForAModeratelyShortSearchArea() {
-        // A search area comfortably above the degenerate-zero case but still fairly short
-        // (e.g. a smaller Dynamic Type size): the nominal 44pt-plus-grabber floor
-        // (`minimumPeekHeight`) still applies as long as it doesn't cross
-        // `actionContentTopOffset` (it doesn't here — see the invariant tests below).
-        let result = BrowseSheetDetentMath.peekHeight(searchAreaHeight: 66)
+    func testPeekHeight_flooredAtMinimumForAGenuinelyShortSearchArea() {
+        // DELIBERATE BEHAVIOR CHANGE: this test previously used searchAreaHeight == 66,
+        // the same input as the test above — under the OLD subtractive formula that
+        // happened to land exactly on the floor. Under the new additive formula, 66 lands
+        // well above the floor (see the test above), so this test now uses a genuinely
+        // short search-area height (58pt — plausible at a smaller Dynamic Type size) chosen
+        // specifically to land in the floor-binding range: `minimumPeekHeight` (64) is
+        // still ≤ `actionContentTopOffset(58) - 1` (65) at this input, so the nominal
+        // 44pt-plus-grabber floor (spec §4.1) is what determines the result, not the
+        // ceiling clamp — see `BrowseSheetDetentMath.peekHeight`'s doc comment for the
+        // three-way (floor / candidate / ceiling) priority ordering this pins.
+        let result = BrowseSheetDetentMath.peekHeight(searchAreaHeight: 58)
         XCTAssertEqual(
             result, BrowseSheetDetentMath.minimumPeekHeight,
-            "For search-area heights close to the floor, peek should land exactly at " +
-            "`minimumPeekHeight` (spec §4.1: 'Peek must clear a full 44pt touch target " +
-            "plus the grabber')."
+            "For search-area heights short enough that floor and ceiling both exceed the " +
+            "additive candidate, peek should land exactly at `minimumPeekHeight` (spec " +
+            "§4.1: 'Peek must clear a full 44pt touch target plus the grabber')."
         )
     }
 
@@ -293,6 +319,57 @@ final class BrowseSheetPeekInvariantTests: XCTestCase {
                 "touch target for any realistically-rendered search field."
             )
         }
+    }
+
+    /// PR #87 ROUND 4 — new invariant, added alongside the round-4 fix (spec brief's
+    /// explicit ask: "a test that the search field's measured height is non-zero for
+    /// realistic inputs, if that's expressible as pure logic"). `BrowseSearchAreaView`'s
+    /// actual on-screen rendered height isn't reachable from this pure-math suite (no
+    /// ViewInspector/snapshot tooling, no simulator on this machine — see this file's
+    /// top-of-file comment) — the closest expressible-as-pure-logic proxy is this: for any
+    /// realistic measured `searchAreaHeight`, `peekHeight` must be large enough to contain
+    /// the ENTIRE search area, not crop it. This is the exact invariant round 4 changed:
+    /// the round-3 formula subtracted a margin (guaranteeing under-shoot, i.e. cropping);
+    /// this one adds one (guaranteeing the full field fits). If this regresses back to
+    /// `peek < searchAreaHeight`, the search field is being cropped again, which is one of
+    /// the two symptoms round 4 fixed.
+    func testPeekHeight_fullyContainsTheSearchArea_acrossRealisticDynamicTypeRange() {
+        for searchAreaHeight in stride(from: CGFloat(40), through: 400, by: 4) {
+            let peek = BrowseSheetDetentMath.peekHeight(searchAreaHeight: searchAreaHeight)
+            XCTAssertGreaterThanOrEqual(
+                peek, searchAreaHeight,
+                "peekHeight(\(searchAreaHeight)) = \(peek) is SHORTER than the measured " +
+                "search area — the field would be bottom-cropped at peek, the exact " +
+                "'no visible search field at peek' symptom from Kevin's 4th live smoke."
+            )
+        }
+    }
+}
+
+// MARK: - BrowseSheetDetentKind.showsActionContent Tests
+//
+// PR #87 ROUND 4: the actual fix for "peek reveals the action content" (three prior
+// arithmetic-only attempts never killed it — see `BrowseNavigationSheet.body`'s doc
+// comment) is that `actionColumn`/its gutter are now conditionally MOUNTED, gated by this
+// property, rather than sized to be invisible. This is pure Swift enum logic — no view
+// rendering needed — so it's directly unit-testable, unlike the actual on-screen
+// conditional-rendering behavior it drives (Kevin's live-UI smoke covers that).
+final class BrowseSheetDetentKindShowsActionContentTests: XCTestCase {
+
+    func testPeek_doesNotShowActionContent() {
+        XCTAssertFalse(
+            BrowseSheetDetentKind.peek.showsActionContent,
+            "Peek must never show the action column — this is the structural (not " +
+            "height-arithmetic) guarantee round 4 introduced."
+        )
+    }
+
+    func testMedium_showsActionContent() {
+        XCTAssertTrue(BrowseSheetDetentKind.medium.showsActionContent)
+    }
+
+    func testLarge_showsActionContent() {
+        XCTAssertTrue(BrowseSheetDetentKind.large.showsActionContent)
     }
 }
 
