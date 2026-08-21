@@ -165,6 +165,49 @@ unavoidable while two presentation contexts coexist.
 Leaving the duplication un-consolidated is the failure mode to watch: two search implementations that
 drift apart is worse than either one alone.
 
+### §0e — Kevin's rulings from the Stream C live smoke (2026-08-21, SETTLED)
+
+He built and ran PR #87 on iPhone 17 / iOS 26.5 — the first time the sheet has been seen running.
+
+**🔴 RULING 1 — the medium detent's three actions become a HORIZONTAL ICON ROW. This OVERRIDES
+design-review finding S1 (§0b), which specified `List` rows.** Kevin: *"The formatting looks goofy but
+its three buttons. Let's discuss how we could make them look a bit cleaner/better. Maybe have them
+left to right rather the up/down?"* — then chose the horizontal option.
+
+- **Shape:** three circular icon buttons side by side, label beneath each — the Apple Maps action-row
+  pattern. Settings (`gearshape`) · Cruise (`car.front.waves.right.fill`) · Parking 101
+  (`questionmark.circle`).
+- **Why this beats S1, now that we can see it running:** it roughly halves the medium detent's height
+  (~260pt → ~190pt), which directly serves the reason OQ-3 exists at all — *"WePark's map IS the
+  product."* S1's rationale was consistency with the suggestions/recents `List` one scroll away, but
+  those live in a **different state** (large detent, search active) and are almost never on screen at
+  the same time as the action rows, so that consistency argument is weaker in practice than it looked
+  on paper.
+- ⚠️ **DO NOT "restore" `List` rows citing S1.** S1 is superseded on this point by Kevin's on-device
+  judgment. S1's *other* requirement — SF Symbol + label on **all three** rows — still stands and was
+  being violated: the shipped Cruise row had **no icon** while Settings and Parking 101 did.
+- The `.insetGrouped` section inset was the visible dead gap between the search field and the rows.
+  It goes away with the `List`.
+
+**🟡 RULING 2 — the fresh-install "New to parking?" banner floats ABOVE the sheet's peek**, as its own
+card, and stays a distinct one-time moment.
+
+- **Kevin's actual requirement is bigger than placement:** *"there needs to be a clear place where
+  people can go to find this intro/tutorial later on. I want it to be very straightforward… I want to
+  take someone who knows NOTHING about street parking and have them fully understand the game."*
+- **Already satisfied in two permanent places — verify before changing anything:** (1) the sheet's
+  third action row, always one tap away in browse mode (**new with FT-20**), and (2) `SettingsView`'s
+  "Parking 101" row (FT-12, above Help & FAQ, `signpost.right.and.left`). FT-20 is a net *improvement*
+  here: pre-FT-20 the guide lived behind a floating `?` button that FT-18 **hid during Drive Mode**.
+- The banner's existing visibility condition (`ContentView.swift:1728`) predates the sheet and doesn't
+  know about it — it only checks `!driveModeActive && !parkUntilMode && !blockSelectModeActive`. It
+  must now also sit clear of the sheet's peek.
+- **Gate criteria, for the record:** `ParkingGuidePromptGate().shouldShow()` is
+  `!defaults.bool(forKey:)` — shows **once per install**, permanently, after which `markShown()`
+  suppresses it forever. To re-test it, delete the app from the simulator and reinstall.
+
+---
+
 ### §0d — Stream B QA carry-forwards (BINDING on Stream C, 2026-08-20)
 
 From `docs/qa/ft20-stream-b-pr86.md`. Both are unreachable today (gate off) and were correctly not
