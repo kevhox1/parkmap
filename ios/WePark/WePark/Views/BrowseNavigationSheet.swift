@@ -4,35 +4,45 @@
 //
 //  FT-20 — browse-mode bottom sheet CONTAINER. Built in Stream A, real content wired by
 //  Stream B, mounted live by Stream C (`ft20BrowseSheetEnabled == true`).
-//  docs/ft20-bottom-sheet-navigation-spec.md §4.1/§4.2, §0b findings B1/B2/S1, §0d C1.
+//  docs/ft20-bottom-sheet-navigation-spec.md §4.1/§4.2, §0b findings B1/B2, §0e, §0f.
 //
 //  This file owns:
 //    - `BrowseSheetDetentMath`: pure, UIKit-free computation of the two CUSTOM detent
 //      heights (peek + medium). Kevin ruled OQ-3 (spec §0): NOT system `.medium` — a
-//      custom height sized to "search field + exactly three rows and no more," measured
+//      custom height sized to "search field + action content and no more," measured
 //      from actual rendered content (§0b finding B2), not hardcoded.
 //    - `BrowseSheetSearchAreaHeightPreferenceKey`: the QA §0d C1 fix — how the search
 //      field's own height reaches this container without ever measuring the large-detent-
 //      only `List` content mounted alongside it. See its own doc comment below.
 //    - `BrowseNavigationSheet`: the sheet's content view. Persistent search-area row on
 //      top (`Views/BrowseSearchAreaView.swift`, Stream C's live entry point — see the note
-//      on `searchArea` below) + the medium-detent 3-item action row (Settings / Cruise /
-//      Parking 101).
+//      on `searchArea` below) + the medium-detent action content below it.
 //
-//      ⚠️ Kevin's live-smoke Ruling 1 (spec §0e, 2026-08-21) OVERRIDES design-review
-//      finding S1. S1 originally called for `List` rows matching `recentDestinationsList`'s
-//      anatomy verbatim. On-device, that anatomy clipped the 3rd row at medium (`.insetGrouped`
-//      needs ~190-210pt of real section chrome for 3 rows; the old budget was only 156pt)
-//      AND its SF Symbol for "Cruise" didn't resolve (see `actionList`'s doc comment below).
-//      Kevin's ruling replaces it with three circular icon buttons + label beneath, evenly
-//      distributed — the Apple Maps action-row pattern. Do NOT "restore" the `List` citing
-//      S1; the live-smoke ruling is the authority here, per spec §0e's own framing.
+//      ⚠️ Kevin's third live-smoke ruling (spec §0f, 2026-08-21) is the CURRENT authority
+//      on this hierarchy, superseding §0e Ruling 1 (a horizontal 3-icon row), which itself
+//      superseded design-review finding S1 (`List` rows). §0f's finding: three equal
+//      controls asserted Settings/Cruise/Parking 101 mattered equally, and they don't —
+//      Apple Maps itself has no in-app settings button; the only entry point is a small
+//      avatar in the search field's trailing edge. The rebuilt hierarchy, top to bottom:
+//        1. Search field, with a small `gearshape` Settings affordance in its TRAILING
+//           EDGE (`BrowseSearchAreaView.searchField`, this file has no part in it).
+//        2. One prominent primary button — `car.fill` + "Find a Spot" — filled, full-
+//           width, unmistakably the main action. Still calls `onCruiseTapped`
+//           (`enterCruiseMode()`) — §0f Ruling 2 is a LABEL change ("Cruise" → "Find a
+//           Spot" in user-facing copy only), not a refactor. Internal identifiers
+//           (`enterCruiseMode()`, `driveModeStyle`, `.cruise`, and this file's own
+//           `onCruiseTapped` closure name) are deliberately left alone.
+//        3. A quiet tertiary text link — "New to parking?" — opens Parking 101. A link,
+//           not a button; visually subordinate to both of the above.
+//      Do NOT "restore" the three-icon row or the `List` citing S1/§0e — §0f is the
+//      authority. See `actionColumn`'s own doc comment for the full anatomy history.
 //
 //  Presentation mechanics (the `.browseNav` case's `.presentationDetents` /
-//  `.presentationBackgroundInteraction` / `.interactiveDismissDisabled` configuration, and
-//  the "dismiss returns to `.browseNav`, not `nil`" rest-state change across every other
-//  `ActiveSheet` case) live in `ContentView.swift`, per the existing
-//  `ActiveSheet`/`.sheet(item:)` single-host pattern — this file only builds the content.
+//  `.presentationBackgroundInteraction` / `.presentationBackground` /
+//  `.interactiveDismissDisabled` configuration, and the "dismiss returns to `.browseNav`,
+//  not `nil`" rest-state change across every other `ActiveSheet` case) live in
+//  `ContentView.swift`, per the existing `ActiveSheet`/`.sheet(item:)` single-host pattern
+//  — this file only builds the content.
 //
 
 import SwiftUI
@@ -44,8 +54,8 @@ import SwiftUI
 /// Zero SwiftUI/UIKit dependencies (no `UIScreen`, no `GeometryProxy`) by design, so this
 /// logic is fully unit-testable without a simulator — see `BrowseSheetDetentMathTests.swift`.
 /// The view layer (`BrowseNavigationSheet`) supplies the measured inputs via
-/// `.onGeometryChange` (iOS 17+, this project's deployment target) and a screen-derived
-/// `maxAllowedHeight` ceiling.
+/// `.onGeometryChange`-style preference reporting and a screen-derived `maxAllowedHeight`
+/// ceiling.
 ///
 /// ⚠️ Do NOT use system `.medium` anywhere `.browseNav` is configured — design-review
 /// finding B1 (docs/design/ft20-bottom-sheet-review.md): every one of the other 11
@@ -55,49 +65,105 @@ import SwiftUI
 /// computes are fed into `.height(_:)`, never `.medium`.
 enum BrowseSheetDetentMath {
 
-    /// Absolute floor for the peek detent — a 44pt touch target (Apple HIG minimum) plus a
+    /// Nominal floor for the peek detent — a 44pt touch target (Apple HIG minimum) plus a
     /// grabber/inset allowance. Spec §4.1: "Peek must clear a full 44pt touch target plus
-    /// the grabber." Guards against a pathologically short (or not-yet-measured, height 0)
-    /// search row producing an unusable, un-tappable peek height.
+    /// the grabber." This is a SOFT floor for `peekHeight` below (see that function's doc
+    /// comment for why it can't be an unconditional floor anymore) but stays the load-
+    /// bearing value everywhere else a "how tall must peek realistically be" figure is
+    /// needed (e.g. `ContentView`'s own initial `@State` placeholder, before any real
+    /// measurement has landed).
     static let minimumPeekHeight: CGFloat = 64
 
-    /// Extra vertical space, beyond `searchAreaHeight`, allotted to the SYSTEM's own
-    /// grab-indicator region — the chrome `.presentationDragIndicator(.visible)` renders
-    /// ABOVE this file's SwiftUI content tree, entirely outside it.
+    /// ⚠️ REMOVED 2026-08-21 (spec §0f) — root-cause note kept here rather than silently
+    /// deleted, because an agent grepping for "why did the peek fix change" needs the full
+    /// history, not just a diff.
     ///
-    /// ⚠️ ROOT CAUSE of the "peek reveals the first action row" live-smoke bug (found
-    /// 2026-08-21) and the FIX, recorded here rather than just silently changed:
+    /// This constant used to add a guessed allowance on top of the measured search-area
+    /// height to account for the SYSTEM's own `.presentationDragIndicator` grab-handle
+    /// region, which this file's content sits below. It went through two live-smoke
+    /// rounds — `24`, then `24 → 12` (removing a real double-count of
+    /// `BrowseSearchAreaView.searchField`'s own `.padding(.vertical, 12)`, which the
+    /// height-reporting `GeometryReader` was already capturing since it's attached AFTER
+    /// that padding, `BrowseSearchAreaView.swift:241–260`) — and the bug (peek revealing a
+    /// sliver of the medium-detent action content) SURVIVED BOTH attempts. Kevin's report
+    /// after the `12` fix: *"the three buttons are peaking."*
     ///
-    /// This constant used to be `24` and its doc comment claimed it covered TWO things —
-    /// "the grabber affordance... plus the content's own top inset." That second thing was
-    /// a double-count. `BrowseSearchAreaView.searchField`'s height-reporting
-    /// `GeometryReader` (`BrowseSearchAreaView.swift:253-260`) is attached AFTER
-    /// `.padding(.vertical, 12)` (`BrowseSearchAreaView.swift:244`), so `searchAreaHeight`
-    /// ALREADY includes that top inset — it's the search bar's own true rendered height,
-    /// padding and all. Adding a *second*, separate allowance for "the content's own top
-    /// inset" on top of a measurement that already contains it inflated `peekHeight`
-    /// (`searchAreaHeight + grabberAndInsetAllowance`, below) past what was needed to show
-    /// just the grabber + search field. Since this sheet's content is laid out against the
-    /// full `.large`-sized container regardless of detent (`body`'s `VStack(spacing: 0) {
-    /// searchArea; actionList }`), that excess budget exposed a sliver of `actionList` —
-    /// exactly the bug Kevin's live smoke observed.
+    /// Root cause: the true footprint of the system's grab-indicator region is a private
+    /// UIKit/SwiftUI layout detail this codebase has no API to read and this environment
+    /// (no simulator, no device) has no way to measure. Both `24` and `12` were guesses.
+    /// `peekHeight` ADDED that guess on top of a fully-measured `searchAreaHeight`, and
+    /// because this file's content is laid out against the FULL `.large`-sized container
+    /// regardless of the currently-selected detent (only the visible WINDOW from the top
+    /// changes size — see `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment for the
+    /// same fact applied to `searchArea`), any overshoot in that guess directly exposed
+    /// that many points of whatever sits immediately below `searchArea` in `body`'s
+    /// `VStack(spacing: 0)` — the action content. A guessed additive constant can, by
+    /// construction, only be verified by looking at a rendered device, which contradicts
+    /// this bug having already shipped, been "fixed," and shipped broken again twice.
     ///
-    /// Fix: `12` = the old `24` minus the `12`pt top-inset component that's already
-    /// counted inside `searchAreaHeight` (matches `searchField`'s own explicit
-    /// `.padding(.vertical, 12)` exactly), leaving only the system grabber's own footprint.
-    ///
-    /// ⚠️ [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK — the remaining `12` is still a
-    /// GUESS, not a measured constant]. The double-count is now removed by construction,
-    /// but the true size of the system's own grab-indicator region is still not something
-    /// this Linux VPS can read off rendered UIKit chrome. Kevin's on-device smoke should
-    /// confirm peek shows exactly the search field and nothing else, at default Dynamic
-    /// Type, before this remaining `12` is trusted.
-    static let grabberAndInsetAllowance: CGFloat = 12
+    /// The fix is architectural, not a third guess: `peekHeight` below no longer adds
+    /// anything to `searchAreaHeight` — instead it's derived FROM `searchAreaHeight` (a
+    /// value this file fully controls and measures precisely) and hard-clamped so it can
+    /// never reach `actionContentTopOffset`, regardless of what the system's own grabber
+    /// chrome ends up costing on top of whatever `.height(_:)` value is presented. See
+    /// `peekHeight`'s doc comment for the construction, and
+    /// `BrowseSheetPeekInvariantTests` for the regression test this bug now has.
 
-    /// Peek height = grabber/inset allowance + the measured height of the persistent
-    /// search area, floored at `minimumPeekHeight`.
+    /// Vertical gap, authored and rendered directly by this file (not a guess about
+    /// external system chrome), between the search area and the action content in
+    /// `BrowseNavigationSheet.body`'s `VStack`. Gives the peek/medium boundary genuine
+    /// visual breathing room and — more importantly — a real, testable margin the
+    /// `peekHeight` clamp below can rely on.
+    static let interSectionGutter: CGFloat = 8
+
+    /// Safety margin subtracted from the measured search-area height before flooring, so
+    /// that even in the "no clamp needed" branch of `peekHeight` (realistic, non-degenerate
+    /// content), peek sits comfortably under `searchAreaHeight` rather than flush against
+    /// it — cheap, additional insurance against the system's own grabber chrome (whatever
+    /// its true footprint turns out to be) nudging the visible window a few points past
+    /// where our content ends.
+    static let peekSafetyMargin: CGFloat = 8
+
+    /// The minimum gap, below `actionContentTopOffset`, that `peekHeight`'s hard clamp
+    /// enforces — i.e. how far "strictly less than" must be, not just "less than or equal
+    /// to." A named constant rather than a bare `1` so the invariant it protects is
+    /// self-documenting at the call site.
+    private static let peekToActionContentMinimumGap: CGFloat = 1
+
+    /// The vertical offset, from the top of the sheet's rendered content, at which the
+    /// action content (the "Find a Spot" primary button) begins — i.e. the exact boundary
+    /// `peekHeight` must never cross. `searchArea` renders first, then `interSectionGutter`
+    /// of blank space, then the action content — see `BrowseNavigationSheet.body`.
+    static func actionContentTopOffset(searchAreaHeight: CGFloat) -> CGFloat {
+        searchAreaHeight + interSectionGutter
+    }
+
+    /// Peek height: derived from the measured search-area height, floored at
+    /// `minimumPeekHeight` for a realistic 44pt-plus-grabber touch target, but HARD-CLAMPED
+    /// so it can never reach `actionContentTopOffset` — i.e. it is now structurally
+    /// impossible for peek to reveal any of the action content, regardless of what the
+    /// system's own (unmeasurable, from this environment) grab-indicator chrome costs on
+    /// top of the presented `.height(_:)` value. See `BrowseSheetDetentMath`'s removed-
+    /// constant doc comment (above `interSectionGutter`) for the two-live-smoke-round
+    /// history this construction replaces.
+    ///
+    /// Priority ordering, stated explicitly because the two goals can conflict at
+    /// pathologically small inputs: "never reveal action content" wins over "meet the
+    /// nominal `minimumPeekHeight` floor." This is deliberate and safe in practice —
+    /// `searchAreaHeight` values small enough to trigger the clamp (roughly ≤56pt) are not
+    /// reachable from a real rendered search field (its own fixed `.padding(10)` +
+    /// `.padding(.vertical, 12)`, `BrowseSearchAreaView.swift:241–244`, put its realistic
+    /// minimum well above that), and the true degenerate case — `searchAreaHeight == 0`,
+    /// the unmeasured `@State` default — never reaches a live `.presentationDetents` call
+    /// in the first place: `BrowseNavigationSheet`'s own `isGenuineMeasurement` guard
+    /// refuses to report it, and `ContentView`'s initial placeholder is hardcoded straight
+    /// to `minimumPeekHeight`, bypassing this function entirely (`ContentView.swift`'s
+    /// `browseSheetPeekHeight` `@State` default).
     static func peekHeight(searchAreaHeight: CGFloat) -> CGFloat {
-        max(minimumPeekHeight, searchAreaHeight + grabberAndInsetAllowance)
+        let candidate = max(minimumPeekHeight, searchAreaHeight - peekSafetyMargin)
+        let ceiling = actionContentTopOffset(searchAreaHeight: searchAreaHeight)
+            - peekToActionContentMinimumGap
+        return max(0, min(candidate, ceiling))
     }
 
     /// FT-20 Stream C bugfix (QA live-smoke, two-bug report): whether a `searchAreaHeight`
@@ -128,52 +194,52 @@ enum BrowseSheetDetentMath {
         searchAreaHeight > 0
     }
 
-    /// Medium height = peek height + the measured height of the 3-item action row
-    /// ("search + exactly three rows and no more" — OQ-3), clamped to `maxAllowedHeight`
-    /// so a large Dynamic Type size can never drive this custom detent up to, or past,
-    /// `.large` (design-review finding B2). Above that ceiling `.large` is what the user
-    /// gets instead — the action row itself doesn't scroll (it's a fixed horizontal row of
-    /// 3 icon buttons, not a `List`), but `.large`'s own content area comfortably fits it
-    /// even at extreme Dynamic Type sizes.
+    /// Medium height = the full offset to the top of the action content
+    /// (`actionContentTopOffset`) + the measured height of that action content itself
+    /// ("search + Find-a-Spot + New-to-parking, and no more" — OQ-3/§0f), clamped to
+    /// `maxAllowedHeight` so a large Dynamic Type size can never drive this custom detent
+    /// up to, or past, `.large` (design-review finding B2).
     ///
-    /// `actionListHeight` is a generic name for "the medium-detent action content's height,
-    /// whatever its anatomy" — unchanged as a parameter label across Kevin's live-smoke
-    /// Ruling 1 (List rows → horizontal icon row) specifically so this pure function, and
-    /// the tests pinning it, didn't need to churn for a rendering-only change. See
-    /// `actionRowHeight(iconDiameter:iconLabelSpacing:labelLineHeight:verticalPadding:)`
-    /// below for how the CALLER (`BrowseNavigationSheet.actionListHeight`) now computes the
-    /// value passed in here.
+    /// Deliberately NOT expressed as `peekHeight(...) + actionColumnHeight` (the Stream C
+    /// formula this replaces) — `peekHeight`'s own clamp exists purely to protect the PEEK
+    /// detent's crop boundary and has nothing to do with how tall the FULL medium content
+    /// actually is; reusing it here was itself part of what made the old formula fragile
+    /// (a change aimed at fixing peek could silently move medium too). `mediumHeight` now
+    /// derives independently from the same `searchAreaHeight`/`interSectionGutter` values
+    /// via `actionContentTopOffset`.
     static func mediumHeight(
         searchAreaHeight: CGFloat,
-        actionListHeight: CGFloat,
+        actionColumnHeight: CGFloat,
         maxAllowedHeight: CGFloat
     ) -> CGFloat {
-        let raw = peekHeight(searchAreaHeight: searchAreaHeight) + actionListHeight
+        let raw = actionContentTopOffset(searchAreaHeight: searchAreaHeight) + actionColumnHeight
         return min(raw, maxAllowedHeight)
     }
 
-    /// Height of the horizontal 3-icon action row (Kevin's live-smoke Ruling 1, spec §0e —
-    /// OVERRIDES design-review finding S1's `List`-row anatomy): icon diameter + the gap
-    /// between icon and label + the label's own line height + top/bottom padding.
+    /// Height of the medium-detent action content — §0f's rebuilt hierarchy: one
+    /// full-width primary button ("Find a Spot") + a vertical gap + one tertiary text link
+    /// ("New to parking?") + top/bottom padding around the whole column.
     ///
     /// Pure and UIKit-free, mirroring `peekHeight`/`mediumHeight` above and the "derive,
-    /// don't measure a greedy container" discipline `actionListHeight` already used for the
-    /// deleted `List` (see `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment for why
-    /// measuring is unsafe here) — an `HStack` of `Button`s isn't greedy the way `List` is,
-    /// but this keeps the same battle-tested "compute from values we control" approach
-    /// rather than introducing a second geometry-measurement mechanism for a rendering-only
-    /// change. `iconDiameter`/`labelLineHeight` are `@ScaledMetric` at the call site
-    /// (`BrowseNavigationSheet`), so this formula is Dynamic-Type-aware end to end;
-    /// `iconLabelSpacing`/`verticalPadding` are plain constants WE author and render
-    /// directly (not guesses about system UIKit chrome), so no on-device-verification flag
-    /// is needed for them the way `grabberAndInsetAllowance` above needs one.
-    static func actionRowHeight(
-        iconDiameter: CGFloat,
-        iconLabelSpacing: CGFloat,
-        labelLineHeight: CGFloat,
-        verticalPadding: CGFloat
+    /// don't measure a greedy container" discipline this file has used since Stream A/QA
+    /// finding C1 — an `HStack`/`VStack` of plain `Button`s and `Text` isn't greedy the way
+    /// `List` is, but computing from values we control (rather than a second geometry-
+    /// measurement mechanism) keeps this file's one battle-tested approach to sizing
+    /// consistent across every anatomy change it's been through (List rows → 3-icon row →
+    /// this). `primaryButtonLabelLineHeight`/`linkLineHeight` are `@ScaledMetric` at the
+    /// call site (`BrowseNavigationSheet`), so this formula is Dynamic-Type-aware end to
+    /// end; the padding/spacing constants are plain values WE author and render directly
+    /// (not guesses about system UIKit chrome), so none of them need an on-device-
+    /// verification flag the way the removed `grabberAndInsetAllowance` did.
+    static func actionColumnHeight(
+        primaryButtonLabelLineHeight: CGFloat,
+        primaryButtonVerticalPadding: CGFloat,
+        columnSpacing: CGFloat,
+        linkLineHeight: CGFloat,
+        columnVerticalPadding: CGFloat
     ) -> CGFloat {
-        iconDiameter + iconLabelSpacing + labelLineHeight + (verticalPadding * 2)
+        let primaryButtonHeight = primaryButtonLabelLineHeight + (primaryButtonVerticalPadding * 2)
+        return primaryButtonHeight + columnSpacing + linkLineHeight + (columnVerticalPadding * 2)
     }
 }
 
@@ -189,12 +255,12 @@ enum BrowseSheetDetentMath {
 /// renders a `List` (recents/suggestions) inside `searchArea` once `detentKind == .large`
 /// — and a system sheet's content is laid out against the FULL `.large`-sized container
 /// regardless of which detent is *currently selected* (the detent only crops what's
-/// exposed) — see `BrowseNavigationSheet.actionIconDiameter`'s doc comment for the same
-/// fact applied to `actionList`. So the moment the user is at `.large`, measuring the
+/// exposed) — see `BrowseSheetDetentMath.peekHeight`'s doc comment for the same fact
+/// underpinning the peek-clamp fix. So the moment the user is at `.large`, measuring the
 /// whole `searchArea` view's geometry reports something close to the full container
 /// height, not "the search field alone" — corrupting `peekHeight`/`mediumHeight` for
 /// however long that inflated value is live, exactly the `List`-greedy-sizing trap
-/// `actionListHeight` was already built to avoid, reintroduced in a spot Stream A never
+/// `actionColumnHeight` was already built to avoid, reintroduced in a spot Stream A never
 /// anticipated (Stream B's real content didn't exist yet).
 ///
 /// The fix: `BrowseSearchAreaView.searchField` (the one node that's ALWAYS visible,
@@ -204,9 +270,8 @@ enum BrowseSheetDetentMath {
 /// banner) happens to be mounted alongside it. This is the textbook use case for
 /// `PreferenceKey` — communicating a value up an arbitrary intermediate view hierarchy that
 /// the ancestor (`BrowseNavigationSheet`, generic over `SearchArea: View`) has no structural
-/// knowledge of. No `List` is ever measured by this mechanism; `actionListHeight`'s own
-/// `@ScaledMetric`-derived "constrain, don't measure" technique (now via `actionIconDiameter`/
-/// `actionLabelLineHeight`, Kevin's live-smoke Ruling 1) is untouched below.
+/// knowledge of. No `List` is ever measured by this mechanism; `actionColumnHeight`'s own
+/// `@ScaledMetric`-derived "constrain, don't measure" technique is untouched below.
 struct BrowseSheetSearchAreaHeightPreferenceKey: PreferenceKey {
     static var defaultValue: CGFloat = 0
     /// Exactly one reporter is expected in the tree (the search field's own `.background`
@@ -306,19 +371,21 @@ func browseSheetDetentSelectionBinding(
 
 /// The `.browseNav` sheet's content.
 ///
-/// **Public interface Stream B builds against:**
-///   - `searchArea`: a `@ViewBuilder` slot for the sheet's persistent top row. Stream C
-///     mounts `BrowseSearchAreaView` here (Stream A's stub, `BrowseSheetSearchAreaStub`, is
-///     gone — the real content has been live since Stream B). The peek/medium detent math
-///     does NOT measure this slot's overall geometry (QA C1 fix — see
-///     `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment): `BrowseSearchAreaView`'s
+/// **Public interface Stream B/C build against:**
+///   - `searchArea`: a `@ViewBuilder` slot for the sheet's persistent top row. Mounts
+///     `BrowseSearchAreaView`, which now also owns the trailing-edge Settings gear (§0f
+///     Ruling 1) — this container has no part in that wiring; `ContentView` passes
+///     `onSettingsTapped` straight into `BrowseSearchAreaView`'s own initializer. The
+///     peek/medium detent math does NOT measure this slot's overall geometry (QA C1 fix —
+///     see `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment): `BrowseSearchAreaView`'s
 ///     own always-visible `searchField` node reports its intrinsic height directly via that
 ///     preference key, so the large-detent-only content (recents/suggestions/place state/
 ///     error banner) mounted alongside it can never corrupt `peekHeight`/`mediumHeight`,
 ///     no matter how tall a `List` inside it gets asked to lay out.
-///   - `onSettingsTapped` / `onCruiseTapped` / `onParkingGuideTapped`: the 3-item list's row
-///     actions. `ContentView` wires these to `activeSheet = .settings`, `enterCruiseMode()`
-///     (AC-18 — no intermediate menu), and `activeSheet = .parkingGuide` respectively.
+///   - `onCruiseTapped` / `onParkingGuideTapped`: the action column's two row actions.
+///     `ContentView` wires these to `enterCruiseMode()` (AC-18 — no intermediate menu) and
+///     `activeSheet = .parkingGuide` respectively. (Settings is no longer part of this
+///     container's own action content — see `searchArea` above.)
 ///   - `onPeekHeightChange` / `onMediumHeightChange`: fire whenever the measured content
 ///     changes (initial layout, Dynamic Type change, etc.) with the two already-computed,
 ///     already-clamped detent heights. `ContentView` stores these into the `@State` it
@@ -336,7 +403,6 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     // the unambiguous, universally-supported one.
 
     let searchArea: SearchArea
-    let onSettingsTapped: () -> Void
     let onCruiseTapped: () -> Void
     let onParkingGuideTapped: () -> Void
     let onPeekHeightChange: (CGFloat) -> Void
@@ -344,14 +410,12 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
 
     init(
         @ViewBuilder searchArea: () -> SearchArea,
-        onSettingsTapped: @escaping () -> Void,
         onCruiseTapped: @escaping () -> Void,
         onParkingGuideTapped: @escaping () -> Void,
         onPeekHeightChange: @escaping (CGFloat) -> Void,
         onMediumHeightChange: @escaping (CGFloat) -> Void
     ) {
         self.searchArea = searchArea()
-        self.onSettingsTapped = onSettingsTapped
         self.onCruiseTapped = onCruiseTapped
         self.onParkingGuideTapped = onParkingGuideTapped
         self.onPeekHeightChange = onPeekHeightChange
@@ -362,41 +426,44 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
 
     @State private var searchAreaHeight: CGFloat = 0
 
-    /// Dynamic-Type-responsive diameter for each circular icon button, via `@ScaledMetric`
-    /// rather than `GeometryReader`/`.onGeometryChange` on `actionList` itself.
-    ///
-    /// Unlike the `List` this replaces (Kevin's live-smoke Ruling 1, spec §0e — see
-    /// `actionList`'s own doc comment), an `HStack` of plain `Button`s is NOT a greedy,
-    /// UIKit-bridged container — left unconstrained it would report its true intrinsic
-    /// size, not "however much space the parent offers." Measuring it directly would
-    /// therefore actually be safe here. This still derives the height from `@ScaledMetric`
-    /// constants instead, matching the same "compute from values we control, don't add a
-    /// second geometry-measurement mechanism" discipline the rest of this file uses (see
-    /// `BrowseSheetDetentMath.actionRowHeight`'s doc comment) — one fewer moving part for a
-    /// change that's purely about anatomy, not about solving a new sizing problem.
-    @ScaledMetric(relativeTo: .body) private var actionIconDiameter: CGFloat = 44
+    /// Dynamic-Type-responsive line height for the primary "Find a Spot" button's label,
+    /// via `@ScaledMetric` rather than `GeometryReader`/`.onGeometryChange` on
+    /// `actionColumn` itself. Unlike the `List` this hierarchy replaced (§0e/§0f), a plain
+    /// `VStack` of a `Button` and a `Text` is NOT a greedy, UIKit-bridged container — left
+    /// unconstrained it would report its true intrinsic size, not "however much space the
+    /// parent offers." Measuring it directly would therefore actually be safe here. This
+    /// still derives the height from `@ScaledMetric` constants instead, matching the same
+    /// "compute from values we control, don't add a second geometry-measurement mechanism"
+    /// discipline the rest of this file uses (see `BrowseSheetDetentMath.actionColumnHeight`'s
+    /// doc comment) — one fewer moving part for a change that's purely about anatomy, not
+    /// about solving a new sizing problem.
+    @ScaledMetric(relativeTo: .headline) private var primaryButtonLabelLineHeight: CGFloat = 22
 
-    /// Dynamic-Type-responsive line height for each icon's label (`.caption`-styled text
-    /// beneath the icon circle).
-    @ScaledMetric(relativeTo: .caption) private var actionLabelLineHeight: CGFloat = 16
+    /// Dynamic-Type-responsive line height for the "New to parking?" tertiary link.
+    @ScaledMetric(relativeTo: .subheadline) private var linkLineHeight: CGFloat = 18
 
-    /// Gap between an icon circle and its label — a value this view authors and renders
-    /// directly (not an estimate of external UIKit chrome), so it needs no on-device
-    /// verification flag the way `BrowseSheetDetentMath.grabberAndInsetAllowance` does.
-    private let actionRowIconLabelSpacing: CGFloat = 6
+    /// Vertical padding inside the primary button, matching the "Go" button's own
+    /// `.padding(.vertical, 14)` (`BrowseSearchAreaView.placeState`) for visual rhythm
+    /// between the two full-width primary actions a user encounters in this sheet.
+    private let primaryButtonVerticalPadding: CGFloat = 14
 
-    /// Top/bottom padding around the action row, matching `BrowseSearchAreaView.searchField`'s
-    /// own `.padding(.vertical, 12)` for visual rhythm with the row above it.
-    private let actionRowVerticalPadding: CGFloat = 12
+    /// Gap between the primary button and the tertiary link beneath it.
+    private let actionColumnSpacing: CGFloat = 10
 
-    /// Icon diameter + icon-label spacing + label line height + top/bottom padding — see
-    /// `BrowseSheetDetentMath.actionRowHeight`'s doc comment for the full derivation.
-    private var actionListHeight: CGFloat {
-        BrowseSheetDetentMath.actionRowHeight(
-            iconDiameter: actionIconDiameter,
-            iconLabelSpacing: actionRowIconLabelSpacing,
-            labelLineHeight: actionLabelLineHeight,
-            verticalPadding: actionRowVerticalPadding
+    /// Top/bottom padding around the whole action column, matching
+    /// `BrowseSearchAreaView.searchField`'s own `.padding(.vertical, 12)` for visual rhythm
+    /// with the row above it.
+    private let actionColumnVerticalPadding: CGFloat = 12
+
+    /// Primary-button height + spacing + link height + top/bottom padding — see
+    /// `BrowseSheetDetentMath.actionColumnHeight`'s doc comment for the full derivation.
+    private var actionColumnHeight: CGFloat {
+        BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: primaryButtonLabelLineHeight,
+            primaryButtonVerticalPadding: primaryButtonVerticalPadding,
+            columnSpacing: actionColumnSpacing,
+            linkLineHeight: linkLineHeight,
+            columnVerticalPadding: actionColumnVerticalPadding
         )
     }
 
@@ -406,8 +473,18 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         VStack(spacing: 0) {
             searchArea
 
-            actionList
-                .frame(height: actionListHeight)
+            // Fixed-height spacer, NOT `Spacer()` — a greedy `Spacer()` here would expand
+            // to fill the sheet's full `.large`-sized layout pass (this file's content is
+            // laid out at full size regardless of the currently-selected detent — see
+            // `BrowseSheetDetentMath.peekHeight`'s doc comment) and push `actionColumn` to
+            // the BOTTOM of a near-screen-height container instead of directly beneath
+            // `searchArea`. `Color.clear.frame(height:)` has a fixed intrinsic size, so it
+            // sits exactly where `BrowseSheetDetentMath.interSectionGutter` says it should.
+            Color.clear
+                .frame(height: BrowseSheetDetentMath.interSectionGutter)
+
+            actionColumn
+                .frame(height: actionColumnHeight)
         }
         // FT-20 Stream C / QA C1 fix: read the search field's OWN reported height via the
         // preference key above, not `searchArea`'s overall geometry — see
@@ -418,8 +495,8 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         }
         // Re-report on every measured change (initial layout, Dynamic Type change, device
         // rotation) — the preference fires on first layout, so this covers all subsequent
-        // changes too. `actionListHeight` is computed (not measured via geometry), so it's
-        // covered by watching its two `@ScaledMetric` inputs instead.
+        // changes too. `actionColumnHeight` is computed (not measured via geometry), so
+        // it's covered by watching its two `@ScaledMetric` inputs instead.
         //
         // FT-20 Stream C bugfix (QA live-smoke, two-bug report): every one of these call
         // sites is guarded by `BrowseSheetDetentMath.isGenuineMeasurement` — see its doc
@@ -436,11 +513,11 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
             guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: newValue) else { return }
             reportHeights()
         }
-        .onChange(of: actionIconDiameter) { _, _ in
+        .onChange(of: primaryButtonLabelLineHeight) { _, _ in
             guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: searchAreaHeight) else { return }
             reportHeights()
         }
-        .onChange(of: actionLabelLineHeight) { _, _ in
+        .onChange(of: linkLineHeight) { _, _ in
             guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: searchAreaHeight) else { return }
             reportHeights()
         }
@@ -450,100 +527,53 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         }
     }
 
-    // MARK: - Kevin's live-smoke Ruling 1: medium-detent 3-icon action row
+    // MARK: - §0f Ruling 1: the rebuilt medium-detent action column
 
-    /// Settings · Cruise · Parking 101 — three circular icon buttons, evenly distributed
-    /// across the row, with a label beneath each (the Apple Maps action-row pattern).
+    /// One prominent primary button ("Find a Spot") + one quiet tertiary text link ("New to
+    /// parking?"). Replaces the horizontal 3-icon row (§0e Ruling 1), which itself replaced
+    /// design-review finding S1's `List` rows.
     ///
-    /// ⚠️ This is Kevin's live-smoke Ruling 1 (spec §0e, 2026-08-21) and it OVERRIDES
-    /// design-review finding S1, which originally specified `List` rows. Do not "restore"
-    /// the `List` citing S1 — see this file's top-of-file doc comment. Two independent
-    /// on-device findings drove the ruling:
-    ///   1. At medium, the 3rd `List` row (Parking 101) was clipped — `.insetGrouped`
-    ///      needs roughly 190-210pt of real section chrome for 3 rows, but the old budget
-    ///      (`singleActionRowHeight * 3 + listSectionChromeAllowance`) was only 156pt.
-    ///      Deleting `List` removes that chrome question entirely — `actionListHeight` is
-    ///      now derived purely from what this file actually renders (see
-    ///      `BrowseSheetDetentMath.actionRowHeight`), no more List-section guesswork.
-    ///   2. The `List` anatomy's "Cruise" row used `car.front.waves.right.fill`, which does
-    ///      NOT exist in Apple's SF Symbols catalog (verified against the SF Symbols name
-    ///      list — the real `car.front.waves...` family is `.up`/`.up.fill`/`.down`/
-    ///      `.down.fill`/`.left.and.right.and.up`/`.left.and.right.and.up.fill`; there is
-    ///      no `.right.fill` variant). Kevin's screenshot showed exactly the signature of
-    ///      an unresolved SF Symbol (blank icon, misaligned label) — likely broken since
-    ///      the symbol was first reused from the deleted `driveEntryButton`'s menu, where
-    ///      nobody visually noticed. Substituted `car.fill` — already used elsewhere in
-    ///      this app (`ContentView.recenterButtonStack`'s "Find my car" button) and
-    ///      confirmed to resolve. In this horizontal layout the icon IS the button, so an
-    ///      unresolved symbol is far more visible than it was as a small leading glyph in a
-    ///      `List` row.
+    /// ⚠️ This is Kevin's THIRD live-smoke ruling on this hierarchy (spec §0f,
+    /// 2026-08-21) — do not "restore" either prior anatomy citing S1 or §0e. The finding:
+    /// *"I think cruise is more important than settings or parking 101."* Three equal
+    /// controls (icon row) or three equal rows (`List`) both assert Settings/Cruise/Parking
+    /// 101 matter equally; they don't. Apple Maps itself has no in-app settings button —
+    /// the only entry point is a small avatar in the search field's trailing edge. Settings
+    /// is demoted out of this column entirely (see `BrowseSearchAreaView.searchField`);
+    /// what remains here is exactly one primary action and one subordinate link.
     ///
-    /// Order matches the spec's own canonical listing (§0's OQ-3 ruling, §2, §4.2, AC-15).
-    /// Height is constrained by the caller (`body`, above) to `actionListHeight`.
-    private var actionList: some View {
-        HStack(spacing: 0) {
-            actionButton(
-                systemImage: "gearshape.fill",
-                label: "Settings",
-                accessibilityLabel: "Open settings",
-                action: onSettingsTapped
-            )
-
-            // "Cruise" (not "Drive Mode", not a menu) — Kevin's terminology ruling (spec
-            // §3.1): entering Drive Mode WITH a destination is the search→place→Go path;
-            // this button means driving with NO destination. See this view's doc comment
-            // above for why the icon is `car.fill`, not the spec's originally-named
-            // `car.front.waves.right.fill` (confirmed not a real SF Symbol).
-            actionButton(
-                systemImage: "car.fill",
-                label: "Cruise",
-                accessibilityLabel: "Cruise",
-                accessibilityHint: "Starts Drive Mode with no destination, to find parking nearby.",
-                action: onCruiseTapped
-            )
-
-            actionButton(
-                systemImage: "questionmark.circle.fill",
-                label: "Parking 101",
-                accessibilityLabel: "Parking 101 guide",
-                accessibilityHint: "Opens the beginner's guide to reading NYC parking signs.",
-                action: onParkingGuideTapped
-            )
-        }
-        .padding(.vertical, actionRowVerticalPadding)
-    }
-
-    /// One circular icon + label button inside `actionList`. `.frame(maxWidth: .infinity)`
-    /// on each button is what evenly distributes all three across the row's full width;
-    /// `.buttonStyle(.plain)` keeps this file's own `VStack` layout (icon circle, then
-    /// label) from being reinterpreted as default button chrome.
-    private func actionButton(
-        systemImage: String,
-        label: String,
-        accessibilityLabel: String,
-        accessibilityHint: String? = nil,
-        action: @escaping () -> Void
-    ) -> some View {
-        Button(action: action) {
-            VStack(spacing: actionRowIconLabelSpacing) {
-                Image(systemName: systemImage)
-                    .font(.system(size: actionIconDiameter * 0.4, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
-                    .frame(width: actionIconDiameter, height: actionIconDiameter)
-                    .background(Color(.secondarySystemGroupedBackground), in: Circle())
-                Text(label)
-                    .font(.caption)
-                    .foregroundStyle(.primary)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.75)
+    /// **"Cruise" → "Find a Spot" (§0f Ruling 2, label only):** Kevin revisited his own
+    /// §3.1 terminology ruling after seeing it running — "Cruise" names a mode, not a job,
+    /// and nothing in the word says parking. This is a LABEL change: `onCruiseTapped` still
+    /// calls the exact same `enterCruiseMode()` entry path (`ContentView.swift`), and
+    /// internal identifiers (`enterCruiseMode()`, `driveModeStyle`, `.cruise`, and this
+    /// file's own `onCruiseTapped` closure name) are deliberately left alone — renaming
+    /// them would be churn with no user-facing benefit. Build 18's patrol mode inherits
+    /// this "find a spot" vocabulary (a note, not new scope here).
+    private var actionColumn: some View {
+        VStack(spacing: actionColumnSpacing) {
+            Button(action: onCruiseTapped) {
+                Label("Find a Spot", systemImage: "car.fill")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, primaryButtonVerticalPadding)
             }
-            .frame(maxWidth: .infinity)
-            .contentShape(Rectangle())
+            .buttonStyle(.borderedProminent)
+            .accessibilityLabel("Find a Spot")
+            .accessibilityHint("Starts Drive Mode with no destination, to find parking nearby.")
+
+            Button(action: onParkingGuideTapped) {
+                Text("New to parking?")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .underline()
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("New to parking?")
+            .accessibilityHint("Opens the beginner's guide to reading NYC parking signs.")
         }
-        .buttonStyle(.plain)
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityHint(accessibilityHint ?? "")
+        .padding(.horizontal, 16)
+        .padding(.vertical, actionColumnVerticalPadding)
     }
 
     // MARK: - Height reporting
@@ -553,7 +583,7 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         onMediumHeightChange(
             BrowseSheetDetentMath.mediumHeight(
                 searchAreaHeight: searchAreaHeight,
-                actionListHeight: actionListHeight,
+                actionColumnHeight: actionColumnHeight,
                 maxAllowedHeight: Self.maxAllowedMediumHeight
             )
         )
@@ -568,8 +598,8 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     /// [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK] Design-review finding B2 explicitly
     /// calls for verifying both detent heights "at default and at least one accessibility
     /// size (e.g., AX3) before merge" — this machine has no simulator. Kevin/QA: please
-    /// confirm at AX3 that the medium detent still reads as "search + three rows," not a
-    /// clipped or scroll-required list, before sign-off.
+    /// confirm at AX3 that the medium detent still reads as "search + Find a Spot + New to
+    /// parking?", not a clipped layout, before sign-off.
     ///
     /// Reads the height off the app's active `UIWindowScene` rather than `UIScreen.main`
     /// (QA docs/qa/ft20-stream-a-pr85.md Finding #5 — `UIScreen.main` is on Apple's

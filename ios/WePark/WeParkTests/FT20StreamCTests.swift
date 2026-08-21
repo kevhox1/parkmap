@@ -133,112 +133,113 @@ final class BrowseSheetDetentMathGenuineMeasurementTests: XCTestCase {
     }
 }
 
-// MARK: - grabberAndInsetAllowance / peek-shows-only-search invariant Tests
+// MARK: - grabberAndInsetAllowance — REMOVED 2026-08-21 (spec §0f)
 //
-// FT-20 Stream C live-smoke, PR #87 follow-up (2026-08-21): the `isGenuineMeasurement`
-// guard above fixed the REMOUNT-churn manifestation of "peek reveals the medium-detent
-// action row," but the bug also reproduced on a fresh cold launch, where no remount has
-// happened yet — a STEADY-STATE sizing error, not a remount race. Root cause:
-// `grabberAndInsetAllowance`'s old value (24) double-counted `BrowseSearchAreaView.
-// searchField`'s own `.padding(.vertical, 12)` top inset — once as part of the measured
-// `searchAreaHeight` (the height-reporting `GeometryReader` is attached AFTER that
-// padding), and again as part of the allowance meant to ALSO cover "the content's own top
-// inset." See `BrowseSheetDetentMath.grabberAndInsetAllowance`'s doc comment for the full
-// derivation of the fix (24 → 12).
-final class BrowseSheetGrabberAllowanceRegressionTests: XCTestCase {
+// FT-20 Stream C live-smoke, PR #87 follow-up: `BrowseSheetGrabberAllowanceRegressionTests`
+// used to pin `grabberAndInsetAllowance == 12` and "the gap between peekHeight and the
+// measured search area stays a small grabber-only sliver." Both tests PASSED on the `12`
+// fix, and Kevin's THIRD live smoke still found "the three buttons are peaking" — i.e.
+// these tests were pinning a formula that was still wrong, not catching the regression.
+// `grabberAndInsetAllowance` is deleted, not re-tuned to a third guessed value — see
+// `BrowseSheetDetentMath`'s doc comment (the constant's removal note, kept in place of the
+// deleted declaration) for the full root-cause writeup. The REPLACEMENT invariant coverage
+// — "peek can never reach the action content, for ANY input, by construction" — lives in
+// `FT20StreamATests.swift`'s `BrowseSheetPeekInvariantTests`, which is deliberately a
+// top-level suite (not scoped to one constant) so it can't be quietly narrowed again.
 
-    func testGrabberAndInsetAllowance_noLongerDoubleCountsSearchFieldsOwnTopInset() {
-        // Pins the corrected value so a future edit can't silently reintroduce the
-        // double-count by creeping the constant back up toward the old 24.
-        XCTAssertEqual(
-            BrowseSheetDetentMath.grabberAndInsetAllowance, 12,
-            "grabberAndInsetAllowance should represent ONLY the system grab-indicator's " +
-            "own footprint now that searchField's own top inset is already inside " +
-            "searchAreaHeight (BrowseSearchAreaView.swift's GeometryReader is attached " +
-            "AFTER .padding(.vertical, 12)) — see the constant's doc comment for the full " +
-            "derivation."
-        )
-    }
-
-    func testPeekHeight_grabberAllowanceStaysASmallSliverOfARealisticSearchField() {
-        // Regression guard for the "peek reveals the action row" live-smoke bug at cold
-        // launch: the gap between peekHeight and the measured search area must stay a
-        // small grabber-only sliver, not balloon back up toward double-counting territory.
-        let realisticSearchHeight: CGFloat = 64
-        let peek = BrowseSheetDetentMath.peekHeight(searchAreaHeight: realisticSearchHeight)
-        XCTAssertLessThan(
-            peek - realisticSearchHeight, 20,
-            "The gap between peekHeight and the measured search area should stay a small " +
-            "grabber-only sliver (well under the old 24pt figure) — a value creeping back " +
-            "up would reintroduce the peek-reveals-the-action-row bug."
-        )
-    }
-}
-
-// MARK: - BrowseSheetDetentMath.actionRowHeight(...) Tests
+// MARK: - BrowseSheetDetentMath.actionColumnHeight(...) Tests
 //
-// FT-20 Stream C / Kevin's live-smoke Ruling 1 (spec §0e, 2026-08-21): the medium-detent
-// action list's anatomy changed from `List` rows (design-review finding S1, overridden) to
-// a horizontal 3-icon row. `actionRowHeight` is the pure, UIKit-free formula
-// `BrowseNavigationSheet.actionListHeight` now derives its `.frame(height:)` constraint
-// from (icon diameter + icon-label spacing + label line height + top/bottom padding),
+// FT-20 Stream C / Kevin's THIRD live-smoke ruling (spec §0f, 2026-08-21): the medium-
+// detent action content's anatomy changed AGAIN — from the horizontal 3-icon row (§0e
+// Ruling 1, itself already a replacement for design-review finding S1's `List` rows) to
+// one primary "Find a Spot" button + one tertiary "New to parking?" link, a vertical
+// column. `actionRowHeight` (§0e) is renamed `actionColumnHeight` (§0f) to match — this is
+// an internal Swift API name, not a user-visible string or one of the identifiers Kevin's
+// §0f Ruling 2 explicitly protects (`enterCruiseMode()`/`driveModeStyle`/`.cruise`), so
+// renaming it to track the anatomy it now describes is in scope. `actionColumnHeight` is
+// the pure, UIKit-free formula `BrowseNavigationSheet.actionColumnHeight` now derives its
+// `.frame(height:)` constraint from (primary-button label height + button's own vertical
+// padding×2 + column spacing + link label height + column's own vertical padding×2),
 // mirroring `peekHeight`/`mediumHeight`'s existing pure-function precedent so it's directly
 // unit-testable without a simulator, per this file's own established convention.
-final class BrowseSheetActionRowHeightTests: XCTestCase {
+final class BrowseSheetActionColumnHeightTests: XCTestCase {
 
-    func testActionRowHeight_sumsAllFourComponents() {
-        let result = BrowseSheetDetentMath.actionRowHeight(
-            iconDiameter: 44,
-            iconLabelSpacing: 6,
-            labelLineHeight: 16,
-            verticalPadding: 12
+    func testActionColumnHeight_sumsAllComponents() {
+        let result = BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: 22,
+            primaryButtonVerticalPadding: 14,
+            columnSpacing: 10,
+            linkLineHeight: 18,
+            columnVerticalPadding: 12
         )
-        // 44 + 6 + 16 + (12 * 2) = 90
-        XCTAssertEqual(result, 90)
+        // primaryButtonHeight = 22 + (14 * 2) = 50
+        // total = 50 + 10 + 18 + (12 * 2) = 102
+        XCTAssertEqual(result, 102)
     }
 
-    func testActionRowHeight_verticalPaddingIsAppliedTwiceForTopAndBottom() {
-        let withoutPadding = BrowseSheetDetentMath.actionRowHeight(
-            iconDiameter: 44, iconLabelSpacing: 6, labelLineHeight: 16, verticalPadding: 0
+    func testActionColumnHeight_primaryButtonPaddingIsAppliedTwiceForTopAndBottom() {
+        let withoutPadding = BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: 22, primaryButtonVerticalPadding: 0,
+            columnSpacing: 10, linkLineHeight: 18, columnVerticalPadding: 12
         )
-        let withPadding = BrowseSheetDetentMath.actionRowHeight(
-            iconDiameter: 44, iconLabelSpacing: 6, labelLineHeight: 16, verticalPadding: 12
+        let withPadding = BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: 22, primaryButtonVerticalPadding: 14,
+            columnSpacing: 10, linkLineHeight: 18, columnVerticalPadding: 12
+        )
+        XCTAssertEqual(
+            withPadding, withoutPadding + 28,
+            "primaryButtonVerticalPadding represents both top AND bottom of the button " +
+            "itself, so it must contribute twice its value to the total column height."
+        )
+    }
+
+    func testActionColumnHeight_columnPaddingIsAppliedTwiceForTopAndBottom() {
+        let withoutPadding = BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: 22, primaryButtonVerticalPadding: 14,
+            columnSpacing: 10, linkLineHeight: 18, columnVerticalPadding: 0
+        )
+        let withPadding = BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: 22, primaryButtonVerticalPadding: 14,
+            columnSpacing: 10, linkLineHeight: 18, columnVerticalPadding: 12
         )
         XCTAssertEqual(
             withPadding, withoutPadding + 24,
-            "verticalPadding represents both top AND bottom, so it must contribute twice " +
-            "its value to the total row height."
+            "columnVerticalPadding represents both top AND bottom of the WHOLE column, " +
+            "so it must contribute twice its value to the total column height."
         )
     }
 
-    func testActionRowHeight_growsWithLargerDynamicTypeInputs() {
-        // Simulates the `@ScaledMetric`-driven growth `actionIconDiameter`/
-        // `actionLabelLineHeight` would report at a larger Dynamic Type size —
-        // `actionRowHeight` itself has no notion of Dynamic Type, only of the values fed
-        // in, so this pins that the formula scales monotonically with its inputs.
-        let defaultSize = BrowseSheetDetentMath.actionRowHeight(
-            iconDiameter: 44, iconLabelSpacing: 6, labelLineHeight: 16, verticalPadding: 12
+    func testActionColumnHeight_growsWithLargerDynamicTypeInputs() {
+        // Simulates the `@ScaledMetric`-driven growth `primaryButtonLabelLineHeight`/
+        // `linkLineHeight` would report at a larger Dynamic Type size —
+        // `actionColumnHeight` itself has no notion of Dynamic Type, only of the values
+        // fed in, so this pins that the formula scales monotonically with its inputs.
+        let defaultSize = BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: 22, primaryButtonVerticalPadding: 14,
+            columnSpacing: 10, linkLineHeight: 18, columnVerticalPadding: 12
         )
-        let accessibilitySize = BrowseSheetDetentMath.actionRowHeight(
-            iconDiameter: 70, iconLabelSpacing: 6, labelLineHeight: 26, verticalPadding: 12
+        let accessibilitySize = BrowseSheetDetentMath.actionColumnHeight(
+            primaryButtonLabelLineHeight: 44, primaryButtonVerticalPadding: 14,
+            columnSpacing: 10, linkLineHeight: 32, columnVerticalPadding: 12
         )
         XCTAssertGreaterThan(
             accessibilitySize, defaultSize,
-            "actionRowHeight must grow when its Dynamic-Type-scaled inputs grow — a " +
+            "actionColumnHeight must grow when its Dynamic-Type-scaled inputs grow — a " +
             "regression here would mean the medium detent stops making room for a larger " +
-            "action row at accessibility text sizes, reintroducing a clipped-row class of " +
-            "bug (the same class of bug S1's List anatomy shipped with)."
+            "action column at accessibility text sizes, reintroducing a clipped-content " +
+            "class of bug (the same class of bug S1's List anatomy shipped with)."
         )
     }
 
-    func testActionRowHeight_zeroInputsProduceZero() {
+    func testActionColumnHeight_zeroInputsProduceZero() {
         // Sanity/degenerate case: all-zero inputs should sum to exactly zero, not some
-        // hidden floor — `BrowseSheetDetentMath.peekHeight`'s own `minimumPeekHeight` is
+        // hidden floor — `BrowseSheetDetentMath.peekHeight`'s own floor/clamp logic is
         // what protects the OVERALL peek detent from a pathologically small value; this
         // formula itself has no independent floor.
         XCTAssertEqual(
-            BrowseSheetDetentMath.actionRowHeight(
-                iconDiameter: 0, iconLabelSpacing: 0, labelLineHeight: 0, verticalPadding: 0
+            BrowseSheetDetentMath.actionColumnHeight(
+                primaryButtonLabelLineHeight: 0, primaryButtonVerticalPadding: 0,
+                columnSpacing: 0, linkLineHeight: 0, columnVerticalPadding: 0
             ),
             0
         )

@@ -1267,9 +1267,12 @@ struct ContentView: View {
     /// is the one deliberate exception. See `BrowseSheetDetentMath`'s doc comment.
     ///
     /// `searchArea` is `BrowseSearchAreaView` (§4.3) — the sheet's real search/place
-    /// content. Row actions call through to the same functions/case-assignments the
-    /// deleted `gearButtonOverlay`/`driveEntryButton` used to (no new entry-path logic,
-    /// only new UI leading into it, spec §3.1).
+    /// content. Its own trailing-edge gear now owns Settings (§0f Ruling 1) — this call
+    /// site is the only place `onSettingsTapped` is wired, straight into
+    /// `BrowseSearchAreaView`'s initializer, not through `BrowseNavigationSheet`'s own
+    /// action content anymore. Row actions call through to the same functions/case-
+    /// assignments the deleted `gearButtonOverlay`/`driveEntryButton` used to (no new
+    /// entry-path logic, only new UI leading into it, spec §3.1).
     ///
     /// `onRouteReady` (spec §0c item 3): this is now the ONLY copy of the
     /// "route ready → enter Destination Mode" sequence — the old
@@ -1277,6 +1280,16 @@ struct ContentView: View {
     /// Stream B QA) was deleted along with the cover itself. `driveModeStyle = .destination`
     /// is still set BEFORE `driveModeActive = true` (CM-3: so `handleDriveModeChange` reads
     /// the correct style when it fires via `.onChange(of: driveModeActive)`).
+    ///
+    /// `.presentationBackground(.regularMaterial)` (§0f "still open" finding): this was
+    /// simply MISSING before — `.browseNav` was the only 1 of this file's 12 `ActiveSheet`
+    /// cases without it (11 others set `.regularMaterial` or `.ultraThickMaterial`,
+    /// `ContentView.swift`'s other `.presentationBackground` call sites), leaving it on the
+    /// plain opaque system sheet background instead of the app-wide material convention
+    /// (spec §8/AC-32). Combined with the search field's own dark fill, that's the root
+    /// cause of Kevin's "dark field on the sheet's dark blurred material, barely visible" —
+    /// see `BrowseSearchAreaView.searchField`'s doc comment for the field-fill half of the
+    /// fix.
     @ViewBuilder
     private var browseNavigationSheetContent: some View {
         BrowseNavigationSheet(
@@ -1292,10 +1305,10 @@ struct ContentView: View {
                         activeRoute = route
                         driveDestinationCoordinate = destination
                         driveModeActive = true
-                    }
+                    },
+                    onSettingsTapped: { activeSheet = .settings }
                 )
             },
-            onSettingsTapped: { activeSheet = .settings },
             onCruiseTapped: { enterCruiseMode() },
             onParkingGuideTapped: { activeSheet = .parkingGuide },
             onPeekHeightChange: { browseSheetPeekHeight = $0 },
@@ -1310,6 +1323,7 @@ struct ContentView: View {
             )
         )
         .presentationBackgroundInteraction(.enabled(upThrough: .height(browseSheetMediumHeight)))
+        .presentationBackground(.regularMaterial)
         .presentationDragIndicator(.visible)
         // Apple Maps' sheet is never fully dismissible, only collapsible (spec §4.1) — the
         // rest state is always at least a peek, never "nothing."
@@ -1773,8 +1787,9 @@ struct ContentView: View {
     /// FT-20 Stream C: the former 4th button — the combined Drive/Cruise entry `Menu`
     /// (`driveEntryButton`) — is DELETED. Its two former options are now reached via search
     /// (`BrowseSearchAreaView`'s place state → Go, destination path) and the sheet's
-    /// medium-detent "Cruise" row (`enterCruiseMode()`, no destination path) — no menu, per
-    /// Kevin's terminology ruling (spec §3.1). This is a net reduction from FOUR buttons to
+    /// primary "Find a Spot" button (`enterCruiseMode()`, no destination path — labeled
+    /// "Cruise" until spec §0f Ruling 2 renamed it) — no menu, per Kevin's terminology
+    /// ruling (spec §3.1, superseded on naming by §0f). This is a net reduction from FOUR buttons to
     /// THREE (design-review "what's working": Locate/Find-my-car/Park Until were already
     /// the only three that needed to stay outside the sheet — decision 5).
     @ViewBuilder

@@ -44,6 +44,15 @@
 //      `BrowseSheetSearchAreaHeightPreferenceKey` rather than the whole view being measured
 //      — see `searchField`'s own doc comment and `BrowseNavigationSheet.swift`'s preference
 //      key doc comment.
+//    - §0f Ruling 1 (2026-08-21, third live smoke): `searchField` now carries a small
+//      `gearshape` Settings affordance in its TRAILING EDGE — the Apple Maps avatar
+//      position. `BrowseNavigationSheet`'s medium-detent action content no longer includes
+//      a Settings control at all (see that file's own doc comment) — this is Settings'
+//      only remaining entry point in browse mode besides `SettingsView` itself.
+//    - §0f "still open" finding: the search field's own fill color is bumped from
+//      `.secondarySystemGroupedBackground` to `.systemGray4` + a hairline
+//      `Color(.separator)` border, for contrast against the sheet's material — see
+//      `searchField`'s own doc comment for the root-cause reasoning.
 //
 
 import SwiftUI
@@ -83,6 +92,12 @@ struct BrowseSearchAreaView: View {
     /// destination; driveModeActive = true` sequence.
     let onRouteReady: (DriveRoute, CLLocationCoordinate2D) -> Void
 
+    /// §0f Ruling 1: fires when the trailing-edge gearshape is tapped. ContentView wires
+    /// this to `activeSheet = .settings`, the same target the deleted `gearButtonOverlay`
+    /// used. Defaulted to a no-op so the existing render-smoke tests (which don't exercise
+    /// Settings) don't all need updating for an unrelated affordance.
+    let onSettingsTapped: () -> Void
+
     // MARK: - Init
 
     init(
@@ -92,6 +107,7 @@ struct BrowseSearchAreaView: View {
         locationService: LocationService,
         detentKind: Binding<BrowseSheetDetentKind>,
         onRouteReady: @escaping (DriveRoute, CLLocationCoordinate2D) -> Void,
+        onSettingsTapped: @escaping () -> Void = {},
         routeService: (any RouteServicing)? = nil
     ) {
         self.currentRegion = currentRegion
@@ -100,6 +116,7 @@ struct BrowseSearchAreaView: View {
         self.locationService = locationService
         self._detentKind = detentKind
         self.onRouteReady = onRouteReady
+        self.onSettingsTapped = onSettingsTapped
         self.routeService = routeService ?? RouteService.shared
     }
 
@@ -216,9 +233,72 @@ struct BrowseSearchAreaView: View {
         }
     }
 
-    // MARK: - Search field (kept verbatim from DriveModeDestinationView)
-
+    // MARK: - Search field
+    //
+    // §0f Ruling 1 (2026-08-21, third live smoke): a small `gearshape` Settings button now
+    // sits in the field's TRAILING EDGE (the Apple Maps avatar position) — the ONLY change
+    // to this row's anatomy versus what shipped in Stream B/C. Everything else (icon,
+    // TextField, clear button, the height-reporting `.background`) is kept verbatim.
+    //
+    // Two hit areas, made unambiguous by construction rather than by careful tuning:
+    //   1. `searchFieldTapTarget` (icon + TextField + clear button) — its own
+    //      `.contentShape(Rectangle())` + `.onTapGesture` focuses the TextField (expanding
+    //      the sheet to `.large`, spec §3.3) from anywhere in that region, not just the
+    //      TextField's own glyph rect.
+    //   2. `settingsButton` — a sibling `Button` in the same outer `HStack`, occupying its
+    //      own fixed frame. SwiftUI lays out `HStack` children in non-overlapping frames,
+    //      so the gear's tap target and `searchFieldTapTarget`'s tap target never overlap;
+    //      no additional gesture-priority tuning is needed. A `Button`'s own gesture
+    //      recognizer also takes priority over an ancestor's `.onTapGesture` by SwiftUI's
+    //      ordinary hit-testing, which is why the clear button (nested INSIDE
+    //      `searchFieldTapTarget`) still works as its own tap target too.
     private var searchField: some View {
+        HStack(spacing: 8) {
+            searchFieldTapTarget
+            settingsButton
+        }
+        .padding(10)
+        // §0f "still open" finding: `.secondarySystemGroupedBackground` read as "dark
+        // field on the sheet's dark blurred material, barely visible" (Kevin, third
+        // smoke) — the sheet's own `.presentationBackground` was ALSO missing entirely
+        // (`ContentView.swift`'s `browseNavigationSheetContent`, now fixed to
+        // `.regularMaterial` matching every other sheet case), compounding the problem.
+        // `.systemGray4` is a meaningfully lighter semantic fill than
+        // `.secondarySystemGroupedBackground` in dark mode (AC-32: still a system/semantic
+        // color, not a new hardcoded hex), and the hairline border gives the field a crisp
+        // edge regardless of how translucent the material behind it reads in direct
+        // sunlight (TF2-18's carried-over risk, spec §0b S6) — a standard, cheap technique
+        // for legibility against blurred/dark material, not a new visual language.
+        .background(Color(.systemGray4), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(
+            RoundedRectangle(cornerRadius: 10)
+                .strokeBorder(Color(.separator), lineWidth: 1)
+        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        // FT-20 Stream C / QA §0d C1 fix: this is the ONLY node in `BrowseSearchAreaView`
+        // that reports its height for `BrowseNavigationSheet`'s peek/medium detent math —
+        // never the whole view (which can contain a greedy `List` at `.large`). A
+        // `GeometryReader` in `.background` measures this HStack's own intrinsic size
+        // (padding included) regardless of how much vertical space its parent offers, since
+        // nothing inside it forces vertical expansion — see
+        // `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment in
+        // `BrowseNavigationSheet.swift` for the full reasoning.
+        .background {
+            GeometryReader { proxy in
+                Color.clear.preference(
+                    key: BrowseSheetSearchAreaHeightPreferenceKey.self,
+                    value: proxy.size.height
+                )
+            }
+        }
+    }
+
+    /// Icon + `TextField` + conditional clear button — kept verbatim from
+    /// `DriveModeDestinationView`, wrapped in its own tap target (see `searchField`'s doc
+    /// comment above) so tapping anywhere in this region focuses the field, not only the
+    /// TextField's own glyph rect.
+    private var searchFieldTapTarget: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
                 .foregroundStyle(.secondary)
@@ -238,26 +318,33 @@ struct BrowseSearchAreaView: View {
                 .accessibilityLabel("Clear search")
             }
         }
-        .padding(10)
-        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 10))
-        .padding(.horizontal, 16)
-        .padding(.vertical, 12)
-        // FT-20 Stream C / QA §0d C1 fix: this is the ONLY node in `BrowseSearchAreaView`
-        // that reports its height for `BrowseNavigationSheet`'s peek/medium detent math —
-        // never the whole view (which can contain a greedy `List` at `.large`). A
-        // `GeometryReader` in `.background` measures this HStack's own intrinsic size
-        // (padding included) regardless of how much vertical space its parent offers, since
-        // nothing inside it forces vertical expansion — see
-        // `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment in
-        // `BrowseNavigationSheet.swift` for the full reasoning.
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: BrowseSheetSearchAreaHeightPreferenceKey.self,
-                    value: proxy.size.height
-                )
-            }
+        .contentShape(Rectangle())
+        .onTapGesture { searchFieldFocused = true }
+    }
+
+    /// §0f Ruling 1: the field's trailing-edge Settings affordance — the Apple Maps avatar
+    /// position. A distinct sibling in `searchField`'s outer `HStack`, never overlapping
+    /// `searchFieldTapTarget`'s hit area (see `searchField`'s doc comment).
+    ///
+    /// [ACCESSIBILITY TRADE-OFF, flagged rather than silently decided] Apple HIG's own
+    /// guidance recommends a 44×44pt minimum tap target; this affordance is deliberately
+    /// smaller (32×32pt) to match its "corner affordance, not a co-equal action" framing
+    /// (§0f's own words) inside a visually compact, single-line search field — inflating it
+    /// to the full 44pt would make it look like a second primary control, which is exactly
+    /// what §0f demoted it away from. 32pt is still comfortably tappable and roughly
+    /// doubles the raw 17pt glyph's own footprint. If VoiceOver/Switch Control testing
+    /// finds this too small in practice, the fix is a larger `.frame` here — this view's
+    /// height math (`BrowseSheetDetentMath`) derives from whatever this renders, so it
+    /// would flow through automatically.
+    private var settingsButton: some View {
+        Button(action: onSettingsTapped) {
+            Image(systemName: "gearshape")
+                .font(.system(size: 17, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
         }
+        .accessibilityLabel("Open settings")
     }
 
     // MARK: - Inline error banner (kept verbatim from DriveModeDestinationView)
