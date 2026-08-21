@@ -208,6 +208,46 @@ card, and stays a distinct one-time moment.
 
 ---
 
+### §0f — Sheet hierarchy rebuilt after the third live smoke (2026-08-21, SETTLED)
+
+Third build-and-smoke of PR #87. Kevin: *"I think cruise is more important than settings or parking
+101… Also is it obvious what cruise actually means? Probably not."*
+
+**The finding behind it:** three equal circular icons assert that Settings, Cruise and Parking 101
+matter equally. They don't. **Apple Maps has no settings button in its main UI at all** — map
+preferences live in the system Settings app, and the only in-app entry is a small circular account
+avatar in the **trailing edge of the search field**. Apple never gives settings equal billing with a
+primary action.
+
+**🔴 RULING 1 — the three-equal-icons row is REPLACED. This supersedes §0e Ruling 1**, which
+supersedes S1. Final structure, top to bottom:
+1. **Search field with a small `gearshape` Settings icon in its trailing edge** — the Apple Maps
+   avatar position. Settings is demoted from a co-equal action to a corner affordance.
+2. **One prominent primary button: `car.fill` + "Find a Spot"** — filled, full-width, unmistakably
+   the main action.
+3. **A quiet tertiary link: "New to parking?"** → opens Parking 101. Text link, not a button.
+
+**🔴 RULING 2 — "Cruise" is renamed to "Find a Spot" in the UI.** Kevin revisited his own §3.1
+terminology ruling after seeing it running. "Cruise" describes a *mode*; nothing in the word says
+parking, and it fails the bar he set for Parking 101 — *"take someone who knows NOTHING about street
+parking and have them fully understand the game."*
+- **Build 18's patrol mode inherits this vocabulary.** Patrol mode is a smarter version of the same
+  job, so the user-facing verb is now "find a spot," not "cruise."
+- Internal identifiers (`enterCruiseMode()`, `driveModeStyle`, `.cruise`) may stay as-is — renaming
+  them is churn with no user benefit. **This is a label change, not a refactor.**
+
+**⚠️ STILL OPEN AFTER THIS SMOKE — the peek detent is STILL wrong.** Kevin: *"I cannot really see the
+search field. And the three buttons are peaking."* The `grabberAndInsetAllowance` 24→12 double-count
+fix was correct but insufficient — peek still exposes the action row. Two distinct problems may be
+conflated here and should be separated: (a) peek height still too tall, and (b) the search field
+itself is **low-contrast** — dark field on dark blurred material, hard to see at all. Fix both; do not
+assume (a) explains (b).
+
+**✅ Confirmed working at this smoke:** the medium detent reads well (*"The drag looks pretty good.
+Can read everything"*), and the Parking-101-round-trip vanish fix holds.
+
+---
+
 ### §0d — Stream B QA carry-forwards (BINDING on Stream C, 2026-08-20)
 
 From `docs/qa/ft20-stream-b-pr86.md`. Both are unreachable today (gate off) and were correctly not
