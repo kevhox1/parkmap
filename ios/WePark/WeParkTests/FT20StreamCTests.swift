@@ -89,3 +89,103 @@ final class BlockSelectEntrySettlingGuardTests: XCTestCase {
         )
     }
 }
+
+// MARK: - BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight:) Tests
+//
+// FT-20 Stream C bugfix: live-smoke found two bugs (the peek detent revealing the medium
+// action list's first row at cold launch; the whole browse sheet vanishing after visiting
+// Parking 101 and panning the map) traced to `BrowseNavigationSheet` reporting degenerate,
+// not-yet-measured heights into `ContentView`'s PERSISTENT `browseSheetPeekHeight`/
+// `browseSheetMediumHeight` state every time it remounts (any round trip through another
+// `ActiveSheet` case resets its own `@State searchAreaHeight` to 0). This guard is what
+// `BrowseNavigationSheet.body`'s `.onAppear`/`.onChange` handlers now check before calling
+// `reportHeights()` — see `BrowseSheetDetentMath.isGenuineMeasurement`'s doc comment.
+final class BrowseSheetDetentMathGenuineMeasurementTests: XCTestCase {
+
+    func testZeroHeight_isNotGenuine() {
+        XCTAssertFalse(
+            BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: 0),
+            "A height of exactly 0 is `BrowseNavigationSheet.searchAreaHeight`'s @State " +
+            "default — reachable on every fresh mount, including every remount after " +
+            "another ActiveSheet case (Settings, Parking 101, a pin/block tap...) is " +
+            "dismissed back to .browseNav. It must never be treated as a real measurement."
+        )
+    }
+
+    func testNegativeHeight_isNotGenuine() {
+        // Defensive: GeometryProxy heights should never be negative in practice, but a
+        // degenerate/invalid measurement must not be treated as genuine either.
+        XCTAssertFalse(BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: -5))
+    }
+
+    func testPositiveHeight_isGenuine() {
+        XCTAssertTrue(BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: 1))
+        XCTAssertTrue(BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: 68))
+    }
+
+    func testVerySmallPositiveHeight_isStillGenuine() {
+        // Any positive value, however small, is a REAL GeometryReader report, not the
+        // unmeasured placeholder — `BrowseSheetDetentMath.peekHeight`'s own floor
+        // (minimumPeekHeight) is what protects against a pathologically short real
+        // measurement; this guard's only job is distinguishing "never measured" from
+        // "measured."
+        XCTAssertTrue(BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: 0.01))
+    }
+}
+
+// MARK: - BrowseSheetSearchAreaHeightPreferenceKey Tests
+//
+// QA pass 1 on PR #87 flagged the C1 preference-key mechanism as shipping with zero
+// regression coverage. These pin `defaultValue` and `reduce`'s documented behavior
+// directly, including the zero-value and multiple-probe cases the live-smoke bug report
+// specifically asked to be checked.
+final class BrowseSheetSearchAreaHeightPreferenceKeyTests: XCTestCase {
+
+    func testDefaultValue_isZero() {
+        XCTAssertEqual(
+            BrowseSheetSearchAreaHeightPreferenceKey.defaultValue, 0,
+            "The default (no reporter in the tree yet) must be 0 — the value " +
+            "`BrowseNavigationSheet`'s `isGenuineMeasurement` guard treats as unmeasured."
+        )
+    }
+
+    func testReduce_withNoPriorValue_takesTheReportedValue() {
+        var value = BrowseSheetSearchAreaHeightPreferenceKey.defaultValue
+        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 68 }
+        XCTAssertEqual(value, 68)
+    }
+
+    func testReduce_withZeroNextValue_producesZero() {
+        // The exact scenario behind the live bug: a reduce pass where the reporter's
+        // subtree is momentarily absent/unmeasured (e.g. mid-remount) and reports back to
+        // the PreferenceKey's own defaultValue (0).
+        var value: CGFloat = 68
+        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 0 }
+        XCTAssertEqual(
+            value, 0,
+            "reduce takes the newest report unconditionally (documented 'last write wins' " +
+            "behavior) — a reporter that (re)fires with 0 legitimately zeroes out the " +
+            "accumulated value. This is why the degenerate-value protection lives in " +
+            "`BrowseNavigationSheet`'s call sites (`isGenuineMeasurement`), not in this " +
+            "PreferenceKey — reduce itself has no notion of 'ignore this report.'"
+        )
+    }
+
+    func testReduce_withMultipleContributingProbes_takesTheLastOne() {
+        // Only one reporter exists in production today (`searchField`'s own `.background`
+        // probe — confirmed by grep, see BrowseNavigationSheet.swift's doc comment), but
+        // `reduce` must be `PreferenceKey`-protocol-total for however many probes SwiftUI
+        // ends up combining. This pins "last write wins" — NOT max/sum — so a future
+        // second reporter (an accidental duplicate, or an intentional future addition)
+        // gets a well-understood, tested combination rule rather than silent misbehavior.
+        var value = BrowseSheetSearchAreaHeightPreferenceKey.defaultValue
+        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 40 }
+        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 68 }
+        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 12 }
+        XCTAssertEqual(
+            value, 12,
+            "reduce is 'take the newest report' (last-write-wins), not max/sum — pinned so " +
+            "a future change to this combination rule is a deliberate, visible diff."
+        )
+    }
+}

@@ -58,6 +58,20 @@ enum BrowseSheetDetentMath {
     /// Extra vertical space, beyond the measured content itself, allotted to the grabber
     /// affordance the system sheet renders above the content, plus the content's own top
     /// inset.
+    ///
+    /// ⚠️ [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK — this is a GUESS, not a measured
+    /// constant]. Same caveat as `listSectionChromeAllowance` below, and previously missing
+    /// here despite carrying the identical risk: `24` is an unverified estimate of how much
+    /// vertical space `.presentationDragIndicator(.visible)`'s grabber plus the system
+    /// sheet's own top content inset actually consumes — not something read off rendered
+    /// UIKit chrome, since this machine has no simulator. If this OVERESTIMATES the real
+    /// system chrome, the peek detent's visible content area ends up TALLER than
+    /// `searchAreaHeight` alone, exposing a slice of `actionList` below the search field
+    /// (grabber, a gap, then the first action row) — a plausible contributor to the
+    /// "peek shows the Settings row" live-smoke bug. If it UNDERESTIMATES, peek instead
+    /// crops the bottom of the search field. Kevin's on-device smoke should confirm peek
+    /// shows exactly the search field and nothing else, at default Dynamic Type, before
+    /// this constant is trusted — same gate `listSectionChromeAllowance` already carries.
     static let grabberAndInsetAllowance: CGFloat = 24
 
     /// Extra vertical space around the 3-row action list accounting for `.insetGrouped`'s
@@ -82,6 +96,34 @@ enum BrowseSheetDetentMath {
     /// search area, floored at `minimumPeekHeight`.
     static func peekHeight(searchAreaHeight: CGFloat) -> CGFloat {
         max(minimumPeekHeight, searchAreaHeight + grabberAndInsetAllowance)
+    }
+
+    /// FT-20 Stream C bugfix (QA live-smoke, two-bug report): whether a `searchAreaHeight`
+    /// value is a genuine measurement worth reporting into `ContentView`'s PERSISTENT
+    /// `browseSheetPeekHeight`/`browseSheetMediumHeight` state, or an unmeasured placeholder
+    /// that should be ignored.
+    ///
+    /// `BrowseNavigationSheet` is torn down and recreated — losing its own
+    /// `@State searchAreaHeight`, which reinitializes to `0` — every time browse mode's
+    /// sheet is replaced by ANY other `ActiveSheet` case (Settings, Parking 101, a pin tap,
+    /// a block tap...) and the user returns to `.browseNav`. `.sheet(item:)` is a single
+    /// host with distinct `id`s per case (`ContentView.swift`'s `ActiveSheet.id`), so this
+    /// is not a rare edge case — it is the STEADY-STATE behavior on every such round trip,
+    /// not just the Parking 101 path that surfaced it.
+    ///
+    /// Without this guard, `BrowseNavigationSheet.body`'s `.onAppear` (which unconditionally
+    /// called `reportHeights()`) would fire with the freshly-reset `searchAreaHeight == 0`
+    /// on every remount, computing `peekHeight(0)` / `mediumHeight(0, ...)` — the
+    /// unmeasured-floor values — and OVERWRITE `ContentView`'s already-correct, persisted
+    /// heights with those degenerate ones, before the real `GeometryReader` measurement
+    /// arrives a moment later and corrects them again. That churn (good height → degenerate
+    /// floor height → corrected height, repeated on every sheet round-trip) is real and
+    /// reachable; whether a live-`.presentationDetents` resize reliably "catches up" to the
+    /// correction on every occurrence could not be confirmed without a device, but the churn
+    /// itself is an unforced, easily-avoidable defect — this guard removes it entirely by
+    /// simply never reporting a not-yet-measured value in the first place.
+    static func isGenuineMeasurement(searchAreaHeight: CGFloat) -> Bool {
+        searchAreaHeight > 0
     }
 
     /// Medium height = peek height + the measured height of the 3-row action list
@@ -153,6 +195,46 @@ struct BrowseSheetSearchAreaHeightPreferenceKey: PreferenceKey {
 /// that class of bug entirely.
 enum BrowseSheetDetentKind: Equatable {
     case peek, medium, large
+
+    /// FT-20 Stream C bugfix (QA live-smoke, two-bug report): classifies a
+    /// `PresentationDetent` reported back by the system (via `.presentationDetents`'s
+    /// `selection` binding's `set` callback) into a `BrowseSheetDetentKind`, given the
+    /// CURRENTLY measured peek/medium heights — or `nil` if `newValue` doesn't exactly
+    /// match `.large` or either currently-known custom height.
+    ///
+    /// A `nil` result is not rare: it's guaranteed to happen whenever `peekHeight`/
+    /// `mediumHeight` are actively changing relative to whatever value the system is
+    /// echoing back — a Dynamic Type change mid-drag (the scenario Stream A's original QA
+    /// Finding #4 flagged and pinned a test for, without fixing), or — newly live once
+    /// Stream C wired up `BrowseSearchAreaView`'s real content — `BrowseNavigationSheet`
+    /// remounting fresh every time browse mode's sheet is replaced by another `ActiveSheet`
+    /// case and restored (see `BrowseSheetDetentMath.isGenuineMeasurement`'s doc comment):
+    /// each such remount churns `peekHeight`/`mediumHeight` through transient values while
+    /// `.onPreferenceChange` catches up, and this classification function's caller is
+    /// reading whatever `PresentationDetent` UIKit happens to report during that window.
+    ///
+    /// The OLD behavior (Stream A, previously pinned by
+    /// `BrowseSheetDetentSelectionBindingTests`' now-updated "falls back to peek" tests —
+    /// see that suite's history) silently reclassified ANY unmatched value as `.peek` —
+    /// meaning a genuine
+    /// medium/large selection could be collapsed to peek purely from float staleness, with
+    /// no user action involved. Callers of this function must PRESERVE the current kind
+    /// when it returns `nil`, not force a fallback — "we didn't recognize this echo" is not
+    /// evidence the user dragged to peek.
+    static func classify(
+        _ detent: PresentationDetent,
+        peekHeight: CGFloat,
+        mediumHeight: CGFloat
+    ) -> BrowseSheetDetentKind? {
+        if detent == .large {
+            return .large
+        } else if detent == .height(mediumHeight) {
+            return .medium
+        } else if detent == .height(peekHeight) {
+            return .peek
+        }
+        return nil
+    }
 }
 
 /// Builds the `.presentationDetents(selection:)` binding for `.browseNav` from a semantic
@@ -171,12 +253,13 @@ func browseSheetDetentSelectionBinding(
             }
         },
         set: { newValue in
-            if newValue == .large {
-                kind.wrappedValue = .large
-            } else if newValue == .height(mediumHeight) {
-                kind.wrappedValue = .medium
-            } else {
-                kind.wrappedValue = .peek
+            // Unrecognized values (see `BrowseSheetDetentKind.classify`'s doc comment)
+            // preserve the current kind rather than forcing `.peek` — a stale echo during
+            // a height remeasurement/remount race is not evidence of a real user selection.
+            if let classified = BrowseSheetDetentKind.classify(
+                newValue, peekHeight: peekHeight, mediumHeight: mediumHeight
+            ) {
+                kind.wrappedValue = classified
             }
         }
     )
@@ -286,9 +369,30 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         // rotation) — the preference fires on first layout, so this covers all subsequent
         // changes too. `actionListHeight` is computed (not measured via geometry), so it's
         // covered by watching `singleActionRowHeight` instead.
-        .onChange(of: searchAreaHeight) { _, _ in reportHeights() }
-        .onChange(of: singleActionRowHeight) { _, _ in reportHeights() }
-        .onAppear { reportHeights() }
+        //
+        // FT-20 Stream C bugfix (QA live-smoke, two-bug report): every one of these three
+        // call sites is guarded by `BrowseSheetDetentMath.isGenuineMeasurement` — see its
+        // doc comment. `searchAreaHeight` resets to `0` every time this view remounts (any
+        // round trip through another `ActiveSheet` case), and reporting that not-yet-
+        // measured value would overwrite `ContentView`'s already-correct, persisted
+        // `browseSheetPeekHeight`/`browseSheetMediumHeight` with the unmeasured-floor
+        // values, only to correct them again a moment later once the real
+        // `GeometryReader` measurement arrives. Skipping the report entirely until a
+        // genuine measurement exists removes that churn outright: the persisted heights
+        // simply hold their last-known-good value across a remount instead of round-
+        // tripping through a degenerate one.
+        .onChange(of: searchAreaHeight) { _, newValue in
+            guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: newValue) else { return }
+            reportHeights()
+        }
+        .onChange(of: singleActionRowHeight) { _, _ in
+            guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: searchAreaHeight) else { return }
+            reportHeights()
+        }
+        .onAppear {
+            guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: searchAreaHeight) else { return }
+            reportHeights()
+        }
     }
 
     // MARK: - S1: medium-detent 3-item list

@@ -265,45 +265,117 @@ final class BrowseSheetDetentSelectionBindingTests: XCTestCase {
     }
 
     // MARK: set — the remeasurement edge case (QA Finding #4's highest-risk scenario)
+    //
+    // FT-20 Stream C bugfix (live-smoke two-bug report): the OLD behavior pinned by these
+    // two tests — silently reclassifying ANY unmatched `newValue` as `.peek` — was
+    // identified as the mechanism behind the "peek shows the Settings row" live bug once
+    // Stream C's real remount cycles (browse sheet round-tripping through Settings/Parking
+    // 101/etc.) started actually changing `peekHeight`/`mediumHeight` at runtime, turning
+    // this dormant Stream A risk into a reachable one. `BrowseSheetDetentKind.classify`
+    // now returns `nil` for an unmatched value, and `browseSheetDetentSelectionBinding`'s
+    // `set` PRESERVES the current kind instead of forcing `.peek` — these tests are updated
+    // to pin the NEW (fixed) behavior; see `BrowseSheetDetentKind.classify`'s doc comment.
 
     /// If a Dynamic Type change re-measures `peekHeight`/`mediumHeight` between when SwiftUI
     /// last read this binding's `get` and the next `set` callback (e.g. mid-drag, or a
-    /// remeasurement racing a detent-change notification), `newValue` may not exactly equal
-    /// either `.height(peekHeight)` or `.height(mediumHeight)` as currently measured.
-    ///
-    /// This pins the CURRENT (documented, not necessarily desirable) behavior: the `set`
-    /// closure's three-way branch has no explicit "unrecognized value" case — anything that
-    /// isn't `.large` and doesn't exactly equal the current `mediumHeight` falls into the
-    /// `else` branch and is classified as `.peek`. Concretely: a value close to (but not
-    /// exactly) `mediumHeight` — e.g. the medium height as measured a moment ago, before a
-    /// Dynamic Type change nudged it — silently misclassifies a user's medium-detent
-    /// selection as peek. This test exists so a future change to this fallback behavior is a
-    /// deliberate, visible diff here, not a silent behavior change.
-    func testSet_valueNotMatchingEitherCustomHeightFallsBackToPeekKind() {
+    /// remeasurement racing a detent-change notification, or — newly relevant — a
+    /// `BrowseNavigationSheet` remount churning the measured heights), `newValue` may not
+    /// exactly equal either `.height(peekHeight)` or `.height(mediumHeight)` as currently
+    /// measured. The fix: preserve whatever kind was already selected rather than guessing
+    /// `.peek` — an unrecognized echo is not evidence the user dragged anywhere.
+    func testSet_valueNotMatchingEitherCustomHeightPreservesCurrentKind() {
         let box = KindBox(.large)
-        // Binding constructed with a STALE mediumHeight (260), simulating the get/set race:
+        // Binding constructed with a STALE mediumHeight (300), simulating the get/set race:
         // the reported newValue reflects a value from BEFORE a remeasurement changed
         // mediumHeight, so it no longer exactly equals the binding's current mediumHeight.
         let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 300)
         binding.wrappedValue = .height(260)  // close to, but not exactly, the current mediumHeight (300)
         XCTAssertEqual(
-            box.kind, .peek,
-            "Current (documented) behavior: a newValue that doesn't exactly match `.large` " +
-            "or the current mediumHeight falls through to `.peek`, even when it's a stale " +
-            "medium-detent value rather than a genuine peek selection. See QA " +
-            "docs/qa/ft20-stream-a-pr85.md Finding #4 — flagged as a real misclassification " +
-            "risk, not fixed here (no behavior change), only pinned so a regression (or a " +
-            "future fix) is a visible diff against this test."
+            box.kind, .large,
+            "An unrecognized newValue (a stale echo during a height remeasurement/remount " +
+            "race) must PRESERVE the current kind, not force `.peek` — see " +
+            "`BrowseSheetDetentKind.classify`'s doc comment. The old fallback-to-`.peek` " +
+            "behavior (QA docs/qa/ft20-stream-a-pr85.md Finding #4, previously pinned by " +
+            "this test) was identified as a likely contributor to the FT-20 Stream C " +
+            "live-smoke bug where the browse sheet's peek detent unexpectedly revealed the " +
+            "medium-detent action list."
         )
     }
 
     /// Same scenario as above but for an arbitrary, unrelated height value (not close to
-    /// either detent) — confirms the fallback-to-`.peek` behavior isn't specific to
-    /// "near-miss" values.
-    func testSet_arbitraryUnmatchedHeightFallsBackToPeekKind() {
+    /// either detent) — confirms kind-preservation isn't specific to "near-miss" values.
+    func testSet_arbitraryUnmatchedHeightPreservesCurrentKind() {
         let box = KindBox(.medium)
         let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
         binding.wrappedValue = .height(500)
+        XCTAssertEqual(box.kind, .medium)
+    }
+
+    /// A `.peek`-kind box receiving an unmatched value must also stay `.peek` — the
+    /// preservation behavior isn't just "anything defaults to non-peek."
+    func testSet_arbitraryUnmatchedHeightPreservesPeekKind() {
+        let box = KindBox(.peek)
+        let binding = makeBinding(box: box, peekHeight: 96, mediumHeight: 260)
+        binding.wrappedValue = .height(500)
         XCTAssertEqual(box.kind, .peek)
+    }
+}
+
+// MARK: - BrowseSheetDetentKind.classify Tests
+
+/// FT-20 Stream C bugfix: direct unit coverage of the pure classification function
+/// `browseSheetDetentSelectionBinding`'s `set` closure now delegates to — see
+/// `BrowseSheetDetentKind.classify`'s doc comment for the full rationale.
+final class BrowseSheetDetentKindClassifyTests: XCTestCase {
+
+    func testClassify_exactPeekMatch() {
+        XCTAssertEqual(
+            BrowseSheetDetentKind.classify(.height(96), peekHeight: 96, mediumHeight: 260),
+            .peek
+        )
+    }
+
+    func testClassify_exactMediumMatch() {
+        XCTAssertEqual(
+            BrowseSheetDetentKind.classify(.height(260), peekHeight: 96, mediumHeight: 260),
+            .medium
+        )
+    }
+
+    func testClassify_largeMatch() {
+        XCTAssertEqual(
+            BrowseSheetDetentKind.classify(.large, peekHeight: 96, mediumHeight: 260),
+            .large
+        )
+    }
+
+    func testClassify_unmatchedValueReturnsNil() {
+        XCTAssertNil(
+            BrowseSheetDetentKind.classify(.height(500), peekHeight: 96, mediumHeight: 260),
+            "A value matching neither .large nor either current custom height must return " +
+            "nil so the caller can preserve the current kind, not guess."
+        )
+    }
+
+    func testClassify_staleNearMissMediumValueReturnsNil() {
+        // The exact QA Finding #4 scenario: a value that WAS mediumHeight a moment ago,
+        // before a remeasurement (or a BrowseNavigationSheet remount) moved it.
+        XCTAssertNil(
+            BrowseSheetDetentKind.classify(.height(260), peekHeight: 96, mediumHeight: 300)
+        )
+    }
+
+    func testClassify_degenerateZeroHeightsStillClassifyExactly() {
+        // Even in a degenerate not-yet-measured scenario (peek/medium both at their
+        // floor-derived values), exact matches still classify correctly — this function
+        // has no independent notion of "measured vs. unmeasured," only exact equality.
+        XCTAssertEqual(
+            BrowseSheetDetentKind.classify(
+                .height(BrowseSheetDetentMath.minimumPeekHeight),
+                peekHeight: BrowseSheetDetentMath.minimumPeekHeight,
+                mediumHeight: 220
+            ),
+            .peek
+        )
     }
 }
