@@ -151,10 +151,15 @@ final class BrowseSheetDetentMathTests: XCTestCase {
     /// so a future regression that silently reintroduces a system-fraction-sized default
     /// would be caught here.
     func testMediumHeight_realisticContentIsFarShorterThanSystemMediumFraction() {
-        // Rough measured values for "search field (single line) + 3 List rows at default
-        // Dynamic Type" — see BrowseSearchAreaView.searchField / actionList's row count.
+        // Rough values for "search field (single line) + the 3-icon action row at default
+        // Dynamic Type" — see BrowseSearchAreaView.searchField /
+        // BrowseSheetDetentMath.actionRowHeight (Kevin's live-smoke Ruling 1: horizontal
+        // icon row, not `List` rows — the realistic action-row figure shrank accordingly,
+        // 170 → 90, but this test's own assertion (comfortably under a system `.medium`
+        // fraction) only gets easier to satisfy, not harder, so the smaller, more accurate
+        // figure is used here without weakening anything).
         let realisticSearchHeight: CGFloat = 60
-        let realisticListHeight: CGFloat = 170   // ~3 rows × ~44pt insetGrouped row + section insets
+        let realisticListHeight: CGFloat = 90   // 44 (icon) + 6 (spacing) + 16 (label) + 24 (padding)
         let result = BrowseSheetDetentMath.mediumHeight(
             searchAreaHeight: realisticSearchHeight,
             actionListHeight: realisticListHeight,

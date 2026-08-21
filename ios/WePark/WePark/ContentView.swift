@@ -563,10 +563,12 @@ struct ContentView: View {
 
     // MARK: - FT-12: Parking 101 first-launch banner
 
-    /// Controls visibility of `ParkingGuidePromptBanner` in `bottomSafeAreaContent`.
-    /// Set to true once at launch (in `performLaunchSetup`) if `ParkingGuidePromptGate`
-    /// says it hasn't been shown yet. Set back to false — and the gate marked shown —
-    /// on tap-to-open, X-dismiss, or the banner's own ~8s auto-hide timer.
+    /// Controls visibility of `ParkingGuidePromptBanner`, rendered via
+    /// `parkingGuideBannerOverlay` (floating above the browse sheet's peek — Kevin's
+    /// live-smoke Ruling 2, spec §0e). Set to true once at launch (in
+    /// `performLaunchSetup`) if `ParkingGuidePromptGate` says it hasn't been shown yet. Set
+    /// back to false — and the gate marked shown — on tap-to-open, X-dismiss, or the
+    /// banner's own ~8s auto-hide timer.
     @State private var showParkingGuideBanner: Bool = false
 
     // MARK: - TF2-16: Drive Mode heading snap-to-street
@@ -1540,6 +1542,49 @@ struct ContentView: View {
                 }
                 .frame(maxWidth: .infinity)
             }
+            // FT-20 Stream C / Kevin's live-smoke Ruling 2 (spec §0e) — see
+            // `parkingGuideBannerOverlay`'s own doc comment.
+            parkingGuideBannerOverlay
+        }
+    }
+
+    /// FT-12's "New to parking?" first-launch prompt, floating ABOVE the browse sheet's
+    /// peek as its own card — Kevin's live-smoke Ruling 2 (spec §0e, 2026-08-21).
+    ///
+    /// This banner predates FT-20's sheet: it used to live inside `bottomSafeAreaContent`,
+    /// a `.safeAreaInset(edge: .bottom)` attached directly to `mapRepresentable`
+    /// (`mapZStack`, above). That inset is part of the SAME presentation layer as the map —
+    /// it renders BEHIND the modally-presented `.browseNav` sheet, which is a separate
+    /// `.sheet(item:)` presentation on top of everything in `mapLayerWithEvents`. Once the
+    /// sheet occupies the bottom of the screen continuously in browse mode (even at peek —
+    /// AC-1/AC-2, it's never fully dismissible), a banner placed in `bottomSafeAreaContent`
+    /// is invisible: it's drawn underneath the sheet's own card, not above it. The banner's
+    /// own visibility gate (`!driveModeActive && !parkUntilMode && !blockSelectModeActive`)
+    /// predates the sheet entirely and knows nothing about it — moving the banner's
+    /// POSITION is the fix, not its gating logic, which is unchanged here.
+    ///
+    /// The fix: render it as its own floating layer, offset up from the true bottom of the
+    /// screen by `browseSheetPeekHeight` (+ a small gap) — the SAME measured value that
+    /// drives `.browseNav`'s own `.presentationDetents`, not a hardcoded pixel offset, so
+    /// this stays correct under Dynamic Type (a larger search field measures a taller
+    /// `browseSheetPeekHeight`, and the banner rises to clear it automatically).
+    ///
+    /// Layout pattern mirrors the existing `ToastHostView` overlay just above (a `VStack`
+    /// with a `Spacer()` pinning content to one edge within `mapZStack`'s outer
+    /// `ZStack(alignment: .top)`) rather than inventing a new positioning mechanism.
+    @ViewBuilder
+    private var parkingGuideBannerOverlay: some View {
+        if showParkingGuideBanner && !driveModeActive && !parkUntilMode && !blockSelectModeActive {
+            VStack(spacing: 0) {
+                Spacer()
+                ParkingGuidePromptBanner(
+                    onOpenGuide: { dismissParkingGuideBanner(openGuide: true) },
+                    onDismiss: { dismissParkingGuideBanner(openGuide: false) }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, browseSheetPeekHeight + 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1640,8 +1685,10 @@ struct ContentView: View {
     ///   4. `DriveModeBottomCard` — the "ground truth" slab; always the bottom-most element
     ///                         when Drive Mode is active, edge-to-edge (unchanged), the one
     ///                         row NOT given 16pt horizontal margins.
-    /// `ParkingGuidePromptBanner` (browse-mode only) stays mutually exclusive with all four,
-    /// as before.
+    /// `ParkingGuidePromptBanner` used to be a 5th row here. Kevin's live-smoke Ruling 2
+    /// (spec §0e) moved it to `parkingGuideBannerOverlay`, a separate floating layer above
+    /// the browse sheet's peek — see that property's doc comment. Its VISIBILITY gating
+    /// (mutually exclusive with the four rows below) is unchanged, only its position.
     ///
     /// Because every row is now structural (laid out in-flow by the VStack) rather than an
     /// independently `Spacer()`-positioned float, adding/removing a row simply pushes the
@@ -1690,17 +1737,11 @@ struct ContentView: View {
                     showApproachStrip: finalApproachState == .approaching
                 )
             }
-            // FT-12: Parking 101 first-launch prompt banner. Never shown alongside
-            // the Drive Mode bottom card or the Park Until pill (AC-7) — both of the
-            // guards above already make those branches mutually exclusive with this one.
-            // FT-15/TF2-15: also excluded during block-select mode, a deliberate
-            // focused task the user is mid-way through.
-            if showParkingGuideBanner && !driveModeActive && !parkUntilMode && !blockSelectModeActive {
-                ParkingGuidePromptBanner(
-                    onOpenGuide: { dismissParkingGuideBanner(openGuide: true) },
-                    onDismiss: { dismissParkingGuideBanner(openGuide: false) }
-                )
-            }
+            // FT-12's "New to parking?" banner used to render here too. Kevin's live-smoke
+            // Ruling 2 (spec §0e, 2026-08-21) moved it OUT of this safe-area-inset stack —
+            // see `parkingGuideBannerOverlay`'s doc comment for why (it's a separate
+            // `.sheet` presentation layer problem, not a `bottomSafeAreaContent` layout
+            // problem) and where it lives now.
         }
     }
 

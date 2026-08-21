@@ -133,6 +133,118 @@ final class BrowseSheetDetentMathGenuineMeasurementTests: XCTestCase {
     }
 }
 
+// MARK: - grabberAndInsetAllowance / peek-shows-only-search invariant Tests
+//
+// FT-20 Stream C live-smoke, PR #87 follow-up (2026-08-21): the `isGenuineMeasurement`
+// guard above fixed the REMOUNT-churn manifestation of "peek reveals the medium-detent
+// action row," but the bug also reproduced on a fresh cold launch, where no remount has
+// happened yet — a STEADY-STATE sizing error, not a remount race. Root cause:
+// `grabberAndInsetAllowance`'s old value (24) double-counted `BrowseSearchAreaView.
+// searchField`'s own `.padding(.vertical, 12)` top inset — once as part of the measured
+// `searchAreaHeight` (the height-reporting `GeometryReader` is attached AFTER that
+// padding), and again as part of the allowance meant to ALSO cover "the content's own top
+// inset." See `BrowseSheetDetentMath.grabberAndInsetAllowance`'s doc comment for the full
+// derivation of the fix (24 → 12).
+final class BrowseSheetGrabberAllowanceRegressionTests: XCTestCase {
+
+    func testGrabberAndInsetAllowance_noLongerDoubleCountsSearchFieldsOwnTopInset() {
+        // Pins the corrected value so a future edit can't silently reintroduce the
+        // double-count by creeping the constant back up toward the old 24.
+        XCTAssertEqual(
+            BrowseSheetDetentMath.grabberAndInsetAllowance, 12,
+            "grabberAndInsetAllowance should represent ONLY the system grab-indicator's " +
+            "own footprint now that searchField's own top inset is already inside " +
+            "searchAreaHeight (BrowseSearchAreaView.swift's GeometryReader is attached " +
+            "AFTER .padding(.vertical, 12)) — see the constant's doc comment for the full " +
+            "derivation."
+        )
+    }
+
+    func testPeekHeight_grabberAllowanceStaysASmallSliverOfARealisticSearchField() {
+        // Regression guard for the "peek reveals the action row" live-smoke bug at cold
+        // launch: the gap between peekHeight and the measured search area must stay a
+        // small grabber-only sliver, not balloon back up toward double-counting territory.
+        let realisticSearchHeight: CGFloat = 64
+        let peek = BrowseSheetDetentMath.peekHeight(searchAreaHeight: realisticSearchHeight)
+        XCTAssertLessThan(
+            peek - realisticSearchHeight, 20,
+            "The gap between peekHeight and the measured search area should stay a small " +
+            "grabber-only sliver (well under the old 24pt figure) — a value creeping back " +
+            "up would reintroduce the peek-reveals-the-action-row bug."
+        )
+    }
+}
+
+// MARK: - BrowseSheetDetentMath.actionRowHeight(...) Tests
+//
+// FT-20 Stream C / Kevin's live-smoke Ruling 1 (spec §0e, 2026-08-21): the medium-detent
+// action list's anatomy changed from `List` rows (design-review finding S1, overridden) to
+// a horizontal 3-icon row. `actionRowHeight` is the pure, UIKit-free formula
+// `BrowseNavigationSheet.actionListHeight` now derives its `.frame(height:)` constraint
+// from (icon diameter + icon-label spacing + label line height + top/bottom padding),
+// mirroring `peekHeight`/`mediumHeight`'s existing pure-function precedent so it's directly
+// unit-testable without a simulator, per this file's own established convention.
+final class BrowseSheetActionRowHeightTests: XCTestCase {
+
+    func testActionRowHeight_sumsAllFourComponents() {
+        let result = BrowseSheetDetentMath.actionRowHeight(
+            iconDiameter: 44,
+            iconLabelSpacing: 6,
+            labelLineHeight: 16,
+            verticalPadding: 12
+        )
+        // 44 + 6 + 16 + (12 * 2) = 90
+        XCTAssertEqual(result, 90)
+    }
+
+    func testActionRowHeight_verticalPaddingIsAppliedTwiceForTopAndBottom() {
+        let withoutPadding = BrowseSheetDetentMath.actionRowHeight(
+            iconDiameter: 44, iconLabelSpacing: 6, labelLineHeight: 16, verticalPadding: 0
+        )
+        let withPadding = BrowseSheetDetentMath.actionRowHeight(
+            iconDiameter: 44, iconLabelSpacing: 6, labelLineHeight: 16, verticalPadding: 12
+        )
+        XCTAssertEqual(
+            withPadding, withoutPadding + 24,
+            "verticalPadding represents both top AND bottom, so it must contribute twice " +
+            "its value to the total row height."
+        )
+    }
+
+    func testActionRowHeight_growsWithLargerDynamicTypeInputs() {
+        // Simulates the `@ScaledMetric`-driven growth `actionIconDiameter`/
+        // `actionLabelLineHeight` would report at a larger Dynamic Type size —
+        // `actionRowHeight` itself has no notion of Dynamic Type, only of the values fed
+        // in, so this pins that the formula scales monotonically with its inputs.
+        let defaultSize = BrowseSheetDetentMath.actionRowHeight(
+            iconDiameter: 44, iconLabelSpacing: 6, labelLineHeight: 16, verticalPadding: 12
+        )
+        let accessibilitySize = BrowseSheetDetentMath.actionRowHeight(
+            iconDiameter: 70, iconLabelSpacing: 6, labelLineHeight: 26, verticalPadding: 12
+        )
+        XCTAssertGreaterThan(
+            accessibilitySize, defaultSize,
+            "actionRowHeight must grow when its Dynamic-Type-scaled inputs grow — a " +
+            "regression here would mean the medium detent stops making room for a larger " +
+            "action row at accessibility text sizes, reintroducing a clipped-row class of " +
+            "bug (the same class of bug S1's List anatomy shipped with)."
+        )
+    }
+
+    func testActionRowHeight_zeroInputsProduceZero() {
+        // Sanity/degenerate case: all-zero inputs should sum to exactly zero, not some
+        // hidden floor — `BrowseSheetDetentMath.peekHeight`'s own `minimumPeekHeight` is
+        // what protects the OVERALL peek detent from a pathologically small value; this
+        // formula itself has no independent floor.
+        XCTAssertEqual(
+            BrowseSheetDetentMath.actionRowHeight(
+                iconDiameter: 0, iconLabelSpacing: 0, labelLineHeight: 0, verticalPadding: 0
+            ),
+            0
+        )
+    }
+}
+
 // MARK: - BrowseSheetSearchAreaHeightPreferenceKey Tests
 //
 // QA pass 1 on PR #87 flagged the C1 preference-key mechanism as shipping with zero
