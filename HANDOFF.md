@@ -201,6 +201,62 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-22 — 🎉 FT-20 COMPLETE. Build 17's payload is done; version bumped to 17.
+
+**`main` @ `7d90595a`+. Zero open PRs. `CURRENT_PROJECT_VERSION` = 17.** Build 17 = dark mode (#83) +
+realtime WebSocket (#84) + the FT-20 browse-mode bottom sheet (#85, #86, #87). Kevin's Mac:
+**804 passed, 0 failed.** Full live smoke passed — *"I think it all looks good."*
+
+**What shipped in the sheet:** peek shows the search field alone (map keeps ~90%); a `gearshape`
+Settings affordance in the search field's trailing edge (Apple Maps' avatar position); one primary
+`car.fill` **"Find a Spot"** button; a quiet "New to parking?" link. Search → place state (distance +
+"Parking near here" in semantic green/amber/red) → **Go**. Top-right went from FOUR floating buttons
+to THREE (Find me / Find my car / Park Until). `DriveModeDestinationView.swift` deleted entirely.
+
+**🔴 THE SIX-ROUND BUG, AND THE PROCESS LESSON THAT MATTERS MOST IN THIS DOC.**
+Peek would not render correctly across **six** build-and-smoke cycles. Every fix was locally correct
+and none moved the symptom: a real `grabberAndInsetAllowance` double-count (24→12), a structural clamp
+below `actionContentTopOffset`, conditional rendering of the action column, `listSectionChromeAllowance`
+deleted with the `List`. The symptom kept *moving* — Settings bleeding in, then the third row clipped,
+then the search field vanishing entirely.
+
+**The actual cause:** `BrowseSheetSearchAreaHeightPreferenceKey.reduce` was `value = nextValue()` —
+"last write wins" — which violates `PreferenceKey`'s contract that `defaultValue` be the reduce
+operator's **identity element**. SwiftUI invokes `reduce` once per sibling branch *including branches
+that never call `.preference()`*; those contribute `defaultValue` (0) and silently overwrote the real
+measurement. **`searchAreaHeight` was `0.0` in every single round.** Four rounds of height arithmetic
+were performed on a number that was always zero. Replaced with `.onGeometryChange` (iOS 17+, target is
+17.0), which has no cross-tree aggregation, so the bug class is structurally impossible rather than
+merely avoided.
+
+- **⭐ RULE: when two consecutive well-reasoned fixes don't move a symptom, STOP REASONING AND
+  INSTRUMENT.** A `#if DEBUG` overlay printing the live values found in ONE screenshot what four rounds
+  of static analysis could not. Cost: minutes. Saved: an unbounded number of build cycles.
+- **Tests can pin a bug as intended behavior.** Two tests asserted the broken last-write-wins `reduce`
+  was correct. Hand-feeding `reduce` in isolation cannot reproduce a bug about how many times SwiftUI
+  invokes it across a live tree — so they passed while the feature was broken. Deleted, with reasoning.
+- **The diagnostic became a cause.** The debug overlay was itself a preference-less sibling branch
+  contributing `0`. Worth knowing that instrumentation can perturb what it measures.
+- **A custom `.height()` detent is a real layout constraint, not a crop window.** Fixed-height siblings
+  win the space negotiation and starve the only flexible child. That's why the search field vanished
+  while the button still rendered.
+- **`car.front.waves.right.fill` is not a real SF Symbol** — the `car.front.waves` family has `.up`,
+  `.down`, `.left.and.right.and.up`, but no `.right`. It had been silently blank since
+  `driveEntryButton`, invisible inside a menu. Verify SF Symbol names; an unresolved one renders empty
+  and collapses its `Label`'s text alignment.
+
+**Serialized-PR discipline paid off twice.** Stream A merged **gated OFF** (`ft20BrowseSheetEnabled`)
+after QA caught that its exhaustively-correct dismiss sweep was a **trap state** in the intermediate
+build — every dismissal landed in a non-dismissible sheet, force-quit the only exit. Stream B then
+*refused* the spec's instruction to gut `DriveModeDestinationView.swift`, because that file was still
+the live search path. **Code correct for the END state can be a trap in an INTERMEDIATE state; when a
+feature is serialized across PRs, the intermediate states are their own acceptance criteria.**
+
+**NEXT:** Kevin archives 17 → TestFlight → drive test. That drive is also the gate on build 18
+(patrol mode), which must not start until realtime has been proven on a live socket in Manhattan.
+
+---
+
 ### 2026-08-20 (later) — FT-20 Stream A merged, gated OFF. Sheet container exists but is invisible.
 
 **`main` @ `37aa8c01`. Zero open PRs.** Kevin's Mac: **748/748 passed, 0 failed, 0 skipped** (iPhone

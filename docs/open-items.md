@@ -12,6 +12,24 @@ App Store Connect, real-device drive test).
 
 ---
 
+## 🖥 BUILD 17 — READY TO ARCHIVE (2026-08-22)
+
+**Payload complete.** Dark mode (#83) + realtime WebSocket (#84) + FT-20 bottom sheet (#85/#86/#87).
+`CURRENT_PROJECT_VERSION` = **17**. 804 tests passing, full live smoke passed on iPhone 17 / iOS 26.5.
+
+**⏳ THE BUILD 17 DRIVE-TEST LIST — carry this into the car:**
+
+| Item | What to watch for |
+|---|---|
+| **Realtime** | The whole point of build 17. Pins should update live, no 8s lag. **A silently-dead socket is the risk** — Drive Mode suspends the 45s poll backstop, so if pins freeze mid-drive, that's the failure mode to report |
+| **TF2-16** | Heading at intersection approaches. **Never actually watched for on any drive** — came back "Unsure" last time. Watch for it deliberately |
+| **FT-15 end-to-end submit** | The one FT-15 path never exercised live. **Writes to production** — do it somewhere verifiable |
+| **S6 — sunlight** | The sheet's peek/medium chrome and the top-right rail in **direct sun**, windshield-mounted. TF2-18 logged a sunlight failure before; always-dark shipped for cleanliness, NOT legibility. No simulator can test this |
+| **The sheet, in motion** | Does peek-only-search feel right while driving? Does "Find a Spot" read as the obvious action? |
+| **FT-21** | Known broken (wide-street curb offset). Already decided A→B→C, lands build 18+. **No need to re-report** |
+
+---
+
 ## 🟡 IN FLIGHT — right now
 
 | # | Item | Where | State |
