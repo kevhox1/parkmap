@@ -47,7 +47,7 @@ enum MapboxRouteError: Error, Equatable {
 // MARK: - RouteServicing protocol (M-2)
 
 /// Protocol seam for route fetching — enables mock injection in tests and views.
-/// `RouteService` conforms. `DriveModeDestinationView` is typed against this protocol.
+/// `RouteService` conforms. `BrowseSearchAreaView` is typed against this protocol.
 ///
 /// M-2 carry-over from W8.5b QA: `pickBestParkingAwareRoute` was originally a `static`
 /// method on the concrete class. Swift protocols don't support static method requirements

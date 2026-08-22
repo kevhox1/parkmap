@@ -47,7 +47,12 @@ final class BrowseSearchAreaViewTests: XCTestCase {
             userLocation: userLocation,
             locationService: LocationService(),
             detentKind: .constant(detentKind),
-            onRouteReady: { _, _ in }
+            onRouteReady: { _, _ in },
+            // PR #87 round 5: `onSearchFieldHeightChange` is required, not defaulted (see
+            // `BrowseSearchAreaView`'s own doc comment on that property for why) — these
+            // render-smoke tests don't assert on the measured height, so a no-op is
+            // explicit here rather than silently defaulted.
+            onSearchFieldHeightChange: { _ in }
         )
     }
 

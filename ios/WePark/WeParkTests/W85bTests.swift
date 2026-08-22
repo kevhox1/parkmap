@@ -7,7 +7,13 @@
 //  Test groups:
 //    - Scoring unit tests: RouteService.pickBestParkingAwareRoute (no live network).
 //    - Recent destinations: RecentDestinationsStore CRUD + persistence.
-//    - View smoke: DriveModeDestinationView renders without crashing.
+//    - M-1 timeout race: state-machine-level test, no view dependency.
+//
+//  FT-20 Stream C: the two `DriveModeDestinationView` render-smoke tests that used to live
+//  here were removed when that view was deleted (`Views/DriveModeDestinationView.swift`,
+//  spec §0c) — their coverage (renders without crashing, with/without user location) is a
+//  strict subset of `BrowseSearchAreaViewTests.swift`'s render-smoke suite, which additionally
+//  covers all three `BrowseSheetDetentKind` values and a loaded-segments case.
 //
 //  @MainActor annotation on the test class is required because
 //  RouteService.pickBestParkingAwareRoute is @MainActor (inherited from RouteService class).
@@ -588,39 +594,5 @@ final class W85bTests: XCTestCase {
                        "errorMessage must match the timeout copy")
         XCTAssertNil(resolvedCoordinate, "resolvedCoordinate must be nil after timeout")
         XCTAssertNil(resolvedName, "resolvedName must be nil after timeout")
-    }
-
-    // MARK: - View smoke
-
-    func testDriveModeDestinationView_renders_withoutCrashing() {
-        let region = MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 40.7527, longitude: -73.9772),
-            span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
-        )
-        let view = DriveModeDestinationView(
-            currentRegion: region,
-            segments: [],
-            userLocation: nil,
-            locationService: LocationService(),
-            onRouteReady: { _, _ in }
-        )
-        let host = UIHostingController(rootView: view)
-        XCTAssertNotNil(host.view, "DriveModeDestinationView should render without crashing (no user location)")
-    }
-
-    func testDriveModeDestinationView_withUserLocation_renders_withoutCrashing() {
-        let region = MKCoordinateRegion(
-            center: CLLocationCoordinate2D(latitude: 40.7527, longitude: -73.9772),
-            span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
-        )
-        let view = DriveModeDestinationView(
-            currentRegion: region,
-            segments: [],
-            userLocation: CLLocationCoordinate2D(latitude: 40.7527, longitude: -73.9772),
-            locationService: LocationService(),
-            onRouteReady: { _, _ in }
-        )
-        let host = UIHostingController(rootView: view)
-        XCTAssertNotNil(host.view, "DriveModeDestinationView with user location should render without crashing")
     }
 }

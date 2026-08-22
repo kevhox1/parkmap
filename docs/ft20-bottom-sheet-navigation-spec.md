@@ -248,6 +248,75 @@ Can read everything"*), and the Parking-101-round-trip vanish fix holds.
 
 ---
 
+### §0g — Round 5: the peek-height bug was a measurement bug, not a height bug (2026-08-22, SETTLED)
+
+Rounds 1–4 all tuned `BrowseSheetDetentMath` height arithmetic against `searchAreaHeight`. Round 4
+added a `#if DEBUG` readout (kept — see below) so the next round would have real numbers instead of a
+5th guess. Kevin's device (iPhone 17 / iOS 26.5, sheet at medium, search field fully rendered
+on-screen) reported `searchH: 0.0` — the measurement had **never once delivered a real value**, on any
+round. Every downstream symptom (peek snapping to medium at cold launch, "the three buttons are
+peaking," the field looking squeezed) was arithmetic performed on an input that was always zero.
+
+**Root cause:** the mechanism (`.background(GeometryReader{...}.preference(...))` +
+`BrowseSheetSearchAreaHeightPreferenceKey`) used `reduce(value:nextValue:) { value = nextValue() }`
+("last write wins"). SwiftUI calls `reduce` once per sibling branch in the observed subtree — including
+branches that never call `.preference` explicitly, which still implicitly contribute the key's
+`defaultValue` (`0`). The round-4 debug overlay itself was exactly such a branch: attached before
+`.onPreferenceChange` in the same observed subtree, it silently zeroed out the real report on whichever
+layout passes SwiftUI happened to visit it last. **The diagnostic tool broke the thing it was measuring.**
+
+**Fix:** replaced the `PreferenceKey` entirely with `.onGeometryChange(for:of:action:)` (iOS 17+, this
+project's deployment target), attached directly to `searchField` — no cross-tree aggregation step, so
+this bug class is structurally impossible now, not just patched for the current tree shape. Full
+writeup: `ios/WePark/WePark/Views/BrowseNavigationSheet.swift`'s removed-`PreferenceKey` doc comment
+(just below `BrowseSheetDetentKind`).
+
+**"Opens at medium at cold launch" needed no separate fix** — it was `ContentView`'s hardcoded
+`browseSheetMediumHeight = 260` default (never overwritten, since `reportHeights()` never fired on a
+genuine measurement) happening to be a size the system snapped to. It resolves once the measurement
+does.
+
+**The `#if DEBUG` readout stays for at least one more round** — same removal instructions in the code
+comment (`BrowseNavigationSheet.swift`, both `#if DEBUG` blocks). Repositioned (pushed down, clear of
+`searchField`'s row) so it no longer risks covering the trailing-edge `gearshape`.
+
+**Still unconfirmed without a device:** whether the search field's placeholder text ("Search for a
+destination") actually renders — present in source, no code-level suppression found, but Kevin's round-4
+screenshot showed the magnifier icon with no placeholder text visible. Not touched this round (no color
+tuning without device evidence, same discipline as the height constants) — needs a fresh screenshot.
+
+**Round 6 (2026-08-22) — CONFIRMED on device, no longer a pending hypothesis.** Kevin's `#if DEBUG`
+readout, on his iPhone 17 / iOS 26.5, reported:
+
+```
+kind: large        searchH: 76.0      peek: 80.0
+medium: 186.0      actionTop: 84.0
+```
+
+`searchH` is a real `76.0` — non-zero for the first time across six rounds, no longer the round 1–5
+`0.0` this section documents above. `peek: 80.0` fully contains it, matching `peekHeight`'s "fully
+contains the search field" invariant. At the peek detent, the search field + magnifier + placeholder
+text + trailing `gearshape` render correctly and nothing below the field is visible; the large detent
+also renders correctly. The `.onGeometryChange` replacement (this section's "Fix," above) is confirmed
+to actually work end to end, not just structurally sound in isolation.
+
+With the fix confirmed, the round-4/5 `#if DEBUG` readout has served its purpose and was removed in round
+6 (both `#if DEBUG` blocks in `BrowseNavigationSheet.swift`, per the removal instructions in their own
+code comments). The still-unconfirmed placeholder-text question above is resolved by this same
+screenshot: placeholder text does render.
+
+Round 6 also removed `SearchFieldHeightMeasurementTests` (`FT20StreamCTests.swift`) — added in round 5
+to exercise this exact `.onGeometryChange` mechanism via `UIHostingController` + `layoutIfNeeded()`, it
+failed on Kevin's Mac (`reportedHeight == 0.0`) on the very same build that reported a real `76.0`
+on-device, confirming the harness (a detached, non-key `UIHostingController` never reliably completing a
+SwiftUI render pass), not the product code, was at fault. See that test file's removal note for the full
+reasoning; the pure height-math half of what those tests covered remains pinned by
+`BrowseSheetPeekInvariantTests.testPeekHeight_fullyContainsTheSearchArea_acrossRealisticDynamicTypeRange`,
+and the "does a real measurement actually arrive" half is covered by this device confirmation plus PR
+#87's live-smoke checklist, not by a unit test.
+
+---
+
 ### §0d — Stream B QA carry-forwards (BINDING on Stream C, 2026-08-20)
 
 From `docs/qa/ft20-stream-b-pr86.md`. Both are unreachable today (gate off) and were correctly not
