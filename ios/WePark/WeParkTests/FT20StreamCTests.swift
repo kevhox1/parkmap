@@ -20,6 +20,9 @@
 //
 
 import XCTest
+import SwiftUI
+import MapKit
+import CoreLocation
 @testable import WePark
 
 // MARK: - browseSheetBoundaryTarget(driveModeBecameActive:) Tests
@@ -246,59 +249,111 @@ final class BrowseSheetActionColumnHeightTests: XCTestCase {
     }
 }
 
-// MARK: - BrowseSheetSearchAreaHeightPreferenceKey Tests
+// MARK: - BrowseSheetSearchAreaHeightPreferenceKey Tests — REMOVED 2026-08-22 (PR #87 round 5)
 //
 // QA pass 1 on PR #87 flagged the C1 preference-key mechanism as shipping with zero
-// regression coverage. These pin `defaultValue` and `reduce`'s documented behavior
-// directly, including the zero-value and multiple-probe cases the live-smoke bug report
-// specifically asked to be checked.
-final class BrowseSheetSearchAreaHeightPreferenceKeyTests: XCTestCase {
+// regression coverage; the class that used to live here (`BrowseSheetSearchAreaHeightPreferenceKeyTests`)
+// was added in response, pinning `BrowseSheetSearchAreaHeightPreferenceKey.defaultValue`/`.reduce`'s
+// behavior directly.
+//
+// ⚠️ Those tests were WRONG in a way worth recording rather than quietly deleting: they
+// called `reduce` directly with hand-fed values and asserted the exact "last write wins"
+// behavior (`testReduce_withZeroNextValue_producesZero`,
+// `testReduce_withMultipleContributingProbes_takesTheLastOne`) as CORRECT, INTENTIONAL
+// design — reasoning that degenerate-value protection belonged in `BrowseNavigationSheet`'s
+// `isGenuineMeasurement` guard, not in `reduce` itself. That reasoning missed the actual bug:
+// SwiftUI calls `reduce` once per SIBLING BRANCH in the observed subtree, including branches
+// that never call `.preference(key:value:)` explicitly (they implicitly contribute
+// `defaultValue`) — a fact no amount of hand-feeding `reduce` in isolation can exercise, since
+// it's about how many times and in what order the LIVE VIEW TREE causes SwiftUI to invoke
+// `reduce`, not about `reduce`'s own per-call logic. On a real device, this file's `#if
+// DEBUG` `.overlay` (a defaultValue-contributing sibling once attached) silently zeroed out
+// `searchField`'s real report on some layout passes — see
+// `BrowseNavigationSheet.swift`'s removed-`PreferenceKey` doc comment (just below
+// `BrowseSheetDetentKind`) for the full root-cause writeup and citations.
+//
+// The `PreferenceKey` this class tested no longer exists — `searchField` reports its height
+// via `.onGeometryChange` now, which has no `reduce`/cross-tree-aggregation step to test.
+// Replacement coverage, exercising the ACTUAL mechanism (not hand-fed values in isolation),
+// is `SearchFieldHeightMeasurementTests` below.
 
-    func testDefaultValue_isZero() {
-        XCTAssertEqual(
-            BrowseSheetSearchAreaHeightPreferenceKey.defaultValue, 0,
-            "The default (no reporter in the tree yet) must be 0 — the value " +
-            "`BrowseNavigationSheet`'s `isGenuineMeasurement` guard treats as unmeasured."
+// MARK: - Search-field height measurement Tests (PR #87 round 5)
+//
+// Exercises the REPLACEMENT mechanism end to end: `BrowseSearchAreaView.searchField`'s real
+// `.onGeometryChange` firing through an actual (headless) SwiftUI layout pass — not a
+// hand-fed value — feeding into `BrowseSheetDetentMath.peekHeight`'s existing "fully
+// contains the search field" invariant (already covered at the pure-math level by
+// `FT20StreamATests.swift`'s `BrowseSheetPeekInvariantTests
+// .testPeekHeight_fullyContainsTheSearchArea_acrossRealisticDynamicTypeRange`; this suite's
+// job is closing the gap THAT test can't cover — "does a real measurement ever reach the
+// math in the first place," which is exactly where round 1–4's bug lived).
+//
+// [COMPILE-UNVERIFIED / NEEDS ON-MAC XCTEST CONFIRMATION] `UIHostingController` +
+// `layoutIfNeeded()` off a live window is a commonly-used pattern for forcing SwiftUI
+// `GeometryReader`/`.onGeometryChange` effects to fire in XCTest, but this machine has no
+// Xcode/simulator to confirm it actually fires synchronously here — if it doesn't, Kevin/QA
+// will see this fail on first run on the Mac, not silently pass while testing nothing.
+@MainActor
+final class SearchFieldHeightMeasurementTests: XCTestCase {
+
+    private let region = MKCoordinateRegion(
+        center: CLLocationCoordinate2D(latitude: 40.7527, longitude: -73.9772),
+        span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
+    )
+
+    func testSearchField_onGeometryChange_reportsANonZeroHeight() {
+        var reportedHeight: CGFloat = 0
+        let view = BrowseSearchAreaView(
+            currentRegion: region,
+            segments: [],
+            userLocation: nil,
+            locationService: LocationService(),
+            detentKind: .constant(.peek),
+            onRouteReady: { _, _ in },
+            onSearchFieldHeightChange: { reportedHeight = $0 }
+        )
+        let host = UIHostingController(rootView: view)
+        host.view.frame = CGRect(x: 0, y: 0, width: 390, height: 200)
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+
+        XCTAssertGreaterThan(
+            reportedHeight, 0,
+            "This is the exact regression round 5 fixes: a fully-rendered search field " +
+            "(non-zero on screen) must report a non-zero measured height. `searchH: 0.0` " +
+            "on a real device with the field visibly rendered was the round-4 bug report " +
+            "this test guards against — see BrowseNavigationSheet.swift's removed-" +
+            "PreferenceKey doc comment."
         )
     }
 
-    func testReduce_withNoPriorValue_takesTheReportedValue() {
-        var value = BrowseSheetSearchAreaHeightPreferenceKey.defaultValue
-        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 68 }
-        XCTAssertEqual(value, 68)
-    }
-
-    func testReduce_withZeroNextValue_producesZero() {
-        // The exact scenario behind the live bug: a reduce pass where the reporter's
-        // subtree is momentarily absent/unmeasured (e.g. mid-remount) and reports back to
-        // the PreferenceKey's own defaultValue (0).
-        var value: CGFloat = 68
-        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 0 }
-        XCTAssertEqual(
-            value, 0,
-            "reduce takes the newest report unconditionally (documented 'last write wins' " +
-            "behavior) — a reporter that (re)fires with 0 legitimately zeroes out the " +
-            "accumulated value. This is why the degenerate-value protection lives in " +
-            "`BrowseNavigationSheet`'s call sites (`isGenuineMeasurement`), not in this " +
-            "PreferenceKey — reduce itself has no notion of 'ignore this report.'"
+    func testSearchField_realMeasurement_producesAPeekHeightThatFullyContainsIt() {
+        var reportedHeight: CGFloat = 0
+        let view = BrowseSearchAreaView(
+            currentRegion: region,
+            segments: [],
+            userLocation: nil,
+            locationService: LocationService(),
+            detentKind: .constant(.peek),
+            onRouteReady: { _, _ in },
+            onSearchFieldHeightChange: { reportedHeight = $0 }
         )
-    }
+        let host = UIHostingController(rootView: view)
+        host.view.frame = CGRect(x: 0, y: 0, width: 390, height: 200)
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
 
-    func testReduce_withMultipleContributingProbes_takesTheLastOne() {
-        // Only one reporter exists in production today (`searchField`'s own `.background`
-        // probe — confirmed by grep, see BrowseNavigationSheet.swift's doc comment), but
-        // `reduce` must be `PreferenceKey`-protocol-total for however many probes SwiftUI
-        // ends up combining. This pins "last write wins" — NOT max/sum — so a future
-        // second reporter (an accidental duplicate, or an intentional future addition)
-        // gets a well-understood, tested combination rule rather than silent misbehavior.
-        var value = BrowseSheetSearchAreaHeightPreferenceKey.defaultValue
-        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 40 }
-        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 68 }
-        BrowseSheetSearchAreaHeightPreferenceKey.reduce(value: &value) { 12 }
-        XCTAssertEqual(
-            value, 12,
-            "reduce is 'take the newest report' (last-write-wins), not max/sum — pinned so " +
-            "a future change to this combination rule is a deliberate, visible diff."
+        // Only meaningful once we know a real measurement actually arrived — otherwise
+        // this degenerates into the pure-math test `BrowseSheetPeekInvariantTests` already
+        // covers with a hardcoded input, which proves nothing new about the mechanism.
+        XCTAssertGreaterThan(reportedHeight, 0, "Precondition: a real measurement must land first.")
+
+        let peek = BrowseSheetDetentMath.peekHeight(searchAreaHeight: reportedHeight)
+        XCTAssertGreaterThanOrEqual(
+            peek, reportedHeight,
+            "A realistic, ACTUALLY-MEASURED (not hand-picked) search field height must " +
+            "produce a peek detent tall enough to fully contain the field — the exact " +
+            "property `BrowseSheetDetentMath.peekBreathingRoom` exists to guarantee."
         )
     }
 }

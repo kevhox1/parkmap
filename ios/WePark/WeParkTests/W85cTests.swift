@@ -558,7 +558,11 @@ final class AuthGateTests: XCTestCase {
             userLocation: w85cAnchor,
             locationService: locationService,
             detentKind: .constant(.large),
-            onRouteReady: { _, _ in }
+            onRouteReady: { _, _ in },
+            // PR #87 round 5: required, not defaulted — see `BrowseSearchAreaView`'s own
+            // doc comment on this property. This test doesn't assert on the measured
+            // height, so the no-op is explicit here.
+            onSearchFieldHeightChange: { _ in }
         )
         let host = UIHostingController(rootView: view)
         XCTAssertNotNil(host.view, "BrowseSearchAreaView should render without crash with notDetermined auth")
@@ -593,7 +597,11 @@ final class AuthGateTests: XCTestCase {
             userLocation: w85cAnchor,
             locationService: locationService,
             detentKind: .constant(.large),
-            onRouteReady: { _, _ in }
+            onRouteReady: { _, _ in },
+            // PR #87 round 5: required, not defaulted — see `BrowseSearchAreaView`'s own
+            // doc comment on this property. This test doesn't assert on the measured
+            // height, so the no-op is explicit here.
+            onSearchFieldHeightChange: { _ in }
         )
         let host = UIHostingController(rootView: view)
         XCTAssertNotNil(host.view, "View should render without crash when locationService is denied")
@@ -617,6 +625,10 @@ final class AuthGateTests: XCTestCase {
             locationService: locationService,
             detentKind: .constant(.large),
             onRouteReady: { _, _ in },
+            // PR #87 round 5: required, not defaulted — see `BrowseSearchAreaView`'s own
+            // doc comment on this property. This test doesn't assert on the measured
+            // height, so the no-op is explicit here.
+            onSearchFieldHeightChange: { _ in },
             routeService: mockRoute
         )
         let host = UIHostingController(rootView: view)
@@ -669,6 +681,10 @@ final class RouteServicingProtocolTests: XCTestCase {
             locationService: locationService,
             detentKind: .constant(.large),
             onRouteReady: { _, _ in },
+            // PR #87 round 5: required, not defaulted — see `BrowseSearchAreaView`'s own
+            // doc comment on this property. This test doesn't assert on the measured
+            // height, so the no-op is explicit here.
+            onSearchFieldHeightChange: { _ in },
             routeService: mockRoute
         )
         let host = UIHostingController(rootView: view)

@@ -11,9 +11,14 @@
 //      heights (peek + medium). Kevin ruled OQ-3 (spec §0): NOT system `.medium` — a
 //      custom height sized to "search field + action content and no more," measured
 //      from actual rendered content (§0b finding B2), not hardcoded.
-//    - `BrowseSheetSearchAreaHeightPreferenceKey`: the QA §0d C1 fix — how the search
-//      field's own height reaches this container without ever measuring the large-detent-
-//      only `List` content mounted alongside it. See its own doc comment below.
+//    - The search-field height plumbing (`searchAreaBuilder`'s `(CGFloat) -> Void`
+//      parameter, `handleSearchFieldHeightChange` below): the QA §0d C1 fix — how the
+//      search field's own height reaches this container without ever measuring the
+//      large-detent-only `List` content mounted alongside it. PR #87 round 5 replaced the
+//      original `PreferenceKey`-based mechanism with `.onGeometryChange` after a real
+//      on-device readout proved the `PreferenceKey` never delivered a non-zero value — see
+//      the doc comment where `BrowseSheetSearchAreaHeightPreferenceKey` used to live, just
+//      below `BrowseSheetDetentKind`, for the full root-cause writeup.
 //    - `BrowseNavigationSheet`: the sheet's content view. Persistent search-area row on
 //      top (`Views/BrowseSearchAreaView.swift`, Stream C's live entry point — see the note
 //      on `searchArea` below) + the medium-detent action content below it.
@@ -283,45 +288,78 @@ enum BrowseSheetDetentMath {
     }
 }
 
-// MARK: - BrowseSheetSearchAreaHeightPreferenceKey
+// MARK: - Search-field height measurement (PR #87 round 5 — see below for why this is no
+// longer a `PreferenceKey`)
 
-/// FT-20 Stream C fix for QA §0d Finding C1 (`docs/qa/ft20-stream-b-pr86.md`): the height
-/// that drives `BrowseSheetDetentMath.peekHeight`/`.mediumHeight` must come from ONLY the
-/// sheet's always-visible top row (the search field), never from `searchArea`'s full
-/// rendered content.
+/// ⚠️ REMOVED 2026-08-22 (PR #87 round 5) — `BrowseSheetSearchAreaHeightPreferenceKey`, a
+/// `PreferenceKey` this file used to define here. Root-cause note kept in place rather than
+/// silently deleted, matching this file's own convention for `BrowseSheetDetentMath`'s
+/// removed `grabberAndInsetAllowance` — an agent grepping for "why did the search-height
+/// measurement change" needs the full history, not just a diff.
 ///
-/// Why not `.onGeometryChange` on the whole `searchArea` slot (Stream A's original
-/// approach)? Because Stream B's real content (`BrowseSearchAreaView`) conditionally
-/// renders a `List` (recents/suggestions) inside `searchArea` once `detentKind == .large`
-/// — and a system sheet's content is laid out against the FULL `.large`-sized container
-/// regardless of which detent is *currently selected* (the detent only crops what's
-/// exposed) — see `BrowseSheetDetentMath.peekHeight`'s doc comment for the same fact
-/// underpinning the peek-clamp fix. So the moment the user is at `.large`, measuring the
-/// whole `searchArea` view's geometry reports something close to the full container
-/// height, not "the search field alone" — corrupting `peekHeight`/`mediumHeight` for
-/// however long that inflated value is live, exactly the `List`-greedy-sizing trap
-/// `actionColumnHeight` was already built to avoid, reintroduced in a spot Stream A never
-/// anticipated (Stream B's real content didn't exist yet).
+/// **What it was for (still true — read `BrowseSearchAreaView.searchField`'s own doc
+/// comment for the current version of this reasoning):** the height driving
+/// `BrowseSheetDetentMath.peekHeight`/`.mediumHeight` must come from ONLY the sheet's
+/// always-visible top row (the search field), never from `searchArea`'s full rendered
+/// content — `BrowseSearchAreaView` can mount a `List` (recents/suggestions) inside
+/// `searchArea` at `.large`, and a system sheet's content is laid out against the FULL
+/// `.large`-sized container regardless of which detent is *currently selected* (the detent
+/// only crops what's exposed) — see `BrowseSheetDetentMath.peekHeight`'s doc comment for the
+/// same fact underpinning the peek-clamp fix. Measuring the whole `searchArea` slot would
+/// report something close to the full container height at `.large`, corrupting
+/// `peekHeight`/`mediumHeight` — the exact `List`-greedy-sizing trap `actionColumnHeight` was
+/// already built to avoid, reintroduced in a spot Stream A never anticipated. **This
+/// constraint is unchanged by round 5** — the replacement mechanism below still measures
+/// `searchField` alone, never the whole slot.
 ///
-/// The fix: `BrowseSearchAreaView.searchField` (the one node that's ALWAYS visible,
-/// regardless of detent) reports its own intrinsic height directly via this
-/// `PreferenceKey`, which bubbles up through the view tree to `BrowseNavigationSheet.body`
-/// unaffected by whatever large-detent-only content (`List`, place-state card, error
-/// banner) happens to be mounted alongside it. This is the textbook use case for
-/// `PreferenceKey` — communicating a value up an arbitrary intermediate view hierarchy that
-/// the ancestor (`BrowseNavigationSheet`, generic over `SearchArea: View`) has no structural
-/// knowledge of. No `List` is ever measured by this mechanism; `actionColumnHeight`'s own
-/// `@ScaledMetric`-derived "constrain, don't measure" technique is untouched below.
-struct BrowseSheetSearchAreaHeightPreferenceKey: PreferenceKey {
-    static var defaultValue: CGFloat = 0
-    /// Exactly one reporter is expected in the tree (the search field's own `.background`
-    /// probe) — `reduce` still must be total per `PreferenceKey`'s protocol requirement, so
-    /// this takes the newest report rather than summing/maxing, which would silently
-    /// misbehave if a future caller nested a second reporter.
-    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
-        value = nextValue()
-    }
-}
+/// **Why it was removed:** Kevin's `#if DEBUG` readout (requested explicitly for this
+/// purpose after three rounds of guessed height constants) showed `searchH: 0.0` on a real
+/// device, at the medium detent, WITH the search field visibly rendered at full size on
+/// screen — i.e. the field genuinely had non-zero height, and the measurement reported zero
+/// anyway. Every downstream symptom across rounds 1–4 (peek snapping to medium at cold
+/// launch, the "three buttons are peaking" bug, the search field looking squeezed) was
+/// height arithmetic performed on an input that had never once been real.
+///
+/// **Root cause, confirmed against `PreferenceKey`'s documented `reduce` contract, not
+/// guessed:** SwiftUI calls a `PreferenceKey`'s `reduce(value:nextValue:)` for EVERY sibling
+/// branch in the observed subtree during layout, including branches that never call
+/// `.preference(key:value:)` explicitly — those branches still contribute the key's
+/// `defaultValue` (`0` here) to the merge. This file's `reduce` was `value = nextValue()`
+/// ("last write wins"), which is exactly wrong for that contract: whichever branch is
+/// visited LAST in the merge — real reporter or not — wins outright, and a defaultValue
+/// contribution from a later branch silently overwrites a real value from an earlier one.
+/// (This is a documented, general SwiftUI `PreferenceKey` pitfall — Apple's own guidance is
+/// that a `reduce` implementation should make the key's `defaultValue` the reduce operator's
+/// IDENTITY element, e.g. `value = max(value, nextValue())` for a non-negative measurement
+/// like this one, so merging in a defaultValue from an unrelated branch can never clobber a
+/// real one.)
+///
+/// The `#if DEBUG` `.overlay(alignment:) { debugReadout }` this file added in round 4 to get
+/// the readout that found this bug is itself exactly this kind of branch: it renders no
+/// `.preference` of its own, so it silently contributes `defaultValue` (0) to every `reduce`
+/// pass once attached — chained BEFORE `.onPreferenceChange` in `body`, so its 0 could
+/// overwrite `searchField`'s real report on the very passes where SwiftUI happened to visit
+/// it last. (`BrowseSheetSearchAreaHeightPreferenceKeyTests`' `testReduce_withZeroNextValue_
+/// producesZero` / `testReduce_withMultipleContributingProbes_takesTheLastOne`, previously in
+/// `FT20StreamCTests.swift`, pinned this exact "last write wins" behavior as INTENTIONAL — an
+/// earlier round's understandable but incorrect read of the bug report, since `reduce`
+/// invoked directly with hand-fed values can't reproduce a bug that's about HOW MANY TIMES
+/// and in WHAT ORDER SwiftUI itself calls `reduce` across the live tree. Those two tests were
+/// removed along with the `PreferenceKey` rather than "fixed," since there is no `reduce` to
+/// test anymore — see `FT20StreamCTests.swift`'s own note where that class used to live.)
+///
+/// **The fix — not a `reduce` patch, a mechanism swap:** `searchField` now reports its height
+/// via `.onGeometryChange(for:of:action:)` (iOS 17+, this project's deployment target)
+/// straight to a caller-supplied closure — see `BrowseSearchAreaView.searchField`'s doc
+/// comment and `handleSearchFieldHeightChange` below. `.onGeometryChange` reads one named
+/// view's own geometry directly; there is no cross-tree aggregation step at all, so this
+/// entire bug class — not just this instance of it — is structurally impossible with this
+/// API, including against any FUTURE sibling this file's actively-iterated `body` grows
+/// (another debug overlay, another conditional branch). A `reduce(value:nextValue:) { value =
+/// max(value, nextValue()) }` patch would also have fixed today's specific symptom, but
+/// remains a class of bug this file would need to re-derive correctly every time its view
+/// tree shape changes; `.onGeometryChange` removes the class outright, which is why it was
+/// chosen over the smaller patch.
 
 // MARK: - BrowseSheetDetentKind
 
@@ -425,16 +463,19 @@ func browseSheetDetentSelectionBinding(
 /// The `.browseNav` sheet's content.
 ///
 /// **Public interface Stream B/C build against:**
-///   - `searchArea`: a `@ViewBuilder` slot for the sheet's persistent top row. Mounts
+///   - `searchArea`: a `@ViewBuilder` slot for the sheet's persistent top row, called with
+///     this container's own `handleSearchFieldHeightChange` so the built view can report its
+///     search field's live height back up (PR #87 round 5 — see below). Mounts
 ///     `BrowseSearchAreaView`, which now also owns the trailing-edge Settings gear (§0f
 ///     Ruling 1) — this container has no part in that wiring; `ContentView` passes
 ///     `onSettingsTapped` straight into `BrowseSearchAreaView`'s own initializer. The
 ///     peek/medium detent math does NOT measure this slot's overall geometry (QA C1 fix —
-///     see `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment): `BrowseSearchAreaView`'s
-///     own always-visible `searchField` node reports its intrinsic height directly via that
-///     preference key, so the large-detent-only content (recents/suggestions/place state/
-///     error banner) mounted alongside it can never corrupt `peekHeight`/`mediumHeight`,
-///     no matter how tall a `List` inside it gets asked to lay out.
+///     see the doc comment where `BrowseSheetSearchAreaHeightPreferenceKey` used to live, just
+///     below `BrowseSheetDetentKind`): `BrowseSearchAreaView`'s own always-visible
+///     `searchField` node reports its intrinsic height directly via `.onGeometryChange`, so
+///     the large-detent-only content (recents/suggestions/place state/error banner) mounted
+///     alongside it can never corrupt `peekHeight`/`mediumHeight`, no matter how tall a
+///     `List` inside it gets asked to lay out.
 ///   - `onCruiseTapped` / `onParkingGuideTapped`: the action column's two row actions.
 ///     `ContentView` wires these to `enterCruiseMode()` (AC-18 — no intermediate menu) and
 ///     `activeSheet = .parkingGuide` respectively. (Settings is no longer part of this
@@ -452,15 +493,28 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
 
     // MARK: Public interface
     //
-    // `searchArea` stores the already-built view, not a closure — the `@ViewBuilder`
-    // attribute lives on this initializer's parameter instead (the same pattern this
-    // codebase already uses once, `FAQHelpView.swift:76`'s `@ViewBuilder content: () ->
-    // some View`), rather than on the stored property directly. Attaching `@ViewBuilder`
-    // to a stored closure-typed property is real, but version/context-sensitive Swift
-    // syntax this file's author has no toolchain to verify — the init-parameter form is
-    // the unambiguous, universally-supported one.
+    // `searchAreaBuilder` stores the BUILDER closure, not an already-built view — a change
+    // from the original Stream A/B/C shape (`let searchArea: SearchArea`, built once in
+    // `init`), made in PR #87 round 5 specifically so the built view can be handed THIS
+    // instance's own `handleSearchFieldHeightChange` as its height-reporting callback.
+    //
+    // That callback mutates `@State searchAreaHeight`, and `@State`'s storage is only
+    // correctly connected to its persistent per-identity box once SwiftUI has "mounted" a
+    // struct instance and is evaluating its `body` — NOT yet during that instance's own
+    // `init()` (a well-known SwiftUI pitfall: `self` inside `init` is a freshly-constructed
+    // value whose `@State` wrapper hasn't been grafted onto persistent storage yet). Building
+    // `SearchArea` inside `init` — the old shape — worked fine when it only needed static
+    // inputs, but would have captured a stale, disconnected `self` if it needed to reference
+    // `handleSearchFieldHeightChange` there. Calling `searchAreaBuilder(...)` from `body`
+    // instead (see `body` below) always sees the current render pass's live, correctly-wired
+    // `self`. The `@ViewBuilder` attribute stays on the initializer's parameter (the same
+    // pattern this codebase already uses for `FAQHelpView.swift:76`'s `@ViewBuilder content:
+    // () -> some View`, now with a parameter of its own — the same shape `ForEach`'s own
+    // `@ViewBuilder content: (Element) -> Content` uses), rather than on the stored property
+    // directly, for the same "no toolchain to verify a stored-property `@ViewBuilder`" reason
+    // as before.
 
-    let searchArea: SearchArea
+    let searchAreaBuilder: (@escaping (CGFloat) -> Void) -> SearchArea
     let detentKind: BrowseSheetDetentKind
     let onCruiseTapped: () -> Void
     let onParkingGuideTapped: () -> Void
@@ -468,14 +522,14 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     let onMediumHeightChange: (CGFloat) -> Void
 
     init(
-        @ViewBuilder searchArea: () -> SearchArea,
+        @ViewBuilder searchArea: @escaping (@escaping (CGFloat) -> Void) -> SearchArea,
         detentKind: BrowseSheetDetentKind,
         onCruiseTapped: @escaping () -> Void,
         onParkingGuideTapped: @escaping () -> Void,
         onPeekHeightChange: @escaping (CGFloat) -> Void,
         onMediumHeightChange: @escaping (CGFloat) -> Void
     ) {
-        self.searchArea = searchArea()
+        self.searchAreaBuilder = searchArea
         self.detentKind = detentKind
         self.onCruiseTapped = onCruiseTapped
         self.onParkingGuideTapped = onParkingGuideTapped
@@ -561,7 +615,10 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     /// it below a usable touch target again.
     var body: some View {
         VStack(spacing: 0) {
-            searchArea
+            // PR #87 round 5: `searchAreaBuilder` is called HERE, in `body`, not in `init`
+            // — see `searchAreaBuilder`'s own doc comment for why passing
+            // `handleSearchFieldHeightChange` requires a live, mounted `self`.
+            searchAreaBuilder(handleSearchFieldHeightChange)
                 // Defensive floor (Task 2): guarantees `searchArea` is never laid out
                 // shorter than a usable touch target, independent of whatever else shares
                 // this VStack. Belt-and-braces alongside the conditional-rendering fix
@@ -587,43 +644,41 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         }
         #if DEBUG
         // ============================================================================
-        // FT-20 DEBUG READOUT — PR #87 round 4. TO REMOVE: delete this `#if DEBUG`
-        // block (through its matching `#endif` below) and the `debugReadout` computed
-        // property further down (also wrapped in its own `#if DEBUG`/`#endif`). Nothing
-        // else references either. Wrapped in `#if DEBUG` so it can never reach a
-        // TestFlight/App Store build regardless of forgetting to remove it.
+        // FT-20 DEBUG READOUT — PR #87 round 4, repositioned round 5. TO REMOVE: delete
+        // this `#if DEBUG` block (through its matching `#endif` below) and the
+        // `debugReadout` computed property further down (also wrapped in its own `#if
+        // DEBUG`/`#endif`). Nothing else references either. Wrapped in `#if DEBUG` so it
+        // can never reach a TestFlight/App Store build regardless of forgetting to
+        // remove it.
+        //
+        // Round 5: pushed down by `minimumPeekHeight + 12` so it clears `searchField`'s
+        // own row (including its trailing-edge `gearshape` Settings button) instead of
+        // sitting on top of it — Kevin's round-4 screenshot couldn't confirm whether the
+        // gear was actually missing because this readout covered exactly that corner.
+        // Harmless that this now reads `BrowseSheetDetentMath.minimumPeekHeight` as an
+        // offset for an unrelated (debug-only, positional) purpose — it's just "a
+        // reasonable number of points taller than the search row," not a load-bearing
+        // reuse of that constant's actual meaning elsewhere in this file.
+        //
+        // NOT the cause of round 4's `searchH: 0.0` bug despite being the thing that
+        // revealed it — see the doc comment where `BrowseSheetSearchAreaHeightPreferenceKey`
+        // used to live for why THIS overlay, once attached, was able to silently corrupt
+        // that now-removed `PreferenceKey`'s aggregated value. `.onGeometryChange` (the
+        // mechanism `searchField` uses now) has no such cross-tree aggregation step, so this
+        // overlay — wherever it's positioned — cannot affect the measurement anymore.
         // ============================================================================
         .overlay(alignment: .topTrailing) {
             debugReadout
+                .padding(.top, BrowseSheetDetentMath.minimumPeekHeight + 12)
         }
         #endif
-        // FT-20 Stream C / QA C1 fix: read the search field's OWN reported height via the
-        // preference key above, not `searchArea`'s overall geometry — see
-        // `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment for why measuring the
-        // whole slot is unsafe once it can contain a `List`.
-        .onPreferenceChange(BrowseSheetSearchAreaHeightPreferenceKey.self) { newHeight in
-            searchAreaHeight = newHeight
-        }
         // Re-report on every measured change (initial layout, Dynamic Type change, device
-        // rotation) — the preference fires on first layout, so this covers all subsequent
-        // changes too. `actionColumnHeight` is computed (not measured via geometry), so
-        // it's covered by watching its two `@ScaledMetric` inputs instead.
-        //
-        // FT-20 Stream C bugfix (QA live-smoke, two-bug report): every one of these call
-        // sites is guarded by `BrowseSheetDetentMath.isGenuineMeasurement` — see its doc
-        // comment. `searchAreaHeight` resets to `0` every time this view remounts (any
-        // round trip through another `ActiveSheet` case), and reporting that not-yet-
-        // measured value would overwrite `ContentView`'s already-correct, persisted
-        // `browseSheetPeekHeight`/`browseSheetMediumHeight` with the unmeasured-floor
-        // values, only to correct them again a moment later once the real
-        // `GeometryReader` measurement arrives. Skipping the report entirely until a
-        // genuine measurement exists removes that churn outright: the persisted heights
-        // simply hold their last-known-good value across a remount instead of round-
-        // tripping through a degenerate one.
-        .onChange(of: searchAreaHeight) { _, newValue in
-            guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: newValue) else { return }
-            reportHeights()
-        }
+        // rotation). `searchAreaHeight` itself is now set directly by
+        // `handleSearchFieldHeightChange` (passed into `searchAreaBuilder` above), which
+        // also re-reports there — no separate `.onPreferenceChange`/`.onChange(of:
+        // searchAreaHeight)` pair is needed anymore (PR #87 round 5). `actionColumnHeight`
+        // is computed (not measured via geometry), so it's covered by watching its two
+        // `@ScaledMetric` inputs below instead.
         .onChange(of: primaryButtonLabelLineHeight) { _, _ in
             guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: searchAreaHeight) else { return }
             reportHeights()
@@ -636,6 +691,21 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
             guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: searchAreaHeight) else { return }
             reportHeights()
         }
+    }
+
+    /// PR #87 round 5: receives `BrowseSearchAreaView.searchField`'s live-measured height —
+    /// threaded through `searchAreaBuilder` (see that property's doc comment for why this
+    /// must be called from `body`, not captured at `init` time) rather than delivered via a
+    /// `PreferenceKey`. Folds together what `.onPreferenceChange` and the subsequent
+    /// `.onChange(of: searchAreaHeight)` used to do as two separate steps: store the raw
+    /// measurement, then conditionally re-report the computed detent heights.
+    /// `.onGeometryChange` (`BrowseSearchAreaView.searchField`'s side of this) already only
+    /// invokes its action when the measured value actually changes, so there's no longer a
+    /// distinct "did the observed value change" event to react to separately.
+    private func handleSearchFieldHeightChange(_ newHeight: CGFloat) {
+        searchAreaHeight = newHeight
+        guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: newHeight) else { return }
+        reportHeights()
     }
 
     #if DEBUG
@@ -652,8 +722,10 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     // ================================================================================
 
     /// Live readout of the exact values driving this file's peek/medium detent math —
-    /// screenshot this instead of guessing. Positioned top-trailing so it sits clear of
-    /// the search field (top-leading/center) and the action column (bottom half).
+    /// screenshot this instead of guessing. Top-trailing, pushed down by `body`'s
+    /// `.padding(.top:)` on the `.overlay` call site (round 5) so it sits clear of
+    /// `searchField`'s own row — including its trailing-edge `gearshape` — rather than on
+    /// top of it, which is where round 4's un-padded top-trailing placement put it.
     private var debugReadout: some View {
         // `String(format:)` rather than `Text(_:specifier:)` — matches this codebase's
         // existing numeric-formatting convention (`BlockDetailView.swift`,

@@ -191,8 +191,9 @@
 //      the first ~0.35s after block-select entry against a fast tap landing during the
 //      three-overlapping-animations window (confirmationDialog dismiss, sheet force-hide,
 //      `blockSelectBar` appear) — see `enterBlockSelectMode()`'s doc comment.
-//    - QA §0d C1/C2 fixes (`docs/qa/ft20-stream-b-pr86.md`): `BrowseSheetSearchAreaHeightPreferenceKey`
-//      (`BrowseNavigationSheet.swift`) replaces measuring the whole `searchArea` slot, so a
+//    - QA §0d C1/C2 fixes (`docs/qa/ft20-stream-b-pr86.md`): measuring `searchField` alone
+//      (`.onGeometryChange` as of PR #87 round 5 — see `BrowseNavigationSheet.swift`'s
+//      removed-`PreferenceKey` doc comment) rather than the whole `searchArea` slot, so a
 //      `List` mounted inside it at `.large` can never corrupt the peek/medium detent math;
 //      `BrowseSearchAreaView` auto-expands to `.large` when an error arrives so it's never
 //      invisible behind a collapsed sheet.
@@ -1300,7 +1301,13 @@ struct ContentView: View {
     @ViewBuilder
     private var browseNavigationSheetContent: some View {
         BrowseNavigationSheet(
-            searchArea: {
+            // PR #87 round 5: `searchArea` is now a BUILDER closure — `BrowseNavigationSheet`
+            // hands it `onSearchFieldHeightChange`, its own `handleSearchFieldHeightChange`,
+            // so `BrowseSearchAreaView.searchField` can report its live-measured height
+            // straight back up via `.onGeometryChange`, replacing a `PreferenceKey` that
+            // Kevin's on-device `#if DEBUG` readout showed never delivered a real value —
+            // see `BrowseNavigationSheet.swift`'s removed-`PreferenceKey` doc comment.
+            searchArea: { onSearchFieldHeightChange in
                 BrowseSearchAreaView(
                     currentRegion: region,
                     segments: tileLoader.segments,
@@ -1313,6 +1320,7 @@ struct ContentView: View {
                         driveDestinationCoordinate = destination
                         driveModeActive = true
                     },
+                    onSearchFieldHeightChange: onSearchFieldHeightChange,
                     onSettingsTapped: { activeSheet = .settings }
                 )
             },

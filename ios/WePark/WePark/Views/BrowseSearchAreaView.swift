@@ -40,10 +40,17 @@
 //    - QA §0d C2 fix (Stream C): auto-expands `detentKind` to `.large` the instant
 //      `errorMessage` is set, so a search/route failure is never invisible behind a
 //      collapsed sheet — see the `.onChange(of: errorMessage)` handler below.
-//    - QA §0d C1 fix (Stream C): `searchField` reports its OWN intrinsic height via
-//      `BrowseSheetSearchAreaHeightPreferenceKey` rather than the whole view being measured
-//      — see `searchField`'s own doc comment and `BrowseNavigationSheet.swift`'s preference
-//      key doc comment.
+//    - QA §0d C1 fix (Stream C): `searchField` reports its OWN intrinsic height rather than
+//      the whole view being measured — see `searchField`'s own doc comment.
+//    - PR #87 round 5 (2026-08-22, real on-device numbers): the C1 fix above originally used
+//      `.background(GeometryReader { ... }.preference(...))` + a `PreferenceKey`. Kevin's
+//      `#if DEBUG` readout proved that mechanism delivered `0` at every layout pass, on a
+//      real device, with the search field fully rendered — see
+//      `BrowseNavigationSheet.swift`'s removed-`PreferenceKey` doc comment for the full
+//      root-cause writeup (a `PreferenceKey.reduce` ordering bug, not a height-arithmetic
+//      bug). `searchField` now reports its height via `.onGeometryChange(for:of:action:)`
+//      (iOS 17+) directly to a caller-supplied closure instead — no `PreferenceKey`
+//      involved, so the whole bug class is structurally impossible here now.
 //    - §0f Ruling 1 (2026-08-21, third live smoke): `searchField` now carries a small
 //      `gearshape` Settings affordance in its TRAILING EDGE — the Apple Maps avatar
 //      position. `BrowseNavigationSheet`'s medium-detent action content no longer includes
@@ -98,6 +105,20 @@ struct BrowseSearchAreaView: View {
     /// Settings) don't all need updating for an unrelated affordance.
     let onSettingsTapped: () -> Void
 
+    /// PR #87 round 5: fires with `searchField`'s own live-measured height every time it
+    /// changes (first layout, Dynamic Type change, rotation) via `.onGeometryChange` — see
+    /// `searchField`'s own doc comment. `BrowseNavigationSheet` supplies this so the value
+    /// lands directly in ITS `@State searchAreaHeight`, which is what actually drives
+    /// `BrowseSheetDetentMath.peekHeight`/`.mediumHeight`.
+    ///
+    /// Deliberately NOT defaulted to a no-op the way `onSettingsTapped` is: unlike Settings,
+    /// this callback is the ENTIRE height-measurement mechanism — a silently-ignored default
+    /// here would reproduce the exact "nothing ever reports a real height" bug this round
+    /// fixed, just moved one layer up. Existing render-smoke tests that don't care about the
+    /// measured value pass `{ _ in }` explicitly instead, so the no-op is visible at each
+    /// call site rather than implicit.
+    let onSearchFieldHeightChange: (CGFloat) -> Void
+
     // MARK: - Init
 
     init(
@@ -107,6 +128,7 @@ struct BrowseSearchAreaView: View {
         locationService: LocationService,
         detentKind: Binding<BrowseSheetDetentKind>,
         onRouteReady: @escaping (DriveRoute, CLLocationCoordinate2D) -> Void,
+        onSearchFieldHeightChange: @escaping (CGFloat) -> Void,
         onSettingsTapped: @escaping () -> Void = {},
         routeService: (any RouteServicing)? = nil
     ) {
@@ -116,6 +138,7 @@ struct BrowseSearchAreaView: View {
         self.locationService = locationService
         self._detentKind = detentKind
         self.onRouteReady = onRouteReady
+        self.onSearchFieldHeightChange = onSearchFieldHeightChange
         self.onSettingsTapped = onSettingsTapped
         self.routeService = routeService ?? RouteService.shared
     }
@@ -278,19 +301,23 @@ struct BrowseSearchAreaView: View {
         .padding(.vertical, 12)
         // FT-20 Stream C / QA §0d C1 fix: this is the ONLY node in `BrowseSearchAreaView`
         // that reports its height for `BrowseNavigationSheet`'s peek/medium detent math —
-        // never the whole view (which can contain a greedy `List` at `.large`). A
-        // `GeometryReader` in `.background` measures this HStack's own intrinsic size
-        // (padding included) regardless of how much vertical space its parent offers, since
-        // nothing inside it forces vertical expansion — see
-        // `BrowseSheetSearchAreaHeightPreferenceKey`'s doc comment in
-        // `BrowseNavigationSheet.swift` for the full reasoning.
-        .background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: BrowseSheetSearchAreaHeightPreferenceKey.self,
-                    value: proxy.size.height
-                )
-            }
+        // never the whole view (which can contain a greedy `List` at `.large`).
+        // `.onGeometryChange` reads THIS view's own final size (padding included) directly,
+        // regardless of how much vertical space its parent offers, since nothing inside it
+        // forces vertical expansion.
+        //
+        // PR #87 round 5 (2026-08-22): replaces a `.background(GeometryReader { ... }
+        // .preference(...))` + `PreferenceKey` mechanism that, per Kevin's on-device `#if
+        // DEBUG` readout, delivered `0` on every single layout pass despite this field
+        // rendering at full height on screen — a `PreferenceKey.reduce` ordering bug (see
+        // `BrowseNavigationSheet.swift`'s removed-`PreferenceKey` doc comment for the full
+        // root-cause writeup), not anything wrong with what this node measures.
+        // `.onGeometryChange(for:of:action:)` (iOS 17+, this project's deployment target)
+        // reads a single named view's geometry directly with no cross-tree aggregation step
+        // — the entire bug class is structurally impossible with this API, not just
+        // avoided for the current tree shape.
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { newHeight in
+            onSearchFieldHeightChange(newHeight)
         }
     }
 
