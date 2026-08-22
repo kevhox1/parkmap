@@ -471,3 +471,451 @@ this PR)
   unrelated to this PR's code).
 - General compile/warnings/test-pass status — `[COMPILE-UNVERIFIED]` per this PR's own commit
   message; no toolchain on this Linux VPS.
+
+---
+
+## Pass 2 — 2026-08-22 — post-six-rounds-of-live-smoke re-review
+
+**Reviewed:** branch `ios/ft20-stream-c-integration` at `f6786baf` (round 6, tip), diffed
+against Pass 1's reviewed commit `b638dab4..HEAD` (9 commits: 2636ccc6 round 1, f0be3583
+round 2, 56f0d7dc/6482ee84 spec updates, d6fed6d0 round 3, 134442d1 round 4, 8624b07e round
+5, f6786baf round 6, plus Pass 1's own QA doc commit 0cbe96c6), against
+`docs/ft20-bottom-sheet-navigation-spec.md` §0e/§0f/§0g (authoritative, in that supersession
+order), §0/§0d/§5/§6/§7.
+**Environment:** Linux VPS — no Xcode, no simulator, no `xcodebuild`, confirmed unavailable
+before starting. Nothing below is a compile or runtime claim; this is a static code read
+against the spec, the commit history, and — where possible — the exact on-device numbers
+Kevin's `#if DEBUG` readout reported, which this pass independently re-derived by hand.
+**Integrity check:** `git fetch origin && git checkout -B ios/ft20-stream-c-integration
+origin/ios/ft20-stream-c-integration` then `git status`/`git diff HEAD` — clean, matches
+`HEAD` (`f6786baf`) exactly before any finding was drafted.
+**Independence note:** this is a fresh read, not a continuation of Pass 1's session — I did
+not carry forward Pass 1's specific findings as assumed-still-true; each one below was
+re-verified against the current diff.
+
+**Verdict: ✅ MERGE.**
+
+### Summary
+
+Six live-smoke rounds in ~16 hours is a lot of churn to land on the same file without
+accumulating damage, and that was the real question for this pass — not "is round 6 correct
+in isolation" (it plainly is) but "did rounds 1–5 leave orphaned constants, contradictory
+guards, or quietly-hollowed test coverage in their wake." I did not find meaningful damage.
+Every constant introduced across the six rounds (`interSectionGutter`, `peekBreathingRoom`,
+`peekToActionContentMinimumGap`, `minimumPeekHeight`, `isGenuineMeasurement`,
+`actionContentTopOffset`) is still read from a live call site — I grepped each one
+individually rather than sampling. Every constant *removed* along the way
+(`grabberAndInsetAllowance`, `listSectionChromeAllowance`, `peekSafetyMargin`, the
+`PreferenceKey` itself) has zero remaining production references; the only hits are doc
+comments explicitly kept as root-cause history, which is this file's own established
+convention (Stream A already did this for earlier removals) and is genuinely useful, not
+clutter. The `#if DEBUG` readout is completely gone — both blocks, confirmed via `git show
+f6786baf`'s actual diff, not the commit message.
+
+The one thing I verified that surprised me in a good way: I hand-computed
+`BrowseSheetDetentMath.peekHeight`/`.mediumHeight`/`.actionColumnHeight` against the exact
+`searchH: 76.0` input from Kevin's round-6 device readout and got `peek: 80.0`, `medium:
+186.0`, `actionTop: 84.0` — an exact match to all four numbers quoted in spec §0g, including
+`actionColumnHeight` backing out to exactly `102` from the default `@ScaledMetric` values.
+That's independent confirmation the shipped formula is the formula that actually produced the
+confirmed-working on-device screenshot, not just "internally consistent with itself."
+
+Test coverage was **not** hollowed out by the accumulated deletions — see the dedicated
+section below. Every deletion across all three rounds that removed tests
+(`grabberAndInsetAllowance`'s pinning tests, the two `PreferenceKey.reduce` tests, the two
+`SearchFieldHeightMeasurementTests`) is accompanied by an explicit, specific doc comment
+naming what broke, why it was wrong to keep, and — critically — what (if anything) now covers
+the same ground. That is a materially higher bar than "we deleted a failing test," and I
+verified the claims in those comments against the actual remaining suite rather than trusting
+them.
+
+One carried-forward gap from Pass 1 remains open (C2's auto-expand-on-error binding mutation
+still has no test with a real, non-`.constant()` binding), and one pre-existing (not
+introduced by these six rounds) minor spec-table inconsistency surfaced that's worth a
+follow-up look. Neither blocks merge.
+
+### Acceptance criteria re-sweep (post-six-rounds, prioritized per task brief)
+
+- [x] **AC-30** (`MapViewRepresentable.swift` zero-diff) — re-confirmed: `git diff
+  b638dab4..HEAD -- ios/WePark/WePark/MapViewRepresentable.swift` and `git diff
+  origin/main..HEAD -- <same file>` both return 0 lines. None of the six rounds touched it.
+- [x] **AC-22** (Park Until preserves 100% of its behavior) — re-confirmed: the only mention
+  of `parkUntilMode` in the six-round diff is inside `parkingGuideBannerOverlay`'s visibility
+  guard (`!driveModeActive && !parkUntilMode && !blockSelectModeActive`), which is a verbatim
+  carry of the pre-existing `ParkingGuidePromptBanner` gate, relocated wholesale from
+  `bottomSafeAreaContent` to a new floating overlay (round 2, §0e Ruling 2). `ParkUntilPill`,
+  the `clock.fill` toolbar button, and `parkUntilMode`'s own read/write sites are untouched.
+- [x] **AC-28/AC-29a** (no frame shows both sheet and Bottom Dock, entry AND exit) — the
+  funnel Pass 1 verified exhaustively (`.onChange(of: driveModeActive)`, single occurrence;
+  `handleDriveModeAndCamera`; `browseSheetBoundaryTarget`) has **zero diff across all six
+  rounds** — confirmed by re-reading the full `ContentView.swift` diff for this range, which
+  contains only doc-comment updates, the `browseNavigationSheetContent` builder-closure
+  change, and the new `parkingGuideBannerOverlay`. None of that logic is anywhere near the
+  Drive-Mode boundary funnel.
+- [x] **AC-23–27** (FT-15 block-select boundary) — same result: `enterBlockSelectMode()`,
+  `cancelBlockSelectMode()`, `submitBlockSelectReport()`, `blockSelectTapShouldBeIgnored`,
+  and `browseSheetBoundaryTarget` are **byte-identical** across the six-round diff. Only
+  `FT20StreamCTests.swift` gained additional coverage of the pure functions (no production
+  change).
+- [x] **AC-4** (search visible at every detent, peek shows search ONLY) — re-verified against
+  the FINAL code, not the intermediate rounds: `BrowseSearchAreaView.body`'s own
+  large-detent-only gate (`if detentKind == .large`) is unchanged since before Pass 1;
+  `BrowseNavigationSheet.body`'s `showsActionContent` gate (round 4) additionally prevents the
+  action column from mounting at all at peek. Combined, peek shows exactly the search field
+  and nothing else — matches §0g's confirmed device readout description.
+- [~] **AC-6, AC-34/35** — unchanged from Pass 1's assessment; not independently
+  re-verifiable without a device this pass either.
+
+### Priority 1: regression risk from six sequential fixes
+
+**Vestigial constants — none found.** I grepped every constant this file has ever defined
+(current and historically-removed) individually across the whole `ios/WePark` tree:
+
+| Constant | Status | Where it's still load-bearing |
+|---|---|---|
+| `minimumPeekHeight` | **Live** | `peekHeight`'s floor; `searchArea`'s `.frame(minHeight:)`; `ContentView`'s initial `@State` default |
+| `interSectionGutter` | **Live** | `actionContentTopOffset`; the conditionally-mounted `Color.clear.frame(height:)` spacer in `body` |
+| `peekBreathingRoom` | **Live** | `peekHeight`'s additive candidate (round 4 replacement for the removed subtractive `peekSafetyMargin`) |
+| `peekToActionContentMinimumGap` | **Live** | `peekHeight`'s ceiling clamp |
+| `isGenuineMeasurement` | **Live** | all three `reportHeights()` call sites in `body` |
+| `grabberAndInsetAllowance` | **Deleted, zero refs** | doc-comment history only (`BrowseSheetDetentMath`'s removed-constant note) + explanatory comments in test files |
+| `listSectionChromeAllowance` | **Deleted, zero refs** | never referenced anywhere in `HEAD` — confirmed via `grep -rn` across the whole tree, no hits at all (not even in doc comments, unlike its siblings — it was cut cleanly in round 2 alongside the `List`→icon-row anatomy change) |
+| `peekSafetyMargin` | **Deleted, zero refs** | mentioned only in `FT20StreamATests.swift`'s own historical doc comments explaining why old tests were rewritten |
+| `BrowseSheetSearchAreaHeightPreferenceKey` (the whole mechanism) | **Deleted, zero refs** | 70-line root-cause doc comment kept in its place; replaced by `.onGeometryChange` |
+
+No constant is defined-but-unused, and no removed constant has a lingering reference outside
+explanatory prose. This matters specifically because the task flagged this file's history
+("vestigial height constants in THIS file are a real hazard") — six rounds of live-fire
+editing did not leave debris.
+
+**Contradictory belt-and-braces — checked, not found to be contradictory.** The four
+overlapping guards the task asked me to check against each other:
+
+1. `isGenuineMeasurement` (gates *whether* a height gets reported up to `ContentView`'s
+   persistent state)
+2. `.frame(minHeight: minimumPeekHeight)` on `searchArea` (a rendering-time floor on the
+   built view)
+3. Conditional mounting of `actionColumn`/gutter at peek (`showsActionContent`)
+4. `peekHeight`'s hard clamp against `actionContentTopOffset`
+
+These operate at four different points in the pipeline (measurement-reporting, rendering
+floor, tree-membership, arithmetic ceiling) and I could not construct an input where any two
+disagree or one silently masks a defect in another — each is independently sufficient for its
+own failure mode, and the doc comments are explicit that #3 and #4 are now redundant-by-design
+("belt-and-braces," in the code's own words) rather than accidentally overlapping. This is the
+opposite of round 1's original bug (the old exact-match `PresentationDetent` classification,
+which was a *single* mechanism silently masking the real defect) — I specifically looked for a
+NEW instance of that pattern and didn't find one. The one thing I'd flag as worth watching
+(not a defect): `.frame(minHeight:)` on `searchArea` (item #2) and `peekHeight`'s floor logic
+(item #4, via `minimumPeekHeight`) both encode "64pt" as the realistic minimum via the *same*
+named constant, so they can't silently drift apart — a genuine strength, not a risk, since it
+was a `24`-vs-`12` version of exactly this kind of drift that caused two of the six rounds.
+
+**Debug overlay — confirmed fully gone.** `git show f6786baf -- BrowseNavigationSheet.swift`
+shows both `#if DEBUG` blocks (the `.overlay` call site and the `debugReadout` property)
+removed as a single clean diff, and a repo-wide `grep -n "^#if DEBUG"` against
+`BrowseNavigationSheet.swift`, `BrowseSearchAreaView.swift`, and `FT20StreamCTests.swift`
+returns zero matches — every remaining occurrence of the string `"#if DEBUG"` in those three
+files is inside a `///` doc comment narrating the removal, not a live directive. `ContentView.swift`'s
+own pre-existing, unrelated `#if DEBUG` blocks (untouched by this PR) and
+`MockRealtimePinChannel`/similar test doubles elsewhere in the codebase are exactly the
+legitimate `#if DEBUG` usage the task said not to flag, and I didn't.
+
+### Priority 2: test honesty after the deletions — coverage was NOT quietly hollowed out
+
+Test-count arithmetic, verified independently (not trusting the commit messages):
+
+| File | b638dab4 (Pass 1) | HEAD (Pass 2) | Δ |
+|---|---|---|---|
+| `FT20StreamATests.swift` | 18 | 33 | +15 |
+| `FT20StreamCTests.swift` | 6 | 15 | +9 |
+| `BrowseSearchAreaViewTests.swift` | 5 | 5 | 0 (init-signature update only) |
+| `W85cTests.swift` | 48 | 48 | 0 (init-signature update only) |
+| **Whole suite** (`git grep -c "^\s*func test"`, all `WeParkTests/*.swift`) | **780** | **804** | **+24** |
+
+`780 + 24 = 804` — the expected count in the task brief, confirmed exactly, not approximately.
+
+Each of the three test-removal events across the six rounds is individually justified and I
+verified the justification against the code, not just the comment:
+
+1. **`grabberAndInsetAllowance` pinning tests (round 2→3), deleted.** These tested a formula
+   (`peekHeight == searchAreaHeight + 12`) that was itself replaced. The replacement invariant
+   (`BrowseSheetPeekInvariantTests.testPeekHeight_isStrictlyLessThanActionContentTopOffset_acrossRealisticDynamicTypeRange`,
+   sweeping `searchAreaHeight` from 40 to 400 in steps of 4) is a **stronger** test than what it
+   replaced: it pins the *outcome* ("peek can never reveal the action content") independent of
+   the internal formula, so it can't go stale the way the deleted formula-level test did when
+   the formula changed twice. I confirmed this test exists at `FT20StreamATests.swift:270` and
+   its assertion is exactly what the doc comment claims.
+2. **`BrowseSheetSearchAreaHeightPreferenceKeyTests`' two `reduce` tests (round 5), deleted.**
+   These are the ones the task specifically flagged as having "pinned the broken last-write-
+   wins behavior as intentional." I read the removal comment
+   (`FT20StreamCTests.swift:249-276`) and independently agree with its self-critical framing:
+   calling `reduce` directly with hand-fed values genuinely cannot exercise the bug (which is
+   about how many times and in what order SwiftUI itself invokes `reduce` across a live view
+   tree, not about `reduce`'s own per-call arithmetic) — this is not a rationalization, it's an
+   accurate description of why that test *structurally could not* have caught the bug even
+   though it was "passing." No replacement PreferenceKey-level test exists, correctly, because
+   the mechanism it tested no longer exists.
+3. **`SearchFieldHeightMeasurementTests` (round 5→6), deleted.** This is the most defensible of
+   the three deletions and the one I scrutinized hardest, since "the test doesn't work, delete
+   it" is exactly the kind of claim that deserves skepticism. The stated reason
+   (`UIHostingController` + `layoutIfNeeded()` doesn't reliably drive `.onGeometryChange` off a
+   real window) is a real, previously-documented category of SwiftUI testing limitation, not
+   invented for this PR — and the falsification evidence given (both tests failed with
+   `reportedHeight == 0.0` on Kevin's Mac on the exact same build whose on-device readout
+   showed a real `76.0`) is about as strong as evidence gets without me being able to run it
+   myself. I could not run this test to confirm it fails on this machine (no Xcode/simulator),
+   so this specific claim rests on Kevin's Mac run, not my own verification — flagged as such,
+   not silently accepted.
+
+**What is genuinely, honestly uncovered by any unit test after all six rounds (both this pass
+and the code's own doc comments agree on this):** *"does `.onGeometryChange` actually deliver
+a non-zero measurement in the live, on-screen app"* — a question about whether a real SwiftUI
+render pass ran, which is not expressible as a headless XCTest on this SDK. That gap is real,
+named explicitly in the removal comment, and is covered by live-device smoke (round 6's
+confirmed readout) rather than a repeatable automated test — this is a legitimate, disclosed
+trade-off, not a silently-dropped guarantee. It is the same category of gap Pass 1's Finding #1
+already flagged for C1's mechanism generally; six rounds later it is *narrower* (the pure
+height-math half is now thoroughly covered by `BrowseSheetPeekInvariantTests`, and the
+"does it fire" half has a real device confirmation with numbers that independently check out
+against the formula) but not fully closed.
+
+**Pass 1's Finding #1, C2 half, is still open — unaddressed across all six rounds.**
+`BrowseSearchAreaViewTests.swift` still constructs every render-smoke test with
+`detentKind: .constant(detentKind)` (confirmed via `grep -n "detentKind"` — every call site).
+No test in this PR's entire six-round history uses a real, mutable binding to assert that
+setting `errorMessage` actually flips `detentKind` to `.large` (the C2 fix). This is not new —
+Pass 1 flagged the identical gap — but I checked whether any of the six rounds happened to
+close it as a side effect (several of them touched adjacent code) and none did. Downgraded
+from Pass 1's 🟡 to a 🟢 here only because it's unchanged risk, not a new or worsened one, and
+because Kevin's live smoke checklist already exercises the search-error-at-peek scenario
+directly per the PR's own process.
+
+### Priority 3: spec conformance against §0f/§0g (final rulings)
+
+- [x] Search field with trailing `gearshape` — `BrowseSearchAreaView.searchField`'s
+  `settingsButton`, in the outer `HStack`'s trailing position, wired to `onSettingsTapped`
+  (`ContentView.swift` sets `activeSheet = .settings`, the same target the deleted
+  `gearButtonOverlay` used).
+- [x] One primary `car.fill` + "Find a Spot" — `BrowseNavigationSheet.actionColumn`'s first
+  child, `.buttonStyle(.borderedProminent)`, full-width, calling `onCruiseTapped` →
+  `enterCruiseMode()` — confirmed the internal identifier chain
+  (`enterCruiseMode()`/`driveModeStyle`/`.cruise`/`onCruiseTapped`) is completely unrenamed,
+  a label-only change as §0f Ruling 2 requires. `car.front.waves.right.fill` (the invalid SF
+  Symbol) has zero remaining references in any `.swift` file — only in historical spec/design
+  docs, which is correct (those are dated records of what was originally asked for, not live
+  instructions).
+- [x] Quiet "New to parking?" link — `actionColumn`'s second child, `.buttonStyle(.plain)`,
+  `.foregroundStyle(.secondary)`, `.underline()`, visually subordinate as specced.
+- [x] Peek shows search ONLY — confirmed above (AC-4 re-sweep).
+- [x] Internal Cruise identifiers unrenamed — confirmed above.
+- [x] No new hardcoded colors (AC-32) — the two new color usages added across these six rounds
+  (`BrowseSearchAreaView.searchField`'s `.background(Color(.systemGray4), ...)` and
+  `.strokeBorder(Color(.separator), ...)`) are both semantic/system `UIColor`-backed values
+  (`Color(.systemGray4)`, `Color(.separator)`), not new hex/RGB literals — same category as
+  every other `Color(.something)` usage already in this codebase. `.presentationBackground(.regularMaterial)`
+  is a system material, not a color. No violation.
+- **Not independently verified by me, only by the code's own claim + Kevin's device
+  confirmation:** whether `.systemGray4` actually reads as sufficiently higher-contrast than
+  `.secondarySystemGroupedBackground` against the sheet's blurred material *in direct
+  sunlight* — this is S6's carried-forward, device-only risk, unrelated to correctness of the
+  code change itself.
+
+### Priority 4: original §7 AC sweep — re-verified after six rounds, results unchanged from Pass 1
+
+Re-ran the full sweep rather than trusting Pass 1's checklist was still accurate; results are
+identical to Pass 1 for every AC not already covered above in the prioritized re-sweep
+(AC-1/2/3/5/7-21/31/32/33 all hold, same reasoning as Pass 1, none touched by these six
+rounds' diffs). No AC regressed.
+
+### Priority 5: can anything strand the user with no sheet, or an undismissable one?
+
+**No new mechanism introduced across these six rounds changes this answer from Pass 1's
+"no."** The only net-new piece of UI added since Pass 1 is `parkingGuideBannerOverlay` (round
+2), and it's purely additive/cosmetic — it doesn't touch `activeSheet`, doesn't gate any
+dismiss path, and its own visibility condition is a straight carry of the pre-existing banner
+gate. I checked whether its `.frame(maxWidth: .infinity, maxHeight: .infinity)` container
+could intercept touches meant for the map or the sheet's grabber underneath it: it's a plain
+`VStack { Spacer(); ParkingGuidePromptBanner(...) }` with no background modifier on the
+container itself, matching the pre-existing `ToastHostView` overlay's identical pattern one
+sibling above it in the same `ZStack` — SwiftUI does not hit-test empty (backgroundless)
+regions of a container, only its actual rendered content, so this should not block taps to
+what's underneath. **Not independently confirmed on a device this pass** (this specific claim
+about SwiftUI hit-testing behavior for `Spacer()`-only regions is standard SwiftUI behavior,
+not something unique to this PR, and the identical pre-existing `ToastHostView` pattern has
+presumably already been live-tested); flagged as a device-checkable item below rather than
+silently assumed.
+
+### Findings
+
+#### 🔴 Blocking
+
+None found.
+
+#### 🟡 Significant
+
+None found this pass. Pass 1's one 🟡 (C1/C2 zero regression coverage) is downgraded — see
+Priority 2 above for the full reasoning: C1's mechanism now has strong indirect confirmation
+(an exact hand-verified match between the pure-math formula and Kevin's real device readout,
+plus thorough invariant-test coverage of the arithmetic itself) and an honestly-documented,
+narrowly-scoped remaining gap ("does a real render pass fire `.onGeometryChange`" — not
+testable on this SDK, covered by live smoke instead). C2's gap is unchanged, not worsened.
+
+#### 🟢 Minor / nit
+
+**#3 — The medium-detent action column (`actionColumn`: "Find a Spot" + "New to parking?")
+also mounts at the LARGE detent, not just medium — `BrowseSheetDetentKind.showsActionContent`
+is `self != .peek`, true for both `.medium` and `.large`.** This predates Pass 1's reviewed
+commit (it was already true of the original `List`-based `actionList` at Stream A) and is
+**not introduced or worsened by any of these six rounds** — but three of the six rounds
+(2, 3, 4) rewrote this exact gating logic and none of them revisited whether `.large` should
+be included. Spec §4.2's detent table describes Large as showing only "search field (focused)
++ suggestions list or recent-destinations list... or the resolved 'place' state" — no mention
+of the action column. In practice this means: while a user is actively viewing search
+suggestions/recents at the large detent, the "Find a Spot" primary button and "New to
+parking?" link also render below that list. Round 6's confirmed device readout says "the
+large detent also renders correctly," which is consistent with this being intentional and
+already seen/accepted by Kevin, but doesn't unambiguously confirm he was looking at (or
+approves of) the action column appearing under the suggestions list specifically. Not a
+regression, not blocking — worth a device screenshot at `.large` with a non-empty query to
+settle whether this is deliberate or an oversight that survived three rewrites of the same
+conditional.
+- **Where:** `BrowseNavigationSheet.swift:390` (`showsActionContent`).
+- **Owner:** `@ios-engineer` (confirm intent against Kevin, or scope the gate to
+  `self == .medium` if it's not).
+
+**#4 — C2 (auto-expand-to-`.large`-on-error) still has no test with a real, mutable
+`detentKind` binding, unchanged across all six rounds.** Carried forward from Pass 1's Finding
+#1; not newly introduced, not worsened, but also not addressed despite several of the six
+rounds touching adjacent code in the same file.
+- **Where:** `ios/WePark/WeParkTests/BrowseSearchAreaViewTests.swift` — every test still uses
+  `detentKind: .constant(...)`.
+- **Owner:** `@ios-engineer`, low priority — Kevin's live smoke already exercises the
+  search-error-at-peek scenario per the PR checklist.
+
+**#5 — `gearButtonVisible`/`parkingGuideButtonVisible` remain dead code, unchanged from Pass
+1's Finding #2.** Same file/lines, same reasoning, still not blocking. Carried forward, not
+re-litigated in depth this pass.
+
+#### 💡 Out of scope (logged, not fixed)
+
+- Whether `.systemGray4` + hairline separator actually reads well in direct sunlight against
+  the sheet's blurred `.regularMaterial` — S6's carried-forward risk, explicitly a device-only
+  question, unrelated to this pass's code-correctness review.
+- Whether `SearchFieldHeightMeasurementTests` genuinely could not be made to work with a
+  differently-constructed harness (e.g. a real, key `UIWindow` + hosting controller) — I did
+  not attempt to re-derive this myself (no toolchain), and I'm relying on Kevin's Mac-run
+  failure evidence as reported in the round-6 commit message and spec §0g. If a future agent
+  is tempted to second-guess this deletion, the removal comment itself
+  (`FT20StreamCTests.swift:278-317`) already anticipates and answers that.
+- The 32×32pt Settings gear tap target (below Apple HIG's 44×44 minimum) — already
+  self-flagged in `BrowseSearchAreaView.swift`'s own doc comment as a deliberate, disclosed
+  trade-off pending VoiceOver/Switch Control testing. Not new this pass; noted for the
+  eventual accessibility sweep, not a finding against this PR.
+- `parkingGuideBannerOverlay`'s hit-testing behavior (Priority 5) — reasoned to be safe by
+  analogy to the pre-existing `ToastHostView` pattern, not independently confirmed on a
+  device this pass.
+
+### Smoke tests run (Pass 2)
+
+- `git fetch origin && git checkout -B ios/ft20-stream-c-integration
+  origin/ios/ft20-stream-c-integration`, then `git status` / `git diff HEAD` — confirmed clean,
+  matches `HEAD` (`f6786baf`) before drafting any finding.
+- `git log --oneline b638dab4..HEAD` — enumerated and cross-referenced all 9 commits (Pass 1's
+  own QA doc + 6 fix rounds + 2 spec-only doc commits) against the task brief's own numbered
+  history; confirmed the mapping (round 1 = `2636ccc6`, round 2 = `f0be3583`, round 3 =
+  `d6fed6d0`, round 4 = `134442d1`, round 5 = `8624b07e`, round 6 = `f6786baf`).
+- Read `docs/ft20-bottom-sheet-navigation-spec.md` §0/§0b/§0c/§0d/§0e/§0f/§0g/§5/§6/§7 in full
+  (not skimmed) before reading any code, to establish the correct supersession order (§0f > §0e
+  > S1; §0g explains WHY §0f's peek fix still didn't fully work until round 5/6).
+- Read the full, current `BrowseNavigationSheet.swift` (774 lines) and `BrowseSearchAreaView.swift`
+  (817 lines) top to bottom.
+- `git diff b638dab4..HEAD -- ContentView.swift` read in full — confirmed the only production
+  changes are `browseNavigationSheetContent`'s builder-closure/`.presentationBackground`
+  update and the new `parkingGuideBannerOverlay`; confirmed via direct read (not assumption)
+  that none of AC-28/29a's funnel or AC-23-27's block-select functions appear anywhere in this
+  diff.
+- `git diff b638dab4..HEAD -- MapViewRepresentable.swift` and `git diff origin/main..HEAD --
+  MapViewRepresentable.swift` — both empty (AC-30 re-confirmed at two different base points).
+- Grepped every `BrowseSheetDetentMath`/`BrowseSheetDetentKind` constant and function
+  (current and historically-removed) individually across the whole `ios/WePark` tree to build
+  the vestigial-constant table in Priority 1 — not sampled, all nine constants/mechanisms
+  checked.
+- `grep -n "^#if DEBUG"` (anchored, to exclude doc-comment mentions of the string) against
+  `BrowseNavigationSheet.swift`, `BrowseSearchAreaView.swift`, `FT20StreamCTests.swift` — zero
+  matches, confirming the debug overlay is fully gone, not just renamed/relocated.
+- Hand-computed `BrowseSheetDetentMath.peekHeight(76)`, `.actionContentTopOffset(76)`, and
+  `.actionColumnHeight(22, 14, 10, 18, 12)` against the current formulas and confirmed each
+  result (`80`, `84`, `102`) exactly matches spec §0g's quoted on-device readout
+  (`searchH: 76.0, peek: 80.0, medium: 186.0, actionTop: 84.0` — `84 + 102 = 186`) — the
+  strongest single piece of evidence in this pass that the shipped math is genuinely correct,
+  not merely self-consistent.
+- `git grep -c "^\s*func test"` against `b638dab4` and `HEAD` for every file in
+  `ios/WePark/WeParkTests/*.swift`, summed both ways (780 → 804, Δ+24) and per-file for the
+  four files with any diff in this range (`FT20StreamATests.swift` +15,
+  `FT20StreamCTests.swift` +9, `BrowseSearchAreaViewTests.swift`/`W85cTests.swift` both 0 net
+  — confirmed both of those two are init-signature-only changes by reading their diffs).
+- Read all three test-removal doc comments in `FT20StreamCTests.swift` in full
+  (`grabberAndInsetAllowance`'s removal note, the `PreferenceKey.reduce` tests' removal note,
+  `SearchFieldHeightMeasurementTests`' removal note) and independently assessed each
+  justification against what I could verify from the code, rather than accepting the stated
+  reasoning at face value.
+- Read `FT20StreamATests.swift`'s `BrowseSheetPeekInvariantTests` and
+  `BrowseSheetActionColumnHeightTests` in full to confirm the replacement coverage claimed in
+  the removal comments genuinely exists and genuinely tests what it claims to.
+- `grep -rn "BrowseSearchAreaView(" ios/WePark` and `grep -rn "BrowseNavigationSheet(" ios/WePark`
+  — enumerated every call site (5 and 1 respectively) and confirmed each supplies the new
+  required parameters (`onSearchFieldHeightChange`, `detentKind`) introduced across these six
+  rounds — no orphaned/stale call site found.
+- `grep -n "detentKind"` in `BrowseSearchAreaViewTests.swift` — confirmed every test still uses
+  `.constant(...)`, the basis for Finding #4.
+- Checked `git branch --show-current` before drafting — `ios/ft20-stream-c-integration` —
+  and again immediately before committing this report, to guard against commit-target drift.
+
+### What's working
+
+- **Six rounds of live-fire editing under real time pressure did not leave the file worse than
+  it started.** This is the actual headline finding of this pass: no vestigial constants, no
+  contradictory guards, no hollowed-out test coverage, no orphaned debug scaffolding. That's a
+  genuinely good outcome for this failure mode, not a given one.
+- **The round-6 root-cause diagnosis (PreferenceKey `reduce` contract violation) is correct,
+  well-cited against the actual Apple-documented contract, and the fix is structurally
+  superior, not just a patch** — `.onGeometryChange` has no cross-tree aggregation step, so
+  this exact bug class (an unrelated sibling silently contributing a defaultValue that
+  clobbers a real measurement) is not just fixed but eliminated as a possibility.
+- **The formula genuinely reproduces the confirmed on-device numbers** — verified by hand,
+  not by trusting the doc comment. This is about as strong a piece of independent evidence as
+  a Linux-VPS-bound QA pass can produce for a geometry claim.
+- **Test-deletion discipline across all three removal events is unusually good.** Every
+  deletion names the specific mechanism that was wrong, why it was wrong, and what (if
+  anything) remains as coverage — this is a meaningfully higher bar than "we deleted a
+  failing/obsolete test," and it held up to independent scrutiny in this pass, not just to a
+  re-read of the comments.
+- **The doc-comment-as-history convention this file established in Stream A survived six
+  rounds of pressure intact** — every removed mechanism/constant has a root-cause note in its
+  former place, which is exactly what let me verify Priority 1's "no vestigial debris" finding
+  without a device.
+
+### Merge recommendation
+
+**MERGE.** No blocking findings across either pass. The two 🟢 carry-forwards (C2 test gap,
+the large-detent action-column question) and the one dead-code nit are appropriate follow-up
+items, not merge conditions — none of them represent a state where the shipped feature is
+broken, unsafe, or contradicts a settled Kevin ruling. The device-only items below are the
+actual remaining gate, and they're Kevin's to close on his Mac, not something further static
+review on this VPS can resolve.
+
+### What only Kevin's live smoke can settle (Pass 2 additions to Pass 1's list)
+
+- Whether `.systemGray4` + hairline separator reads acceptably in direct sunlight (S6,
+  unresolved since Stream A).
+- Whether the large-detent action-column question (Finding #3) is something Kevin has already
+  seen and is fine with, or an oversight — a fresh screenshot at `.large` with a non-empty
+  search query would settle it in one look.
+- `parkingGuideBannerOverlay`'s actual on-screen behavior — does it correctly clear the peek
+  detent under Dynamic Type, and does it avoid intercepting taps meant for the map/sheet
+  beneath it (Priority 5) — reasoned sound by analogy to `ToastHostView`, not device-confirmed
+  this pass.
+- Everything already carried over from Pass 1's own list (AC-28/29a frame-level animation
+  timing, the 0.35s block-select constant, AX3/Dynamic Type rendering, general
+  compile/test-pass status — `[COMPILE-UNVERIFIED]` on this environment for both passes).
