@@ -642,36 +642,6 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
                     .frame(height: actionColumnHeight)
             }
         }
-        #if DEBUG
-        // ============================================================================
-        // FT-20 DEBUG READOUT — PR #87 round 4, repositioned round 5. TO REMOVE: delete
-        // this `#if DEBUG` block (through its matching `#endif` below) and the
-        // `debugReadout` computed property further down (also wrapped in its own `#if
-        // DEBUG`/`#endif`). Nothing else references either. Wrapped in `#if DEBUG` so it
-        // can never reach a TestFlight/App Store build regardless of forgetting to
-        // remove it.
-        //
-        // Round 5: pushed down by `minimumPeekHeight + 12` so it clears `searchField`'s
-        // own row (including its trailing-edge `gearshape` Settings button) instead of
-        // sitting on top of it — Kevin's round-4 screenshot couldn't confirm whether the
-        // gear was actually missing because this readout covered exactly that corner.
-        // Harmless that this now reads `BrowseSheetDetentMath.minimumPeekHeight` as an
-        // offset for an unrelated (debug-only, positional) purpose — it's just "a
-        // reasonable number of points taller than the search row," not a load-bearing
-        // reuse of that constant's actual meaning elsewhere in this file.
-        //
-        // NOT the cause of round 4's `searchH: 0.0` bug despite being the thing that
-        // revealed it — see the doc comment where `BrowseSheetSearchAreaHeightPreferenceKey`
-        // used to live for why THIS overlay, once attached, was able to silently corrupt
-        // that now-removed `PreferenceKey`'s aggregated value. `.onGeometryChange` (the
-        // mechanism `searchField` uses now) has no such cross-tree aggregation step, so this
-        // overlay — wherever it's positioned — cannot affect the measurement anymore.
-        // ============================================================================
-        .overlay(alignment: .topTrailing) {
-            debugReadout
-                .padding(.top, BrowseSheetDetentMath.minimumPeekHeight + 12)
-        }
-        #endif
         // Re-report on every measured change (initial layout, Dynamic Type change, device
         // rotation). `searchAreaHeight` itself is now set directly by
         // `handleSearchFieldHeightChange` (passed into `searchAreaBuilder` above), which
@@ -707,54 +677,6 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: newHeight) else { return }
         reportHeights()
     }
-
-    #if DEBUG
-    // ================================================================================
-    // FT-20 DEBUG READOUT — PR #87 round 4, requested explicitly so the NEXT round (if
-    // there is one) is driven by real on-device numbers instead of a 5th guess. Small,
-    // high-contrast, monospaced overlay of the live values driving peek/medium sizing.
-    //
-    // TO REMOVE: delete this entire `#if DEBUG` ... `#endif` block, plus the
-    // `.overlay(alignment: .topTrailing) { debugReadout }` call (also `#if DEBUG`-
-    // wrapped) in `body` above. Nothing else in this file or `ContentView.swift`
-    // references `debugReadout`. Both are `#if DEBUG`-gated so this can never ship in
-    // a TestFlight/release build even if the deletion is forgotten.
-    // ================================================================================
-
-    /// Live readout of the exact values driving this file's peek/medium detent math —
-    /// screenshot this instead of guessing. Top-trailing, pushed down by `body`'s
-    /// `.padding(.top:)` on the `.overlay` call site (round 5) so it sits clear of
-    /// `searchField`'s own row — including its trailing-edge `gearshape` — rather than on
-    /// top of it, which is where round 4's un-padded top-trailing placement put it.
-    private var debugReadout: some View {
-        // `String(format:)` rather than `Text(_:specifier:)` — matches this codebase's
-        // existing numeric-formatting convention (`BlockDetailView.swift`,
-        // `ParkingRulesEngine.swift`) and avoids relying on an unverified
-        // `Text`/`CGFloat` `specifier:` overload on a machine with no compiler to check it.
-        let peek = BrowseSheetDetentMath.peekHeight(searchAreaHeight: searchAreaHeight)
-        let medium = BrowseSheetDetentMath.mediumHeight(
-            searchAreaHeight: searchAreaHeight,
-            actionColumnHeight: actionColumnHeight,
-            maxAllowedHeight: Self.maxAllowedMediumHeight
-        )
-        let actionTop = BrowseSheetDetentMath.actionContentTopOffset(searchAreaHeight: searchAreaHeight)
-        return VStack(alignment: .trailing, spacing: 1) {
-            Text("FT20 DEBUG")
-                .fontWeight(.bold)
-            Text("kind: \(String(describing: detentKind))")
-            Text("searchH: \(String(format: "%.1f", searchAreaHeight))")
-            Text("peek: \(String(format: "%.1f", peek))")
-            Text("medium: \(String(format: "%.1f", medium))")
-            Text("actionTop: \(String(format: "%.1f", actionTop))")
-        }
-        .font(.system(size: 9, weight: .semibold, design: .monospaced))
-        .foregroundStyle(.white)
-        .padding(6)
-        .background(Color.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 6))
-        .padding(6)
-        .allowsHitTesting(false)
-    }
-    #endif
 
     // MARK: - §0f Ruling 1: the rebuilt medium-detent action column
 

@@ -20,9 +20,6 @@
 //
 
 import XCTest
-import SwiftUI
-import MapKit
-import CoreLocation
 @testable import WePark
 
 // MARK: - browseSheetBoundaryTarget(driveModeBecameActive:) Tests
@@ -273,87 +270,48 @@ final class BrowseSheetActionColumnHeightTests: XCTestCase {
 // `BrowseSheetDetentKind`) for the full root-cause writeup and citations.
 //
 // The `PreferenceKey` this class tested no longer exists — `searchField` reports its height
-// via `.onGeometryChange` now, which has no `reduce`/cross-tree-aggregation step to test.
-// Replacement coverage, exercising the ACTUAL mechanism (not hand-fed values in isolation),
-// is `SearchFieldHeightMeasurementTests` below.
+// via `.onGeometryChange` now, which has no `reduce`/cross-tree-aggregation step to test. A
+// round-5 attempt at replacement coverage exercising the ACTUAL mechanism
+// (`SearchFieldHeightMeasurementTests`) lived immediately below this comment for one round —
+// see that section's own removal note (round 6) for why it was deleted rather than fixed.
 
-// MARK: - Search-field height measurement Tests (PR #87 round 5)
+// MARK: - Search-field height measurement — SearchFieldHeightMeasurementTests REMOVED
+// 2026-08-22 (PR #87 round 6)
 //
-// Exercises the REPLACEMENT mechanism end to end: `BrowseSearchAreaView.searchField`'s real
-// `.onGeometryChange` firing through an actual (headless) SwiftUI layout pass — not a
-// hand-fed value — feeding into `BrowseSheetDetentMath.peekHeight`'s existing "fully
-// contains the search field" invariant (already covered at the pure-math level by
-// `FT20StreamATests.swift`'s `BrowseSheetPeekInvariantTests
-// .testPeekHeight_fullyContainsTheSearchArea_acrossRealisticDynamicTypeRange`; this suite's
-// job is closing the gap THAT test can't cover — "does a real measurement ever reach the
-// math in the first place," which is exactly where round 1–4's bug lived).
+// Round 5 added `SearchFieldHeightMeasurementTests` here to exercise the REPLACEMENT
+// mechanism end to end: `BrowseSearchAreaView.searchField`'s real `.onGeometryChange` firing
+// through a `UIHostingController` + `layoutIfNeeded()` headless layout pass, asserting a
+// non-zero reported height and that `BrowseSheetDetentMath.peekHeight` fully contains it.
+// Both tests were flagged `[COMPILE-UNVERIFIED / NEEDS ON-MAC XCTEST CONFIRMATION]` at the
+// time — this machine has no Xcode/simulator to confirm `UIHostingController` +
+// `layoutIfNeeded()` actually drives `.onGeometryChange` synchronously off-screen.
 //
-// [COMPILE-UNVERIFIED / NEEDS ON-MAC XCTEST CONFIRMATION] `UIHostingController` +
-// `layoutIfNeeded()` off a live window is a commonly-used pattern for forcing SwiftUI
-// `GeometryReader`/`.onGeometryChange` effects to fire in XCTest, but this machine has no
-// Xcode/simulator to confirm it actually fires synchronously here — if it doesn't, Kevin/QA
-// will see this fail on first run on the Mac, not silently pass while testing nothing.
-@MainActor
-final class SearchFieldHeightMeasurementTests: XCTestCase {
-
-    private let region = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(latitude: 40.7527, longitude: -73.9772),
-        span: MKCoordinateSpan(latitudeDelta: 0.04, longitudeDelta: 0.04)
-    )
-
-    func testSearchField_onGeometryChange_reportsANonZeroHeight() {
-        var reportedHeight: CGFloat = 0
-        let view = BrowseSearchAreaView(
-            currentRegion: region,
-            segments: [],
-            userLocation: nil,
-            locationService: LocationService(),
-            detentKind: .constant(.peek),
-            onRouteReady: { _, _ in },
-            onSearchFieldHeightChange: { reportedHeight = $0 }
-        )
-        let host = UIHostingController(rootView: view)
-        host.view.frame = CGRect(x: 0, y: 0, width: 390, height: 200)
-        host.view.setNeedsLayout()
-        host.view.layoutIfNeeded()
-
-        XCTAssertGreaterThan(
-            reportedHeight, 0,
-            "This is the exact regression round 5 fixes: a fully-rendered search field " +
-            "(non-zero on screen) must report a non-zero measured height. `searchH: 0.0` " +
-            "on a real device with the field visibly rendered was the round-4 bug report " +
-            "this test guards against — see BrowseNavigationSheet.swift's removed-" +
-            "PreferenceKey doc comment."
-        )
-    }
-
-    func testSearchField_realMeasurement_producesAPeekHeightThatFullyContainsIt() {
-        var reportedHeight: CGFloat = 0
-        let view = BrowseSearchAreaView(
-            currentRegion: region,
-            segments: [],
-            userLocation: nil,
-            locationService: LocationService(),
-            detentKind: .constant(.peek),
-            onRouteReady: { _, _ in },
-            onSearchFieldHeightChange: { reportedHeight = $0 }
-        )
-        let host = UIHostingController(rootView: view)
-        host.view.frame = CGRect(x: 0, y: 0, width: 390, height: 200)
-        host.view.setNeedsLayout()
-        host.view.layoutIfNeeded()
-
-        // Only meaningful once we know a real measurement actually arrived — otherwise
-        // this degenerates into the pure-math test `BrowseSheetPeekInvariantTests` already
-        // covers with a hardcoded input, which proves nothing new about the mechanism.
-        XCTAssertGreaterThan(reportedHeight, 0, "Precondition: a real measurement must land first.")
-
-        let peek = BrowseSheetDetentMath.peekHeight(searchAreaHeight: reportedHeight)
-        XCTAssertGreaterThanOrEqual(
-            peek, reportedHeight,
-            "A realistic, ACTUALLY-MEASURED (not hand-picked) search field height must " +
-            "produce a peek detent tall enough to fully contain the field — the exact " +
-            "property `BrowseSheetDetentMath.peekBreathingRoom` exists to guarantee."
-        )
-    }
-}
+// It doesn't. Kevin's Mac run: both failed with `reportedHeight == 0.0`, while the SAME
+// build's on-device `#if DEBUG` readout (round 4/5's diagnostic overlay, since removed)
+// showed a real, non-zero `searchH: 76.0` for the exact same view driving the exact same
+// live UI — i.e. the product code is confirmed correct; the harness is what's broken.
+// `UIHostingController` detached from a real, key `UIWindow` does not reliably complete a
+// SwiftUI render pass that fires `.onGeometryChange` — there is no guarantee `layoutIfNeeded()`
+// alone drives it, and unlike UIKit `layoutSubviews()`, SwiftUI offers no synchronous "flush
+// all pending geometry effects now" call to force the issue deterministically off-screen.
+//
+// Rather than attempt (and ship unverified, a second time) a heavier fix — e.g. attaching the
+// hosting controller to a real `UIWindow`, making it key/visible, and pumping the run loop —
+// these two tests are deleted outright. A test that can't run in this project's harness is
+// worse than no test: it fails for reasons unrelated to the product code and trains reviewers
+// to treat red as noise. The pure height math these tests' second half re-derived (a
+// realistic measured value → `peekHeight` fully contains it) is ALREADY covered, with a
+// hardcoded-but-realistic input, by `FT20StreamATests.swift`'s `BrowseSheetPeekInvariantTests
+// .testPeekHeight_fullyContainsTheSearchArea_acrossRealisticDynamicTypeRange`.
+//
+// What is deliberately NOT covered by any unit test after this deletion: "does SwiftUI's
+// `.onGeometryChange` actually deliver a real (non-zero) measurement in the live app" — that
+// question is about whether a real render pass ran, which is exactly the class of fact a
+// headless XCTest process cannot observe on this SDK/pattern. That question is answered by
+// live-device smoke instead: PR #87's smoke checklist ("searchH" readout confirmed 76.0 on
+// Kevin's iPhone 17 / iOS 26.5, peek: 80.0 fully containing it, search field + magnifier +
+// placeholder + trailing gearshape rendering correctly at peek) is the coverage for this
+// specific mechanism. Do not re-add a `UIHostingController`-based version of this test
+// without first confirming on a Mac that it actually exercises `.onGeometryChange` (e.g. by
+// deliberately breaking the production height reporting and watching the test go red) — a
+// test that passes for the wrong reason is exactly what round 5 shipped here.

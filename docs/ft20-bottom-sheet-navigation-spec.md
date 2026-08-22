@@ -285,6 +285,36 @@ destination") actually renders — present in source, no code-level suppression 
 screenshot showed the magnifier icon with no placeholder text visible. Not touched this round (no color
 tuning without device evidence, same discipline as the height constants) — needs a fresh screenshot.
 
+**Round 6 (2026-08-22) — CONFIRMED on device, no longer a pending hypothesis.** Kevin's `#if DEBUG`
+readout, on his iPhone 17 / iOS 26.5, reported:
+
+```
+kind: large        searchH: 76.0      peek: 80.0
+medium: 186.0      actionTop: 84.0
+```
+
+`searchH` is a real `76.0` — non-zero for the first time across six rounds, no longer the round 1–5
+`0.0` this section documents above. `peek: 80.0` fully contains it, matching `peekHeight`'s "fully
+contains the search field" invariant. At the peek detent, the search field + magnifier + placeholder
+text + trailing `gearshape` render correctly and nothing below the field is visible; the large detent
+also renders correctly. The `.onGeometryChange` replacement (this section's "Fix," above) is confirmed
+to actually work end to end, not just structurally sound in isolation.
+
+With the fix confirmed, the round-4/5 `#if DEBUG` readout has served its purpose and was removed in round
+6 (both `#if DEBUG` blocks in `BrowseNavigationSheet.swift`, per the removal instructions in their own
+code comments). The still-unconfirmed placeholder-text question above is resolved by this same
+screenshot: placeholder text does render.
+
+Round 6 also removed `SearchFieldHeightMeasurementTests` (`FT20StreamCTests.swift`) — added in round 5
+to exercise this exact `.onGeometryChange` mechanism via `UIHostingController` + `layoutIfNeeded()`, it
+failed on Kevin's Mac (`reportedHeight == 0.0`) on the very same build that reported a real `76.0`
+on-device, confirming the harness (a detached, non-key `UIHostingController` never reliably completing a
+SwiftUI render pass), not the product code, was at fault. See that test file's removal note for the full
+reasoning; the pure height-math half of what those tests covered remains pinned by
+`BrowseSheetPeekInvariantTests.testPeekHeight_fullyContainsTheSearchArea_acrossRealisticDynamicTypeRange`,
+and the "does a real measurement actually arrive" half is covered by this device confirmation plus PR
+#87's live-smoke checklist, not by a unit test.
+
 ---
 
 ### §0d — Stream B QA carry-forwards (BINDING on Stream C, 2026-08-20)
