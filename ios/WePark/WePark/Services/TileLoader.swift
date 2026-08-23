@@ -49,6 +49,18 @@
 //  `gridSize.cols` from index.json) before looping, via `clampToInt` — which never
 //  traps. See `tileKeys(forRegion:)` and `maxLoadSpanDegrees` below.
 //
+//  Isolation fix (2026-08-23): `static func tileKeys(forRegion:...)` and
+//  `static func clampToInt(...)` are marked `nonisolated`. `TileLoader` is
+//  `@MainActor`, and this project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`,
+//  so unannotated members of an `@MainActor` type inherit that isolation — these two
+//  static funcs were being pinned to the main actor despite touching only their own
+//  parameters (no instance state, no globals). That's harmless from existing
+//  @MainActor call sites (calling a nonisolated func from @MainActor is always fine)
+//  but made them uncallable from the synchronous, non-actor-isolated XCTestCase
+//  methods in TileLoaderZoomCrashTests.swift. `nonisolated` costs nothing here since
+//  both functions are pure, and leaves room to run tile-key math off the main thread
+//  later if profiling calls for it.
+//
 
 import Foundation
 import MapKit
@@ -270,7 +282,7 @@ final class TileLoader {
     /// 50 cols (index.json `gridSize`), so after clamping this loop is bounded at
     /// roughly `(rows + 2·buffer) × (cols + 2·buffer)` ≈ 84 × 54 ≈ 4,536 iterations
     /// for ANY input, valid or not.
-    static func tileKeys(
+    nonisolated static func tileKeys(
         forRegion region: MKCoordinateRegion,
         gridRows: Int,
         gridCols: Int,
@@ -339,7 +351,7 @@ final class TileLoader {
     /// instead of crashing. Used by `tileKeys(forRegion:...)` to convert
     /// region-derived row/col bounds that may be garbage (mid-gesture MapKit state,
     /// or a viewport far outside the tile grid) into safe grid indices.
-    static func clampToInt(_ value: Double, lower: Int, upper: Int) -> Int {
+    nonisolated static func clampToInt(_ value: Double, lower: Int, upper: Int) -> Int {
         guard value.isFinite else { return value > 0 ? upper : lower }
         if value <= Double(lower) { return lower }
         if value >= Double(upper) { return upper }
