@@ -1341,10 +1341,44 @@ struct ContentView: View {
         .presentationBackgroundInteraction(.enabled(upThrough: .height(browseSheetMediumHeight)))
         .presentationBackground(.regularMaterial)
         .presentationDragIndicator(.visible)
+        // Corner-radius fix (Kevin, on-device): ".browseNav" was the only one of this file's
+        // 12 ActiveSheet cases with no explicit .presentationCornerRadius at all — see
+        // browseSheetOuterCornerRadius's doc comment for the derivation.
+        .presentationCornerRadius(Self.browseSheetOuterCornerRadius)
         // Apple Maps' sheet is never fully dismissible, only collapsible (spec §4.1) — the
         // rest state is always at least a peek, never "nothing."
         .interactiveDismissDisabled(true)
     }
+
+    /// Corner-radius fix (Kevin, on-device smoke): *"Change the corner radius on the text
+    /// bar to match the search box."* The browse sheet's outer container had NO explicit
+    /// `.presentationCornerRadius` set at all — unlike every other one of this file's 12
+    /// `ActiveSheet` cases, all of which set `20` (e.g. `pinDetailSheetContent`,
+    /// `blockDetailSheetContent`) — so it fell back to the system default, which read as a
+    /// visibly different, uncoordinated radius sitting right above
+    /// `BrowseSearchAreaView.searchField`'s own `RoundedRectangle(cornerRadius: 10)` fill
+    /// (`BrowseSearchAreaView.swift`).
+    ///
+    /// Nesting geometry: a rounded rect nested inside another rounded rect does NOT look
+    /// right when the two radii are numerically EQUAL — the inner corner reads as "too
+    /// round" because it has less room to curve into before hitting the padding. The
+    /// visually-correct relationship is `outerRadius = innerRadius + padding`.
+    ///
+    /// This holds the search field's own already-tuned `cornerRadius: 10` fixed as the
+    /// reference — Kevin's literal ask is to match the OUTER to the search box, not the
+    /// other way around, and `searchField` was never called out as looking wrong on its
+    /// own, only the mismatch was — and derives the outer sheet radius from it using
+    /// `searchField`'s own `.padding(.horizontal, 16)` (the distance from the search
+    /// field's rounded-rect edge to the sheet's edge; `BrowseNavigationSheet.body` applies
+    /// no further horizontal inset above it, so 16 is the true edge-to-edge gap):
+    ///
+    ///     outerRadius = innerRadius (10) + horizontalPadding (16) = 26
+    ///
+    /// [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK] — this machine has no simulator. Kevin/
+    /// QA: eyeball that the two corners now nest concentrically (not "too round" / "too
+    /// square" relative to each other) before sign-off; this is a visual judgment call the
+    /// formula above gets close to but can't fully replace a real screen for.
+    private static let browseSheetOuterCornerRadius: CGFloat = 26
 
     // MARK: - Community 1.0 / Tier 1: Pin detail sheet content
 
@@ -2704,6 +2738,13 @@ struct ContentView: View {
         // reconnect for whatever changed on public.pins while backgrounded).
         pinService.reconnectRealtime()
         Task { await pinService.refetchCurrentRegion() }
+        // Badge fix: the icon badge means "a reminder is waiting" (NotificationScheduler
+        // sets content.badge = 1 on every scheduled ASP reminder). Once the user opens the
+        // app they've seen whatever fired, so clear it here — standard behavior, what every
+        // other app does. Nothing previously cleared it: the badge belongs to the install
+        // (not the build), so the first reminder that ever fired stamped a permanent "1" on
+        // the icon that survived every subsequent launch/build.
+        NotificationScheduler.shared.clearBadge()
     }
 
     // MARK: - Dismiss helpers
