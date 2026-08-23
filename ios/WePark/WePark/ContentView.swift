@@ -733,10 +733,11 @@ struct ContentView: View {
     // MARK: - Constants
 
     // Note: the overlay zoom-hide threshold formerly declared here as a private constant
-    // moved to `AppConstants.polylineHideSpanThreshold` (2026-08-23) so
-    // `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` can derive its value from it
-    // instead of a second, independently-tuned number. See that constant's doc comment for
-    // the full three-layer relationship.
+    // moved to `AppConstants.polylineHideSpanThreshold` (2026-08-23). It no longer drives
+    // `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (that coupling was reversed
+    // 2026-08-23, PR #89 on-device follow-up — the camera ceiling now derives from
+    // `AppConstants.manhattanCoverageBounds` instead). See both constants' own doc comments
+    // for the full three-layer relationship and the reversal writeup.
 
     /// Tap hit threshold in meters (matches W4 behavior).
     private let tapHitThresholdMeters: Double = 20.0
@@ -2305,16 +2306,21 @@ struct ContentView: View {
     /// the fix so the next tap will have an up-to-date position.
     ///
     /// zoom-out-limit-tighten (2026-08-23): guards against recentering onto a coordinate with
-    /// no parking data (a non-NYC device, or an Apple reviewer in Cupertino). Before the
-    /// tightened `maxZoomOutCenterCoordinateDistance`, a user recentered outside coverage
-    /// could still pinch-zoom out far enough to see where they'd landed and pan back. With the
-    /// ~7,457m ceiling that is no longer true — recentering somewhere with no data could leave
-    /// the user unable to reorient. So this action simply does not move the camera when the
-    /// fix is out of coverage; it reuses the existing out-of-coverage toast
-    /// (`BrowseSearchAreaView`'s "Limited parking data outside Manhattan", shown there for the
-    /// analogous out-of-coverage-destination routing case) rather than inventing a second
-    /// pattern. The camera stays wherever it already was — a place with data — so "no data AND
-    /// can't get back" is structurally unreachable via this button.
+    /// no parking data (a non-NYC device, or an Apple reviewer in Cupertino). This action
+    /// simply does not move the camera when the fix is out of coverage; it reuses the
+    /// existing out-of-coverage toast (`BrowseSearchAreaView`'s "Limited parking data outside
+    /// Manhattan", shown there for the analogous out-of-coverage-destination routing case)
+    /// rather than inventing a second pattern. The camera stays wherever it already was — a
+    /// place with data — so "no data AND can't get back" is structurally unreachable via this
+    /// button.
+    ///
+    /// Independent of, and unaffected by, the zoom-out ceiling's later widening (PR #89
+    /// on-device follow-up, `MapViewRepresentable.maxZoomOutCenterCoordinateDistance`): this
+    /// guard is about WHERE the camera centers (a coordinate with data vs. without), not how
+    /// far it can zoom out from wherever it lands. Even at the wider ~41.5km ceiling,
+    /// recentering onto an out-of-coverage fix would still show the user a location with no
+    /// parking overlays and, likely, no idea where relative to Manhattan they are — this
+    /// guard stays regardless of the camera ceiling's value.
     private func recenterOnUser() {
         if let loc = locationService.userLocation {
             guard AppConstants.isInManhattanCoverage(loc) else {

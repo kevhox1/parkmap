@@ -148,11 +148,14 @@ final class TileLoader {
     /// `AppConstants.polylineHideSpanThreshold`'s doc comment for the canonical statement of
     /// all three together; restated briefly here since this is the layer most likely to look
     /// "redundant" and get deleted):
-    ///   1. `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (tightest) — the actual
-    ///      camera ceiling reachable via gesture/programmatic call. As of 2026-08-23
-    ///      (zoom-out-limit-tighten) this is DERIVED from `AppConstants
-    ///      .polylineHideSpanThreshold` plus a small margin (~7,457m ≈ 0.036° visible span),
-    ///      not a fixed number — it moves if that threshold moves.
+    ///   1. `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (tightest of the two
+    ///      steady-state camera guards, but still well inside this backstop) — the actual
+    ///      camera ceiling reachable via gesture/programmatic call. As of 2026-08-23 (PR #89
+    ///      on-device follow-up) this is DERIVED from `AppConstants.manhattanCoverageBounds`
+    ///      plus a small margin (~41,467m ≈ 0.2002° visible span, framing all of Manhattan),
+    ///      not a fixed number — it moves if the tile grid's coverage extent moves. (An
+    ///      earlier pass derived it from `AppConstants.polylineHideSpanThreshold` instead;
+    ///      that coupling was reversed — see that constant's own derivation note.)
     ///   2. `AppConstants.polylineHideSpanThreshold` (0.04°, middle) — the rendering gate:
     ///      no parking-state polyline exists above this span.
     ///   3. This constant, `maxLoadSpanDegrees` (0.5°, widest) — the tile-LOAD backstop.
