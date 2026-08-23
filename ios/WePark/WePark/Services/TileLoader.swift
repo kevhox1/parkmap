@@ -143,6 +143,16 @@ final class TileLoader {
     /// doesn't flicker the loader on/off at the boundary.
     ///
     /// Kevin: tune on-device if 0.5° feels too eager/lazy to cut off loading.
+    ///
+    /// Relationship to `MapViewRepresentable.maxZoomOutCenterCoordinateDistance`
+    /// (2026-08-23, hard camera zoom-out limit, ~53,000m ≈ 0.255° visible span): that
+    /// constant caps the STEADY-STATE camera the user can actually reach — it is a UX
+    /// fix, not a replacement for this threshold. This threshold (and the grid clamping
+    /// in `tileKeys`/`clampToInt` below) must stay regardless of the camera limit,
+    /// because MapKit can still report a transient, degenerate `region.span` mid-gesture
+    /// (e.g. at extreme pitch) that is decoupled from the camera's steady-state bound —
+    /// the `Int`-trap crash path this threshold and the clamping guard against is
+    /// reachable independently of how far the user is allowed to zoom. Keep both.
     static let maxLoadSpanDegrees: Double = 0.5
 
     // MARK: Init
@@ -282,6 +292,14 @@ final class TileLoader {
     /// 50 cols (index.json `gridSize`), so after clamping this loop is bounded at
     /// roughly `(rows + 2·buffer) × (cols + 2·buffer)` ≈ 84 × 54 ≈ 4,536 iterations
     /// for ANY input, valid or not.
+    ///
+    /// Do NOT remove this clamping on the assumption that
+    /// `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (the 2026-08-23 hard
+    /// camera zoom-out limit) makes it redundant — that limit bounds the STEADY-STATE
+    /// camera the user can reach; this clamp guards a transient, mid-gesture
+    /// `region.span` MapKit can still report independent of that steady-state bound
+    /// (e.g. at extreme pitch). Defense in depth: camera limit = UX, this clamp =
+    /// safety net. See `maxLoadSpanDegrees` above for the same relationship.
     nonisolated static func tileKeys(
         forRegion region: MKCoordinateRegion,
         gridRows: Int,

@@ -710,6 +710,60 @@ struct MapViewRepresentable: UIViewRepresentable {
         return delta
     }
 
+    // MARK: - Hard camera zoom-out limit (2026-08-23)
+
+    /// Maximum camera distance (meters) the user can zoom out to, applied via
+    /// `setCameraZoomRange(_:animated:)` in `makeUIView`. No minimum is set (see below).
+    ///
+    /// Kevin's explicit call after seeing the fully-zoomed-out state on device: a small
+    /// rotated map square floating in a grey void with a faint grid, no parking data, no
+    /// city context — "cant we just lock it so that you cant zoom too far out?"
+    ///
+    /// Derivation (data, not taste) — from the tile grid's actual coverage
+    /// (`tiles/index.json`; same numbers `TileLoader.swift` documents for
+    /// `maxLoadSpanDegrees`):
+    ///   latMin 40.7, gridSize.rows 80, rowSize ≈ 0.002275° → latSpan = 80×0.002275 ≈ 0.182°
+    ///   lngMin -74.02, gridSize.cols 50, colSize ≈ 0.00226° → lngSpan = 50×0.00226 ≈ 0.113°
+    /// i.e. NYC's tile coverage is a ~0.182° × 0.113° box. Converting to physical meters
+    /// with the same 111,000 m/° flat-Earth approximation `altitudeForSpan` below uses:
+    ///   N–S: 0.182° × 111,000 ≈ 20,200m   (the binding/taller dimension)
+    ///   E–W: 0.113° × 111,000 × cos(40.79°) ≈ 9,500m
+    ///
+    /// Target: frame the whole box comfortably with margin, then stop shortly past it —
+    /// "being unable to see your whole city feels broken in the other direction." Using a
+    /// 1.4× margin on the N–S (binding) dimension and the same
+    /// halfHeight / tan(15°) conversion `altitudeForSpan` uses to go from a visible span
+    /// to a camera altitude:
+    ///   targetFullHeight = 20,200m × 1.4 ≈ 28,280m  (≈ 0.255° lat equivalent)
+    ///   halfHeight = 28,280 / 2 = 14,140m
+    ///   altitude = 14,140 / tan(15°) ≈ 52,770m
+    /// Rounded to **53,000m (~53km)**.
+    ///
+    /// At this limit: MapKit's basemap continues to render normally (unlike the pre-fix
+    /// crash state, which was a `tileKeys` watchdog kill, not a rendering ceiling) and the
+    /// full NYC tile-coverage area is framed with a comfortable margin of surrounding
+    /// context — no more empty grey void.
+    ///
+    /// ⚠️ Known interaction, flagged rather than silently resolved: this altitude implies
+    /// a visible span (~0.255°) well past `ContentView.polylineHideSpanThreshold` (0.04°,
+    /// pre-existing/long-standing — "individual block faces are illegible anyway, hiding
+    /// is correct UX"). That gate already hides all parking-state polylines above 0.04°,
+    /// long before the camera reaches this 53,000m limit. This constant guarantees the
+    /// **basemap** frames the whole city; it does NOT keep colored parking polylines
+    /// visible all the way out to the limit — nothing in this PR changes that pre-existing
+    /// threshold. See PR body for the explicit call-out.
+    ///
+    /// Relationship to `TileLoader.maxLoadSpanDegrees` / grid clamping (kept, unchanged):
+    /// this is a UX-layer cap on the STEADY-STATE camera reachable via gesture or
+    /// programmatic `setCamera`/`setRegion`. It is NOT a substitute for `TileLoader`'s
+    /// safety net — MapKit can still report a transient, degenerate `region.span`
+    /// mid-gesture (e.g. at extreme pitch) that is decoupled from this steady-state bound;
+    /// that is the independent crash path `TileLoader.tileKeys`/`clampToInt` exists to
+    /// guard regardless of how far the user can actually zoom. Keep both.
+    ///
+    /// Single named constant so it's one number to tune after Kevin sees it on-device.
+    static let maxZoomOutCenterCoordinateDistance: CLLocationDistance = 53_000
+
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
@@ -739,6 +793,18 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         // Set initial camera region.
         mapView.setRegion(region, animated: false)
+
+        // Hard zoom-out limit (Kevin, 2026-08-23, on-device): max only, no minimum —
+        // Drive Mode and block-select both depend on tight zoom-in, so leaving
+        // minCenterCoordinateDistance unset imposes no zoom-in floor. Applies to BOTH
+        // user pinch gestures and programmatic setCamera/setRegion calls. See
+        // `maxZoomOutCenterCoordinateDistance` above for the full derivation.
+        mapView.setCameraZoomRange(
+            MKMapView.CameraZoomRange(
+                maxCenterCoordinateDistance: MapViewRepresentable.maxZoomOutCenterCoordinateDistance
+            ),
+            animated: false
+        )
 
         // W5: UILongPressGestureRecognizer for pin-drop / report dialog.
         // 0.4s minimum duration — slightly faster than iOS default (0.5s) for better
