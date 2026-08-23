@@ -471,6 +471,30 @@ final class NotificationScheduler {
         return content
     }
 
+    // MARK: - Badge clearing (fix: badge never cleared)
+
+    /// Clears the app icon badge.
+    ///
+    /// `content.badge = 1` is set on every scheduled ASP reminder (see `buildContent` above).
+    /// The badge means "a reminder is waiting" — once the user opens the app, they've seen
+    /// whatever fired, so the badge should clear. Nothing previously called this: the badge
+    /// belongs to the install (not the build), so the FIRST reminder that ever fired stamped
+    /// a permanent "1" on the icon that survived every subsequent app launch and TestFlight
+    /// build. Call site: `ContentView.handleScenePhaseChange` on `.active` (foreground).
+    ///
+    /// `setBadgeCount(_:withCompletionHandler:)` is the modern (iOS 16+) badge API; this
+    /// project targets 17.0. Routed through `center` (the same injectable seam used by every
+    /// other method here) so it's unit-testable via `MockNotificationCenter` without touching
+    /// real notification permissions. A failure here is cosmetic (the badge just doesn't
+    /// clear) — logged, not thrown or asserted, so it can never crash the app.
+    func clearBadge() {
+        center.setBadgeCount(0, withCompletionHandler: { error in
+            if let error {
+                print("[NotificationScheduler] clearBadge failed: \(error)")
+            }
+        })
+    }
+
     /// Extracts the time portion from a `nextRestrictionTimeLabel` string.
     /// Input examples: "Today 7:00 AM", "Tomorrow 9:30 AM", "Thursday 7:00 PM"
     /// Output examples: "7:00 AM", "9:30 AM", "7:00 PM"
@@ -494,6 +518,9 @@ protocol UNUserNotificationCenterProtocol: AnyObject {
     func add(_ request: UNNotificationRequest, withCompletionHandler completionHandler: ((Error?) -> Void)?)
     func removePendingNotificationRequests(withIdentifiers identifiers: [String])
     func removeDeliveredNotifications(withIdentifiers identifiers: [String])
+    /// Badge fix: mirrors `UNUserNotificationCenter.setBadgeCount(_:withCompletionHandler:)`
+    /// (iOS 16+) so `NotificationScheduler.clearBadge()` is testable via a mock.
+    func setBadgeCount(_ newBadgeCount: Int, withCompletionHandler completionHandler: ((Error?) -> Void)?)
 }
 
 // MARK: - UNUserNotificationCenter conformance

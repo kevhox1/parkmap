@@ -29,6 +29,8 @@ final class MockNotificationCenter: UNUserNotificationCenterProtocol {
     var addedRequests: [UNNotificationRequest] = []
     var removedPendingIdentifiers: [String] = []
     var removedDeliveredIdentifiers: [String] = []
+    /// Badge fix: records every `setBadgeCount` call for assertion.
+    var badgeCountCalls: [Int] = []
 
     func getNotificationSettings(completionHandler: @escaping (UNNotificationSettings) -> Void) {
         // Unused in the test path (scheduleForTest bypasses this check).
@@ -53,6 +55,11 @@ final class MockNotificationCenter: UNUserNotificationCenterProtocol {
 
     func removeDeliveredNotifications(withIdentifiers identifiers: [String]) {
         removedDeliveredIdentifiers.append(contentsOf: identifiers)
+    }
+
+    func setBadgeCount(_ newBadgeCount: Int, withCompletionHandler completionHandler: ((Error?) -> Void)?) {
+        badgeCountCalls.append(newBadgeCount)
+        completionHandler?(nil)
     }
 }
 
@@ -1123,5 +1130,18 @@ final class FT6ReminderTests: XCTestCase {
 
         // Clean up.
         UserDefaults.standard.removeSuite(named: suiteName)
+    }
+
+    // MARK: - Badge fix: clearBadge()
+
+    /// Regression test for "the app icon badge never clears": `clearBadge()` must route
+    /// through the injectable `center` to `setBadgeCount(0, ...)`, exactly once per call,
+    /// so `ContentView.handleScenePhaseChange` clearing on foreground is verifiable without
+    /// a real device/simulator.
+    func testBadgeFix_ClearBadge_CallsSetBadgeCountZero() {
+        scheduler.clearBadge()
+
+        XCTAssertEqual(mockCenter.badgeCountCalls, [0],
+                        "clearBadge() must call setBadgeCount(0, ...) exactly once")
     }
 }
