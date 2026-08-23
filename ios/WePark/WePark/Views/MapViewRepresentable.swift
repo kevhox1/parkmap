@@ -710,59 +710,79 @@ struct MapViewRepresentable: UIViewRepresentable {
         return delta
     }
 
-    // MARK: - Hard camera zoom-out limit (2026-08-23)
+    // MARK: - Hard camera zoom-out limit (2026-08-23, tightened 2026-08-23)
 
     /// Maximum camera distance (meters) the user can zoom out to, applied via
     /// `setCameraZoomRange(_:animated:)` in `makeUIView`. No minimum is set (see below).
     ///
-    /// Kevin's explicit call after seeing the fully-zoomed-out state on device: a small
+    /// Kevin's original call after seeing the fully-zoomed-out state on device: a small
     /// rotated map square floating in a grey void with a faint grid, no parking data, no
-    /// city context — "cant we just lock it so that you cant zoom too far out?"
+    /// city context — "cant we just lock it so that you cant zoom too far out?" That first
+    /// pass (superseded below) locked at ~53,000m, framing all of NYC's basemap.
     ///
-    /// Derivation (data, not taste) — from the tile grid's actual coverage
-    /// (`tiles/index.json`; same numbers `TileLoader.swift` documents for
-    /// `maxLoadSpanDegrees`):
-    ///   latMin 40.7, gridSize.rows 80, rowSize ≈ 0.002275° → latSpan = 80×0.002275 ≈ 0.182°
-    ///   lngMin -74.02, gridSize.cols 50, colSize ≈ 0.00226° → lngSpan = 50×0.00226 ≈ 0.113°
-    /// i.e. NYC's tile coverage is a ~0.182° × 0.113° box. Converting to physical meters
-    /// with the same 111,000 m/° flat-Earth approximation `altitudeForSpan` below uses:
-    ///   N–S: 0.182° × 111,000 ≈ 20,200m   (the binding/taller dimension)
-    ///   E–W: 0.113° × 111,000 × cos(40.79°) ≈ 9,500m
+    /// Revised, current derivation — Kevin, after review: "I think locking where data ends
+    /// makes sense." The 53,000m basemap-framing limit still left an 8.3km→53km band where
+    /// the basemap rendered but zero parking polylines did (`AppConstants
+    /// .polylineHideSpanThreshold` hides all polylines above a 0.04° span, ~8,285m altitude
+    /// — see that constant's own doc comment, which states the full three-layer
+    /// relationship). That band was the same "looks broken" complaint in milder form. Instead
+    /// of framing the whole city, this constant now locks the zoom-out ceiling at the point
+    /// where parking data itself stops rendering — an empty map is structurally unreachable,
+    /// because the camera can never get far enough out to reach the empty band in the first
+    /// place.
     ///
-    /// Target: frame the whole box comfortably with margin, then stop shortly past it —
-    /// "being unable to see your whole city feels broken in the other direction." Using a
-    /// 1.4× margin on the N–S (binding) dimension and the same
-    /// halfHeight / tan(15°) conversion `altitudeForSpan` uses to go from a visible span
-    /// to a camera altitude:
-    ///   targetFullHeight = 20,200m × 1.4 ≈ 28,280m  (≈ 0.255° lat equivalent)
-    ///   halfHeight = 28,280 / 2 = 14,140m
-    ///   altitude = 14,140 / tan(15°) ≈ 52,770m
-    /// Rounded to **53,000m (~53km)**.
+    /// **Derived FROM `AppConstants.polylineHideSpanThreshold`, not hardcoded** — the two
+    /// must move together. If that threshold is ever retuned (e.g. viewport-polish already
+    /// moved it 0.1° → 0.04° once for performance), this constant recomputes automatically
+    /// instead of silently reintroducing the empty-band gap. `MapZoomOutLimitTests` locks in
+    /// this coupling with a test that fails if the two ever drift apart.
+    ///
+    /// `zoomOutMarginFactor` (0.9, i.e. 10% headroom on the SPAN, not the altitude) exists so
+    /// the ceiling is reached a hair before polylines would actually vanish, not at the exact
+    /// same instant — Kevin: "a hair of headroom reads better than hitting the wall at the
+    /// same instant the data disappears." Both quantities scale linearly with span in
+    /// `altitudeForSpan`, so applying the margin to the span before conversion is equivalent
+    /// to applying it to the resulting altitude.
+    ///
+    /// Worked numbers (computed by the code below at compile-time-equivalent load time —
+    /// these are documentation of the arithmetic, not separately hardcoded values):
+    ///   raw altitude at the threshold: altitudeForSpan(0.04°) ≈ 8,285m
+    ///   margined target span: 0.04° × 0.9 = 0.036°
+    ///   final altitude: altitudeForSpan(0.036°) ≈ 7,457m
     ///
     /// At this limit: MapKit's basemap continues to render normally (unlike the pre-fix
-    /// crash state, which was a `tileKeys` watchdog kill, not a rendering ceiling) and the
-    /// full NYC tile-coverage area is framed with a comfortable margin of surrounding
-    /// context — no more empty grey void.
+    /// crash state, which was a `tileKeys` watchdog kill, not a rendering ceiling), and
+    /// parking-state polylines are still visible with a small margin right up to the ceiling
+    /// — the camera can no longer reach the empty-basemap band at all. The trade-off,
+    /// explicit: the user can no longer zoom out far enough to see "all of NYC" or the
+    /// surrounding boroughs at once; the previous 53,000m behavior is gone. Kevin's call:
+    /// that trade is correct — "locking where data ends" is the priority over whole-city
+    /// framing.
     ///
-    /// ⚠️ Known interaction, flagged rather than silently resolved: this altitude implies
-    /// a visible span (~0.255°) well past `ContentView.polylineHideSpanThreshold` (0.04°,
-    /// pre-existing/long-standing — "individual block faces are illegible anyway, hiding
-    /// is correct UX"). That gate already hides all parking-state polylines above 0.04°,
-    /// long before the camera reaches this 53,000m limit. This constant guarantees the
-    /// **basemap** frames the whole city; it does NOT keep colored parking polylines
-    /// visible all the way out to the limit — nothing in this PR changes that pre-existing
-    /// threshold. See PR body for the explicit call-out.
+    /// ⚠️ Known side effect, flagged rather than silently absorbed: `ContentView`'s cold-launch
+    /// default `region` span (0.07°/0.05°, ~14,499m altitude) is now WIDER than this ceiling.
+    /// When the launch-priority fallback leaves that default region in place (out-of-coverage
+    /// or location-denied users — see `performLaunchSetup`'s Priority 3), `setCameraZoomRange`
+    /// immediately clamps the initial camera down to this constant's value instead of the
+    /// wider default. This is a net UX improvement, not a regression: it moves cold-launch
+    /// framing closer to where polylines actually render (0.036° vs the old 0.07°), rather
+    /// than showing a wide default view where zero polylines were visible anyway. See
+    /// `MapZoomOutLimitTests.testInitialBrowseRegion_isNowIntentionallyClampedAtLaunch`.
     ///
-    /// Relationship to `TileLoader.maxLoadSpanDegrees` / grid clamping (kept, unchanged):
-    /// this is a UX-layer cap on the STEADY-STATE camera reachable via gesture or
-    /// programmatic `setCamera`/`setRegion`. It is NOT a substitute for `TileLoader`'s
-    /// safety net — MapKit can still report a transient, degenerate `region.span`
-    /// mid-gesture (e.g. at extreme pitch) that is decoupled from this steady-state bound;
-    /// that is the independent crash path `TileLoader.tileKeys`/`clampToInt` exists to
-    /// guard regardless of how far the user can actually zoom. Keep both.
-    ///
-    /// Single named constant so it's one number to tune after Kevin sees it on-device.
-    static let maxZoomOutCenterCoordinateDistance: CLLocationDistance = 53_000
+    /// Relationship to `TileLoader.maxLoadSpanDegrees` / grid clamping (kept, unchanged, and
+    /// necessarily wider than this constant): see `AppConstants.polylineHideSpanThreshold`'s
+    /// doc comment for the full three-layer statement (camera ceiling / polyline-hide gate /
+    /// tile-load backstop). Short version: this is a UX-layer cap on the STEADY-STATE camera
+    /// reachable via gesture or programmatic `setCamera`/`setRegion`. It is NOT a substitute
+    /// for `TileLoader`'s safety net — MapKit can still report a transient, degenerate
+    /// `region.span` mid-gesture (e.g. at extreme pitch) that is decoupled from this
+    /// steady-state bound; that is the independent crash path `TileLoader.tileKeys`/
+    /// `clampToInt` exists to guard regardless of how far the user can actually zoom.
+    /// Keep both — deleting either "because they look redundant" reopens a different bug.
+    static let zoomOutMarginFactor: Double = 0.9
+
+    static let maxZoomOutCenterCoordinateDistance: CLLocationDistance =
+        altitudeForSpan(AppConstants.polylineHideSpanThreshold * zoomOutMarginFactor)
 
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()

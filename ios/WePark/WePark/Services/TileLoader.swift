@@ -135,7 +135,7 @@ final class TileLoader {
     /// -73.907` (0.113° lng) — all of NYC is ~0.18° across at its widest. At a 0.5°
     /// span, all of NYC already renders as a sub-pixel smear (2.7× its largest
     /// dimension) well before this method would even run — and
-    /// `ContentView.polylineHideSpanThreshold` (0.04°) already stops *rendering*
+    /// `AppConstants.polylineHideSpanThreshold` (0.04°) already stops *rendering*
     /// polylines far earlier than that. This constant is the outer backstop: it
     /// stops *loading* (tile-key computation + bundle decode) once the viewport is
     /// so wide that no amount of loaded data could produce a visible parking
@@ -144,15 +144,25 @@ final class TileLoader {
     ///
     /// Kevin: tune on-device if 0.5° feels too eager/lazy to cut off loading.
     ///
-    /// Relationship to `MapViewRepresentable.maxZoomOutCenterCoordinateDistance`
-    /// (2026-08-23, hard camera zoom-out limit, ~53,000m ≈ 0.255° visible span): that
-    /// constant caps the STEADY-STATE camera the user can actually reach — it is a UX
-    /// fix, not a replacement for this threshold. This threshold (and the grid clamping
-    /// in `tileKeys`/`clampToInt` below) must stay regardless of the camera limit,
-    /// because MapKit can still report a transient, degenerate `region.span` mid-gesture
-    /// (e.g. at extreme pitch) that is decoupled from the camera's steady-state bound —
-    /// the `Int`-trap crash path this threshold and the clamping guard against is
-    /// reachable independently of how far the user is allowed to zoom. Keep both.
+    /// Three-layer relationship (widest/outermost of the three — see
+    /// `AppConstants.polylineHideSpanThreshold`'s doc comment for the canonical statement of
+    /// all three together; restated briefly here since this is the layer most likely to look
+    /// "redundant" and get deleted):
+    ///   1. `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (tightest) — the actual
+    ///      camera ceiling reachable via gesture/programmatic call. As of 2026-08-23
+    ///      (zoom-out-limit-tighten) this is DERIVED from `AppConstants
+    ///      .polylineHideSpanThreshold` plus a small margin (~7,457m ≈ 0.036° visible span),
+    ///      not a fixed number — it moves if that threshold moves.
+    ///   2. `AppConstants.polylineHideSpanThreshold` (0.04°, middle) — the rendering gate:
+    ///      no parking-state polyline exists above this span.
+    ///   3. This constant, `maxLoadSpanDegrees` (0.5°, widest) — the tile-LOAD backstop.
+    /// This threshold (and the grid clamping in `tileKeys`/`clampToInt` below) must stay
+    /// regardless of what layers 1–2 are set to, because MapKit can still report a transient,
+    /// degenerate `region.span` mid-gesture (e.g. at extreme pitch) that is decoupled from the
+    /// camera's steady-state bound — the `Int`-trap crash path this threshold and the
+    /// clamping guard against is reachable independently of how far the user is allowed to
+    /// zoom, or of where the polyline-hide gate sits. Keep all three; they guard different
+    /// failure modes even though they all sound like "zoom limits."
     static let maxLoadSpanDegrees: Double = 0.5
 
     // MARK: Init

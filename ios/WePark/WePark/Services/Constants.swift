@@ -39,6 +39,36 @@ enum AppConstants {
         coordinate.longitude <= manhattanCoverageBounds.lngMax
     }
 
+    // MARK: - Zoom / camera / tile-load three-layer relationship (2026-08-23)
+
+    /// Hide all parking-state overlays when the visible camera span is zoomed out past this
+    /// (same behavior as W2/W3). Viewport-polish: lowered from 0.1 to 0.04 (4,453 m N-S,
+    /// ~44 Manhattan blocks). At 0.04° the LRU cap (200 tiles) covers the viewport without
+    /// eviction patchwork. Above 0.04° individual block faces are illegible anyway — hiding
+    /// is correct UX.
+    ///
+    /// Moved here (2026-08-23, zoom-out-limit-tighten) from a `private` instance constant on
+    /// `ContentView` so `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` can derive
+    /// its value FROM this one instead of duplicating an unrelated hardcoded number — Kevin's
+    /// call: "I think locking where data ends makes sense," i.e. the camera zoom-out ceiling
+    /// must track wherever this threshold is, not the other way around.
+    ///
+    /// This is the MIDDLE layer of three independent, deliberately-still-separate guards —
+    /// do not collapse them into one:
+    ///   1. `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (tightest) — the actual
+    ///      camera ceiling a user can reach via gesture or programmatic call. Derived FROM
+    ///      this constant plus a small margin, so the zoom limit always lands just inside the
+    ///      point where polylines vanish.
+    ///   2. `AppConstants.polylineHideSpanThreshold` (this constant, middle) — the rendering
+    ///      gate: no parking-state polyline exists above this span regardless of camera limit.
+    ///   3. `TileLoader.maxLoadSpanDegrees` (widest/outermost) — the tile-LOAD backstop. Exists
+    ///      independently of layers 1–2 because MapKit can report a transient, degenerate
+    ///      `region.span` mid-gesture (e.g. extreme pitch) that is decoupled from the camera's
+    ///      steady-state bound — the `Int`-trap crash path this guards against is reachable
+    ///      no matter how far the user is allowed to zoom. Keep all three.
+    /// See each constant's own doc comment for its half of this relationship.
+    static let polylineHideSpanThreshold: Double = 0.04
+
     /// In-app notification rationale shown before `UNUserNotificationCenter.requestAuthorization`.
     /// Verbatim from `docs/ios-mvp-spec.md` §3.6 — do not change without updating the spec.
     static let notificationRationale = "Get a reminder before alternate-side parking starts so you never get ticketed. Notifications are scheduled on-device only."
