@@ -344,9 +344,24 @@ final class ParkPinService {
 /// This allows test injection of an in-memory mock without requiring a real iCloud account
 /// or a second device (spec §3.7) — mirrors `NotificationScheduler.swift`'s
 /// `UNUserNotificationCenterProtocol` pattern exactly.
+///
+/// `set(_:forKey:)` takes `Data?`, matching `NSUbiquitousKeyValueStore`'s real signature
+/// (one of several type-specific `set(_:forKey:)` overloads on that class — `String?`,
+/// `Data?`, `[Any]?`, `[String: Any]?`, `Int64`, `Double`, `Bool` — so the requirement must
+/// match the `Data?` overload exactly or the extension below fails to conform). A `Data`
+/// argument still promotes implicitly to `Data?` at every call site, so this does not
+/// change what callers pass.
+///
+/// IMPORTANT: passing `nil` to `set(_:forKey:)` on the real store REMOVES the key. This
+/// codebase must never do that — `ParkPinService.writeEnvelope(_:)` always encodes a
+/// concrete `SyncedCarEnvelope` (including the `.cleared` case, which is itself the
+/// tombstone) and only ever passes non-nil `Data`. A `nil` write would delete the tombstone
+/// outright and let a cleared car resurrect on another device that hasn't yet seen the
+/// clear (spec §3.2) — that is the exact bug the tombstone exists to prevent. Do not add a
+/// call site that passes `nil` here.
 protocol UbiquitousKeyValueStoring: AnyObject {
     func data(forKey key: String) -> Data?
-    func set(_ data: Data, forKey key: String)
+    func set(_ data: Data?, forKey key: String)
     @discardableResult func synchronize() -> Bool
 }
 

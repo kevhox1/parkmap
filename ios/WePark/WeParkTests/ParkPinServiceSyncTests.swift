@@ -38,7 +38,12 @@ final class MockUbiquitousStore: UbiquitousKeyValueStoring {
         storage[key]
     }
 
-    func set(_ data: Data, forKey key: String) {
+    /// Matches `UbiquitousKeyValueStoring`'s `Data?` requirement (mirrors the real
+    /// `NSUbiquitousKeyValueStore.set(_:forKey:)` overload for `Data`). `ParkPinService`
+    /// never passes `nil` here — see the protocol's doc comment — but this mock honors the
+    /// real store's semantics regardless: a `nil` write removes the key, same as
+    /// `storage[key] = nil` does on a `[String: Data]` dictionary.
+    func set(_ data: Data?, forKey key: String) {
         storage[key] = data
         setCallCount += 1
     }
