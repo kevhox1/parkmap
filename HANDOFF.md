@@ -201,6 +201,38 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-24 — 🔒 STANDING PRIVACY RULE for pin visibility (Kevin, settled)
+
+Asked while testing FT-2. **The current schema already implements this** — recorded so it governs
+future pin types rather than being re-derived.
+
+**The rule:**
+- **PERSONAL-LOCATION pins are PRIVATE.** Kevin: *"Pins for private info should be private (car
+  parked icon or house icon etc)."* Today that's `parked_car` only, and it has **two independent
+  locks**: the app never uploads it at all (no write path exists), and `supabase/02-pins-schema.sql:132`
+  excludes `parked_car` from anonymous reads — *"author-only… anon callers cannot see parked_car rows
+  for other users."*
+- **COMMUNITY REPORTS are PUBLIC.** Kevin: *"Street cleaner or street closed should be public for
+  sure and can be tagged with the persons user name/id."* That's every user-creatable type:
+  `enforcement_active`, `sweeper_passed`, `filming`, `construction`. **Sweeper-passed is explicitly
+  public** — asked directly, answered *"public for sure."* It's arguably the single most useful thing
+  one NYC driver tells another.
+- **Anonymous IDs are fine to expose.** Kevin: *"people[']s anonymous IDs are fine to expose. There's
+  no personal info there."* So `pins_with_author` exposing `author_id` / `author_username` /
+  `author_reputation` is **accepted, not a gap** — an earlier concern about correlating a user's
+  reports into a movement trail was raised and explicitly dismissed by Kevin.
+
+**⚠️ APPLIES TO ANY NEW PIN TYPE.** Every type except `parked_car` is public by default, so a new
+personal-location type (a saved home, a favourite spot) **inherits the wrong default**. Follow the
+`parked_car` precedent: exclude it in the RLS read policy AND keep it off the write path. Do not
+assume the app-layer alone protects it.
+
+**Not a gap, for the record:** the app fetches `author_username` but never displays it, and never
+sets one — so no name is attached to a pin in practice today. Attribution/reputation UI would be a
+new feature, not a leak.
+
+---
+
 ### 2026-08-24 (latest) — ✅ BUILD 18 SHIPPED TO EXTERNAL. Feature work renumbered to build 19.
 
 **Build 1.0 (18) is archived, uploaded, and distributed externally.** Payload: dark mode (#83) +
