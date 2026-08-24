@@ -607,9 +607,10 @@ private struct ReactionsRow: View {
     /// Delete-confirmed tap (FT-2, spec §4.2): calls `deleteCrowdPin`, which itself performs
     /// the optimistic local removal before the network call. On success, dismisses the sheet
     /// and shows the "Report deleted." toast (spec AC-FT2.7, AC-FT2.8). On failure, keeps the
-    /// sheet open and shows an inline error (AC-FT2.9) — the pin has already been optimistically
-    /// removed from the map; it reappears on the next periodic refresh only if the delete did
-    /// not actually succeed server-side.
+    /// sheet open and shows an inline error (AC-FT2.9) — `deleteCrowdPin` itself restores the
+    /// pin to the map before rethrowing (unless Realtime already confirmed the delete really
+    /// went through server-side), so the inline error here and what the map shows agree: the
+    /// pin is back, matching "the delete didn't work."
     private func handleDelete() async {
         isLoading = true
         errorMessage = nil

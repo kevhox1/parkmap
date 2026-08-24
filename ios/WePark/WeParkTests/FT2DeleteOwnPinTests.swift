@@ -11,8 +11,11 @@
 //  verified by reading the committed schema file (§3.1's verification queries are Kevin's prod-side
 //  confirmation step, out of scope for this file). These tests exercise the client only.
 //
-//  Test inventory (9 tests — spec's 8 plus one added for the realtime-echo interaction the
-//  spec's §4.1 step 5 describes but the original 8-test inventory didn't cover directly):
+//  Test inventory (13 tests — spec's original 8 [7 renamed/expanded, see below] plus one for
+//  the realtime-echo interaction spec's §4.1 step 5 describes, plus 4 added for the
+//  failed-delete rollback follow-up: on a thrown delete error, the pin must be restored to
+//  `visiblePins` rather than left removed, UNLESS Realtime has already independently confirmed
+//  the server genuinely deleted it):
 //
 //  Service layer — deleteCrowdPin (AC-FT2.6, AC-FT2.9, AC-FT2.11):
 //    1. testDeleteCrowdPin_notAuthenticated_throws
@@ -24,10 +27,27 @@
 //         (folded together with test 3's assertion per the spec's own note that this is
 //         "tricky to test directly" — this variant proves the removal is synchronous and does
 //         not depend on the network response arriving, using a mock that intentionally delays.)
-//    7. testDeleteCrowdPin_networkError_doesNotDismiss      (AC-FT2.9 — service-layer half;
+//    7. testDeleteCrowdPin_networkError_rollsBackPin        (AC-FT2.9 — service-layer half;
 //         UI half — sheet stays open, inline error shown — is PinDetailSheet/ReactionsRow
 //         behavior, covered by the live-smoke checklist in the PR description, not a unit test,
-//         same as the spec's own test 8 note.)
+//         same as the spec's own test 8 note. RENAMED from
+//         testDeleteCrowdPin_networkError_doesNotDismiss and its assertion INVERTED — see that
+//         test's own doc comment for why: the original asserted no-rollback, which was the
+//         behavior at the time; a rollback-on-failure follow-up changed that intentionally.)
+//
+//  Failed-delete rollback follow-up (a failed optimistic delete leaving the map disagreeing
+//  with the still-live server pin defeats FT-2's whole purpose — every OTHER driver still sees
+//  the un-deleted pin while this user believes they fixed it):
+//    7a. testDeleteCrowdPin_networkError_rollsBackAtOriginalIndex (restores at the exact index,
+//         not just "somewhere in the array" — proven with 3 fixture pins)
+//    7b. testDeleteCrowdPin_403_rollsBackPin                 (rollback applies to ANY thrown
+//         CommunityPinWriteError, not just network-level errors)
+//    7c. testDeleteCrowdPin_notAuthenticated_noOptimisticRemovalToRollBack (guards that the auth
+//         check still happens before any removal, so there's nothing to roll back on that path)
+//    7d. testDeleteCrowdPin_realtimeEchoDuringFailingRequest_suppressesRollback (a genuine
+//         Realtime DELETE echo arriving DURING the failing round trip must suppress the
+//         rollback — the server really did delete the row; resurrecting it would recreate the
+//         exact "map disagrees with server" bug via a different path)
 //
 //  Realtime-echo interaction (spec §4.1 step 5, §5 "Realtime DELETE event arriving after
 //  optimistic removal"):
@@ -41,8 +61,8 @@
 //       of being unmodified and included in the full suite run. No new test added here per the
 //       spec's own guidance ("add a new test only if the isOwnPin logic is modified").
 //
-//  Baseline: 830/0 before this file. After: 830 + 8 = 838/0 (net new XCTestCase test methods
-//  in this file below).
+//  Baseline: 830/0 before this file. Original PR: 830 + 8 = 838/0. This follow-up adds 4 new
+//  XCTestCase test methods (7a-7d above) without removing any: 838 + 4 = 842/0.
 //
 //  No Calendar.current use. No hardcoded Supabase keys.
 //
@@ -381,14 +401,19 @@ final class FT2DeleteOwnPinTests: XCTestCase {
         XCTAssertTrue(service.visiblePins.isEmpty)
     }
 
-    // MARK: 7. Network error propagates (UI keeps sheet open on this path)
+    // MARK: 7. Network error propagates AND rolls the pin back (UI keeps sheet open on this path)
 
     /// A network-level error (e.g. offline) propagates out of deleteCrowdPin. The optimistic
-    /// removal has already happened by this point — this test documents that the pin stays
-    /// removed locally even though the server-side delete did not confirm (spec §5 "Delete
-    /// while offline": accepted behavior, pin reappears on the next periodic refresh only if
-    /// the delete didn't actually go through server-side).
-    func testDeleteCrowdPin_networkError_doesNotDismiss() async {
+    /// removal happens first, but on failure the pin must be restored to `visiblePins` — a
+    /// vanished pin plus an inline error tells the user two contradictory stories (it's gone /
+    /// it isn't), and a driver who believes a bad report is gone when it isn't is exactly the
+    /// bug FT-2 exists to prevent. See `CommunityPinService.deleteCrowdPin`'s doc comment.
+    ///
+    /// NOTE: an earlier version of this test asserted the OPPOSITE — that `visiblePins` stayed
+    /// empty after a failed delete (no rollback). That was the original, intentionally-matched-
+    /// to-optimistic-add behavior; it has since been revised to roll back on failure, and this
+    /// test was updated to match rather than left encoding the old behavior.
+    func testDeleteCrowdPin_networkError_rollsBackPin() async {
         let service = await makeAuthenticatedService()
         let pin = makeFT2FixturePin()
         service.inject(fixtures: [pin])
@@ -405,9 +430,116 @@ final class FT2DeleteOwnPinTests: XCTestCase {
             // isn't independently testable here without a rendering harness).
         }
 
-        // Optimistic removal already happened — documented, not silently assumed.
+        XCTAssertEqual(service.visiblePins.count, 1,
+            "A failed delete must restore the pin so the map doesn't disagree with the error")
+        XCTAssertEqual(service.visiblePins.first?.id, pin.id,
+            "The restored pin must be the same pin that was optimistically removed")
+    }
+
+    /// Same failure as test 7, but asserts the restored pin lands back at its original index
+    /// in a multi-pin `visiblePins`, not just "somewhere in the array."
+    func testDeleteCrowdPin_networkError_rollsBackAtOriginalIndex() async {
+        let service = await makeAuthenticatedService()
+        let pinA = makeFT2FixturePin()
+        let pinB = makeFT2FixturePin()
+        let pinC = makeFT2FixturePin()
+        service.inject(fixtures: [pinA, pinB, pinC])
+
+        FT2DeleteWriteMockURLProtocol.errorToThrow = URLError(.notConnectedToInternet)
+
+        do {
+            try await service.deleteCrowdPin(id: pinB.id)
+            XCTFail("Expected the network error to propagate")
+        } catch {
+            // Expected.
+        }
+
+        XCTAssertEqual(service.visiblePins.map(\.id), [pinA.id, pinB.id, pinC.id],
+            "Rollback must restore the pin at its original collection index, not append it")
+    }
+
+    /// A 403 (RLS-rejected delete) must also roll the pin back — the rollback applies to any
+    /// thrown `CommunityPinWriteError`, not just network-level errors.
+    func testDeleteCrowdPin_403_rollsBackPin() async {
+        let service = await makeAuthenticatedService()
+        let pin = makeFT2FixturePin()
+        service.inject(fixtures: [pin])
+
+        FT2DeleteWriteMockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 403, httpVersion: nil, headerFields: nil)!,
+             Data())
+        }
+
+        do {
+            try await service.deleteCrowdPin(id: pin.id)
+            XCTFail("Expected CommunityPinWriteError.httpError(statusCode: 403)")
+        } catch {
+            // Expected.
+        }
+
+        XCTAssertEqual(service.visiblePins.count, 1,
+            "A 403 delete failure must also restore the pin, matching the network-error rollback path")
+    }
+
+    /// A `.notAuthenticated` failure is thrown BEFORE any optimistic removal happens, so there
+    /// is nothing to roll back — this test guards against a future change accidentally moving
+    /// the auth check after the removal.
+    func testDeleteCrowdPin_notAuthenticated_noOptimisticRemovalToRollBack() async {
+        let service = CommunityPinService(
+            supabaseURL: kFT2URL,
+            supabaseAnonKey: kFT2AnonKey,
+            urlSession: ft2WriteSession(),
+            authService: nil
+        )
+        let pin = makeFT2FixturePin()
+        service.inject(fixtures: [pin])
+
+        do {
+            try await service.deleteCrowdPin(id: pin.id)
+            XCTFail("Expected .notAuthenticated")
+        } catch {
+            // Expected.
+        }
+
+        XCTAssertEqual(service.visiblePins.count, 1,
+            "notAuthenticated is thrown before any optimistic removal — the pin was never removed")
+    }
+
+    // MARK: 7b. Rollback vs. a genuine Realtime DELETE echo arriving mid-flight
+
+    /// If a Realtime DELETE echo for the SAME pin arrives WHILE the failing network call is
+    /// still in flight (i.e. the server really did delete the row and only this client's HTTP
+    /// response came back as an error), the failure-path rollback must NOT resurrect the pin —
+    /// Realtime's independent confirmation of server truth wins over the failed response.
+    ///
+    /// This is the ordering the spec calls out explicitly: a rollback must not be able to
+    /// resurrect a pin the server genuinely removed.
+    func testDeleteCrowdPin_realtimeEchoDuringFailingRequest_suppressesRollback() async {
+        let service = await makeAuthenticatedService()
+        let pin = makeFT2FixturePin()
+        service.inject(fixtures: [pin])
+
+        FT2DeleteWriteMockURLProtocol.requestHandler = { request in
+            // Simulate the Realtime DELETE echo landing WHILE this request is "in flight"
+            // from deleteCrowdPin's perspective — i.e. before the error is thrown back to the
+            // caller. The mock handler runs synchronously before the response is delivered
+            // back through URLSession (same pattern as test 6's in-flight assertion above),
+            // so calling `removePin(id:)` here reproduces "echo arrives mid-round-trip"
+            // deterministically without a real timing race.
+            service.removePin(id: pin.id)
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!,
+                    Data())
+        }
+
+        do {
+            try await service.deleteCrowdPin(id: pin.id)
+            XCTFail("Expected CommunityPinWriteError.httpError(statusCode: 500)")
+        } catch {
+            // Expected.
+        }
+
         XCTAssertTrue(service.visiblePins.isEmpty,
-            "Optimistic removal precedes the network call and is not rolled back on failure")
+            "A Realtime DELETE echo confirming the server genuinely deleted the row must suppress rollback")
     }
 
     // MARK: 8. Realtime-echo interaction
