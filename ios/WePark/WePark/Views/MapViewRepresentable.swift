@@ -710,13 +710,106 @@ struct MapViewRepresentable: UIViewRepresentable {
         return delta
     }
 
+    // MARK: - Hard camera zoom-out limit (2026-08-23, tightened 2026-08-23, widened 2026-08-23)
+
+    /// Maximum camera distance (meters) the user can zoom out to, applied via
+    /// `setCameraZoomRange(_:animated:)` in `makeUIView`. No minimum is set (see below).
+    ///
+    /// Kevin's original call after seeing the fully-zoomed-out state on device: a small
+    /// rotated map square floating in a grey void with a faint grid, no parking data, no
+    /// city context — "cant we just lock it so that you cant zoom too far out?" That first
+    /// pass locked at ~53,000m, framing all of NYC's basemap.
+    ///
+    /// Second pass ("zoom-out-limit-tighten") derived this constant FROM
+    /// `AppConstants.polylineHideSpanThreshold` instead, locking the ceiling at the point
+    /// where parking polylines themselves stop rendering (~7,457m) — the premise being that
+    /// "locking where data ends" beats framing the whole city.
+    ///
+    /// **Third pass, current (PR #89 on-device follow-up) — that premise is now REVERSED.**
+    /// Kevin, on device with the 7,457m ceiling: "i think we need to have farther zoom. All
+    /// of manhattan is probably the right gate. So that you can zoom out to see all of
+    /// manhattan. The spot we are right now is awkward and difficult to understand what your
+    /// looking at unless you actually know manhattan really well." Locking to the
+    /// data-availability edge produced a *tighter*, more disorienting zoom-out ceiling than
+    /// the first-pass basemap-framing one — a user without an internal map of every block
+    /// couldn't zoom out far enough to get their bearings. Orientation at wide zoom is worth
+    /// more than guaranteeing polyline data is visible at every reachable zoom level.
+    ///
+    /// **Derivation, restructured (no longer coupled to `polylineHideSpanThreshold`):** this
+    /// constant is now derived from the pre-built tile grid's own coverage extent —
+    /// `AppConstants.manhattanCoverageBounds` — because that bounding box is what the new
+    /// limit actually means: "you can zoom out to see the whole covered area, and no
+    /// further." If the tile grid's coverage ever grows (`manhattanCoverageBounds` is the
+    /// single source of truth `isInManhattanCoverage(_:)` already uses elsewhere), this
+    /// constant recomputes automatically instead of silently falling out of sync.
+    ///
+    /// `manhattanCoverageZoomOutMarginFactor` (1.1, i.e. +10% headroom on the SPAN) exists so
+    /// the ceiling frames slightly MORE than the exact coverage box — "a little breathing
+    /// room" past the edge of Manhattan, rather than clipping the camera exactly at the
+    /// coastline. Both quantities scale linearly with span in `altitudeForSpan`, so applying
+    /// the margin to the span before conversion is equivalent to applying it to the
+    /// resulting altitude.
+    ///
+    /// Worked numbers (computed by the code below at compile-time-equivalent load time —
+    /// these are documentation of the arithmetic, not separately hardcoded values):
+    ///   coverage lat span: `manhattanCoverageBounds.latMax - latMin` = 40.882 − 40.700 =
+    ///     0.182° (80 tile rows × 0.002275°/row — matches the tile grid exactly)
+    ///   exact-fit altitude: altitudeForSpan(0.182°) ≈ 37,700m (≈37.7 km)
+    ///   margined target span: 0.182° × 1.1 = 0.2002°
+    ///   final altitude: altitudeForSpan(0.2002°) ≈ 41,467m (≈41.5 km)
+    ///
+    /// At this limit: the camera frames roughly all of Manhattan with a little margin — the
+    /// same "orient yourself against the whole island" view the first-pass 53,000m limit gave,
+    /// but now derived honestly from the actual coverage box instead of an arbitrary
+    /// city-framing guess. **Trade-off, explicit and accepted:** `AppConstants
+    /// .polylineHideSpanThreshold` (0.04°, ~8,285m) is unchanged and NOT raised — parking
+    /// polylines fade well before this ceiling (above ~8.3km), leaving a wide band
+    /// (~8.3km→41.5km) where Apple's basemap continues to render street names and
+    /// neighborhood labels but zero parking-state overlays. That is the accepted trade: Kevin
+    /// has an open complaint about zoom/pan lag, and `polylineHideSpanThreshold` was lowered
+    /// from 0.1° to 0.04° during viewport-polish specifically for performance (LRU tile-cache
+    /// headroom) — raising it back to chase this wider ceiling would reopen that regression.
+    /// Basemap-only orientation above 8.3km is the intended experience, not a bug.
+    ///
+    /// ⚠️ Known side effect, flagged rather than silently absorbed: `ContentView`'s cold-launch
+    /// default `region` span (0.07°/0.05° lat/lng, ~14,499m altitude) is now WELL INSIDE this
+    /// ceiling again (it was clamped down to ~7,457m by the previous, tighter pass) — see
+    /// `MapZoomOutLimitTests.testInitialBrowseRegion_isNoLongerClampedAtLaunch`, which now
+    /// documents the opposite of what the prior test name asserted.
+    ///
+    /// Relationship to `TileLoader.maxLoadSpanDegrees` / grid clamping (kept, unchanged, and
+    /// still wider than this constant): see `AppConstants.polylineHideSpanThreshold`'s doc
+    /// comment for the full three-layer statement (camera ceiling / polyline-hide gate /
+    /// tile-load backstop). Short version: this is a UX-layer cap on the STEADY-STATE camera
+    /// reachable via gesture or programmatic `setCamera`/`setRegion`. It is NOT a substitute
+    /// for `TileLoader`'s safety net — MapKit can still report a transient, degenerate
+    /// `region.span` mid-gesture (e.g. at extreme pitch) that is decoupled from this
+    /// steady-state bound; that is the independent crash path `TileLoader.tileKeys`/
+    /// `clampToInt` exists to guard regardless of how far the user can actually zoom.
+    /// Keep both — deleting either "because they look redundant" reopens a different bug.
+    static let manhattanCoverageZoomOutMarginFactor: Double = 1.1
+
+    static let maxZoomOutCenterCoordinateDistance: CLLocationDistance =
+        altitudeForSpan(
+            (AppConstants.manhattanCoverageBounds.latMax
+                - AppConstants.manhattanCoverageBounds.latMin)
+                * manhattanCoverageZoomOutMarginFactor
+        )
+
     func makeUIView(context: Context) -> MKMapView {
         let mapView = MKMapView()
         mapView.delegate = context.coordinator
         mapView.showsUserLocation = true  // W5.1: show blue dot for recenter feature
         mapView.isRotateEnabled = true
         mapView.isPitchEnabled = true
-        mapView.showsCompass = true
+        // PR #89 on-device follow-up, Kevin: "should we have the compass in the top left or
+        // in a spot so its clear which way you have tilted the map?" MapKit's built-in
+        // `showsCompass` compass renders top-RIGHT, colliding with `recenterButtonStack`
+        // (Find me / Find my car / Park Until) — visibly clipped on device. Disabled here;
+        // a repositioned `MKCompassButton` is added as a plain subview below, top-LEADING,
+        // which FT-20 vacated (the gear + Parking 101 "?" buttons that used to live there
+        // were deleted — see `ContentView`'s `mapZStack` doc comments).
+        mapView.showsCompass = false
         mapView.showsScale = true
 
         // Register the CarPinAnnotation view class.
@@ -739,6 +832,18 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         // Set initial camera region.
         mapView.setRegion(region, animated: false)
+
+        // Hard zoom-out limit (Kevin, 2026-08-23, on-device): max only, no minimum —
+        // Drive Mode and block-select both depend on tight zoom-in, so leaving
+        // minCenterCoordinateDistance unset imposes no zoom-in floor. Applies to BOTH
+        // user pinch gestures and programmatic setCamera/setRegion calls. See
+        // `maxZoomOutCenterCoordinateDistance` above for the full derivation.
+        mapView.setCameraZoomRange(
+            MKMapView.CameraZoomRange(
+                maxCenterCoordinateDistance: MapViewRepresentable.maxZoomOutCenterCoordinateDistance
+            ),
+            animated: false
+        )
 
         // W5: UILongPressGestureRecognizer for pin-drop / report dialog.
         // 0.4s minimum duration — slightly faster than iOS default (0.5s) for better
@@ -931,6 +1036,81 @@ struct MapViewRepresentable: UIViewRepresentable {
         coordinatorActions.setShowsBuildings = { [weak mapView] show in
             mapView?.showsBuildings = show
         }
+
+        // PR #89 on-device follow-up: repositioned compass (see `showsCompass = false`
+        // above for the full rationale). Added directly as a subview of `mapView` — Apple's
+        // own recommended usage of `MKCompassButton` — rather than as a SwiftUI overlay in
+        // `ContentView`, so the whole change stays inside this file (`ContentView.swift` and
+        // this file are the two most regression-prone views in the project; a native-subview
+        // add here is a one-time, static `makeUIView` setup call, not a per-render mutation,
+        // so it does not touch `updateUIView`'s "no UIKit state mutation mid-SwiftUI-update"
+        // invariant).
+        //
+        // `compassVisibility` defaults to `.adaptive` (iOS 16+, this target is iOS 17+):
+        // MapKit shows the compass only when the map is rotated away from north and
+        // auto-hides it at zero rotation — set explicitly below for documentation, not
+        // because the default needs overriding. That auto-hide/auto-show behavior is exactly
+        // the affordance Kevin asked to keep ("which way have I tilted the map"); it is
+        // MapKit's own internal animation, untouched here.
+        //
+        // Positioned top-leading, top offset pinned to `mapView.safeAreaLayoutGuide.topAnchor`
+        // (NOT the raw `mapView.topAnchor`) — on-device follow-up to the PR #89 comment this
+        // replaced. That prior version pinned to `mapView.topAnchor` with the same `100pt`
+        // constant `recenterButtonStack` uses and reasoned the two would land in the same
+        // place because the constant matched. On device they didn't (Kevin: "can we pull the
+        // compass down just a bit? Its overlapping on the banner"): `mapView.topAnchor` is the
+        // map view's RAW top — it sits above the status bar AND above the always-visible ASP
+        // banner (`SuspensionBannerState` has no "none" case; ASPBanner.swift's three states
+        // all render a visible ~44pt banner, and `paddingForBannerState` in ContentView.swift
+        // returns a non-zero value for all of them). `recenterButtonStack`'s `100pt` is a
+        // SwiftUI `.padding(.top, 100)`, which — because `recenterButtonStack` is a sibling of
+        // `mapRepresentable` in `ContentView`'s `mapZStack`, not a descendant of it — sits
+        // relative to the device's plain safe-area top (status bar / Dynamic Island), NOT the
+        // ASP banner (the banner's `.safeAreaInset` is attached directly to `mapRepresentable`
+        // and only extends the safe area seen by mapRepresentable's own subtree). Matching
+        // constants, different origins → the compass landed roughly a banner-height too high
+        // and clipped the banner. See the `paddingForBannerState` doc comment
+        // (`ContentView.swift`, TF2-18 P2-2) for the same "two unrelated toolbars instead of
+        // one row" failure mode already on record for this pair of floating clusters.
+        //
+        // Fix: switch the compass's base anchor to `mapView.safeAreaLayoutGuide.topAnchor`.
+        // Because the ASP banner's `.safeAreaInset(edge: .top)` IS attached to
+        // `mapRepresentable` (this same UIViewRepresentable), SwiftUI extends the wrapped
+        // `MKMapView`'s own safe area to include the banner's rendered height automatically —
+        // so this anchor already accounts for status bar + banner without `MapViewRepresentable`
+        // needing to take a `SuspensionBannerState` (or any other banner-shaped) input, and it
+        // self-updates if the banner's height or the device's safe-area inset ever changes.
+        // This is the "fix the mechanism, not the number" version: a live Auto Layout anchor
+        // that reads the actual rendered safe area, not a second hand-copied magic number.
+        //
+        // Remaining top offset (56pt) was derived, not measured, from typical values for this
+        // target (no simulator/Xcode in this environment):
+        //   recenterButtonStack absolute top  ≈ deviceSafeAreaTop (~59pt, Dynamic Island) + 100
+        //                                      ≈ 159pt
+        //   safeAreaLayoutGuide.topAnchor     ≈ deviceSafeAreaTop (~59pt) + bannerHeight (~44pt)
+        //                                      ≈ 103pt
+        //   remaining constant                ≈ 159 - 103 ≈ 56pt
+        // Kevin: please eyeball this against `recenterButtonStack`'s top edge on the next
+        // device pass — these are typical-device estimates, not an on-device measurement, so
+        // nudge the constant below if it's still off.
+        //
+        // No extra background chrome is added around the compass glyph itself (unlike the
+        // `.regularMaterial` pill buttons in `recenterButtonStack`): MapKit's own compass
+        // rendering already reads as a floating system control, and wrapping it in a
+        // persistent backdrop would keep an empty pill visible at north-up, undermining the
+        // auto-hide affordance Kevin explicitly asked to preserve. Flagged for Kevin's
+        // on-device call — if the bare compass reads as a "foreign element" against the
+        // toolbar's frosted-glass buttons once he sees it live, wrapping it in a
+        // show/hide-synced `.regularMaterial` backdrop is a scoped follow-up.
+        let compassButton = MKCompassButton(mapView: mapView)
+        compassButton.compassVisibility = .adaptive
+        compassButton.translatesAutoresizingMaskIntoConstraints = false
+        mapView.addSubview(compassButton)
+        NSLayoutConstraint.activate([
+            compassButton.topAnchor.constraint(
+                equalTo: mapView.safeAreaLayoutGuide.topAnchor, constant: 56),
+            compassButton.leadingAnchor.constraint(equalTo: mapView.leadingAnchor, constant: 12),
+        ])
 
         return mapView
     }

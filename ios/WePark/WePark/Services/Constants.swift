@@ -39,6 +39,46 @@ enum AppConstants {
         coordinate.longitude <= manhattanCoverageBounds.lngMax
     }
 
+    // MARK: - Zoom / camera / tile-load three-layer relationship (2026-08-23)
+
+    /// Hide all parking-state overlays when the visible camera span is zoomed out past this
+    /// (same behavior as W2/W3). Viewport-polish: lowered from 0.1 to 0.04 (4,453 m N-S,
+    /// ~44 Manhattan blocks). At 0.04° the LRU cap (200 tiles) covers the viewport without
+    /// eviction patchwork. Above 0.04° individual block faces are illegible anyway — hiding
+    /// is correct UX.
+    ///
+    /// Moved here (2026-08-23, zoom-out-limit-tighten) from a `private` instance constant on
+    /// `ContentView`.
+    ///
+    /// **Coupling to layer 1 changed (2026-08-23, PR #89 on-device follow-up):** layer 1
+    /// (`MapViewRepresentable.maxZoomOutCenterCoordinateDistance`) previously derived its
+    /// value FROM this constant — "locking where data ends." Kevin's on-device follow-up
+    /// reversed that: the camera ceiling now derives from `manhattanCoverageBounds` (below)
+    /// instead, because a limit tied to data-availability was tighter than useful for
+    /// orientation ("difficult to understand what your looking at unless you actually know
+    /// manhattan really well"). Layers 1 and 2 are now independently tuned, NOT coupled —
+    /// see layer 1's own doc comment for the full reversal writeup. This constant stays at
+    /// 0.04° regardless of where the camera ceiling sits: it was lowered from 0.1° during
+    /// viewport-polish for LRU tile-cache performance, and raising it back would reopen that
+    /// regression (Kevin has an open zoom/pan lag complaint). The accepted trade: polylines
+    /// fade above ~8.3km while the camera can still zoom out to ~41.5km on basemap alone.
+    ///
+    /// This is one of three independent, deliberately-separate guards — do not collapse them
+    /// into one:
+    ///   1. `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` — the actual camera
+    ///      ceiling reachable via gesture/programmatic call (~41.5km, now WIDER than this
+    ///      constant's implied span — the two used to nest tightest-to-widest, they no
+    ///      longer do) — derived from `manhattanCoverageBounds`, independent of this constant.
+    ///   2. `AppConstants.polylineHideSpanThreshold` (this constant) — the rendering gate: no
+    ///      parking-state polyline exists above this span regardless of camera limit.
+    ///   3. `TileLoader.maxLoadSpanDegrees` (widest/outermost) — the tile-LOAD backstop. Exists
+    ///      independently of layers 1–2 because MapKit can report a transient, degenerate
+    ///      `region.span` mid-gesture (e.g. extreme pitch) that is decoupled from the camera's
+    ///      steady-state bound — the `Int`-trap crash path this guards against is reachable
+    ///      no matter how far the user is allowed to zoom. Keep all three.
+    /// See each constant's own doc comment for its half of this relationship.
+    static let polylineHideSpanThreshold: Double = 0.04
+
     /// In-app notification rationale shown before `UNUserNotificationCenter.requestAuthorization`.
     /// Verbatim from `docs/ios-mvp-spec.md` §3.6 — do not change without updating the spec.
     static let notificationRationale = "Get a reminder before alternate-side parking starts so you never get ticketed. Notifications are scheduled on-device only."

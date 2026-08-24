@@ -732,11 +732,12 @@ struct ContentView: View {
 
     // MARK: - Constants
 
-    /// Hide all overlays when zoomed out beyond this span (same as W2/W3 behavior).
-    /// Viewport-polish: lowered from 0.1 to 0.04 (4,453 m N-S, ~44 Manhattan blocks).
-    /// At 0.04° the LRU cap (200 tiles) covers the viewport without eviction patchwork.
-    /// Above 0.04° individual block faces are illegible anyway — hiding is correct UX.
-    private let polylineHideSpanThreshold: Double = 0.04
+    // Note: the overlay zoom-hide threshold formerly declared here as a private constant
+    // moved to `AppConstants.polylineHideSpanThreshold` (2026-08-23). It no longer drives
+    // `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (that coupling was reversed
+    // 2026-08-23, PR #89 on-device follow-up — the camera ceiling now derives from
+    // `AppConstants.manhattanCoverageBounds` instead). See both constants' own doc comments
+    // for the full three-layer relationship and the reversal writeup.
 
     /// Tap hit threshold in meters (matches W4 behavior).
     private let tapHitThresholdMeters: Double = 20.0
@@ -1443,7 +1444,7 @@ struct ContentView: View {
     ///   - Selection change
     private func rebuildOverlays(at now: Date) {
         // Zoom-threshold gating: if zoomed out, clear all overlays.
-        guard region.span.latitudeDelta <= polylineHideSpanThreshold else {
+        guard region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold else {
             overlayGeneration += 1
             overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
             return
@@ -2337,9 +2338,33 @@ struct ContentView: View {
     /// Requests user location and recenters when the fix arrives.
     /// If a cached location is available, recenters immediately and also refreshes
     /// the fix so the next tap will have an up-to-date position.
+    ///
+    /// zoom-out-limit-tighten (2026-08-23): guards against recentering onto a coordinate with
+    /// no parking data (a non-NYC device, or an Apple reviewer in Cupertino). This action
+    /// simply does not move the camera when the fix is out of coverage; it reuses the
+    /// existing out-of-coverage toast (`BrowseSearchAreaView`'s "Limited parking data outside
+    /// Manhattan", shown there for the analogous out-of-coverage-destination routing case)
+    /// rather than inventing a second pattern. The camera stays wherever it already was — a
+    /// place with data — so "no data AND can't get back" is structurally unreachable via this
+    /// button.
+    ///
+    /// Independent of, and unaffected by, the zoom-out ceiling's later widening (PR #89
+    /// on-device follow-up, `MapViewRepresentable.maxZoomOutCenterCoordinateDistance`): this
+    /// guard is about WHERE the camera centers (a coordinate with data vs. without), not how
+    /// far it can zoom out from wherever it lands. Even at the wider ~41.5km ceiling,
+    /// recentering onto an out-of-coverage fix would still show the user a location with no
+    /// parking overlays and, likely, no idea where relative to Manhattan they are — this
+    /// guard stays regardless of the camera ceiling's value.
     private func recenterOnUser() {
         if let loc = locationService.userLocation {
-            // We have a cached fix — recenter immediately.
+            guard AppConstants.isInManhattanCoverage(loc) else {
+                ToastService.shared.show(message: "Limited parking data outside Manhattan")
+                // Still refresh the fix in the background — harmless, and picks up a fresher
+                // position (e.g. the user has since moved back into coverage) for next tap.
+                locationService.requestAndFetchLocation()
+                return
+            }
+            // We have a cached fix, in coverage — recenter immediately.
             recenterMap(on: loc)
             // Also request a fresh fix in the background for next use.
             locationService.requestAndFetchLocation()
@@ -2553,9 +2578,16 @@ struct ContentView: View {
     private func handleLocationUpdate() {
         guard let coord = locationService.userLocation else { return }
         // W5.1: Recenter on user location if requested.
+        // zoom-out-limit-tighten: same out-of-coverage guard as the immediate-fix branch in
+        // recenterOnUser() above — this is the deferred completion of the same button tap
+        // when no cached fix was available yet.
         if recenterOnUserRequested {
             recenterOnUserRequested = false
-            recenterMap(on: coord)
+            if AppConstants.isInManhattanCoverage(coord) {
+                recenterMap(on: coord)
+            } else {
+                ToastService.shared.show(message: "Limited parking data outside Manhattan")
+            }
         }
         // Viewport-polish Priority 2b: auto-center at launch if in coverage.
         if recenterOnUserAtLaunch {

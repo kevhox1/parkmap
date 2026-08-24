@@ -34,6 +34,33 @@
 //  ≈ 5 MB segment data — well within budget. Total tile set is 1,028 tiles × ~25 KB
 //  ≈ 25 MB; caching all 1,028 would be fine too, but 200 (~25%) is conservative.
 //
+//  Zoom-out crash fix (2026-08-23): `tileKeys(forRegion:)` previously looped every
+//  row/col combination in the viewport's bounds with NO upper limit before checking
+//  membership in `tileSet`. The tile grid is fine-grained (rowSize ≈ 0.00227°,
+//  colSize ≈ 0.00226°), so a wide-enough viewport made that loop explode — a 50°
+//  span is ~484M iterations, a world-scale span is ~12.6B — each doing a string
+//  interpolation + Set lookup. That is a watchdog termination presenting as a crash
+//  on-device. Separately, `Int(floor(x))` TRAPS at runtime for non-finite (NaN/inf)
+//  or out-of-Int-range `Double` input; MapKit can report a degenerate `region.span`
+//  (observed pattern: absurd or non-finite `latitudeDelta`) when the camera is at
+//  extreme pitch/altitude mid-gesture, which would crash instantly rather than hang.
+//  Fixed by (1) bailing out on non-finite region math before any Int conversion, and
+//  (2) clamping row/col ranges to the tile grid's ACTUAL extent (`gridSize.rows` /
+//  `gridSize.cols` from index.json) before looping, via `clampToInt` — which never
+//  traps. See `tileKeys(forRegion:)` and `maxLoadSpanDegrees` below.
+//
+//  Isolation fix (2026-08-23): `static func tileKeys(forRegion:...)` and
+//  `static func clampToInt(...)` are marked `nonisolated`. `TileLoader` is
+//  `@MainActor`, and this project sets `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`,
+//  so unannotated members of an `@MainActor` type inherit that isolation — these two
+//  static funcs were being pinned to the main actor despite touching only their own
+//  parameters (no instance state, no globals). That's harmless from existing
+//  @MainActor call sites (calling a nonisolated func from @MainActor is always fine)
+//  but made them uncallable from the synchronous, non-actor-isolated XCTestCase
+//  methods in TileLoaderZoomCrashTests.swift. `nonisolated` costs nothing here since
+//  both functions are pure, and leaves room to run tile-key math off the main thread
+//  later if profiling calls for it.
+//
 
 import Foundation
 import MapKit
@@ -99,6 +126,48 @@ final class TileLoader {
     /// late-finishing Task to overwrite segments with a stale viewport.
     private var currentRegion: MKCoordinateRegion?
 
+    /// Maximum visible-region span (in degrees, checked on both axes) above which
+    /// `loadTiles` does no work at all — no `tileKeys` computation, no decode
+    /// `Task`s, no cache touches.
+    ///
+    /// Chosen from the data, not taste: the tile grid's actual coverage (index.json)
+    /// is `latMin: 40.7, latMax: 40.882` (0.182° lat) × `lngMin: -74.02, lngMax:
+    /// -73.907` (0.113° lng) — all of NYC is ~0.18° across at its widest. At a 0.5°
+    /// span, all of NYC already renders as a sub-pixel smear (2.7× its largest
+    /// dimension) well before this method would even run — and
+    /// `AppConstants.polylineHideSpanThreshold` (0.04°) already stops *rendering*
+    /// polylines far earlier than that. This constant is the outer backstop: it
+    /// stops *loading* (tile-key computation + bundle decode) once the viewport is
+    /// so wide that no amount of loaded data could produce a visible parking
+    /// segment. 0.5° leaves headroom so a user panning slightly past the city edge
+    /// doesn't flicker the loader on/off at the boundary.
+    ///
+    /// Kevin: tune on-device if 0.5° feels too eager/lazy to cut off loading.
+    ///
+    /// Three-layer relationship (widest/outermost of the three — see
+    /// `AppConstants.polylineHideSpanThreshold`'s doc comment for the canonical statement of
+    /// all three together; restated briefly here since this is the layer most likely to look
+    /// "redundant" and get deleted):
+    ///   1. `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (tightest of the two
+    ///      steady-state camera guards, but still well inside this backstop) — the actual
+    ///      camera ceiling reachable via gesture/programmatic call. As of 2026-08-23 (PR #89
+    ///      on-device follow-up) this is DERIVED from `AppConstants.manhattanCoverageBounds`
+    ///      plus a small margin (~41,467m ≈ 0.2002° visible span, framing all of Manhattan),
+    ///      not a fixed number — it moves if the tile grid's coverage extent moves. (An
+    ///      earlier pass derived it from `AppConstants.polylineHideSpanThreshold` instead;
+    ///      that coupling was reversed — see that constant's own derivation note.)
+    ///   2. `AppConstants.polylineHideSpanThreshold` (0.04°, middle) — the rendering gate:
+    ///      no parking-state polyline exists above this span.
+    ///   3. This constant, `maxLoadSpanDegrees` (0.5°, widest) — the tile-LOAD backstop.
+    /// This threshold (and the grid clamping in `tileKeys`/`clampToInt` below) must stay
+    /// regardless of what layers 1–2 are set to, because MapKit can still report a transient,
+    /// degenerate `region.span` mid-gesture (e.g. at extreme pitch) that is decoupled from the
+    /// camera's steady-state bound — the `Int`-trap crash path this threshold and the
+    /// clamping guard against is reachable independently of how far the user is allowed to
+    /// zoom, or of where the polyline-hide gate sits. Keep all three; they guard different
+    /// failure modes even though they all sound like "zoom limits."
+    static let maxLoadSpanDegrees: Double = 0.5
+
     // MARK: Init
     init() {
         loadIndex()
@@ -113,6 +182,14 @@ final class TileLoader {
         // Update currentRegion first. Any Task that finishes after a later
         // pan will read this value at execution time, not the captured arg.
         currentRegion = region
+
+        // Zoomed out past NYC's actual coverage — no tile could produce a visible
+        // segment at this scale. Skip tileKeys/decode entirely rather than doing
+        // (now-bounded, but still pointless) grid work. See `maxLoadSpanDegrees`.
+        guard region.span.latitudeDelta <= Self.maxLoadSpanDegrees,
+              region.span.longitudeDelta <= Self.maxLoadSpanDegrees else {
+            return
+        }
 
         let keys = tileKeys(forRegion: region)
         let uncached = keys.filter { cache[$0] == nil }
@@ -186,14 +263,67 @@ final class TileLoader {
     /// Computes which tile keys overlap the given map region.
     /// Ported from getTilesForBounds() in index.html:2221.
     ///
+    /// Thin instance wrapper around the pure `Self.tileKeys(forRegion:...)` below —
+    /// supplies the grid parameters parsed from `index.json` at init time. See that
+    /// static function for the full algorithm and crash-fix rationale.
+    private func tileKeys(forRegion region: MKCoordinateRegion) -> [String] {
+        guard let idx = tileIndex else { return [] }
+        return Self.tileKeys(
+            forRegion: region,
+            gridRows: idx.gridSize.rows,
+            gridCols: idx.gridSize.cols,
+            latMin: idx.latMin,
+            lngMin: idx.lngMin,
+            rowSize: idx.rowSize,
+            colSize: idx.colSize,
+            tileSet: tileSet
+        )
+    }
+
+    /// Pure tile-key computation: no `Bundle`/`TileIndex`-loading dependency, directly
+    /// unit-testable without needing to load `index.json` from a bundle (same
+    /// "pure, directly testable" pattern as the `static func` decision helpers in
+    /// `MapViewRepresentable`). The instance method `tileKeys(forRegion:)` above is
+    /// the production call site, supplying grid parameters from the parsed
+    /// `TileIndex`.
+    ///
     /// The JS uses Leaflet `bounds.getSouth/getNorth/getWest/getEast`; we
     /// replicate those from the MKCoordinateRegion center + span.
     ///
-    /// Buffer = 2 extra tiles in each direction for smoother panning,
+    /// `buffer` = 2 extra tiles in each direction for smoother panning,
     /// matching the PWA's `const buffer = 2`.
-    private func tileKeys(forRegion region: MKCoordinateRegion) -> [String] {
-        guard let idx = tileIndex else { return [] }
-
+    ///
+    /// Crash fix (2026-08-23): row/col ranges are clamped to the tile grid's ACTUAL
+    /// extent (`gridRows` / `gridCols`) before the loop below runs, and all
+    /// Double→Int conversions go through `clampToInt` instead of `Int(floor(...))`.
+    /// Without the clamp, a viewport spanning far beyond NYC (up to world-scale)
+    /// produced a row/col range in the hundreds of millions to billions — each cell
+    /// visited to do a miss lookup in `tileSet` — a watchdog-timeout crash. Without
+    /// the finite/`clampToInt` guards, a non-finite or absurdly large `region.span`
+    /// (MapKit can report one mid-gesture at extreme pitch) would TRAP immediately in
+    /// `Int(floor(x))` instead of hanging. The grid's real extent is only 80 rows ×
+    /// 50 cols (index.json `gridSize`), so after clamping this loop is bounded at
+    /// roughly `(rows + 2·buffer) × (cols + 2·buffer)` ≈ 84 × 54 ≈ 4,536 iterations
+    /// for ANY input, valid or not.
+    ///
+    /// Do NOT remove this clamping on the assumption that
+    /// `MapViewRepresentable.maxZoomOutCenterCoordinateDistance` (the 2026-08-23 hard
+    /// camera zoom-out limit) makes it redundant — that limit bounds the STEADY-STATE
+    /// camera the user can reach; this clamp guards a transient, mid-gesture
+    /// `region.span` MapKit can still report independent of that steady-state bound
+    /// (e.g. at extreme pitch). Defense in depth: camera limit = UX, this clamp =
+    /// safety net. See `maxLoadSpanDegrees` above for the same relationship.
+    nonisolated static func tileKeys(
+        forRegion region: MKCoordinateRegion,
+        gridRows: Int,
+        gridCols: Int,
+        latMin: Double,
+        lngMin: Double,
+        rowSize: Double,
+        colSize: Double,
+        tileSet: Set<String>,
+        buffer: Int = 2
+    ) -> [String] {
         let halfLat = region.span.latitudeDelta / 2.0
         let halfLng = region.span.longitudeDelta / 2.0
         let south = region.center.latitude  - halfLat
@@ -201,14 +331,36 @@ final class TileLoader {
         let west  = region.center.longitude - halfLng
         let east  = region.center.longitude + halfLng
 
-        let buffer = 2
-        let rowMin = Int(floor((south - idx.latMin) / idx.rowSize)) - buffer
-        let rowMax = Int(floor((north - idx.latMin) / idx.rowSize)) + buffer
-        let colMin = Int(floor((west  - idx.lngMin) / idx.colSize)) - buffer
-        let colMax = Int(floor((east  - idx.lngMin) / idx.colSize)) + buffer
+        // Bail out on non-finite region math (NaN/inf) BEFORE any Int conversion.
+        // `Int(floor(x))` traps at runtime for non-finite input — this guard turns
+        // a potential instant crash into "no tiles for this frame".
+        guard south.isFinite, north.isFinite, west.isFinite, east.isFinite else {
+            return []
+        }
 
-        // Guard against degenerate ranges (e.g. zoomed out so far that rowMin > rowMax
-        // after clamping would produce an empty range — shouldn't happen but be safe).
+        let rowMinRaw = floor((south - latMin) / rowSize) - Double(buffer)
+        let rowMaxRaw = floor((north - latMin) / rowSize) + Double(buffer)
+        let colMinRaw = floor((west  - lngMin) / colSize) - Double(buffer)
+        let colMaxRaw = floor((east  - lngMin) / colSize) + Double(buffer)
+
+        // Clamp to the tile grid's ACTUAL extent, not the viewport. Every tile that
+        // exists has row in [0, gridRows - 1] and col in [0, gridCols - 1] (see
+        // index.json); any row/col outside that range is guaranteed to miss
+        // `tileSet.contains` anyway, so clamping first only removes iterations that
+        // could never have produced a hit — no functional change for any viewport
+        // that actually overlaps NYC, and a hard bound on iteration count for any
+        // viewport that doesn't.
+        let rowBound = max(0, gridRows - 1)
+        let colBound = max(0, gridCols - 1)
+
+        let rowMin = clampToInt(rowMinRaw, lower: 0, upper: rowBound)
+        let rowMax = clampToInt(rowMaxRaw, lower: 0, upper: rowBound)
+        let colMin = clampToInt(colMinRaw, lower: 0, upper: colBound)
+        let colMax = clampToInt(colMaxRaw, lower: 0, upper: colBound)
+
+        // Guard against degenerate/inverted ranges (e.g. a region entirely outside
+        // the grid, where clamping pins both min and max to the same bound but on
+        // opposite sides — or a genuinely inverted south > north input).
         guard rowMin <= rowMax, colMin <= colMax else { return [] }
 
         var result: [String] = []
@@ -221,6 +373,20 @@ final class TileLoader {
             }
         }
         return result
+    }
+
+    /// Converts a `Double` to an `Int` clamped into `[lower, upper]`.
+    ///
+    /// Unlike `Int(value)` / `Int(floor(value))`, this NEVER traps: non-finite
+    /// (NaN/±infinity) or out-of-`Int`-range input clamps to the nearest bound
+    /// instead of crashing. Used by `tileKeys(forRegion:...)` to convert
+    /// region-derived row/col bounds that may be garbage (mid-gesture MapKit state,
+    /// or a viewport far outside the tile grid) into safe grid indices.
+    nonisolated static func clampToInt(_ value: Double, lower: Int, upper: Int) -> Int {
+        guard value.isFinite else { return value > 0 ? upper : lower }
+        if value <= Double(lower) { return lower }
+        if value >= Double(upper) { return upper }
+        return Int(value)
     }
 
     // MARK: - LRU cache helpers
