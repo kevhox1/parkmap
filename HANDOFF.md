@@ -201,7 +201,36 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
-### 2026-08-24 (later) — Build 18 started: iCloud parked-car sync + FT-2. Two prerequisites for Kevin.
+### 2026-08-24 (latest) — ✅ BUILD 18 SHIPPED TO EXTERNAL. Feature work renumbered to build 19.
+
+**Build 1.0 (18) is archived, uploaded, and distributed externally.** Payload: dark mode (#83) +
+realtime WebSocket (#84) + the FT-20 browse-mode bottom sheet (#85/#86/#87) + all six stability fixes
+(#88/#89). This is the first externally-distributed build that does not crash on a pinch-out.
+
+**⚠️ NUMBERING CHANGED — read this before trusting any older entry.** Build 17 was already on
+TestFlight when the zoom-crash fixes landed, so the corrected archive could not reuse that number.
+**"Build 18" now means THIS SHIPPED ARCHIVE.** Everywhere earlier in this doc and in
+`docs/open-items.md` where "build 18" means *iCloud parked-car sync + FT-2*, that scope is now
+**BUILD 19**. Patrol mode (either reading) is build 20+.
+
+**🔴 BUILD 17 IS STILL ON TESTFLIGHT AND STILL CRASHES.** It predates #88/#89. Kevin was advised to
+stop distributing it to any group — anyone who already installed it keeps it until they update.
+
+**BUILD 19 = iCloud parked-car sync + FT-2 delete-own-pin.** ~4–6.5 sessions. Specs:
+`docs/icloud-parked-car-sync-spec.md`, `docs/ft2-delete-own-pin-spec.md`. Neither is blocked on the
+drive test. **Patrol mode still is** — and its two readings differ by ~7–11 vs ~14–26 sessions
+(`docs/build-18-sizing.md`, which despite its filename sizes what is now build 19+).
+
+**⏳ THE BUILD 18 DRIVE TEST IS NOW THE GATE ON EVERYTHING ELSE.** Realtime is the payload and the
+reason the build exists. Watch for a **silently dead socket**: Drive Mode suspends the 45s poll
+backstop, so pins freezing mid-drive with no error is THE failure mode to report. Also riding along:
+**TF2-16** (heading at intersection approaches — never actually watched for, "Unsure" twice),
+the **FT-15 end-to-end submit** (writes to production; somewhere verifiable), and the **sunlight
+check** on the new sheet chrome and top-right rail, which no simulator can perform.
+
+---
+
+### 2026-08-24 (later) — Build 19 work started: iCloud parked-car sync + FT-2. Two prerequisites for Kevin.
 
 **`main` @ `386d7d49`.** Build 18's scope is **iCloud parked-car sync + FT-2 delete-own-pin** — ~4–6.5
 sessions, disjoint files, and neither is blocked on the build-17 drive test. Patrol mode (either
