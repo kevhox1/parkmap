@@ -5,7 +5,9 @@
 //  Tier 1 Pin Display — Community 1.0 read-only fetch + Realtime subscription stub.
 //  Tier 3 Sub-PR #1 additions: authenticated write path (insertCrowdPin, upsertVote,
 //  callExtendPinExpiry) + Realtime channel activation for ephemeral crowd pins.
-//  Spec: docs/tier1-pin-display-spec.md §9, docs/tier3-auth-and-reactions-spec.md §3.9.
+//  FT-2 addition: deleteCrowdPin — hard-delete a pin the current user authored.
+//  Spec: docs/tier1-pin-display-spec.md §9, docs/tier3-auth-and-reactions-spec.md §3.9,
+//  docs/ft2-delete-own-pin-spec.md.
 //
 //  Responsibilities:
 //   - Debounced (800ms) PostgREST bounding-box fetch, merged from 3 channels:
@@ -23,6 +25,10 @@
 //   - Client-side expiry filter: removes pins where expiresAt != nil && expiresAt <= nowProvider().
 //   - Publishes `visiblePins: [CommunityPin]` — ContentView observes this.
 //   - Write path: insertCrowdPin / upsertVote / callExtendPinExpiry (authenticated, sub-PR #1).
+//   - Write path: deleteCrowdPin (FT-2) — hard-deletes a pin the caller authored, gated
+//     server-side by the pre-existing `pins_delete_own` RLS policy. Optimistic local
+//     removal before the network call; a Realtime DELETE echo for the same pin is a
+//     harmless no-op against `removePin(id:)`.
 //   - Optimistic add after insertCrowdPin: uses return=representation + mergeRealtimeChange
 //     so the reporter sees their own pin immediately without panning (Fix 1).
 //
@@ -1348,6 +1354,89 @@ final class CommunityPinService {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw CommunityPinWriteError.httpError(statusCode: status)
         }
+    }
+
+    // MARK: - Write path: Delete own pin (FT-2)
+
+    /// Hard-deletes a pin the current user authored — the "I reported this by mistake"
+    /// escape hatch (`docs/ft2-delete-own-pin-spec.md` §4.1).
+    ///
+    /// Server-side authority is the `pins_delete_own` RLS policy
+    /// (`supabase/02-pins-schema.sql:157-159`, `for delete using (auth.uid() = author_id)`)
+    /// — that policy already exists and is live; this method does NOT re-check ownership
+    /// client-side before issuing the request. `PinDetailSheet`'s delete affordance only
+    /// ever appears on the caller's own pin (`ReactionsRow.isOwnPin`), but that UI guard is
+    /// a convenience, not the security boundary — a caller that somehow reached this method
+    /// for someone else's pin gets an HTTP 403 back from RLS, exactly as intended.
+    ///
+    /// Optimistic local removal happens BEFORE the network call fires (spec §4.1 step 2),
+    /// mirroring `insertCrowdPin`'s optimistic-add: `visiblePins` drops the pin immediately
+    /// so the map marker disappears without waiting for a round trip. If the network call
+    /// subsequently fails, this method does NOT roll the removal back — the caller
+    /// (`PinDetailSheet`) surfaces an inline error and keeps the sheet open instead. The pin
+    /// only reappears if the delete did not actually succeed server-side, on the next
+    /// periodic refresh or Realtime reconciliation (spec §5 "Delete while offline").
+    ///
+    /// The `votes` FK (`supabase/02-pins-schema.sql:166`, `on delete cascade`) means a
+    /// successful delete here also removes every vote on the pin server-side — no
+    /// client-side pre-delete of votes is needed.
+    ///
+    /// A Realtime DELETE event for this same pin may arrive over the WebSocket shortly
+    /// after (own echo, or another client's fetch racing this one) and routes through
+    /// `removePin(id:)`, which is `visiblePins.removeAll { $0.id == id }` — a no-op on an
+    /// ID that's already absent (this method's own optimistic removal got there first).
+    /// No flicker, no resurrection, no crash: removal is idempotent by construction.
+    ///
+    /// - Parameter id: The pin's primary key.
+    /// - Throws: `CommunityPinWriteError.notAuthenticated` if there's no valid session;
+    ///   `.httpError(statusCode:)` for any other non-2xx response (in particular 403 if
+    ///   RLS rejects the delete because the caller isn't the author). HTTP 404 is treated
+    ///   as success — the pin is already gone (expired cleanup, or a delete race with
+    ///   another client/tab), and PostgREST itself returns 200/204 with zero rows affected
+    ///   rather than 404 for "no matching row" on DELETE, so this is defensive, not the
+    ///   expected path.
+    func deleteCrowdPin(id: UUID) async throws {
+        guard let authSvc = authService else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken(),
+              authSvc.currentUserId != nil else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+
+        // Optimistic local removal — before the network call (spec §4.1 step 2).
+        visiblePins.removeAll { $0.id == id }
+
+        // DELETE requests filter by primary key via a PostgREST query parameter
+        // (?id=eq.<uuid>), not the path — same URLComponents pattern as the request
+        // builders above (e.g. buildOpenDataRequest). buildAuthenticatedRequest(path:...)
+        // can't express this: it only ever appends `path` as a literal path component.
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/pins"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "id", value: "eq.\(id.uuidString)")]
+        guard let url = components?.url else {
+            throw CommunityPinWriteError.encodingFailure
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // return=minimal: DELETE has no body either way; no representation is needed back.
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse else {
+            throw CommunityPinWriteError.httpError(statusCode: 0)
+        }
+        // 2xx: success. 404: already gone — also treated as success (see doc comment above).
+        if (200..<300).contains(http.statusCode) || http.statusCode == 404 {
+            return
+        }
+        throw CommunityPinWriteError.httpError(statusCode: http.statusCode)
     }
 
     // MARK: - Write path: Block-scoped restriction report (FT-15/TF2-15 Stream B3)

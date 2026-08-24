@@ -6,8 +6,11 @@
 //  Tier 3 Sub-PR #1 additions: reactions row for ephemeral crowd pins.
 //  FT-15 / TF2-15 Stream B4 additions: block-scoped restriction detail view, widened
 //  reactions gate, construction glyph/color.
+//  FT-2 addition: own-pin delete affordance ("I reported this by mistake") replaces the
+//  vote buttons when the current user is the pin's author.
 //  Spec: docs/tier1-pin-display-spec.md §8, docs/tier3-auth-and-reactions-spec.md §3.10,
-//  docs/ft15-tf215-temporary-block-restrictions-spec.md §9.2/§9.3.
+//  docs/ft15-tf215-temporary-block-restrictions-spec.md §9.2/§9.3,
+//  docs/ft2-delete-own-pin-spec.md §4.2.
 //
 //  Surfaces:
 //   - filming (open_data, reportGroupId == nil): type icon + label, open-data badge,
@@ -18,16 +21,22 @@
 //     segment_id), starts_at–expires_at window, multi-blockface extent if >1 sibling
 //     shares the reportGroupId, notes.
 //   - enforcement_active / sweeper_passed (Tier 3 ephemeral crowd pins):
-//       reactions row with "Still there?" (confirm + extend) and "Gone" (dispute) buttons.
+//       reactions row with "Still there?" (confirm + extend) and "Gone" (dispute) buttons
+//       for other users' pins, or a delete affordance (FT-2) for the caller's own pin.
 //
-//  Reactions row (sub-PR #1; widened FT-15/TF2-15 AC-C4):
+//  Reactions row (sub-PR #1; widened FT-15/TF2-15 AC-C4; FT-2 own-pin branch):
 //   - Shown when pin.source == .crowd AND (pin.lifespan == .ephemeral OR
 //     pin.reportGroupId != nil) — see `CommunityPin.showsReactionsRow`
 //     (Views/PinMarkerAnnotation.swift).
-//   - A1 own-pin guard: buttons disabled when pin.authorId == authService.currentUserId.
-//   - "Still there?" disabled when pin.lifespan == .ephemeral AND pin is within 5min of
-//     the 2h TTL cap — see `isStillHereDisabled`'s doc comment for why this check is
-//     scoped to ephemeral pins only (non-ephemeral pins never hit it).
+//   - A1 own-pin guard (`isOwnPin`): pin.authorId == authService.currentUserId.
+//   - FT-2: when `isOwnPin`, the "Community Check" header, confirm-count badge, and both
+//     vote buttons are replaced entirely by a single destructive "I reported this by
+//     mistake" button. Tapping it presents a `.confirmationDialog` before calling
+//     `CommunityPinService.deleteCrowdPin(id:)`. Own pins never show vote buttons — there
+//     is no more "greyed-out dead end" state (docs/field-testing-log.md FT-3 note).
+//   - "Still there?" disabled (non-own pins only) when pin.lifespan == .ephemeral AND pin
+//     is within 5min of the 2h TTL cap — see `isStillHereDisabled`'s doc comment for why
+//     this check is scoped to ephemeral pins only (non-ephemeral pins never hit it).
 //   - Confirm count badge reads from pin.confirmCount (updated in real time via Realtime).
 //   - Loading state: ProgressView while async calls are in-flight.
 //
@@ -76,7 +85,8 @@ struct PinDetailSheet: View {
                         ReactionsRow(
                             pin: pin,
                             authService: authService,
-                            pinService: pinService
+                            pinService: pinService,
+                            onDismiss: onDismiss
                         )
                     }
                 }
@@ -374,78 +384,44 @@ struct PinDetailSheet: View {
 
 /// Reactions row for Tier 3 ephemeral crowd pins.
 ///
-/// Shows "Still there?" (confirm + extend TTL) and "Gone" (dispute) buttons.
-/// Displays the live confirm count from `pin.confirmCount`.
+/// Non-own pins show "Still there?" (confirm + extend TTL) and "Gone" (dispute) buttons,
+/// with the live confirm count from `pin.confirmCount`. The caller's own pin (FT-2) shows
+/// a single destructive delete affordance instead — see `deleteSection`.
 ///
 /// Design (community-1.0-direction.md §6.1):
-///   - One-tap, binary, no confirmation sheet.
+///   - One-tap, binary, no confirmation sheet for votes.
 ///   - Tap targets are 44pt minimum (HIG).
-///   - A1 guard: buttons disabled when pin.authorId == authService.currentUserId.
+///   - A1 guard: vote buttons hidden (not just disabled — FT-2) when
+///     pin.authorId == authService.currentUserId.
 private struct ReactionsRow: View {
 
     let pin: CommunityPin
     var authService: SupabaseAuthService
     var pinService: CommunityPinService
 
-    /// True while a reaction call is in-flight. Replaces the confirm count with a spinner.
+    /// Closes the parent `PinDetailSheet`. FT-2: called after a successful delete
+    /// (`docs/ft2-delete-own-pin-spec.md` §4.2 step 3) before the toast fires.
+    var onDismiss: () -> Void
+
+    /// True while a reaction/delete call is in-flight. Replaces the confirm count (or the
+    /// delete button) with a spinner and disables further taps (AC-FT2.10 double-tap guard).
     @State private var isLoading: Bool = false
 
-    /// Last error from a reaction call. Cleared on next successful call.
+    /// Last error from a reaction/delete call. Cleared on next successful call.
     @State private var errorMessage: String? = nil
+
+    /// Drives the FT-2 delete confirmation `.confirmationDialog` presentation.
+    @State private var showDeleteConfirmation: Bool = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            // Section header
-            Text("Community Check")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .textCase(.uppercase)
-
-            // Confirm count badge or loading spinner
-            HStack {
-                if isLoading {
-                    ProgressView()
-                        .frame(width: 20, height: 20)
-                } else {
-                    Label(
-                        pin.confirmCount == 1
-                            ? "1 confirm"
-                            : "\(pin.confirmCount) confirms",
-                        systemImage: "checkmark.circle.fill"
-                    )
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                }
-                Spacer()
-            }
-
-            // Reaction buttons
-            HStack(spacing: 12) {
-                // "Still there?" button — confirm + extend TTL.
-                Button {
-                    Task { await handleStillHere() }
-                } label: {
-                    Label("Still there?", systemImage: "checkmark.circle")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.bordered)
-                .tint(.green)
-                .disabled(isStillHereDisabled)
-                .accessibilityLabel("Still there? Confirm this pin and extend its time")
-
-                // "Gone" button — dispute.
-                Button {
-                    Task { await handleGone() }
-                } label: {
-                    Label("Gone", systemImage: "xmark.circle")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                }
-                .buttonStyle(.bordered)
-                .tint(.red)
-                .disabled(isGoneDisabled)
-                .accessibilityLabel("Gone — dispute this pin")
+            // FT-2 (AC-FT2.2, AC-FT2.12): own pins get a delete affordance instead of the
+            // "Community Check" header / confirm badge / vote buttons — there is no more
+            // "greyed out, nothing to do" dead end (docs/field-testing-log.md FT-3 note).
+            if isOwnPin {
+                deleteSection
+            } else {
+                voteSection
             }
 
             // Error display (non-blocking — user can retry).
@@ -455,11 +431,107 @@ private struct ReactionsRow: View {
                     .foregroundStyle(.red)
             }
         }
+        .confirmationDialog(
+            "Delete this report?",
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) {
+                Task { await handleDelete() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This will permanently remove your pin. This cannot be undone.")
+        }
+    }
+
+    // MARK: - Own-pin delete section (FT-2)
+
+    @ViewBuilder
+    private var deleteSection: some View {
+        if isLoading {
+            HStack {
+                ProgressView()
+                    .frame(width: 20, height: 20)
+                Spacer()
+            }
+        } else {
+            Button {
+                showDeleteConfirmation = true
+            } label: {
+                Label("I reported this by mistake", systemImage: "trash")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .disabled(isLoading)
+            .accessibilityLabel("Delete this report — tap to remove your accidental pin")
+        }
+    }
+
+    // MARK: - Non-own-pin vote section
+
+    @ViewBuilder
+    private var voteSection: some View {
+        // Section header
+        Text("Community Check")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .textCase(.uppercase)
+
+        // Confirm count badge or loading spinner
+        HStack {
+            if isLoading {
+                ProgressView()
+                    .frame(width: 20, height: 20)
+            } else {
+                Label(
+                    pin.confirmCount == 1
+                        ? "1 confirm"
+                        : "\(pin.confirmCount) confirms",
+                    systemImage: "checkmark.circle.fill"
+                )
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+
+        // Reaction buttons
+        HStack(spacing: 12) {
+            // "Still there?" button — confirm + extend TTL.
+            Button {
+                Task { await handleStillHere() }
+            } label: {
+                Label("Still there?", systemImage: "checkmark.circle")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .tint(.green)
+            .disabled(isStillHereDisabled)
+            .accessibilityLabel("Still there? Confirm this pin and extend its time")
+
+            // "Gone" button — dispute.
+            Button {
+                Task { await handleGone() }
+            } label: {
+                Label("Gone", systemImage: "xmark.circle")
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+            }
+            .buttonStyle(.bordered)
+            .tint(.red)
+            .disabled(isGoneDisabled)
+            .accessibilityLabel("Gone — dispute this pin")
+        }
     }
 
     // MARK: - Button enable logic
 
     /// True when the user's own pin (A1 own-pin guard, iOS-side, decision A1 per spec OQ-1).
+    /// FT-2 reuses this unchanged guard to route to `deleteSection` instead of `voteSection`.
     private var isOwnPin: Bool {
         guard let authorId = pin.authorId,
               let currentId = authService.currentUserId else { return false }
@@ -467,7 +539,8 @@ private struct ReactionsRow: View {
     }
 
     /// "Still there?" is disabled when:
-    ///   1. It is the user's own pin (A1 guard).
+    ///   1. It is the user's own pin (A1 guard) — dead code post-FT-2 since own pins never
+    ///      render `voteSection` at all, but kept as a defensive second guard.
     ///   2. The pin is `ephemeral` AND within 5 minutes of the 2h TTL cap
     ///      (expires_at > now + 115 min). No point extending — the cap is close.
     ///      Uses Date() + TimeInterval (no Calendar.current).
@@ -496,6 +569,8 @@ private struct ReactionsRow: View {
     }
 
     /// "Gone" is disabled when it is the user's own pin (A1 guard) or a call is in-flight.
+    /// Dead code post-FT-2 for the same reason as `isStillHereDisabled`'s rule 1 — kept as
+    /// a defensive second guard, not the primary mechanism (that's `isOwnPin` routing).
     private var isGoneDisabled: Bool {
         isOwnPin || isLoading
     }
@@ -527,6 +602,27 @@ private struct ReactionsRow: View {
             errorMessage = "Couldn't report — please try again."
         }
         isLoading = false
+    }
+
+    /// Delete-confirmed tap (FT-2, spec §4.2): calls `deleteCrowdPin`, which itself performs
+    /// the optimistic local removal before the network call. On success, dismisses the sheet
+    /// and shows the "Report deleted." toast (spec AC-FT2.7, AC-FT2.8). On failure, keeps the
+    /// sheet open and shows an inline error (AC-FT2.9) — the pin has already been optimistically
+    /// removed from the map; it reappears on the next periodic refresh only if the delete did
+    /// not actually succeed server-side.
+    private func handleDelete() async {
+        isLoading = true
+        errorMessage = nil
+        do {
+            try await pinService.deleteCrowdPin(id: pin.id)
+            onDismiss()
+            await MainActor.run {
+                ToastService.shared.show(message: "Report deleted.")
+            }
+        } catch {
+            isLoading = false
+            errorMessage = "Couldn't delete — please try again."
+        }
     }
 }
 
