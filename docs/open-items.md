@@ -30,6 +30,22 @@ App Store Connect, real-device drive test).
 
 ---
 
+## 🟡 FT-2 FOLLOW-UPS — merged with known findings (2026-08-24, from `docs/qa/pr90-ft2-delete-own-pin.md`)
+
+FT-2 merged (`2a6084d9`) after device smoke + QA. Two 🟡 findings were accepted as non-blocking
+because neither is reachable through the shipped UI. **They are still real — do not let them evaporate.**
+
+| # | Finding | Why it was not a blocker |
+|---|---|---|
+| **F1** | **AC-FT2.11 assumes an RLS-rejected DELETE returns 403. PostgREST's actual behaviour for a bare `USING` policy with no raising trigger — which `pins_delete_own` is — is *success with zero rows affected*.** So the client's `403 → httpError` branch (`CommunityPinService.swift:1512-1516`) is probably unreachable, and if the UI ownership guard were ever broken, deleting someone else's pin would show a **false "Report deleted."** ⚠️ **Not a security hole** — RLS still blocks the delete. But the UX would lie. **Verify the real status code with curl against production before treating AC-FT2.11 as closed**, then either correct the spec or make the client treat a zero-row response as failure |
+| **F2** | **`pendingOptimisticDeletes` interference on a concurrent same-id delete.** `CommunityPinService.swift:1476-1479` sets the entry *conditionally* (`if capturedPin != nil`) but the `defer` at `:1479` clears it *unconditionally*. A second call for the same id — whose own `capturedPin` is nil because the first already removed the pin — still registers that defer and clears the first call's in-flight entry. `rollbackOptimisticDelete` (`:1539-1545`) could then resurrect a pin the server genuinely deleted | Not reachable via the shipped UI: the delete button is *replaced by a spinner* (not merely disabled) before a second tap can land, and `.confirmationDialog` fires its destructive action once. **The fix is small — make the `defer` conditional, matching the set** |
+
+Also logged 🟢: the test-file header says "13 tests" but contains 12 (`FT2DeleteOwnPinTests.swift:14`) — the 830+12=842 arithmetic is right, only the comment is off by one.
+
+**Still with no device evidence:** AC-FT2.13(e), "no delete button on someone else's pin." Kevin had no other users' pins to test against. QA verified the predicate by trace — `isOwnPin` compares `author_id`, a **base-table** column that IS present in Realtime WAL payloads (only the view-joined `author_username` is absent), so it holds for Realtime-delivered pins too.
+
+---
+
 ## 🟡 IN FLIGHT — right now
 
 | # | Item | Where | State |
