@@ -1053,15 +1053,46 @@ struct MapViewRepresentable: UIViewRepresentable {
         // the affordance Kevin asked to keep ("which way have I tilted the map"); it is
         // MapKit's own internal animation, untouched here.
         //
-        // Positioned top-leading, pinned to `mapView.topAnchor`/`leadingAnchor` (not
-        // `safeAreaLayoutGuide`) with a fixed 100pt top offset — the SAME offset
-        // `recenterButtonStack` uses (`TF2-18 P2-2`, `ContentView.swift`) to clear the status
-        // bar + the always-visible ASP banner (`SuspensionBannerState` has no "none" case;
-        // the banner is present in all three states). Reusing that proven, on-device-verified
-        // constant rather than deriving a second, untested one from
-        // `mapView.safeAreaLayoutGuide` keeps this in the same coordinate space
-        // `recenterButtonStack`'s offset was calibrated against. 12pt leading mirrors that
-        // stack's 12pt trailing inset for a symmetric top strip.
+        // Positioned top-leading, top offset pinned to `mapView.safeAreaLayoutGuide.topAnchor`
+        // (NOT the raw `mapView.topAnchor`) — on-device follow-up to the PR #89 comment this
+        // replaced. That prior version pinned to `mapView.topAnchor` with the same `100pt`
+        // constant `recenterButtonStack` uses and reasoned the two would land in the same
+        // place because the constant matched. On device they didn't (Kevin: "can we pull the
+        // compass down just a bit? Its overlapping on the banner"): `mapView.topAnchor` is the
+        // map view's RAW top — it sits above the status bar AND above the always-visible ASP
+        // banner (`SuspensionBannerState` has no "none" case; ASPBanner.swift's three states
+        // all render a visible ~44pt banner, and `paddingForBannerState` in ContentView.swift
+        // returns a non-zero value for all of them). `recenterButtonStack`'s `100pt` is a
+        // SwiftUI `.padding(.top, 100)`, which — because `recenterButtonStack` is a sibling of
+        // `mapRepresentable` in `ContentView`'s `mapZStack`, not a descendant of it — sits
+        // relative to the device's plain safe-area top (status bar / Dynamic Island), NOT the
+        // ASP banner (the banner's `.safeAreaInset` is attached directly to `mapRepresentable`
+        // and only extends the safe area seen by mapRepresentable's own subtree). Matching
+        // constants, different origins → the compass landed roughly a banner-height too high
+        // and clipped the banner. See the `paddingForBannerState` doc comment
+        // (`ContentView.swift`, TF2-18 P2-2) for the same "two unrelated toolbars instead of
+        // one row" failure mode already on record for this pair of floating clusters.
+        //
+        // Fix: switch the compass's base anchor to `mapView.safeAreaLayoutGuide.topAnchor`.
+        // Because the ASP banner's `.safeAreaInset(edge: .top)` IS attached to
+        // `mapRepresentable` (this same UIViewRepresentable), SwiftUI extends the wrapped
+        // `MKMapView`'s own safe area to include the banner's rendered height automatically —
+        // so this anchor already accounts for status bar + banner without `MapViewRepresentable`
+        // needing to take a `SuspensionBannerState` (or any other banner-shaped) input, and it
+        // self-updates if the banner's height or the device's safe-area inset ever changes.
+        // This is the "fix the mechanism, not the number" version: a live Auto Layout anchor
+        // that reads the actual rendered safe area, not a second hand-copied magic number.
+        //
+        // Remaining top offset (56pt) was derived, not measured, from typical values for this
+        // target (no simulator/Xcode in this environment):
+        //   recenterButtonStack absolute top  ≈ deviceSafeAreaTop (~59pt, Dynamic Island) + 100
+        //                                      ≈ 159pt
+        //   safeAreaLayoutGuide.topAnchor     ≈ deviceSafeAreaTop (~59pt) + bannerHeight (~44pt)
+        //                                      ≈ 103pt
+        //   remaining constant                ≈ 159 - 103 ≈ 56pt
+        // Kevin: please eyeball this against `recenterButtonStack`'s top edge on the next
+        // device pass — these are typical-device estimates, not an on-device measurement, so
+        // nudge the constant below if it's still off.
         //
         // No extra background chrome is added around the compass glyph itself (unlike the
         // `.regularMaterial` pill buttons in `recenterButtonStack`): MapKit's own compass
@@ -1076,7 +1107,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         compassButton.translatesAutoresizingMaskIntoConstraints = false
         mapView.addSubview(compassButton)
         NSLayoutConstraint.activate([
-            compassButton.topAnchor.constraint(equalTo: mapView.topAnchor, constant: 100),
+            compassButton.topAnchor.constraint(
+                equalTo: mapView.safeAreaLayoutGuide.topAnchor, constant: 56),
             compassButton.leadingAnchor.constraint(equalTo: mapView.leadingAnchor, constant: 12),
         ])
 
