@@ -201,6 +201,51 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-24 (later) — Build 18 started: iCloud parked-car sync + FT-2. Two prerequisites for Kevin.
+
+**`main` @ `386d7d49`.** Build 18's scope is **iCloud parked-car sync + FT-2 delete-own-pin** — ~4–6.5
+sessions, disjoint files, and neither is blocked on the build-17 drive test. Patrol mode (either
+reading) IS blocked on that drive and waits for build 19+.
+
+**🖥 TWO PREREQUISITES ONLY KEVIN CAN DO:**
+1. **Add the iCloud capability in Xcode** — target → Signing & Capabilities → **+ Capability → iCloud
+   → Key-value storage**. **There is no `.entitlements` file or iCloud capability anywhere in
+   `project.pbxproj` today** — not disabled, absent. ⚠️ **This fails SILENTLY:**
+   `NSUbiquitousKeyValueStore` compiles and runs fine without it, simply never syncing, with no error.
+   Do this before the engineering lands or verification will chase a config gap. Same shape as the
+   Phase-0 supabase-swift SPM add.
+2. **A second Apple device** (iPad, old iPhone) on the same Apple ID. Cross-device behaviour is the
+   entire feature; neither a simulator nor one phone can prove it. If there isn't one, the spec's
+   verification section states plainly what stays unverified.
+
+**🔴 THE TRAP THE SPEC CAUGHT** (`docs/icloud-parked-car-sync-spec.md`): piping a remote-arrived car
+through the existing `save()`/`pinDropped` path would fire `firstPinDropped` — **showing the W6
+permission-rationale sheet on a fresh device merely reacting to sync** — and `pinDropped`, which W7.5
+uses to auto-open the Park Until prompt. It would also cancel notifications via `ContentView`'s
+local-only `previousCarID`, targeting a stale ID. Fix: a separate `remoteCarChanged` publisher and an
+`applyRemoteChange()` path that never touches those sheets or `hasEverParkedKey`. **This is a
+two-device-only bug — invisible to every test we can run here.**
+
+**Merge rule, refined:** last-write-wins by an envelope-level `updatedAt` bumped on **every** write —
+NOT `car.parkedAt`. Toggling a per-pin notify setting isn't a re-park, so `parkedAt` can't order
+metadata-only edits or tombstones. Clearing a car writes a **tombstone** ("no car as of T"); absence
+does not sync, and without one a cleared car resurrects from the other device.
+
+**✅ FT-2 is cheaper than the docs claimed:** `pins_delete_own` RLS and the votes cascade FK are
+**already live** (`supabase/02-pins-schema.sql:157`). **No hand-applied migration needed** — only the
+iOS `deleteCrowdPin` + delete UI. Priority was raised 2026-08-20 because external users can now
+misreport a block with no way to retract it.
+
+**📌 FT-21 IS DECIDED — this doc was stale on it until now.** Kevin ruled 2026-08-21: **(A)** model
+divided streets as CSCL's separate carriageways rather than one centerline plus a fudge → **(B)** if
+that fails, derive the curb from NYC planimetric sidewalk polygons → **(C)** if neither works,
+cosmetic is an acceptable terminal state. Gated on one tech-lead session confirming CSCL supports (A).
+**Must not ship in a build whose drive test is validating something else** — its regen would confound
+the result. Full detail in `docs/field-testing-log.md` FT-21. Its regen should also carry the
+duplicate-vertex hygiene fix and the 359 remaining lost zone rows — three items, one regen.
+
+---
+
 ### 2026-08-24 — Six stability fixes merged. Build 17's archive is STALE and must be re-cut.
 
 **`main` @ `9d8c4f89`. Zero open PRs.** All six landed via #88 and #89, each QA'd and smoke-tested on
