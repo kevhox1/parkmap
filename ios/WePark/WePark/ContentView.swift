@@ -198,6 +198,21 @@
 //      `BrowseSearchAreaView` auto-expands to `.large` when an error arrives so it's never
 //      invisible behind a collapsed sheet.
 //
+//  Build 19 additions (iCloud parked-car sync — docs/icloud-parked-car-sync-spec.md §3.5):
+//    - .onReceive(parkPinService.remoteCarChanged): a THIRD, distinct publisher from
+//      firstPinDropped/pinDropped, fired only by ParkPinService.applyRemoteChange() when a
+//      remote (or migrated-legacy) car envelope wins the last-write-wins comparison.
+//    - handleRemoteCarChanged(newCar:oldCarID:): schedules/cancels notifications via the new
+//      NotificationScheduler.cancelAll(forUUID:) / cancelAllThenSchedule(...), dismisses a
+//      now-stale .parkedCarDetail sheet, clears an orphaned Park Until filter — but
+//      DELIBERATELY never sets activeSheet to .notificationRationale or .parkUntil, and never
+//      touches hasEverParkedKey. A remote arrival must not look like a local pin drop to the
+//      UI layer — see the spec's §3.5 trace for why piping it through the existing
+//      pinDropped path would have been the wrong (and two-device-only-visible) bug.
+//    - previousCarID bookkeeping generalized: also updated by handleRemoteCarChanged (not
+//      just confirmPinDrop) so a SUBSEQUENT local drop always computes its "old ID" against
+//      current reality, whether the last change was local or remote.
+//
 
 import SwiftUI
 import MapKit
@@ -776,6 +791,9 @@ struct ContentView: View {
     var body: some View {
         mapLayerWithEvents
             .onReceive(parkPinService.pinDropped) { newCar in handlePinDropped(newCar) }
+            .onReceive(parkPinService.remoteCarChanged) { newCar, oldCarID in
+                handleRemoteCarChanged(newCar: newCar, oldCarID: oldCarID)
+            }
             .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in routePendingDeepLink(carID) }
             .sheet(item: $activeSheet, onDismiss: {
                 if selectedSegmentID != nil { selectedSegmentID = nil }
@@ -3291,6 +3309,55 @@ struct ContentView: View {
                 loadedSegments: tileLoader.segments,
                 engine: engine
             )
+        }
+    }
+
+    // MARK: - Build 19: Remote car-changed event handler
+
+    /// Handles the `parkPinService.remoteCarChanged` Combine event — a car that arrived (or
+    /// was cleared) via iCloud sync from another device, or via the one-time legacy
+    /// migration. Distinct from `handlePinDropped(_:)` on purpose (spec §3.5): this path
+    /// must never look like a local pin drop to the sheet layer.
+    ///
+    /// - `newCar` non-nil: schedules/cancels notifications on THIS device per its own
+    ///   mute/permission/per-pin-opt-in state (`NotificationScheduler.schedule()` already
+    ///   fails closed per-device — see spec §3.5's "why scheduling still happens on the
+    ///   receiving device" note).
+    /// - `newCar` nil (remote clear): cancels this device's pending reminders for the old
+    ///   car via the UUID directly, since `parkPinService.parkedCar` is already nil by the
+    ///   time this fires.
+    ///
+    /// Deliberately does NOT set `activeSheet` to `.notificationRationale` or `.parkUntil`,
+    /// and does NOT touch `hasEverParkedKey` — those are local-drop-only, by design.
+    private func handleRemoteCarChanged(newCar: ParkedCar?, oldCarID: UUID?) {
+        if let newCar {
+            NotificationScheduler.shared.cancelAllThenSchedule(
+                for: newCar,
+                oldCarID: oldCarID,
+                loadedSegments: tileLoader.segments,
+                engine: engine
+            )
+        } else if let oldCarID {
+            NotificationScheduler.shared.cancelAll(forUUID: oldCarID)
+        }
+
+        // Keep previousCarID correct across BOTH local and remote paths — a subsequent
+        // local drop must compute its own "old ID" against current reality.
+        previousCarID = newCar?.id
+
+        // Spec §3.3.1: a remote change that replaces/clears the car currently shown in
+        // ParkedCarDetailView leaves that sheet showing stale data (SwiftUI doesn't re-diff
+        // an already-captured associated value) — dismiss it rather than live-refresh (§0.3).
+        if case .parkedCarDetail(let shown) = activeSheet, shown.id == oldCarID {
+            activeSheet = dismissTargetOutsideBrowseNav
+        }
+
+        // Mirror the existing onClearPin cleanup when the referenced car is gone remotely —
+        // no orphan Park Until filter for a car that no longer exists.
+        if newCar == nil, parkUntilMode {
+            parkUntilMode = false
+            parkUntilTarget = nil
+            rebuildOverlays(at: .nowET)
         }
     }
 

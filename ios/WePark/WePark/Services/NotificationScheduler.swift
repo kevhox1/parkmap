@@ -201,6 +201,24 @@ final class NotificationScheduler {
         }
     }
 
+    /// Cancel all pending notification requests for the given car UUID, without needing a
+    /// `ParkedCar` value to look them up — used when the car itself is no longer reachable
+    /// (e.g. Build 19's remote-clear path, where `ParkPinService.parkedCar` has already been
+    /// set to nil by the time the cancellation needs to run). Mirrors `cancelAll(for:)`
+    /// exactly, just keyed by UUID directly instead of extracting it from a `ParkedCar`.
+    func cancelAll(forUUID uuid: UUID) {
+        let prefix = notificationIDPrefix(forUUID: uuid)
+        center.getPendingNotificationRequests { requests in
+            let ids = requests
+                .map { $0.identifier }
+                .filter { $0.hasPrefix(prefix) }
+            if !ids.isEmpty {
+                self.center.removePendingNotificationRequests(withIdentifiers: ids)
+                self.center.removeDeliveredNotifications(withIdentifiers: ids)
+            }
+        }
+    }
+
     /// Cancel all pending notifications for the old car ID, then schedule for the new car.
     /// This is the pin-replace path: old car notifications are removed, new ones scheduled.
     ///
