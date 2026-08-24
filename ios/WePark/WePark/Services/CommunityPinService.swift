@@ -5,7 +5,9 @@
 //  Tier 1 Pin Display — Community 1.0 read-only fetch + Realtime subscription stub.
 //  Tier 3 Sub-PR #1 additions: authenticated write path (insertCrowdPin, upsertVote,
 //  callExtendPinExpiry) + Realtime channel activation for ephemeral crowd pins.
-//  Spec: docs/tier1-pin-display-spec.md §9, docs/tier3-auth-and-reactions-spec.md §3.9.
+//  FT-2 addition: deleteCrowdPin — hard-delete a pin the current user authored.
+//  Spec: docs/tier1-pin-display-spec.md §9, docs/tier3-auth-and-reactions-spec.md §3.9,
+//  docs/ft2-delete-own-pin-spec.md.
 //
 //  Responsibilities:
 //   - Debounced (800ms) PostgREST bounding-box fetch, merged from 3 channels:
@@ -23,6 +25,14 @@
 //   - Client-side expiry filter: removes pins where expiresAt != nil && expiresAt <= nowProvider().
 //   - Publishes `visiblePins: [CommunityPin]` — ContentView observes this.
 //   - Write path: insertCrowdPin / upsertVote / callExtendPinExpiry (authenticated, sub-PR #1).
+//   - Write path: deleteCrowdPin (FT-2) — hard-deletes a pin the caller authored, gated
+//     server-side by the pre-existing `pins_delete_own` RLS policy. Optimistic local
+//     removal before the network call; a Realtime DELETE echo for the same pin is a
+//     harmless no-op against `removePin(id:)`. If the network call itself throws, the
+//     pin is rolled back into `visiblePins` at its original position — UNLESS a genuine
+//     Realtime DELETE echo for that same id already arrived during the round trip, in
+//     which case the server truth (really deleted) wins and the rollback is suppressed.
+//     See `deleteCrowdPin`'s doc comment for the full reasoning.
 //   - Optimistic add after insertCrowdPin: uses return=representation + mergeRealtimeChange
 //     so the reporter sees their own pin immediately without panning (Fix 1).
 //
@@ -314,6 +324,23 @@ final class CommunityPinService {
 
     /// True when Drive Mode is active. Set from ContentView via `setDriveModeActive(_:)`.
     private var driveModeActive: Bool = false
+
+    /// Tracks pins whose optimistic removal (`deleteCrowdPin`) is still in flight, keyed by
+    /// pin id, so a genuine Realtime DELETE echo that lands during the network round trip can
+    /// be distinguished from "no echo arrived yet" once the round trip completes.
+    ///
+    /// Value semantics: `false` means "optimistically removed, no Realtime confirmation seen
+    /// yet"; `true` means `removePin(id:)` was called for this id while the entry existed —
+    /// i.e. the server genuinely deleted the row and Realtime confirmed it independently of
+    /// this client's own in-flight request. `deleteCrowdPin` consults this value in its
+    /// failure path to decide whether restoring the pin would resurrect something the server
+    /// actually deleted (see `deleteCrowdPin` and `rollbackOptimisticDelete` doc comments).
+    ///
+    /// An id is only ever present here for the duration of one `deleteCrowdPin` call — set
+    /// just before the optimistic removal, cleared via `defer` when that call returns or
+    /// throws. Not a general-purpose cache: a Realtime echo that arrives before or after that
+    /// window (no matching entry) just runs `removePin(id:)`'s normal, unconditional removal.
+    private var pendingOptimisticDeletes: [UUID: Bool] = [:]
 
     /// Consecutive failure count per channel label ("open_data" / "crowd_ephemeral" /
     /// "crowd_block_scoped"). Used only to throttle `logChannelFailure` console spam during
@@ -614,7 +641,18 @@ final class CommunityPinService {
     /// key, so this cannot reuse `mergeRealtimeChange`'s `CommunityPin`-typed signature. No-op
     /// if `id` is not currently present in `visiblePins` (e.g. it was never in the fetched
     /// viewport, or Kevin's manual SQL cleanup deleted a row no client had loaded).
+    ///
+    /// If `id` has an in-flight optimistic-delete entry (`pendingOptimisticDeletes` —
+    /// `deleteCrowdPin`'s request for the same id hasn't resolved yet), this is the signal
+    /// that the server genuinely deleted the row independent of how that request ends up
+    /// resolving. Marking the entry `true` here tells `deleteCrowdPin`'s failure path not to
+    /// resurrect the pin even if its own HTTP response comes back as an error (e.g. the
+    /// delete succeeded server-side but the response itself was lost) — see
+    /// `rollbackOptimisticDelete`'s doc comment for the full reasoning.
     func removePin(id: UUID) {
+        if pendingOptimisticDeletes[id] != nil {
+            pendingOptimisticDeletes[id] = true
+        }
         visiblePins.removeAll { $0.id == id }
     }
 
@@ -1348,6 +1386,162 @@ final class CommunityPinService {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw CommunityPinWriteError.httpError(statusCode: status)
         }
+    }
+
+    // MARK: - Write path: Delete own pin (FT-2)
+
+    /// Hard-deletes a pin the current user authored — the "I reported this by mistake"
+    /// escape hatch (`docs/ft2-delete-own-pin-spec.md` §4.1).
+    ///
+    /// Server-side authority is the `pins_delete_own` RLS policy
+    /// (`supabase/02-pins-schema.sql:157-159`, `for delete using (auth.uid() = author_id)`)
+    /// — that policy already exists and is live; this method does NOT re-check ownership
+    /// client-side before issuing the request. `PinDetailSheet`'s delete affordance only
+    /// ever appears on the caller's own pin (`ReactionsRow.isOwnPin`), but that UI guard is
+    /// a convenience, not the security boundary — a caller that somehow reached this method
+    /// for someone else's pin gets an HTTP 403 back from RLS, exactly as intended.
+    ///
+    /// Optimistic local removal happens BEFORE the network call fires (spec §4.1 step 2),
+    /// mirroring `insertCrowdPin`'s optimistic-add: `visiblePins` drops the pin immediately
+    /// so the map marker disappears without waiting for a round trip.
+    ///
+    /// If the network call subsequently throws, this method ROLLS the removal BACK — restoring
+    /// the pin to `visiblePins` at its original index — before rethrowing, so the caller
+    /// (`PinDetailSheet`) can show its inline error against a map that still shows the pin,
+    /// not one that already erased it. This is a deliberately different posture than
+    /// `insertCrowdPin`'s optimistic add, which does NOT roll back on failure: a failed
+    /// optimistic *add* just means a pin the user tried to share never appears — mildly
+    /// annoying, and self-evident when it doesn't show up. A failed optimistic *delete*
+    /// without rollback is worse in kind: the user's map says the bad report is gone, so they
+    /// believe they fixed it and move on, while every *other* driver still sees the original
+    /// (possibly wrong) pin. That's exactly the scenario FT-2 exists to prevent — so this path
+    /// must not defeat it.
+    ///
+    /// Rollback vs. a genuine Realtime DELETE echo (spec §5 "Delete while offline", and the
+    /// case where the delete actually succeeded server-side but the HTTP response itself was
+    /// lost/errored): rolling back unconditionally on any thrown error would risk resurrecting
+    /// a pin the server truly did delete, only to have it vanish again (or worse, stick around)
+    /// once Realtime's real DELETE event arrives — a flicker at best, a stale zombie pin at
+    /// worst. To avoid that, `pendingOptimisticDeletes[id]` is set to `false` right before the
+    /// optimistic removal and consulted right before any rollback:
+    ///   - If a Realtime DELETE echo for this same id arrives DURING the round trip,
+    ///     `removePin(id:)` flips that entry to `true`. The failure-path rollback below checks
+    ///     this and skips restoring the pin — Realtime's independent confirmation that the row
+    ///     is really gone wins over the failed HTTP response.
+    ///   - If no echo arrives during the round trip, the entry stays `false`, the pin is
+    ///     restored, and the `pendingOptimisticDeletes` entry is cleared via `defer` regardless
+    ///     of outcome. If a genuine echo arrives LATER (after this call has already returned/
+    ///     thrown and the entry is gone), it just runs `removePin(id:)`'s normal, unconditional
+    ///     `visiblePins.removeAll { $0.id == id }` — which correctly removes the pin this
+    ///     rollback just restored. Either ordering self-corrects to server truth.
+    ///
+    /// The `votes` FK (`supabase/02-pins-schema.sql:166`, `on delete cascade`) means a
+    /// successful delete here also removes every vote on the pin server-side — no
+    /// client-side pre-delete of votes is needed.
+    ///
+    /// A Realtime DELETE event for this same pin arriving after a SUCCESSFUL delete (own echo,
+    /// or another client's fetch racing this one) routes through `removePin(id:)`, which is a
+    /// no-op on an ID that's already absent (this method's own optimistic removal got there
+    /// first). No flicker, no resurrection, no crash: removal is idempotent by construction.
+    ///
+    /// - Parameter id: The pin's primary key.
+    /// - Throws: `CommunityPinWriteError.notAuthenticated` if there's no valid session (thrown
+    ///   before any optimistic removal — nothing to roll back on this path); `.httpError
+    ///   (statusCode:)` for any other non-2xx response (in particular 403 if RLS rejects the
+    ///   delete because the caller isn't the author), with the pin restored to `visiblePins`
+    ///   first unless Realtime already confirmed the delete (see above). HTTP 404 is treated
+    ///   as success, not a failure — the pin is already gone (expired cleanup, or a delete race
+    ///   with another client/tab), and PostgREST itself returns 200/204 with zero rows affected
+    ///   rather than 404 for "no matching row" on DELETE, so this is defensive, not the
+    ///   expected path. No rollback happens on this path since it isn't a failure.
+    func deleteCrowdPin(id: UUID) async throws {
+        guard let authSvc = authService else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken(),
+              authSvc.currentUserId != nil else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+
+        // Capture the pin's exact position and fields BEFORE the optimistic removal, so a
+        // failure-path rollback restores it precisely rather than reconstructing it. `nil` if
+        // `id` isn't currently present (nothing to capture or later roll back).
+        let capturedIndex = visiblePins.firstIndex { $0.id == id }
+        let capturedPin = capturedIndex.map { visiblePins[$0] }
+
+        // Register this id as an in-flight optimistic delete BEFORE removing it, so a Realtime
+        // DELETE echo that lands during the network round trip can be distinguished from "no
+        // echo arrived" once we're back here deciding whether to roll back (see doc comment
+        // above and `removePin(id:)`). Cleared unconditionally on return via `defer`.
+        if capturedPin != nil {
+            pendingOptimisticDeletes[id] = false
+        }
+        defer { pendingOptimisticDeletes[id] = nil }
+
+        // Optimistic local removal — before the network call (spec §4.1 step 2).
+        visiblePins.removeAll { $0.id == id }
+
+        // DELETE requests filter by primary key via a PostgREST query parameter
+        // (?id=eq.<uuid>), not the path — same URLComponents pattern as the request
+        // builders above (e.g. buildOpenDataRequest). buildAuthenticatedRequest(path:...)
+        // can't express this: it only ever appends `path` as a literal path component.
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/pins"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "id", value: "eq.\(id.uuidString)")]
+        guard let url = components?.url else {
+            rollbackOptimisticDelete(id: id, pin: capturedPin, index: capturedIndex)
+            throw CommunityPinWriteError.encodingFailure
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // return=minimal: DELETE has no body either way; no representation is needed back.
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+
+        do {
+            let (_, response) = try await urlSession.data(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw CommunityPinWriteError.httpError(statusCode: 0)
+            }
+            // 2xx: success. 404: already gone — also treated as success (see doc comment
+            // above). Neither path rolls back.
+            if (200..<300).contains(http.statusCode) || http.statusCode == 404 {
+                return
+            }
+            throw CommunityPinWriteError.httpError(statusCode: http.statusCode)
+        } catch {
+            rollbackOptimisticDelete(id: id, pin: capturedPin, index: capturedIndex)
+            throw error
+        }
+    }
+
+    /// Restores a pin removed by `deleteCrowdPin`'s optimistic removal, after the network call
+    /// actually failed — UNLESS a genuine Realtime DELETE echo for the same id arrived during
+    /// the round trip (`pendingOptimisticDeletes[id] == true`, set by `removePin(id:)`), in
+    /// which case the server really did delete the row and only the client's response failed
+    /// to reflect it; resurrecting the pin in that case would recreate, via a different code
+    /// path, exactly the "map disagrees with server truth" bug FT-2 exists to prevent.
+    ///
+    /// No-op if there's nothing captured to restore (`pin`/`index` nil — `id` wasn't present at
+    /// the start of `deleteCrowdPin`), if Realtime already confirmed the delete, or if the pin
+    /// is somehow already present (defensive; shouldn't happen given `deleteCrowdPin`'s single
+    /// call site for this, but avoids a duplicate entry if it ever does).
+    ///
+    /// - Parameters:
+    ///   - id: The pin's primary key — used only to consult `pendingOptimisticDeletes`.
+    ///   - pin: The exact `CommunityPin` captured immediately before optimistic removal.
+    ///   - index: Its index in `visiblePins` at that same moment.
+    private func rollbackOptimisticDelete(id: UUID, pin: CommunityPin?, index: Int?) {
+        guard let pin, let index else { return }
+        guard pendingOptimisticDeletes[id] != true else { return }
+        guard !visiblePins.contains(where: { $0.id == id }) else { return }
+        let insertIndex = min(index, visiblePins.count)
+        visiblePins.insert(pin, at: insertIndex)
     }
 
     // MARK: - Write path: Block-scoped restriction report (FT-15/TF2-15 Stream B3)
