@@ -201,6 +201,53 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-24 — Six stability fixes merged. Build 17's archive is STALE and must be re-cut.
+
+**`main` @ `9d8c4f89`. Zero open PRs.** All six landed via #88 and #89, each QA'd and smoke-tested on
+Kevin's device (iPhone 17 / iOS 26.5, 830 tests green):
+
+| Fix | Was |
+|---|---|
+| **Zoom-out crash** | `TileLoader.tileKeys` looped every row×col in the viewport unbounded — **~12.6 BILLION iterations at world zoom**, each a string interpolation + `Set` lookup → watchdog kill |
+| **`Int` trap** | `Int(floor(x))` **traps** in Swift on non-finite/out-of-range input; MapKit can report a degenerate `span` mid-gesture. A separate, faster crash path than the hang |
+| **Camera zoom lock** | No limit at all. Now ~41,467m, derived from `manhattanCoverageBounds` × 1.1 |
+| **Compass** | MapKit's built-in rendered top-right, clipped by `recenterButtonStack`. Now `MKCompassButton` top-left |
+| **"Find me" out of coverage** | Recentered unconditionally — with a zoom lock that would strand a non-NYC user with no way to zoom out |
+| **App icon badge** | `content.badge = 1` was set on every ASP reminder and **nothing ever cleared it** — a permanent `1` surviving launches and new builds |
+
+**⚠️ THE ARCHIVE KEVIN CUT FOR BUILD 17 PREDATES ALL OF THIS AND CONTAINS THE CRASH.** Pinching out
+is the first thing any user does with a map. **Do not distribute it.** Re-archive from `main`.
+
+**🔑 THE PROCESS LESSON, WORTH MORE THAN THE FIXES:**
+- **Same constant, different origin.** The compass used `100pt` "to match `recenterButtonStack`" — but
+  the rail is a **sibling** of `mapRepresentable`, not a descendant, so the ASP banner's
+  `.safeAreaInset` never extends its safe area. Same number, genuinely different zero. Fixed by
+  anchoring to `safeAreaLayoutGuide` so it self-tracks instead of copying a value.
+- **A "graceful degradation" can be worse than a hard stop.** The tile threshold let the user reach an
+  empty rotated map in a grey void — Kevin's report was *"I don't think I could zoom in or out,"* i.e.
+  **wedged, not just ugly.** A camera limit made the whole state unreachable. Prefer making a bad state
+  impossible over making it survivable.
+- **Design reasoning expires.** The zoom limit went 53,000 → 7,457 → 41,467 as the premise changed from
+  "frame the city" to "stop where data ends" to "stop where coverage ends." Each was correct for its
+  premise. **When you change the premise, restructure the derivation — don't retune the number**, or
+  the code says one thing and means another.
+
+**BUILD 18 SIZED — and the sizing found something bigger than a number** (`docs/build-18-sizing.md`):
+**"patrol mode" means two different features.** `tier3-patrol-mode-buildplan.md` means the Tier-3
+crowd-reporting UI — **already mostly built** (W8.5e/f merged in #39–42; W8.5g's decay display exists
+as `PinMarkerAnnotation.timeSinceBadge` + `ReactionsRow`; `DriveModeStyle.patrol` was deleted
+2026-06-05 and is confirmed absent). Only `open_spot` (W8.5h) remains. But FT-20's spec §0 OQ-4 uses
+"build 18's patrol mode" to mean the **never-built, never-specced coverage-sweep smart parking route**
+(`PatrolModeService`/`PatrolView` have never existed in git history). **~6.5–11 sessions vs ~14–26+.**
+⚠️ **Resolve which is meant before dispatching** — that ambiguity is itself the biggest risk.
+
+**Also found:** FT-2 needs **no Supabase migration** — `pins_delete_own` RLS and the votes cascade FK
+are already live in `supabase/02-pins-schema.sql:157`. Only the iOS `deleteCrowdPin` + delete UI remain.
+
+**NEXT:** re-archive 17 → drive test (realtime is the point) → build 18 = iCloud parked-car sync + FT-2.
+
+---
+
 ### 2026-08-22 — 🎉 FT-20 COMPLETE. Build 17's payload is done; version bumped to 17.
 
 **`main` @ `7d90595a`+. Zero open PRs. `CURRENT_PROJECT_VERSION` = 17.** Build 17 = dark mode (#83) +
