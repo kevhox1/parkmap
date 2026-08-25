@@ -201,6 +201,60 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-25 — CHECKPOINT for context reset. FT-2 merged; #91 one build from done; three decisions pending.
+
+**WHERE WE ARE:** `main` @ `c29631bb`+. **One open PR: #91** (iCloud parked-car sync).
+`CURRENT_PROJECT_VERSION` = 18; **build 1.0 (18) is live on external TestFlight** (dark mode +
+realtime + FT-20 sheet + six stability fixes). Build 17 still on TestFlight, still crashes on
+pinch-out — Kevin stopped distributing it. Kevin is **out of NYC for 1–2 weeks** with no second
+phone: the build-18 drive test, cross-device iCloud verification, and anything gated on either are
+calendar-blocked.
+
+**✅ MERGED THIS STRETCH:** FT-2 delete-own-pin (#90, `2a6084d9`) — device-smoked including the
+Airplane-Mode rollback; **two accepted follow-ups recorded in `open-items.md`** (the PostgREST
+zero-rows-not-403 finding and the `pendingOptimisticDeletes` defer bug — neither reachable via
+shipped UI, both real). FT-21 carriageway investigation (#92) — **qualified GO on (A)**, see below.
+Patrol-mode feasibility spec + iCloud sync spec + product docs all landed on `main`.
+
+**🟡 PR #91 — iCloud parked-car sync — ONE BUILD FROM DONE.** First Mac build failed on a protocol
+conformance (`set(_:forKey:)` needed `Data?` — NSUbiquitousKeyValueStore's parameter is optional);
+fixed signature-only in `1d2e5ca2`. **Kevin has not yet rebuilt.** Expect ~862 tests. Before the
+smoke he must add the iCloud capability (target → Signing & Capabilities → + iCloud → Key-value
+storage) — **it is absent from the project and its absence fails silently** (compiles, runs, never
+syncs, no error). Solo-provable smoke: park → delete app → reinstall → car returns. Cross-device
+half (tombstones, stale-ordering, the W6/Park-Until sheets NOT firing on remote arrival) waits for
+his second phone. Then QA pass → merge.
+
+**🟡 THREE DECISIONS PENDING — all Kevin's, none urgent, all documented:**
+1. **FT-21 A/B/C** (`docs/ft21-carriageway-investigation.md`): qualified GO on (A) — carriageways
+   really are separate CSCL rows (~19.2m apart on E Houston, measured) and (A) would REPLACE the
+   allow-list fudge, reaching ~9% of segments vs today's 1.3%. But pairing halves needs a
+   proximity+address-parity heuristic (`joinid`/`bphys_id` are null; `b5sc` is street-level), and
+   the ORIGINAL TF2-12 Bowery stretch is recorded in CSCL as UNDIVIDED — (A) can't fix it, which is
+   also an argument for (B) (planimetric sidewalk polygons = ground truth).
+2. **Smart-route v1 shape** (`docs/patrol-mode-feasibility-spec.md`): recommendation is **extend
+   Cruise Mode** with one live "better odds ahead" line over the current node's outgoing edges — no
+   persisted route, no polyline. Full feature 10–17 sessions + 2+ drive cycles. Key findings: **no
+   directed street graph exists on iOS at all** (largest unpriced primitive), and
+   `ParkingProximityScorer`/the +3/+1 weights fit only PARTIALLY (radius-bucket vs per-edge
+   traversal — FT-20's reuse intent was right, shape wrong).
+3. **Retire the name "patrol mode"** — it has meant two different features in two docs and already
+   cost a wasted sizing premise.
+
+**🆕 PRODUCT DOCS** (for the separate design workstream — Kevin is workshopping look-and-feel in
+Claude design): `docs/product/synopsis.md` and `docs/product/use-cases-and-vision.md`. The three
+personas (day-tripper / resident / spotter), the anti-engagement principle (*"not for fun —
+practical"*; notification is the product surface, sessions last seconds), and the
+per-block-density vision live there. **Do not workshop design in the engineering session** — Kevin
+runs that separately.
+
+**⏳ WHEN KEVIN IS BACK IN NYC:** build-18 drive test (realtime is the payload — watch for a
+silently dead socket; Drive Mode suspends the 45s poll backstop) + TF2-16 + the FT-15 end-to-end
+submit + the sunlight check; cross-device iCloud verification with the second phone. The drive test
+gates the smart route.
+
+---
+
 ### 2026-08-24 — 🔒 STANDING PRIVACY RULE for pin visibility (Kevin, settled)
 
 Asked while testing FT-2. **The current schema already implements this** — recorded so it governs
