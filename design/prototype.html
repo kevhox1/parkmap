@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<style>
+@font-face { font-family: x; src: local(arial); }
+@keyframes wp-drop { from { transform: translateY(-130%); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+@keyframes wp-fade { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
+@keyframes wp-ping { from { transform: scale(0.5); opacity: 0.9; } to { transform: scale(2.4); opacity: 0; } }
+@keyframes wp-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+body { margin: 0; background: #0B0D12; font-family: -apple-system, "SF Pro Text", "Helvetica Neue", Helvetica, sans-serif; -webkit-font-smoothing: antialiased; }
+a { color: #0A84FF; text-decoration: none; }
+a:hover { color: #409CFF; }
+input { outline: none; }
+::-webkit-scrollbar { width: 0; height: 0; }
+</style>
+</helmet>
+<div style="min-height:100vh;display:flex;justify-content:center;align-items:flex-start;gap:30px;padding:34px 24px 60px;box-sizing:border-box">
+<x-import component-from-global-scope="IOSDevice" from="./ios-frame.jsx" dark="{{ true }}" time="{{ clock }}" hint-size="402px,874px">
+<div data-screen-label="WePark map" style="position:relative;height:100%;overflow:hidden;background:#171A21">
+
+  <div onPointerDown="{{ mapDown }}" onPointerMove="{{ mapMove }}" onPointerUp="{{ mapUp }}" style="position:absolute;inset:0;touch-action:none;cursor:grab">{{ mapSvg }}</div>
+
+  <div style="position:absolute;top:0;left:0;right:0;height:88px;background:#EBC200;z-index:6;display:flex;align-items:flex-end;justify-content:center;padding-bottom:9px;pointer-events:none">
+    <span style="font-size:15px;font-weight:650;color:#261A00;letter-spacing:-0.2px">ASP in Effect Today</span>
+  </div>
+
+  <sc-if value="{{ untilChip }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:100px;left:12px;z-index:8;display:flex;align-items:center;gap:8px;background:#0A84FF;border-radius:100px;padding:7px 12px;box-shadow:0 4px 14px rgba(0,0,0,0.4)">
+      <span style="font-size:12.5px;font-weight:650;color:#fff">Showing {{ untilChip }}</span>
+      <span onClick="{{ clearUntil }}" style="cursor:pointer;font-size:12px;font-weight:700;color:rgba(255,255,255,0.85);background:rgba(0,0,0,0.25);border-radius:100px;padding:2px 7px">✕</span>
+    </div>
+  </sc-if>
+
+  <div style="position:absolute;right:12px;top:100px;z-index:8;display:flex;flex-direction:column;gap:8px">
+    <div onClick="{{ locate }}" style-hover="background:#2E323C" style="width:44px;height:44px;border-radius:13px;background:rgba(33,36,44,0.94);border:0.5px solid rgba(255,255,255,0.09);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,0.35)">
+      <svg width="19" height="19" viewBox="0 0 24 24"><path d="M3 11.5L21.5 3 13 21.5l-2.2-7.3L3 11.5z" fill="#0A84FF"></path></svg>
+    </div>
+    <sc-if value="{{ carOn }}" hint-placeholder-val="{{ true }}">
+      <div onClick="{{ findCar }}" style-hover="background:#2E323C" style="width:44px;height:44px;border-radius:13px;background:rgba(33,36,44,0.94);border:0.5px solid rgba(255,255,255,0.09);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,0.35)">
+        <svg width="21" height="21" viewBox="0 0 24 24"><path d="M5 11l1.6-4.2A2 2 0 018.5 5.5h7a2 2 0 011.9 1.3L19 11v5.5a1 1 0 01-1 1h-1a1 1 0 01-1-1V16H8v0.5a1 1 0 01-1 1H6a1 1 0 01-1-1V11z" fill="none" stroke="#0A84FF" stroke-width="1.8" stroke-linejoin="round"></path><circle cx="8" cy="13" r="1.1" fill="#0A84FF"></circle><circle cx="16" cy="13" r="1.1" fill="#0A84FF"></circle></svg>
+      </div>
+    </sc-if>
+    <div onClick="{{ openUntil }}" style-hover="background:#2E323C" style="width:44px;height:44px;border-radius:13px;background:rgba(33,36,44,0.94);border:0.5px solid rgba(255,255,255,0.09);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 3px 10px rgba(0,0,0,0.35)">
+      <svg width="20" height="20" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.2" fill="none" stroke="#0A84FF" stroke-width="1.8"></circle><path d="M12 7.5V12l3 2" fill="none" stroke="#0A84FF" stroke-width="1.8" stroke-linecap="round"></path></svg>
+    </div>
+  </div>
+
+  <sc-if value="{{ showLegend }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ toggleLegend }}" style="position:absolute;inset:0;z-index:24;background:rgba(0,0,0,0.25)"></div>
+    <div data-screen-label="Map legend" style="position:absolute;right:14px;bottom:{{ legendBottom }}px;z-index:25;width:244px;background:rgba(28,31,38,0.98);border:0.5px solid rgba(255,255,255,0.12);border-radius:18px;padding:14px 15px;animation:wp-fade 0.25s;box-shadow:0 12px 34px rgba(0,0,0,0.55)">
+      <div style="font-size:10.5px;font-weight:750;letter-spacing:1.2px;color:rgba(235,235,245,0.45);margin-bottom:7px">CURB COLORS</div>
+      <sc-for list="{{ legend }}" as="lg" hint-placeholder-count="5">
+        <div style="display:flex;align-items:center;gap:9px;padding:3.5px 0">
+          <div style="flex:none;width:20px;height:6px;border-radius:100px;background:{{ lg.c }}"></div>
+          <div style="font-size:11.5px;color:rgba(235,235,245,0.85);line-height:1.35"><span style="font-weight:750;color:#fff">{{ lg.n }}</span> — {{ lg.d }}</div>
+        </div>
+      </sc-for>
+      <div style="font-size:10.5px;font-weight:750;letter-spacing:1.2px;color:rgba(235,235,245,0.45);margin:11px 0 7px">LIVE PINS</div>
+      <sc-for list="{{ pinLegend }}" as="pl" hint-placeholder-count="6">
+        <div style="display:flex;align-items:center;gap:9px;padding:3.5px 0">
+          <div style="flex:none;width:22px;height:22px;border-radius:50%;background:#1C1F26;border:2px solid {{ pl.c }};display:flex;align-items:center;justify-content:center;font-size:10px;font-weight:800;color:{{ pl.c }}">{{ pl.i }}</div>
+          <div style="font-size:11.5px;color:rgba(235,235,245,0.85)">{{ pl.l }}</div>
+        </div>
+      </sc-for>
+      <div style="font-size:10.5px;color:rgba(235,235,245,0.4);line-height:1.5;margin-top:9px">Pins pulse when fresh and fade as they expire. Black pin = your car · blue dot = you · dashed box = your square.</div>
+    </div>
+  </sc-if>
+
+  <div onClick="{{ openReport }}" style-hover="transform:scale(1.04)" style="position:absolute;left:14px;bottom:{{ reportBtnBottom }}px;z-index:8;display:flex;align-items:center;gap:8px;background:rgba(33,36,44,0.96);border:0.5px solid rgba(255,255,255,0.09);border-radius:100px;padding:11px 18px;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.4);transition:transform 0.15s">
+    <svg width="15" height="15" viewBox="0 0 24 24"><path d="M5 3v18M5 4h11l-2.5 4L16 12H5" fill="none" stroke="#FF9F0A" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"></path></svg>
+    <span style="font-size:15px;font-weight:650;color:#FF9F0A">Report</span>
+  </div>
+
+  <div onClick="{{ toggleLegend }}" style-hover="transform:scale(1.06)" style="position:absolute;right:14px;bottom:{{ reportBtnBottom }}px;z-index:8;width:40px;height:40px;border-radius:50%;background:rgba(33,36,44,0.96);border:0.5px solid rgba(255,255,255,0.09);display:flex;align-items:center;justify-content:center;cursor:pointer;box-shadow:0 4px 14px rgba(0,0,0,0.4);transition:transform 0.15s">
+    <span style="font-size:17px;font-weight:750;color:rgba(235,235,245,0.75);font-family:inherit">?</span>
+  </div>
+
+  <sc-if value="{{ placingHint }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;top:102px;left:50%;transform:translateX(-50%);z-index:9;display:flex;gap:12px;align-items:center;background:rgba(10,132,255,0.96);border-radius:100px;padding:9px 16px;box-shadow:0 6px 18px rgba(0,0,0,0.45);white-space:nowrap">
+      <span style="font-size:13px;font-weight:700;color:#fff">Tap the curb where the spot is</span>
+      <span onClick="{{ placeCancel }}" style="font-size:12px;font-weight:700;color:rgba(255,255,255,0.85);cursor:pointer;text-decoration:underline">Cancel</span>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ placeCard }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:14px;right:14px;bottom:{{ promptBottom }}px;z-index:9;background:rgba(28,31,38,0.98);border:1px solid rgba(10,132,255,0.5);border-radius:18px;padding:14px 16px;animation:wp-fade 0.3s;box-shadow:0 8px 24px rgba(0,0,0,0.5)">
+      <div style="font-size:14.5px;font-weight:700;color:#fff"><span style="color:#0A84FF;font-weight:800">P</span>&nbsp; Spot open — {{ placeTitle }}</div>
+      <div style="font-size:12.5px;color:rgba(235,235,245,0.65);margin-top:3px;line-height:1.4">{{ placeSub }}</div>
+      <div style="display:flex;gap:8px;margin-top:11px">
+        <button onClick="{{ placePost }}" style="flex:1;background:#0A84FF;color:#fff;border:none;border-radius:100px;padding:9px 0;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer">Post it</button>
+        <button onClick="{{ placeCancel }}" style="flex:none;background:rgba(255,255,255,0.1);color:rgba(235,235,245,0.75);border:none;border-radius:100px;padding:9px 18px;font-size:13.5px;font-weight:600;font-family:inherit;cursor:pointer">Cancel</button>
+      </div>
+      <div style="font-size:11px;color:rgba(235,235,245,0.4);margin-top:8px;text-align:center">Expires in ~3 min · tap elsewhere to move the pin · first come, first served</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ prompt }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:14px;right:14px;bottom:{{ promptBottom }}px;z-index:9;background:rgba(28,32,30,0.98);border:1px solid rgba(48,209,88,0.5);border-radius:18px;padding:14px 16px;animation:wp-fade 0.35s;box-shadow:0 8px 24px rgba(0,0,0,0.5)">
+      <div style="font-size:14.5px;font-weight:700;color:#fff">🧹 Sweeper reported on your block</div>
+      <div style="font-size:12.5px;color:rgba(235,235,245,0.65);margin-top:3px;line-height:1.4">You're parked here. Did it pass? Your confirm tells 148 neighbors it's clear.</div>
+      <div style="display:flex;gap:8px;margin-top:11px">
+        <button onClick="{{ promptConfirm }}" style="flex:1;background:#30D158;color:#04290F;border:none;border-radius:100px;padding:9px 0;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer">Confirm — it passed</button>
+        <button onClick="{{ promptDismiss }}" style="flex:1;background:rgba(255,255,255,0.1);color:rgba(235,235,245,0.75);border:none;border-radius:100px;padding:9px 0;font-size:13.5px;font-weight:600;font-family:inherit;cursor:pointer">Didn't see it</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <div data-screen-label="Bottom sheet" style="position:absolute;left:0;right:0;bottom:0;z-index:20;height:{{ sheetH }}px;background:rgba(25,27,33,0.97);backdrop-filter:blur(20px);border-radius:22px 22px 0 0;border-top:0.5px solid rgba(255,255,255,0.12);box-shadow:0 -10px 34px rgba(0,0,0,0.5);transition:{{ sheetTrans }};display:flex;flex-direction:column;overflow:hidden">
+    <div onPointerDown="{{ sheetDown }}" onPointerMove="{{ sheetMove }}" onPointerUp="{{ sheetUp }}" style="padding:8px 0 4px;display:flex;justify-content:center;cursor:grab;touch-action:none;flex:none">
+      <div style="width:42px;height:5px;border-radius:100px;background:rgba(255,255,255,0.28)"></div>
+    </div>
+    <div style="padding:4px 14px 10px;flex:none">
+      <div style="display:flex;align-items:center;gap:9px;background:rgba(118,118,128,0.16);border-radius:14px;padding:11px 13px">
+        <svg width="16" height="16" viewBox="0 0 24 24"><circle cx="10.5" cy="10.5" r="6.5" fill="none" stroke="rgba(235,235,245,0.45)" stroke-width="2"></circle><path d="M15.5 15.5L21 21" stroke="rgba(235,235,245,0.45)" stroke-width="2" stroke-linecap="round"></path></svg>
+        <input onFocus="{{ searchFocus }}" placeholder="Search for a destination" style="flex:1;background:none;border:none;font-size:16px;color:#fff;font-family:inherit;caret-color:#0A84FF">
+        <svg width="18" height="18" viewBox="0 0 24 24"><path d="M12 8a4 4 0 100 8 4 4 0 000-8zm8.5 4a6.5 6.5 0 01-.1 1.1l2 1.6-1.9 3.3-2.4-1a8 8 0 01-1.9 1.1l-.4 2.5h-3.8l-.4-2.5a8 8 0 01-1.9-1.1l-2.4 1-1.9-3.3 2-1.6a6.5 6.5 0 010-2.2l-2-1.6 1.9-3.3 2.4 1a8 8 0 011.9-1.1l.4-2.5h3.8l.4 2.5a8 8 0 011.9 1.1l2.4-1 1.9 3.3-2 1.6c.1.4.1.7.1 1.1z" fill="rgba(10,132,255,0.7)"></path></svg>
+      </div>
+    </div>
+    <div style="flex:1;overflow-y:auto;padding:0 14px 40px;opacity:{{ sheetBodyOpacity }};transition:opacity 0.2s">
+      <sc-if value="{{ searchOpen }}" hint-placeholder-val="{{ false }}">
+        <div style="font-size:19px;font-weight:700;color:rgba(235,235,245,0.85);margin:6px 2px 8px">Recent</div>
+        <div style="background:rgba(118,118,128,0.12);border-radius:16px;padding:2px 14px;margin-bottom:14px">
+          <sc-for list="{{ recents }}" as="r" hint-placeholder-count="3">
+            <div onClick="{{ r.tap }}" style="display:flex;align-items:center;gap:11px;padding:13px 0;border-bottom:0.5px solid rgba(255,255,255,0.07);cursor:pointer">
+              <svg width="17" height="17" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5" fill="none" stroke="#0A84FF" stroke-width="1.6" opacity="0.75"></circle><path d="M12 7.5V12l3 2" fill="none" stroke="#0A84FF" stroke-width="1.6" stroke-linecap="round" opacity="0.75"></path></svg>
+              <span style="font-size:16.5px;color:#0A84FF">{{ r.n }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <button onClick="{{ findSpot }}" style-hover="background:#2695FF" style="width:100%;background:#0A84FF;color:#fff;border:none;border-radius:100px;padding:15px 0;font-size:18px;font-weight:700;font-family:inherit;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:9px;margin:2px 0 10px">
+      <svg width="21" height="21" viewBox="0 0 24 24"><path d="M4.5 11l1.7-4.5A2 2 0 018.1 5.2h7.8a2 2 0 011.9 1.3L19.5 11v5.8a1 1 0 01-1 1h-1.2a1 1 0 01-1-1V16H7.7v0.8a1 1 0 01-1 1H5.5a1 1 0 01-1-1V11z" fill="#fff"></path><circle cx="8.2" cy="13" r="1.2" fill="#0A84FF"></circle><circle cx="15.8" cy="13" r="1.2" fill="#0A84FF"></circle></svg>
+      Find a Spot</button>
+      <div style="text-align:center;margin-bottom:14px"><span onClick="{{ openP101 }}" style="font-size:14px;color:rgba(235,235,245,0.55);text-decoration:underline;cursor:pointer">New to parking?</span></div>
+      <div style="display:flex;gap:7px;margin:4px 0 10px">
+        <sc-for list="{{ zoneChips }}" as="z" hint-placeholder-count="3">
+          <span onClick="{{ z.pick }}" style="font-size:12px;font-weight:700;padding:6px 13px;border-radius:100px;cursor:pointer;background:{{ z.bg }};color:{{ z.fg }};border:0.5px solid rgba(255,255,255,0.1)">{{ z.l }}</span>
+        </sc-for>
+      </div>
+      <div style="display:flex;align-items:baseline;justify-content:space-between;margin:0 2px 8px">
+        <span style="font-size:13px;font-weight:750;letter-spacing:1.2px;color:rgba(235,235,245,0.5)">{{ crewName }}</span>
+        <span style="font-size:12px;color:rgba(235,235,245,0.5)"><span style="color:#30D158">●</span> {{ crewParkers }} parkers · {{ activeNow }} out now</span>
+      </div>
+      <sc-if value="{{ canPost }}" hint-placeholder-val="{{ true }}">
+        <div style="display:flex;gap:7px;align-items:center;margin-bottom:10px">
+          <input value="{{ crewDraft }}" onChange="{{ setCrewDraft }}" placeholder="Say something to the square…" style="flex:1;min-width:0;background:rgba(118,118,128,0.16);border:0.5px solid rgba(255,255,255,0.08);border-radius:100px;padding:9px 14px;font-size:13.5px;color:#fff;font-family:inherit">
+          <span onClick="{{ cycleAnchor }}" style="flex:none;font-size:11.5px;font-weight:700;color:#0A84FF;background:rgba(10,132,255,0.14);border:0.5px solid rgba(10,132,255,0.35);border-radius:100px;padding:7px 11px;cursor:pointer">→ {{ crewAnchorLabel }}</span>
+          <button onClick="{{ sendCrew }}" style="flex:none;width:34px;height:34px;border-radius:50%;background:#0A84FF;color:#fff;border:none;font-size:15px;font-weight:800;cursor:pointer;font-family:inherit">↑</button>
+        </div>
+      </sc-if>
+      <sc-if value="{{ awayNote }}" hint-placeholder-val="{{ false }}">
+        <div style="font-size:11.5px;color:rgba(235,235,245,0.45);margin-bottom:10px;line-height:1.5">You're browsing this square — posting stays in your home square (Nolita), where your car sleeps.</div>
+      </sc-if>
+      <sc-if value="{{ profileOn }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:12px;background:rgba(118,118,128,0.12);border-radius:16px;padding:12px 14px;margin-bottom:10px">
+          <div style="width:42px;height:42px;border-radius:50%;background:#2A2E38;border:1.5px solid rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:21px">{{ avatar }}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:15px;font-weight:700;color:#fff">{{ handle }}</div>
+            <div style="font-size:11.5px;color:rgba(235,235,245,0.55);margin-top:1px">{{ tenure }} · {{ acc }}% accurate · helped {{ helped }} neighbors</div>
+          </div>
+          <div style="text-align:right">
+            <div style="font-size:19px;font-weight:800;color:#30D158">{{ rep }}</div>
+            <div style="font-size:10px;font-weight:650;letter-spacing:0.8px;color:rgba(235,235,245,0.45)">REP</div>
+          </div>
+        </div>
+      </sc-if>
+      <sc-if value="{{ sheetFull }}" hint-placeholder-val="{{ false }}">
+        <div style="background:rgba(48,209,88,0.09);border:0.5px solid rgba(48,209,88,0.25);border-radius:16px;padding:12px 14px;margin-bottom:10px">
+          <div style="font-size:13.5px;font-weight:700;color:#30D158">Tickets dodged this month: ~36</div>
+          <div style="font-size:12px;color:rgba(235,235,245,0.6);margin-top:2px;line-height:1.45">That's $2,340 kept in the neighborhood — one street-cleaning ticket is $65.</div>
+        </div>
+        <div style="background:rgba(118,118,128,0.12);border-radius:16px;padding:10px 14px;margin-bottom:10px">
+          <div style="font-size:11.5px;font-weight:750;letter-spacing:1px;color:rgba(235,235,245,0.45);margin-bottom:7px">THIS WEEK</div>
+          <sc-for list="{{ leaders }}" as="l" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:10px;padding:6px 0">
+              <span style="font-size:12px;font-weight:700;color:rgba(235,235,245,0.4);width:16px">{{ l.rank }}</span>
+              <span style="font-size:16px">{{ l.e }}</span>
+              <span style="flex:1;font-size:14px;font-weight:600;color:#fff">{{ l.n }}</span>
+              <span style="font-size:13px;font-weight:700;color:{{ l.c }}">{{ l.pts }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </sc-if>
+      <sc-for list="{{ feed }}" as="f" hint-placeholder-count="4">
+        <div style="display:flex;gap:11px;padding:11px 2px;border-bottom:0.5px solid rgba(255,255,255,0.06);animation:wp-fade 0.4s">
+          <div style="flex:none;width:36px;height:36px;border-radius:50%;background:#232730;border:2px solid {{ f.color }};display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;color:#0A84FF">{{ f.icon }}</div>
+          <div style="flex:1;min-width:0">
+            <div style="font-size:14px;font-weight:650;color:#fff;line-height:1.35">{{ f.title }}</div>
+            <div style="font-size:11.5px;color:rgba(235,235,245,0.5);margin-top:2px">{{ f.sub }}</div>
+            <sc-if value="{{ f.showConfirm }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;gap:7px;margin-top:8px">
+                <button onClick="{{ f.onConfirm }}" style="background:rgba(48,209,88,0.15);color:#30D158;border:0.5px solid rgba(48,209,88,0.4);border-radius:100px;padding:5px 12px;font-size:12px;font-weight:700;font-family:inherit;cursor:pointer">Still there · {{ f.conf }}</button>
+                <button onClick="{{ f.onGone }}" style="background:rgba(255,255,255,0.07);color:rgba(235,235,245,0.65);border:0.5px solid rgba(255,255,255,0.12);border-radius:100px;padding:5px 12px;font-size:12px;font-weight:600;font-family:inherit;cursor:pointer">Gone</button>
+              </div>
+            </sc-if>
+            <sc-if value="{{ f.claimable }}" hint-placeholder-val="{{ false }}">
+              <button onClick="{{ f.onClaim }}" style="margin-top:8px;background:#0A84FF;color:#fff;border:none;border-radius:100px;padding:6px 14px;font-size:12.5px;font-weight:700;font-family:inherit;cursor:pointer">I'm heading there</button>
+            </sc-if>
+            <sc-if value="{{ f.claimedTag }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:7px;font-size:12px;font-weight:650;color:#0A84FF">You're heading there — first come, first served</div>
+            </sc-if>
+          </div>
+          <sc-if value="{{ f.badge }}" hint-placeholder-val="{{ false }}">
+            <div style="flex:none;align-self:flex-start;font-size:11px;font-weight:700;color:{{ f.color }};background:rgba(255,255,255,0.06);border-radius:100px;padding:3px 8px">{{ f.badge }}</div>
+          </sc-if>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <sc-if value="{{ showBlock }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOverlay }}" style="position:absolute;inset:0;z-index:30;background:rgba(0,0,0,0.4)"></div>
+    <div data-screen-label="Block detail" style="position:absolute;left:0;right:0;bottom:0;z-index:31;max-height:660px;overflow-y:auto;background:#1C1F26;border-radius:22px 22px 0 0;animation:wp-fade 0.3s;box-shadow:0 -10px 34px rgba(0,0,0,0.55)">
+      <div style="height:6px;border-radius:22px 22px 0 0;background:{{ bColor }}"></div>
+      <div style="padding:16px 18px 26px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+          <div>
+            <div style="font-size:21px;font-weight:800;color:#fff;letter-spacing:-0.3px">{{ bTitle }}</div>
+            <div style="font-size:13px;color:rgba(235,235,245,0.55);margin-top:3px">{{ bBetween }}</div>
+          </div>
+          <div onClick="{{ closeOverlay }}" style="width:28px;height:28px;border-radius:50%;background:rgba(118,118,128,0.24);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:rgba(235,235,245,0.7);font-weight:700">✕</div>
+        </div>
+        <div style="font-size:30px;font-weight:800;color:#fff;letter-spacing:-0.5px;line-height:1.15;margin:14px 0 4px">{{ bBig }}</div>
+        <sc-if value="{{ bSwept }}" hint-placeholder-val="{{ false }}">
+          <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(48,209,88,0.13);border:0.5px solid rgba(48,209,88,0.35);border-radius:100px;padding:5px 11px;margin-top:6px">
+            <span style="font-size:12.5px;font-weight:700;color:#30D158">🧹 {{ bSwept }}</span>
+          </div>
+        </sc-if>
+        <div style="margin-top:16px">
+          <sc-for list="{{ bRules }}" as="rr" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:0.5px solid rgba(255,255,255,0.07)">
+              <span style="flex:1;font-size:13px;color:rgba(235,235,245,0.8);letter-spacing:0.2px">{{ rr.t }}</span>
+              <sc-if value="{{ rr.badge }}" hint-placeholder-val="{{ false }}">
+                <span style="flex:none;font-size:11.5px;font-weight:700;color:#FFB84D;background:rgba(255,159,10,0.16);border-radius:8px;padding:4px 9px">{{ rr.badge }}</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ bHasReports }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:11.5px;font-weight:750;letter-spacing:1px;color:rgba(235,235,245,0.45);margin:14px 0 4px">LIVE ON THIS BLOCK</div>
+          <sc-for list="{{ bReports }}" as="br" hint-placeholder-count="1">
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:0.5px solid rgba(255,255,255,0.07)">
+              <span style="font-size:16px">{{ br.icon }}</span>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:13.5px;font-weight:650;color:#fff">{{ br.title }}</div>
+                <div style="font-size:11.5px;color:rgba(235,235,245,0.5);margin-top:1px">{{ br.sub }}</div>
+              </div>
+              <sc-if value="{{ br.showConfirm }}" hint-placeholder-val="{{ false }}">
+                <button onClick="{{ br.onConfirm }}" style="background:rgba(48,209,88,0.15);color:#30D158;border:0.5px solid rgba(48,209,88,0.4);border-radius:100px;padding:5px 11px;font-size:11.5px;font-weight:700;font-family:inherit;cursor:pointer">Still there · {{ br.conf }}</button>
+              </sc-if>
+            </div>
+          </sc-for>
+        </sc-if>
+        <div style="font-size:11.5px;font-weight:750;letter-spacing:1px;color:rgba(235,235,245,0.45);margin:14px 0 4px">BLOCK CHATTER</div>
+        <sc-for list="{{ bChats }}" as="bc" hint-placeholder-count="2">
+          <div style="display:flex;gap:9px;padding:7px 0">
+            <span style="font-size:16px;flex:none">{{ bc.e }}</span>
+            <div>
+              <span style="font-size:12px;font-weight:700;color:rgba(235,235,245,0.65)">{{ bc.n }}</span>
+              <span style="font-size:11px;color:rgba(235,235,245,0.4)"> · {{ bc.when }}</span>
+              <div style="font-size:13.5px;color:rgba(235,235,245,0.9);margin-top:1px;line-height:1.4">{{ bc.text }}</div>
+            </div>
+          </div>
+        </sc-for>
+        <div style="display:flex;gap:8px;margin-top:8px">
+          <input value="{{ chatDraft }}" onChange="{{ setChatDraft }}" placeholder="Message this block…" style="flex:1;background:rgba(118,118,128,0.16);border:0.5px solid rgba(255,255,255,0.08);border-radius:100px;padding:9px 14px;font-size:13.5px;color:#fff;font-family:inherit">
+          <button onClick="{{ sendChat }}" style="flex:none;width:36px;height:36px;border-radius:50%;background:#0A84FF;color:#fff;border:none;font-size:16px;font-weight:800;cursor:pointer;font-family:inherit">↑</button>
+        </div>
+        <button onClick="{{ parkHere }}" style-hover="background:#2695FF" style="width:100%;background:#0A84FF;color:#fff;border:none;border-radius:100px;padding:14px 0;font-size:17px;font-weight:700;font-family:inherit;cursor:pointer;margin-top:16px">Park here →</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showCar }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOverlay }}" style="position:absolute;inset:0;z-index:30;background:rgba(0,0,0,0.4)"></div>
+    <div data-screen-label="My Car" style="position:absolute;left:0;right:0;bottom:0;z-index:31;max-height:680px;overflow-y:auto;background:#1C1F26;border-radius:22px 22px 0 0;animation:wp-fade 0.3s;box-shadow:0 -10px 34px rgba(0,0,0,0.55)">
+      <div style="height:6px;border-radius:22px 22px 0 0;background:{{ cColor }}"></div>
+      <div style="padding:16px 18px 26px">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px">
+          <div>
+            <div style="font-size:21px;font-weight:800;color:#fff">My Car</div>
+            <div style="font-size:13px;color:rgba(235,235,245,0.55);margin-top:3px">{{ cLoc }}</div>
+          </div>
+          <div onClick="{{ closeOverlay }}" style="width:28px;height:28px;border-radius:50%;background:rgba(118,118,128,0.24);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:rgba(235,235,245,0.7);font-weight:700">✕</div>
+        </div>
+        <div style="font-size:30px;font-weight:800;color:#fff;letter-spacing:-0.5px;line-height:1.15;margin:14px 0 2px">{{ cBig }}</div>
+        <div style="font-size:12.5px;color:rgba(235,235,245,0.5);margin-bottom:14px">{{ cParkedAgo }}</div>
+        <sc-if value="{{ cSwept }}" hint-placeholder-val="{{ false }}">
+          <div style="display:inline-flex;align-items:center;gap:6px;background:rgba(48,209,88,0.13);border:0.5px solid rgba(48,209,88,0.35);border-radius:100px;padding:5px 11px;margin-bottom:12px">
+            <span style="font-size:12.5px;font-weight:700;color:#30D158">🧹 {{ cSwept }}</span>
+          </div>
+        </sc-if>
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 0 10px">
+          <span style="font-size:16px;color:#fff">Remind me before parking changes</span>
+          <div onClick="{{ toggleRemind }}" style="width:51px;height:31px;border-radius:100px;background:{{ remindBg }};position:relative;cursor:pointer;transition:background 0.2s">
+            <div style="position:absolute;top:2px;left:{{ remindKnob }}px;width:27px;height:27px;border-radius:50%;background:#fff;box-shadow:0 2px 5px rgba(0,0,0,0.3);transition:left 0.2s"></div>
+          </div>
+        </div>
+        <sc-if value="{{ remind }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-wrap:wrap;gap:7px;margin-bottom:14px">
+            <sc-for list="{{ offsetChips }}" as="oc" hint-placeholder-count="5">
+              <span onClick="{{ oc.toggle }}" style="font-size:12.5px;font-weight:650;padding:7px 13px;border-radius:100px;cursor:pointer;background:{{ oc.bg }};color:{{ oc.fg }};border:0.5px solid rgba(255,255,255,0.1)">{{ oc.l }}</span>
+            </sc-for>
+          </div>
+        </sc-if>
+        <div style="margin:2px 0 14px">
+          <sc-for list="{{ cRules }}" as="cr" hint-placeholder-count="2">
+            <div style="display:flex;align-items:center;gap:10px;padding:9px 0;border-bottom:0.5px solid rgba(255,255,255,0.07)">
+              <span style="flex:1;font-size:13px;color:rgba(235,235,245,0.8)">{{ cr.t }}</span>
+              <sc-if value="{{ cr.badge }}" hint-placeholder-val="{{ false }}">
+                <span style="flex:none;font-size:11.5px;font-weight:700;color:#FFB84D;background:rgba(255,159,10,0.16);border-radius:8px;padding:4px 9px">{{ cr.badge }}</span>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <div style="background:rgba(10,132,255,0.09);border:0.5px solid rgba(10,132,255,0.3);border-radius:16px;padding:12px 14px;margin-bottom:12px">
+          <div style="font-size:13.5px;font-weight:700;color:#fff">Hand your spot to the crew</div>
+          <div style="font-size:12px;color:rgba(235,235,245,0.6);margin-top:2px;line-height:1.45">Posts a "leaving soon" pin here. Spots can't be held — first come, first served.</div>
+          <div style="display:flex;gap:7px;margin-top:9px">
+            <sc-for list="{{ leaveChips }}" as="lc" hint-placeholder-count="4">
+              <span onClick="{{ lc.pick }}" style="font-size:12.5px;font-weight:650;padding:6px 12px;border-radius:100px;cursor:pointer;background:{{ lc.bg }};color:{{ lc.fg }}">{{ lc.l }}</span>
+            </sc-for>
+          </div>
+          <button onClick="{{ doLeave }}" style="width:100%;margin-top:10px;background:#0A84FF;color:#fff;border:none;border-radius:100px;padding:10px 0;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer">Leaving in {{ leaveMins }} min — tell the crew</button>
+        </div>
+        <button onClick="{{ clearPin }}" style="width:100%;background:rgba(255,69,58,0.16);color:#FF6961;border:none;border-radius:100px;padding:13px 0;font-size:16px;font-weight:700;font-family:inherit;cursor:pointer">I left — clear pin</button>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showUntil }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOverlay }}" style="position:absolute;inset:0;z-index:30;background:rgba(0,0,0,0.4)"></div>
+    <div data-screen-label="Park Until" style="position:absolute;left:0;right:0;bottom:0;z-index:31;background:#1C1F26;border-radius:22px 22px 0 0;animation:wp-fade 0.3s;padding:20px 18px 30px;box-shadow:0 -10px 34px rgba(0,0,0,0.55)">
+      <div style="font-size:26px;font-weight:800;color:#fff;letter-spacing:-0.4px">Parking until when?</div>
+      <div style="font-size:13px;color:rgba(235,235,245,0.55);margin-top:4px">The map recolors for your whole window — green means it survives the stay.</div>
+      <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;color:rgba(235,235,245,0.45);margin:18px 0 8px">QUICK PICKS</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <sc-for list="{{ untilChips }}" as="uc" hint-placeholder-count="6">
+          <span onClick="{{ uc.pick }}" style="font-size:14px;font-weight:650;padding:9px 16px;border-radius:100px;cursor:pointer;background:{{ uc.bg }};color:{{ uc.fg }}">{{ uc.l }}</span>
+        </sc-for>
+      </div>
+      <button onClick="{{ untilConfirm }}" style="width:100%;margin-top:20px;background:{{ untilBtnBg }};color:{{ untilBtnFg }};border:none;border-radius:100px;padding:14px 0;font-size:17px;font-weight:700;font-family:inherit;cursor:pointer">Confirm</button>
+      <div style="text-align:center;margin-top:12px"><span onClick="{{ closeOverlay }}" style="font-size:14.5px;color:rgba(235,235,245,0.55);cursor:pointer">Skip for now</span></div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showReport }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOverlay }}" style="position:absolute;inset:0;z-index:30;background:rgba(0,0,0,0.4)"></div>
+    <div data-screen-label="Report" style="position:absolute;left:0;right:0;bottom:0;z-index:31;background:#1C1F26;border-radius:22px 22px 0 0;animation:wp-fade 0.3s;padding:20px 18px 30px;box-shadow:0 -10px 34px rgba(0,0,0,0.55)">
+      <div style="font-size:26px;font-weight:800;color:#fff;letter-spacing:-0.4px">Report to the crew</div>
+      <sc-if value="{{ repGrid }}" hint-placeholder-val="{{ true }}">
+      <div style="font-size:13px;color:rgba(235,235,245,0.55);margin-top:4px;line-height:1.45">Two taps — pick what you see, confirm the block, done.</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px">
+        <div onClick="{{ repEnf }}" style-hover="background:#2A2E38" style="background:rgba(118,118,128,0.12);border:0.5px solid rgba(255,159,10,0.35);border-radius:16px;padding:14px;cursor:pointer">
+          <div style="font-size:22px">🎫</div>
+          <div style="font-size:14.5px;font-weight:700;color:#fff;margin-top:6px">Enforcement active</div>
+          <div style="font-size:11.5px;color:rgba(235,235,245,0.55);margin-top:2px;line-height:1.4">Agent working this block — heads-up to move or feed the meter</div>
+        </div>
+        <div onClick="{{ repSwp }}" style-hover="background:#2A2E38" style="background:rgba(118,118,128,0.12);border:0.5px solid rgba(48,209,88,0.35);border-radius:16px;padding:14px;cursor:pointer">
+          <div style="font-size:22px">🧹</div>
+          <div style="font-size:14.5px;font-weight:700;color:#fff;margin-top:6px">Sweeper passed</div>
+          <div style="font-size:11.5px;color:rgba(235,235,245,0.55);margin-top:2px;line-height:1.4">The broom came through — block's been cleaned</div>
+        </div>
+        <div onClick="{{ repSpot }}" style-hover="background:#2A2E38" style="background:rgba(118,118,128,0.12);border:0.5px solid rgba(10,132,255,0.35);border-radius:16px;padding:14px;cursor:pointer">
+          <div style="font-size:20px;font-weight:800;color:#0A84FF">P</div>
+          <div style="font-size:14.5px;font-weight:700;color:#fff;margin-top:6px">Spot open</div>
+          <div style="font-size:11.5px;color:rgba(235,235,245,0.55);margin-top:2px;line-height:1.4">Walking past an empty legal spot? Takes 2 seconds, earns rep</div>
+        </div>
+        <div onClick="{{ repClosure }}" style-hover="background:#2A2E38" style="background:rgba(118,118,128,0.12);border:0.5px solid rgba(232,115,13,0.4);border-radius:16px;padding:14px;cursor:pointer">
+          <div style="font-size:22px">🚧</div>
+          <div style="font-size:14.5px;font-weight:700;color:#fff;margin-top:6px">Street closure</div>
+          <div style="font-size:11.5px;color:rgba(235,235,245,0.55);margin-top:2px;line-height:1.4">Filming or construction holding the curb — photo helps</div>
+        </div>
+      </div>
+      <div style="font-size:11px;color:rgba(235,235,245,0.4);margin-top:14px;line-height:1.5;text-align:center">Reports expire on their own. Accurate ones raise your rep; disputed ones lower it.</div>
+      </sc-if>
+      <sc-if value="{{ repStep2 }}" hint-placeholder-val="{{ false }}">
+        <div style="display:flex;align-items:center;gap:9px;margin-top:14px">
+          <span style="font-size:22px">{{ repIcon }}</span>
+          <span style="font-size:17px;font-weight:750;color:#fff">{{ repTypeLabel }}</span>
+          <span onClick="{{ repBack }}" style="margin-left:auto;font-size:13px;color:#0A84FF;cursor:pointer;font-weight:650">‹ Back</span>
+        </div>
+        <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;color:rgba(235,235,245,0.45);margin:16px 0 8px">CONFIRM THE STREET</div>
+        <div style="display:flex;flex-direction:column;gap:7px">
+          <sc-for list="{{ repBlockOpts }}" as="bo" hint-placeholder-count="3">
+            <div onClick="{{ bo.pick }}" style="display:flex;align-items:center;gap:10px;background:rgba(118,118,128,0.12);border:1.5px solid {{ bo.bd }};border-radius:14px;padding:10px 13px;cursor:pointer">
+              <div style="flex:1">
+                <div style="font-size:14px;font-weight:700;color:#fff">{{ bo.street }} — {{ bo.side }}</div>
+                <div style="font-size:11.5px;color:rgba(235,235,245,0.5);margin-top:1px">{{ bo.between }}</div>
+              </div>
+              <sc-if value="{{ bo.on }}" hint-placeholder-val="{{ false }}"><span style="font-size:14px;font-weight:800;color:#0A84FF">✓</span></sc-if>
+            </div>
+          </sc-for>
+        </div>
+        <sc-if value="{{ repNeedsDir }}" hint-placeholder-val="{{ false }}">
+          <div style="font-size:12px;font-weight:700;letter-spacing:0.8px;color:rgba(235,235,245,0.45);margin:16px 0 8px">HEADING TOWARD</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <sc-for list="{{ repDirChips }}" as="dc" hint-placeholder-count="3">
+              <span onClick="{{ dc.pick }}" style="font-size:13px;font-weight:650;padding:8px 14px;border-radius:100px;cursor:pointer;background:{{ dc.bg }};color:{{ dc.fg }}">{{ dc.l }}</span>
+            </sc-for>
+          </div>
+        </sc-if>
+        <button onClick="{{ repPost }}" style="width:100%;margin-top:18px;background:#0A84FF;color:#fff;border:none;border-radius:100px;padding:13px 0;font-size:16px;font-weight:750;font-family:inherit;cursor:pointer">Post to the crew</button>
+      </sc-if>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showIdentity }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;inset:0;z-index:34;background:rgba(0,0,0,0.55)"></div>
+    <div data-screen-label="Pick a handle" style="position:absolute;left:20px;right:20px;top:200px;z-index:35;background:#1C1F26;border-radius:24px;animation:wp-fade 0.3s;padding:22px 20px;box-shadow:0 20px 60px rgba(0,0,0,0.6)">
+      <div style="font-size:23px;font-weight:800;color:#fff;letter-spacing:-0.3px">Say hi to the crew</div>
+      <div style="font-size:13px;color:rgba(235,235,245,0.6);margin-top:5px;line-height:1.5">First report! Pick how neighbors see you. No account — this lives on your phone and signs your reports.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 12px">
+        <sc-for list="{{ avatars }}" as="av" hint-placeholder-count="8">
+          <div onClick="{{ av.pick }}" style="width:44px;height:44px;border-radius:50%;background:#232730;display:flex;align-items:center;justify-content:center;font-size:22px;cursor:pointer;border:2px solid {{ av.bd }}">{{ av.e }}</div>
+        </sc-for>
+      </div>
+      <input value="{{ handleDraft }}" onChange="{{ setHandleDraft }}" style="width:100%;box-sizing:border-box;background:rgba(118,118,128,0.16);border:0.5px solid rgba(255,255,255,0.12);border-radius:14px;padding:12px 14px;font-size:16px;font-weight:650;color:#fff;font-family:inherit">
+      <button onClick="{{ saveIdentity }}" style="width:100%;margin-top:14px;background:#30D158;color:#04290F;border:none;border-radius:100px;padding:13px 0;font-size:16px;font-weight:750;font-family:inherit;cursor:pointer">Join the board &amp; post</button>
+      <div style="text-align:center;margin-top:11px"><span onClick="{{ skipIdentity }}" style="font-size:13.5px;color:rgba(235,235,245,0.5);cursor:pointer">Post anonymously</span></div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ showP101 }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closeOverlay }}" style="position:absolute;inset:0;z-index:30;background:rgba(0,0,0,0.4)"></div>
+    <div data-screen-label="Parking 101" style="position:absolute;left:0;right:0;bottom:0;z-index:31;max-height:700px;overflow-y:auto;background:#1C1F26;border-radius:22px 22px 0 0;animation:wp-fade 0.3s;padding:20px 18px 34px;box-shadow:0 -10px 34px rgba(0,0,0,0.55)">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between">
+        <div>
+          <div style="font-size:26px;font-weight:800;color:#fff;letter-spacing:-0.4px">Parking 101</div>
+          <div style="font-size:13.5px;color:rgba(235,235,245,0.6);margin-top:3px">Free parking in NYC is doable. Here's how.</div>
+        </div>
+        <div onClick="{{ closeOverlay }}" style="width:28px;height:28px;border-radius:50%;background:rgba(118,118,128,0.24);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:13px;color:rgba(235,235,245,0.7);font-weight:700">✕</div>
+      </div>
+      <div style="background:rgba(48,209,88,0.09);border:0.5px solid rgba(48,209,88,0.25);border-radius:16px;padding:13px 15px;margin-top:16px">
+        <div style="font-size:14px;font-weight:700;color:#30D158">The money math</div>
+        <div style="font-size:12.5px;color:rgba(235,235,245,0.75);line-height:1.55;margin-top:4px">Manhattan garages run $500–$1,000+ a month. The street costs $0 — the whole trick is moving your car about twice a week for cleaning, and a missed window is a ~$65 ticket. Learn the rhythm once and that's roughly $4,800–$12,000 a year back in your pocket.</div>
+      </div>
+      <div style="font-size:12px;font-weight:750;letter-spacing:1px;color:rgba(235,235,245,0.45);margin:16px 0 6px">WHAT THE COLORS MEAN</div>
+      <sc-for list="{{ legend }}" as="lg" hint-placeholder-count="5">
+        <div style="display:flex;align-items:center;gap:11px;padding:7px 0">
+          <div style="flex:none;width:26px;height:8px;border-radius:100px;background:{{ lg.c }}"></div>
+          <div style="font-size:13px;color:rgba(235,235,245,0.85);line-height:1.4"><span style="font-weight:750;color:#fff">{{ lg.n }}</span> — {{ lg.d }}</div>
+        </div>
+      </sc-for>
+      <div style="font-size:12px;font-weight:750;letter-spacing:1px;color:rgba(235,235,245,0.45);margin:16px 0 6px">THE 3-TIER LADDER</div>
+      <div style="font-size:12.5px;color:rgba(235,235,245,0.75);line-height:1.6"><span style="color:#fff;font-weight:700">NO PARKING</span> — you may stop to load passengers or merchandise.<br><span style="color:#fff;font-weight:700">NO STANDING</span> — passengers only, never cargo.<br><span style="color:#fff;font-weight:700">NO STOPPING</span> — nothing, except to obey a signal.</div>
+      <div style="font-size:12px;font-weight:750;letter-spacing:1px;color:rgba(235,235,245,0.45);margin:16px 0 6px">ROOKIE MISTAKES</div>
+      <div style="font-size:12.5px;color:rgba(235,235,245,0.75);line-height:1.65">· ASP resumes the very next day after a suspension.<br>· Read the whole sign stack — the lower plate can change everything.<br>· Stay 15 ft from hydrants (about a car length), even "just for a second."</div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ notif }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ notifTap }}" style="position:absolute;top:64px;left:10px;right:10px;z-index:80;background:rgba(44,46,54,0.97);backdrop-filter:blur(16px);border-radius:20px;padding:12px 14px;display:flex;gap:11px;align-items:flex-start;cursor:pointer;animation:wp-drop 0.45s cubic-bezier(0.2,0.9,0.3,1);box-shadow:0 10px 30px rgba(0,0,0,0.5);border:0.5px solid rgba(255,255,255,0.1)">
+      <div style="flex:none;width:38px;height:38px;border-radius:9.5px;background:linear-gradient(135deg,#30D158,#1FA347);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:900;color:#fff;font-family:inherit">P</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;justify-content:space-between;gap:8px">
+          <span style="font-size:13.5px;font-weight:750;color:#fff">{{ notifTitle }}</span>
+          <span style="flex:none;font-size:11.5px;color:rgba(235,235,245,0.45)">now</span>
+        </div>
+        <div style="font-size:12.5px;color:rgba(235,235,245,0.75);line-height:1.4;margin-top:2px">{{ notifBody }}</div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:absolute;left:50%;transform:translateX(-50%);bottom:{{ toastBottom }}px;z-index:85;background:rgba(44,46,54,0.97);border:0.5px solid rgba(255,255,255,0.12);border-radius:100px;padding:9px 18px;font-size:13px;font-weight:650;color:#fff;white-space:nowrap;animation:wp-fade 0.3s;box-shadow:0 6px 20px rgba(0,0,0,0.5)">{{ toast }}</div>
+  </sc-if>
+
+</div>
+</x-import>
+
+<sc-if value="{{ showRail }}" hint-placeholder-val="{{ true }}">
+<div data-screen-label="Demo controls" style="width:296px;flex:none;display:flex;flex-direction:column;gap:14px;position:sticky;top:34px">
+  <div style="background:#12151C;border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:18px">
+    <div style="font-size:11px;font-weight:750;letter-spacing:1.4px;color:rgba(235,235,245,0.4)">DEMO CLOCK · NOLITA</div>
+    <div style="font-size:34px;font-weight:800;color:#fff;letter-spacing:-0.5px;margin-top:6px;font-variant-numeric:tabular-nums">{{ railClock }}</div>
+    <div style="font-size:12.5px;color:rgba(235,235,245,0.5);margin-top:1px">{{ railDay }} · curb colors are live against this clock</div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button onClick="{{ togglePlay }}" style="flex:1;background:{{ playBg }};color:{{ playFg }};border:none;border-radius:100px;padding:9px 0;font-size:13.5px;font-weight:750;font-family:inherit;cursor:pointer">{{ playLabel }}</button>
+      <sc-for list="{{ speedChips }}" as="sp" hint-placeholder-count="3">
+        <button onClick="{{ sp.pick }}" style="flex:none;background:{{ sp.bg }};color:{{ sp.fg }};border:none;border-radius:100px;padding:9px 12px;font-size:12.5px;font-weight:700;font-family:inherit;cursor:pointer">{{ sp.l }}</button>
+      </sc-for>
+    </div>
+    <div style="display:flex;flex-wrap:wrap;gap:7px;margin-top:10px">
+      <sc-for list="{{ jumps }}" as="j" hint-placeholder-count="4">
+        <button onClick="{{ j.tap }}" style="background:rgba(118,118,128,0.14);color:rgba(235,235,245,0.8);border:0.5px solid rgba(255,255,255,0.09);border-radius:100px;padding:7px 12px;font-size:12px;font-weight:650;font-family:inherit;cursor:pointer">{{ j.l }}</button>
+      </sc-for>
+    </div>
+  </div>
+  <div style="background:#12151C;border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:18px">
+    <div style="font-size:11px;font-weight:750;letter-spacing:1.4px;color:rgba(235,235,245,0.4)">THE TUESDAY STORY</div>
+    <div style="margin-top:10px;display:flex;flex-direction:column;gap:9px">
+      <sc-for list="{{ checklist }}" as="ck" hint-placeholder-count="5">
+        <div style="display:flex;gap:9px;align-items:baseline">
+          <span style="flex:none;font-size:12px;font-weight:800;color:{{ ck.c }}">{{ ck.mark }}</span>
+          <span style="font-size:13px;line-height:1.45;color:{{ ck.tc }}">{{ ck.l }}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+  <div style="background:#12151C;border:1px solid rgba(255,255,255,0.08);border-radius:18px;padding:18px">
+    <div style="font-size:11px;font-weight:750;letter-spacing:1.4px;color:rgba(235,235,245,0.4)">TRY IT</div>
+    <div style="font-size:13px;color:rgba(235,235,245,0.7);line-height:1.75;margin-top:8px">· Tap any curb line for the block's rules<br>· Pull the sheet up — crew feed &amp; leaderboard<br>· Switch squares: Nolita / SoHo / LES chips<br>· Post to the square — the → chip picks the block<br>· Report something (first one asks your handle)<br>· Clock icon → "Park Until" recolors the map<br>· Confirm the 8:21 sweeper from your car sheet</div>
+  </div>
+  <div style="font-size:11px;color:rgba(235,235,245,0.35);line-height:1.6;padding:0 4px">Prototype grounded in kevhox1/parkmap — real palette (ParkingColors.swift), pin taxonomy (CommunityPin.swift), reminder offsets, and the Community 1.0 / NYC Neighbors direction docs. Nothing in the repo was modified.</div>
+</div>
+</sc-if>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showDemoRail&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;section&quot;:&quot;Demo&quot;},&quot;demoSpeed&quot;:{&quot;editor&quot;:&quot;range&quot;,&quot;default&quot;:1,&quot;min&quot;:1,&quot;max&quot;:15,&quot;step&quot;:1,&quot;unit&quot;:&quot; min/s&quot;,&quot;tsType&quot;:&quot;number&quot;,&quot;section&quot;:&quot;Demo&quot;}}">
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.MIN = 60000;
+    this.T0 = new Date(2026, 7, 25, 0, 0, 0).getTime(); // Tue Aug 25 2026 00:00
+    this.COL = { red: '#FF453A', orange: '#FF9F0A', amber: '#EBC200', green: '#30D158', gray: 'rgba(142,142,147,0.4)' };
+    this.geo = this.buildGeo();
+    this.baseChats = [
+      { block: 'MOTT ST|1|E', a: ['Springy', '🥯', 380], text: 'morning all — quiet so far', atMin: 425 }
+    ];
+    this.zones = { nolita: { n: 'NOLITA CREW', p: 148 }, soho: { n: 'SOHO CREW', p: 203 }, les: { n: 'LES CREW', p: 96 } };
+    this.awayChats = {
+      soho: [{ block: 'WOOSTER ST|0|E', a: ['CanalCat', '🐈', 350], text: 'film trucks staging on Wooster again', atMin: 455 }],
+      les: [{ block: 'ORCHARD ST|0|W', a: ['DelanceyDan', '🌉', 180], text: 'orchard btwn riv/stanton all clear', atMin: 430 }]
+    };
+    this.baseReports = [
+      { id: 'r-con', rt: 'closure', seg: 'BROOME ST|1|N', by: null, open: true, atMin: -660, ttl: null, conf: 9, disp: 0, note: 'Con Ed street work — curb closed through Thu (DOT permit)' },
+      { id: 'r-film', rt: 'filming', seg: 'LAFAYETTE ST|1|E', by: null, open: true, atMin: -300, ttl: null, conf: 3, disp: 0, note: 'Film shoot Thu 6 AM–10 PM — curb will be held (film office permit)' },
+      { id: 'r-note', rt: 'note', seg: 'MOTT ST|2|E', by: ['BoweryBird', '🦅', 204], atMin: -2880, ttl: null, conf: 12, disp: 0, note: 'Hydrant mid-block is easy to miss at night — count 15 ft' }
+    ];
+    this.events = [
+      { at: 465, type: 'notif', title: 'Move by 8:00 AM — street cleaning', body: 'NO PARKING 8–9:30 AM starts on MOTT ST (east side). 15-minute warning, as you set it.', act: 'car' },
+      { at: 467, type: 'chat', block: 'MOTT ST|1|E', a: ['Springy', '🥯', 380], text: "DSNY ran early last Tuesday — don't cut it close" },
+      { at: 472, type: 'report', rep: { id: 'r-enf', rt: 'enforcement', seg: 'ELIZABETH ST|1|W', by: ['BoweryBird', '🦅', 204], atMin: 472, ttl: 45, conf: 1, disp: 0, note: 'Agent walking north from Spring' } },
+      { at: 476, type: 'bump', id: 'r-enf', conf: 4 },
+      { at: 480, type: 'notif', title: 'ASP is live on your block', body: 'MOTT ST east side is no-parking until 9:30 AM. Enforcement reported 2 blocks east.', act: 'car' },
+      { at: 487, type: 'chat', block: 'MOTT ST|1|E', a: ['MulberryMike', '🚗', 412], text: 'double-parked west side with flashers — usual Tuesday club out here' },
+      { at: 501, type: 'report', prompt: true, rep: { id: 'r-swp', rt: 'sweeper', seg: 'MOTT ST|1|E', by: ['MulberryMike', '🚗', 412], atMin: 501, ttl: 120, conf: 2, disp: 0, note: 'Broom just turned off Prince' } },
+      { at: 503, type: 'bump', id: 'r-swp', conf: 6 },
+      { at: 504, type: 'notif', title: 'Sweeper passed MOTT ST', body: "6 neighbors confirmed the broom came through. ASP still runs to 9:30 — you're clear after that.", act: 'block' },
+      { at: 511, type: 'report', rep: { id: 'r-leave', rt: 'leaving', seg: 'SPRING ST|2|N', by: ['ElizaBets', '☕', 298], atMin: 511, ttl: 12, conf: 0, disp: 0, note: 'Leaving in ~10 min — silver hatchback, fits a sedan' } },
+      { at: 570, type: 'notif', title: "You're clear until Friday", body: 'Cleaning ended on MOTT ST. Free until Fri 8:00 AM — your confirm helped 12 neighbors today.', act: 'car' },
+      { at: 573, type: 'chat', block: 'MOTT ST|1|E', a: ['Springy', '🥯', 380], text: 'survived another one. see everyone Friday' }
+    ];
+    this.state = {
+      nowMin: 462, playing: true, speed: (props && props.demoSpeed) || 1,
+      sheet: 'collapsed', dragH: null, dragging: false,
+      overlay: null, sel: null,
+      parked: { seg: 'MOTT ST|1|E', atMin: -348 }, // Mon 6:12 PM
+      remind: true, offs: { o15: true, o30: false, o60: true, o120: false, night: true },
+      until: null, untilPick: null,
+      reports: this.baseReports.slice(), chats: this.baseChats.slice(), fired: {},
+      notif: null, toast: null, prompt: null, promptDone: false,
+      confirmed: {}, claimed: {},
+      handle: null, avatar: '🗽', rep: 126, acc: 96, helped: 41,
+      handleDraft: 'MottStRegular', leaveMins: 10, chatDraft: '', searchOpen: false,
+      zone: 'nolita', crewDraft: '', anchorIdx: 0, showLegend: false, repDraft: null, placing: false, placeDraft: null,
+      pan: { x: -47, y: 95 }, pending: null
+    };
+  }
+  componentDidMount() { this._iv = setInterval(() => { if (this.state.playing) this.advanceTo(this.state.nowMin + this.state.speed, false); }, 1000); }
+  componentWillUnmount() { clearInterval(this._iv); clearTimeout(this._nt); clearTimeout(this._tt); }
+
+  buildGeo() {
+    const verts = [['LAFAYETTE ST', 60], ['MULBERRY ST', 150], ['MOTT ST', 240], ['ELIZABETH ST', 330], ['BOWERY', 430]];
+    const hors = [['E HOUSTON ST', 80], ['PRINCE ST', 250], ['SPRING ST', 420], ['BROOME ST', 590], ['GRAND ST', 760]];
+    const segs = [];
+    verts.forEach(([n, x]) => {
+      for (let i = 0; i < 4; i++) {
+        const y1 = hors[i][1] + 16, y2 = hors[i + 1][1] - 16, my = (y1 + y2) / 2;
+        segs.push({ key: n + '|' + i + '|W', st: n, i, side: 'W', v: 1, x1: x - 7, y1, x2: x - 7, y2, mx: x - 22, my, between: [hors[i][0], hors[i + 1][0]] });
+        segs.push({ key: n + '|' + i + '|E', st: n, i, side: 'E', v: 1, x1: x + 7, y1, x2: x + 7, y2, mx: x + 22, my, between: [hors[i][0], hors[i + 1][0]] });
+      }
+    });
+    hors.forEach(([n, y]) => {
+      for (let i = 0; i < 4; i++) {
+        const x1 = verts[i][1] + 16, x2 = verts[i + 1][1] - 16, mx = (x1 + x2) / 2;
+        segs.push({ key: n + '|' + i + '|N', st: n, i, side: 'N', v: 0, x1, y1: y - 7, x2, y2: y - 7, mx, my: y - 22, between: [verts[i][0], verts[i + 1][0]] });
+        segs.push({ key: n + '|' + i + '|S', st: n, i, side: 'S', v: 0, x1, y1: y + 7, x2, y2: y + 7, mx, my: y + 22, between: [verts[i][0], verts[i + 1][0]] });
+      }
+    });
+    return { verts, hors, segs, byKey: Object.fromEntries(segs.map(s => [s.key, s])) };
+  }
+  ruleFor(st, i, side) {
+    const asp = (days, s, e, txt, badge) => ({ k: 'asp', days, s, e, txt, badge });
+    const meter = { k: 'meter', days: [1, 2, 3, 4, 5, 6], s: 480, e: 1140, txt: 'PAY TO PARK 8AM-7PM MON-SAT (MUNI-METER)', badge: 'Meter' };
+    const ns = { k: 'ns', txt: 'NO STANDING ANYTIME', badge: '24/7' };
+    const unk = { k: 'unk', txt: 'NO SIGN DATA DIGITIZED FOR THIS CURB', badge: null };
+    const aTF = asp([2, 5], 480, 570, 'NO PARKING 8-9:30AM TUE & FRI (SANITATION BROOM SYMBOL)', 'ASP Tue/Fri');
+    const aMT = asp([1, 4], 480, 570, 'NO PARKING 8-9:30AM MON & THU (SANITATION BROOM SYMBOL)', 'ASP Mon/Thu');
+    const aTF2 = asp([2, 5], 510, 540, 'NO PARKING 8:30-9AM TUE & FRI (SANITATION BROOM SYMBOL)', 'ASP Tue/Fri');
+    const aMT2 = asp([1, 4], 510, 540, 'NO PARKING 8:30-9AM MON & THU (SANITATION BROOM SYMBOL)', 'ASP Mon/Thu');
+    const aWS = asp([3, 6], 480, 570, 'NO PARKING 8-9:30AM WED & SAT (SANITATION BROOM SYMBOL)', 'ASP Wed/Sat');
+    const aTh = asp([4], 570, 660, 'NO PARKING 9:30-11AM THU (SANITATION BROOM SYMBOL)', 'ASP Thu');
+    const aTF11 = asp([2, 5], 660, 750, 'NO PARKING 11AM-12:30PM TUE & FRI (SANITATION BROOM SYMBOL)', 'ASP Tue/Fri');
+    switch (st) {
+      case 'MOTT ST': return side === 'E' ? aTF : aMT;
+      case 'MULBERRY ST': return side === 'E' ? aTF2 : aMT2;
+      case 'ELIZABETH ST': return side === 'E' ? aWS : meter;
+      case 'LAFAYETTE ST': return side === 'W' ? ns : meter;
+      case 'BOWERY': return side === 'W' ? ns : meter;
+      case 'E HOUSTON ST': return ns;
+      case 'PRINCE ST': return side === 'N' ? aTF11 : meter;
+      case 'SPRING ST': return side === 'N' ? aTh : meter;
+      case 'BROOME ST': return side === 'N' ? (i === 1 ? aMT : aMT2) : unk;
+      case 'GRAND ST': return side === 'N' ? unk : (i < 2 ? meter : unk);
+      default: return unk;
+    }
+  }
+  nowDate(m) { return new Date(this.T0 + (m == null ? this.state.nowMin : m) * this.MIN); }
+  dayMin(m) { return ((m % 1440) + 1440) % 1440; }
+  nextWindow(rule, m) {
+    const dow0 = this.nowDate(m).getDay(), dm = this.dayMin(m), base = m - dm;
+    for (let k = 0; k < 8; k++) {
+      const dow = (dow0 + k) % 7;
+      if (rule.days.includes(dow)) {
+        const s = base + k * 1440 + rule.s, e = base + k * 1440 + rule.e;
+        if (m >= s && m < e) return { active: true, s, e };
+        if (m < s) return { active: false, s, e };
+      }
+    }
+    return null;
+  }
+  stateAt(rule, m) {
+    if (rule.k === 'unk') return { c: 'gray' };
+    if (rule.k === 'ns') return { c: 'red' };
+    const w = this.nextWindow(rule, m);
+    if (!w) return { c: 'green' };
+    if (rule.k === 'meter') return w.active ? { c: 'amber', until: w.e } : { c: 'green', until: w.s };
+    if (w.active) return { c: 'red', until: w.e };
+    if (w.s - m <= 360) return { c: 'orange', until: w.s };
+    return { c: 'green', until: w.s };
+  }
+  windowState(rule, from, to) {
+    if (rule.k === 'unk') return { c: 'gray' };
+    if (rule.k === 'ns') return { c: 'red' };
+    let hit = null;
+    for (let k = 0; k <= Math.ceil((to - from) / 1440) + 1; k++) {
+      const base = from - this.dayMin(from) + k * 1440;
+      const dow = (this.nowDate(from).getDay() + k) % 7;
+      if (rule.days.includes(dow)) {
+        const s = base + rule.s, e = base + rule.e;
+        if (s < to && e > from) { hit = { s, e }; break; }
+      }
+    }
+    if (!hit) return { c: 'green' };
+    return rule.k === 'meter' ? { c: 'amber', until: hit.s } : { c: 'red', until: hit.s };
+  }
+  fmtT(m) { const d = this.nowDate(m); let h = d.getHours(), mm = d.getMinutes(), ap = h >= 12 ? 'PM' : 'AM'; h = h % 12 || 12; return h + ':' + String(mm).padStart(2, '0') + ' ' + ap; }
+  fmtWhen(m) {
+    const nd = Math.floor(this.state.nowMin / 1440), td = Math.floor(m / 1440);
+    if (td === nd) return this.fmtT(m);
+    if (td === nd + 1) return 'Tomorrow ' + this.fmtT(m);
+    return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'][this.nowDate(m).getDay()] + ' ' + this.fmtT(m);
+  }
+  ago(m) { const d = this.state.nowMin - m; if (d < 1) return 'just now'; if (d < 60) return Math.round(d) + ' min ago'; if (d < 1440) return Math.round(d / 60) + ' hr ago'; return Math.round(d / 1440) + ' d ago'; }
+  segState(seg) {
+    const rule = this.ruleFor(seg.st, seg.i, seg.side);
+    return this.state.until ? this.windowState(rule, this.state.nowMin, this.state.until) : this.stateAt(rule, this.state.nowMin);
+  }
+  bigLine(rule, st) {
+    if (this.state.until) {
+      if (st.c === 'gray') return 'No data — read the signs';
+      if (st.c === 'red') return "Won't last — cleaning " + this.fmtWhen(st.until);
+      if (st.c === 'amber') return 'Metered during your window';
+      return 'Clear through ' + this.fmtWhen(this.state.until);
+    }
+    if (st.c === 'gray') return 'No data — read the signs';
+    if (st.c === 'red') return rule.k === 'ns' ? 'No standing — anytime' : 'Street cleaning until ' + this.fmtT(st.until);
+    if (st.c === 'orange') return 'Free — cleaning starts ' + this.fmtWhen(st.until);
+    if (st.c === 'amber') return 'Pay to park until ' + this.fmtT(st.until);
+    return 'Free until ' + this.fmtWhen(st.until || this.state.nowMin + 10080);
+  }
+  tc(s) { return s.split(' ').map(w => w === 'ST' ? 'St' : w[0] + w.slice(1).toLowerCase()).join(' '); }
+  sideName(s) { return { E: 'East side', W: 'West side', N: 'North side', S: 'South side' }[s]; }
+
+  advanceTo(nm, silent) {
+    const fired = { ...this.state.fired };
+    let reports = this.state.reports.map(r => ({ ...r })), chats = this.state.chats.slice(), notif = this.state.notif, prompt = this.state.prompt;
+    this.events.forEach((e, ix) => {
+      if (e.at <= nm && !fired[ix]) {
+        fired[ix] = 1;
+        if (e.type === 'chat') chats = chats.concat([{ block: e.block, a: e.a, text: e.text, atMin: e.at }]);
+        if (e.type === 'report') { reports = reports.concat([{ ...e.rep }]); if (e.prompt && this.state.parked && this.state.parked.seg === e.rep.seg && !this.state.promptDone) prompt = e.rep.id; }
+        if (e.type === 'bump') { const r = reports.find(r => r.id === e.id); if (r) r.conf = Math.max(r.conf, e.conf); }
+        if (e.type === 'notif' && !silent) {
+          notif = { title: e.title, body: e.body, act: e.act };
+          clearTimeout(this._nt); this._nt = setTimeout(() => this.setState({ notif: null }), 9000);
+        }
+      }
+    });
+    reports = reports.filter(r => r.ttl == null || r.atMin + r.ttl > nm);
+    if (prompt && !reports.find(r => r.id === prompt)) prompt = null;
+    this.setState({ nowMin: nm, fired, reports, chats, notif, prompt });
+  }
+  jump(nm) {
+    if (nm >= this.state.nowMin) { this.setState({ notif: null }, () => this.advanceTo(nm, true)); }
+    else {
+      this.setState({ nowMin: nm, fired: {}, reports: this.baseReports.slice(), chats: this.baseChats.slice(), notif: null, prompt: null, promptDone: false, confirmed: {}, claimed: {}, until: null, untilPick: null }, () => this.advanceTo(nm, true));
+    }
+  }
+  say(t) { this.setState({ toast: t }); clearTimeout(this._tt); this._tt = setTimeout(() => this.setState({ toast: null }), 3600); }
+  needIdentity(fn) { if (this.state.handle) { fn(); return; } this.setState({ overlay: 'identity', pending: fn }); }
+  defRepSeg() { return this.state.sel || (this.state.parked && this.state.parked.seg) || 'MOTT ST|1|E'; }
+  fronts(segKey) {
+    return {
+      'MOTT ST|1|E': ['The Elk', 'Enly'], 'MOTT ST|1|W': ['Aimé Leon Dore'],
+      'ELIZABETH ST|1|W': ['Caffe Paradiso', 'Peasant'], 'PRINCE ST|2|S': ['Prince St. Pizza'],
+      'SPRING ST|2|N': ['Elizabeth St Garden gate'], 'MULBERRY ST|1|E': ['The Mulberry', 'The Grey Dog']
+    }[segKey] || [];
+  }
+  pinPos(s, frac) {
+    if (frac == null) return { x: s.mx, y: s.my };
+    return s.v ? { x: s.mx, y: s.y1 + (s.y2 - s.y1) * frac } : { x: s.x1 + (s.x2 - s.x1) * frac, y: s.my };
+  }
+  addReport(rt, note, ttl, segIn, frac) {
+    const seg = segIn || this.defRepSeg();
+    const rep = { id: 'u' + Math.random().toString(36).slice(2, 7), rt, seg, frac, by: [this.state.handle || 'Anonymous', this.state.avatar, this.state.rep], atMin: this.state.nowMin, ttl, conf: 0, disp: 0, note, mine: true };
+    this.setState({ reports: this.state.reports.concat([rep]), rep: this.state.rep + 5, overlay: null });
+    this.say('+5 rep — the crew can see it now');
+  }
+
+  // ——— map svg ———
+  buildMap() {
+    const h = React.createElement, S = this.state, g = this.geo;
+    const kids = [];
+    kids.push(h('rect', { key: 'pk', x: 252, y: 262, width: 66, height: 146, rx: 7, fill: '#20342A' }));
+    kids.push(h('text', { key: 'pkl', x: 285, y: 330, fill: '#7FC98F', fontSize: 8.5, fontWeight: 600, textAnchor: 'middle', fontFamily: 'inherit' }, 'Elizabeth St'));
+    kids.push(h('text', { key: 'pkl2', x: 285, y: 341, fill: '#7FC98F', fontSize: 8.5, fontWeight: 600, textAnchor: 'middle' }, 'Garden'));
+    g.verts.forEach(([n, x], i) => kids.push(h('line', { key: 'v' + i, x1: x, y1: g.hors[0][1] - 20, x2: x, y2: g.hors[4][1] + 20, stroke: '#3A404D', strokeWidth: 11, strokeLinecap: 'round' })));
+    g.hors.forEach(([n, y], i) => kids.push(h('line', { key: 'h' + i, x1: g.verts[0][1] - 20, y1: y, x2: g.verts[4][1] + 20, y2: y, stroke: '#3A404D', strokeWidth: 11, strokeLinecap: 'round' })));
+    g.segs.forEach(s => {
+      const st = this.segState(s);
+      const col = this.COL[st.c];
+      if (S.sel === s.key) kids.push(h('line', { key: s.key + 'sel', x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, stroke: 'rgba(255,255,255,0.55)', strokeWidth: 8, strokeLinecap: 'round' }));
+      kids.push(h('line', { key: s.key, x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, stroke: col, strokeWidth: 3.6, opacity: st.c === 'gray' ? 0.6 : 1 }));
+      kids.push(h('line', { key: s.key + 'hit', x1: s.x1, y1: s.y1, x2: s.x2, y2: s.y2, stroke: 'rgba(0,0,0,0)', strokeWidth: 15, style: { cursor: 'pointer' }, onClick: (e) => this.segClick(s.key, e) }));
+    });
+    kids.push(h('rect', { key: 'sq', x: 116, y: 216, width: 248, height: 408, rx: 16, fill: 'rgba(10,132,255,0.045)', stroke: '#0A84FF', strokeWidth: 1.6, strokeDasharray: '7 6', opacity: 0.75, style: { pointerEvents: 'none' } }));
+    kids.push(h('text', { key: 'sql', x: 128, y: 238, fill: '#6FB4FF', fontSize: 9.5, fontWeight: 750, letterSpacing: 1.4, style: { paintOrder: 'stroke', stroke: '#171A21', strokeWidth: 3 } }, 'YOUR SQUARE · NOLITA'));
+    g.verts.forEach(([n, x], i) => [165, 505].forEach((y, k) => kids.push(h('text', { key: 'vl' + i + k, x, y, fill: '#A9B1C4', fontSize: 10.5, fontWeight: 650, letterSpacing: 1.2, textAnchor: 'middle', transform: 'rotate(-90 ' + x + ' ' + y + ')', style: { paintOrder: 'stroke', stroke: '#171A21', strokeWidth: 3 } }, this.tc(n).toUpperCase()))));
+    g.hors.forEach(([n, y], i) => kids.push(h('text', { key: 'hl' + i, x: 196, y: y + 3.5, fill: '#A9B1C4', fontSize: 10.5, fontWeight: 650, letterSpacing: 1.2, textAnchor: 'middle', style: { paintOrder: 'stroke', stroke: '#171A21', strokeWidth: 3 } }, this.tc(n).toUpperCase())));
+    [[352, 236, 'Prince St. Pizza', '🍕'], [356, 468, 'Caffe Paradiso', '☕'], [154, 646, "Lombardi's", '🍕'], [96, 178, 'La Cabra', '☕']].forEach(([x, y, n, e], i) => {
+      kids.push(h('circle', { key: 'poi' + i, cx: x, cy: y, r: 8.5, fill: '#2A2E38', stroke: '#4A4F5C', strokeWidth: 1 }));
+      kids.push(h('text', { key: 'poie' + i, x, y: y + 3.2, fontSize: 9, textAnchor: 'middle' }, e));
+      kids.push(h('text', { key: 'poin' + i, x, y: y + 20, fill: '#C9A96A', fontSize: 8.5, fontWeight: 600, textAnchor: 'middle', style: { paintOrder: 'stroke', stroke: '#171A21', strokeWidth: 2.5 } }, n));
+    });
+    kids.push(h('rect', { key: 'm1', x: 50, y: 410, width: 20, height: 20, rx: 5, fill: '#3F62C7' }));
+    kids.push(h('text', { key: 'm1t', x: 60, y: 424.5, fill: '#fff', fontSize: 12, fontWeight: 800, textAnchor: 'middle' }, 'M'));
+    // community pins
+    S.reports.forEach(r => {
+      const s = g.byKey[r.seg]; if (!s) return;
+      const meta = this.rtMeta(r.rt);
+      const pp = this.pinPos(s, r.frac);
+      const dim = S.claimed[r.id] ? 0.45 : 1;
+      const fresh = r.ttl != null && S.nowMin - r.atMin < 4;
+      if (fresh) kids.push(h('circle', { key: r.id + 'p', cx: pp.x, cy: pp.y, r: 11, fill: 'none', stroke: meta.color, strokeWidth: 2, style: { transformOrigin: pp.x + 'px ' + pp.y + 'px', animation: 'wp-ping 1.6s ease-out infinite' } }));
+      kids.push(h('circle', { key: r.id + 'c', cx: pp.x, cy: pp.y, r: 10.5, fill: '#1C1F26', stroke: meta.color, strokeWidth: 2, opacity: dim, style: { cursor: 'pointer' }, onClick: () => this.segClick(r.seg) }));
+      kids.push(h('text', { key: r.id + 'e', x: pp.x, y: pp.y + 3.8, fontSize: meta.icon === 'P' ? 11 : 10, fontWeight: 800, fill: meta.color, textAnchor: 'middle', opacity: dim, style: { pointerEvents: 'none' } }, meta.icon));
+    });
+    if (S.placeDraft) {
+      const ds = g.byKey[S.placeDraft.seg], dp = this.pinPos(ds, S.placeDraft.frac);
+      kids.push(h('circle', { key: 'pd-ping', cx: dp.x, cy: dp.y, r: 12, fill: 'none', stroke: '#0A84FF', strokeWidth: 2, style: { transformOrigin: dp.x + 'px ' + dp.y + 'px', animation: 'wp-ping 1.4s ease-out infinite' } }));
+      kids.push(h('circle', { key: 'pd-c', cx: dp.x, cy: dp.y, r: 11, fill: 'rgba(10,132,255,0.2)', stroke: '#0A84FF', strokeWidth: 2, strokeDasharray: '4 3' }));
+      kids.push(h('text', { key: 'pd-t', x: dp.x, y: dp.y + 4, fontSize: 11, fontWeight: 800, fill: '#6FB4FF', textAnchor: 'middle', style: { pointerEvents: 'none' } }, 'P'));
+    }
+    // you
+    kids.push(h('circle', { key: 'youp', cx: 226, cy: 288, r: 9, fill: 'none', stroke: '#0A84FF', strokeWidth: 2, style: { transformOrigin: '226px 288px', animation: 'wp-ping 2.4s ease-out infinite' } }));
+    kids.push(h('circle', { key: 'you', cx: 226, cy: 288, r: 6, fill: '#0A84FF', stroke: '#fff', strokeWidth: 2 }));
+    // car pin
+    if (S.parked) {
+      const s = g.byKey[S.parked.seg];
+      const cs = this.segState(s), ring = cs.c === 'red' ? this.COL.red : '#fff';
+      kids.push(h('g', { key: 'car', style: { cursor: 'pointer' }, onClick: () => this.setState({ overlay: 'car' }) },
+        h('circle', { cx: s.mx + 14, cy: s.my, r: 13, fill: '#0E0F13', stroke: ring, strokeWidth: 2 }),
+        h('path', { d: 'M' + (s.mx + 14) + ' ' + (s.my - 6) + ' a4.2 4.2 0 010 8.4 a4.2 4.2 0 010-8.4 M' + (s.mx + 14) + ' ' + (s.my + 2.4) + ' l0 4.8', stroke: '#E8EAF0', strokeWidth: 2.2, fill: 'none', strokeLinecap: 'round' })
+      ));
+    }
+    const inner = h('g', { transform: 'rotate(-10 240 340)' }, kids);
+    return h('svg', { width: 402, height: 874, viewBox: '0 0 402 874', style: { display: 'block' } },
+      h('g', { transform: 'translate(' + S.pan.x + ' ' + S.pan.y + ')' }, inner));
+  }
+  rtMeta(rt) {
+    return {
+      enforcement: { label: 'Enforcement active', icon: '🎫', color: '#FF9F0A' },
+      sweeper: { label: 'Sweeper passed', icon: '🧹', color: '#30D158' },
+      leaving: { label: 'Leaving soon', icon: '🚙', color: '#0A84FF' },
+      spot: { label: 'Spot open', icon: 'P', color: '#0A84FF' },
+      closure: { label: 'Street closure', icon: '🚧', color: '#E8730D' },
+      filming: { label: 'Film shoot', icon: '🎬', color: '#E8730D' },
+      note: { label: 'Block note', icon: '📌', color: '#9BA1AF' }
+    }[rt];
+  }
+  segClick(key, e) {
+    if (this._dragged) return;
+    if (this.state.placing) { if (e) this.placeFromEvent(e, key); return; }
+    this.setState({ sel: key, overlay: 'block', searchOpen: false });
+  }
+  placeFromEvent(e, segKey) {
+    const svgRect = (e.target.ownerSVGElement || e.currentTarget).getBoundingClientRect();
+    const sx = e.clientX - svgRect.left - this.state.pan.x, sy = e.clientY - svgRect.top - this.state.pan.y;
+    const c = Math.cos(10 * Math.PI / 180), s = Math.sin(10 * Math.PI / 180);
+    const dx = sx - 240, dy = sy - 340;
+    const wx = 240 + c * dx - s * dy, wy = 340 + s * dx + c * dy;
+    let best = null;
+    const cands = segKey ? [this.geo.byKey[segKey]] : this.geo.segs;
+    cands.forEach(sg => {
+      let frac, px, py;
+      if (sg.v) { frac = Math.max(0, Math.min(1, (wy - sg.y1) / (sg.y2 - sg.y1))); px = sg.x1; py = sg.y1 + frac * (sg.y2 - sg.y1); }
+      else { frac = Math.max(0, Math.min(1, (wx - sg.x1) / (sg.x2 - sg.x1))); px = sg.x1 + frac * (sg.x2 - sg.x1); py = sg.y1; }
+      const d = Math.hypot(wx - px, wy - py);
+      if (!best || d < best.d) best = { d, seg: sg.key, frac };
+    });
+    if (!best || (!segKey && best.d > 34)) { this.say('Tap closer to a curb'); return; }
+    this.setState({ placeDraft: { seg: best.seg, frac: best.frac } });
+  }
+  nearLabel(segKey, frac) {
+    const s = this.geo.byKey[segKey], f = this.fronts(segKey);
+    if (f.length && frac > 0.3 && frac < 0.7) return 'in front of ' + f[0];
+    if (frac < 0.4) return 'near ' + this.tc(s.between[0]);
+    if (frac > 0.6) return 'near ' + this.tc(s.between[1]);
+    return 'mid-block';
+  }
+
+  renderVals() {
+    const S = this.state, g = this.geo;
+    const sheetHs = { collapsed: 84, half: 430, full: 720 };
+    const sheetH = S.dragH != null ? S.dragH : sheetHs[S.sheet];
+    const d = this.nowDate();
+    let hh = d.getHours() % 12 || 12;
+    const clock = hh + ':' + String(d.getMinutes()).padStart(2, '0');
+    const dayName = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][d.getDay()];
+
+    // feed
+    const feed = [];
+    const zchats = S.zone === 'nolita' ? S.chats : (this.awayChats[S.zone] || []);
+    zchats.forEach(c => feed.push({ kind: 'chat', at: c.atMin, icon: c.a[1], color: '#3E4450', title: c.text, sub: c.a[0] + ' · ' + this.tc(c.block.split('|')[0]) + ' · ' + this.ago(c.atMin), badge: null }));
+    if (S.zone === 'nolita') S.reports.forEach(r => {
+      const meta = this.rtMeta(r.rt), s = g.byKey[r.seg];
+      const eph = r.ttl != null;
+      feed.push({
+        kind: 'rep', at: r.atMin, icon: meta.icon, color: meta.color,
+        title: meta.label + ' — ' + this.tc(s.st),
+        sub: 'btwn ' + this.tc(s.between[0]) + ' & ' + this.tc(s.between[1]) + ' · ' + this.ago(r.atMin) + ' · ' + (r.by ? r.by[0] : 'NYC open data'),
+        badge: r.conf > 0 ? '✓ ' + r.conf : null, conf: r.conf,
+        showConfirm: eph && !r.mine && !S.confirmed[r.id] && r.rt !== 'leaving',
+        claimable: r.rt === 'leaving' && !r.mine && !S.claimed[r.id],
+        claimedTag: r.rt === 'leaving' && !!S.claimed[r.id],
+        onConfirm: () => this.confirmRep(r.id), onGone: () => this.goneRep(r.id), onClaim: () => this.claimRep(r.id)
+      });
+    });
+    feed.sort((a, b) => b.at - a.at);
+
+    // block detail
+    let bv = {};
+    if (S.overlay === 'block' && S.sel) {
+      const s = g.byKey[S.sel], rule = this.ruleFor(s.st, s.i, s.side), st = this.segState(s);
+      const otherSide = s.v ? (s.side === 'E' ? 'W' : 'E') : (s.side === 'N' ? 'S' : 'N');
+      const oRule = this.ruleFor(s.st, s.i, otherSide);
+      const swp = S.reports.find(r => r.rt === 'sweeper' && r.seg === S.sel);
+      bv = {
+        bTitle: s.st + ' — ' + this.sideName(s.side),
+        bBetween: 'between ' + s.between[0] + ' and ' + s.between[1],
+        bBig: this.bigLine(rule, st), bColor: this.COL[st.c],
+        bSwept: swp ? 'Swept ' + this.ago(swp.atMin) + ' · ' + swp.conf + ' confirms' : false,
+        bRules: [{ t: rule.txt, badge: rule.badge }, { t: this.sideName(otherSide).toUpperCase() + ': ' + oRule.txt, badge: oRule.badge }],
+        bReports: S.reports.filter(r => r.seg === S.sel).map(r => {
+          const meta = this.rtMeta(r.rt);
+          return { icon: meta.icon, title: meta.label + (r.by ? ' — ' + r.by[0] : ' — NYC open data'), sub: (r.note || '') + ' · ' + this.ago(r.atMin), conf: r.conf, showConfirm: r.ttl != null && !r.mine && !S.confirmed[r.id], onConfirm: () => this.confirmRep(r.id) };
+        }),
+        bHasReports: S.reports.some(r => r.seg === S.sel),
+        bChats: S.chats.filter(c => c.block === S.sel).slice(-3).map(c => ({ e: c.a[1], n: c.a[0], when: this.ago(c.atMin), text: c.text }))
+      };
+      if (bv.bChats.length === 0) bv.bChats = [{ e: '💬', n: 'No chatter yet', when: '', text: 'Be the first — crews form block by block.' }];
+    }
+
+    // car detail
+    let cv = {};
+    if (S.parked) {
+      const s = g.byKey[S.parked.seg], rule = this.ruleFor(s.st, s.i, s.side), st = this.segState(s);
+      const swp = S.reports.find(r => r.rt === 'sweeper' && r.seg === S.parked.seg);
+      const otherSide = s.v ? (s.side === 'E' ? 'W' : 'E') : (s.side === 'N' ? 'S' : 'N');
+      cv = {
+        cLoc: s.st + ' — ' + this.sideName(s.side) + ' · between ' + s.between[0] + ' and ' + s.between[1],
+        cBig: this.bigLine(rule, st), cColor: this.COL[st.c],
+        cParkedAgo: 'Parked ' + this.ago(S.parked.atMin),
+        cSwept: swp ? 'Swept ' + this.ago(swp.atMin) + ' · ' + swp.conf + ' confirms — clear at 9:30' : false,
+        cRules: [{ t: rule.txt, badge: rule.badge }, { t: this.sideName(otherSide).toUpperCase() + ': ' + this.ruleFor(s.st, s.i, otherSide).txt, badge: this.ruleFor(s.st, s.i, otherSide).badge }]
+      };
+    }
+
+    const offDefs = [['o15', '15 min'], ['o30', '30 min'], ['o60', '1 hr'], ['o120', '2 hr'], ['night', 'Night before']];
+    const untilOpts = this.untilOpts();
+    const ck = [
+      ['7:45 — the reminder fires (your offsets: 15 min, 1 hr, night before)', S.nowMin >= 465],
+      ['8:00 — your side of Mott goes red', S.nowMin >= 480],
+      ['8:21 — MulberryMike reports the sweeper', S.nowMin >= 501],
+      ['You confirm → 148 neighbors know the block is clear', S.promptDone],
+      ['9:30 — free until Friday. No ticket, no sitting in the car.', S.nowMin >= 570]
+    ];
+
+    return {
+      clock, mapSvg: this.buildMap(),
+      mapDown: e => { e.currentTarget.setPointerCapture(e.pointerId); this._pd = { x: e.clientX, y: e.clientY, px: S.pan.x, py: S.pan.y, moved: false }; this._dragged = false; },
+      mapMove: e => { if (!this._pd) return; const dx = e.clientX - this._pd.x, dy = e.clientY - this._pd.y; if (Math.abs(dx) + Math.abs(dy) > 6) this._pd.moved = true; if (this._pd.moved) this.setState({ pan: { x: this._pd.px + dx, y: this._pd.py + dy } }); },
+      mapUp: e => { this._dragged = !!(this._pd && this._pd.moved); this._pd = null; if (!this._dragged) { if (S.placing) this.placeFromEvent(e, null); else this.setState({ searchOpen: false }); } },
+      sheetBodyOpacity: sheetH < 130 ? 0 : 1,
+      sheetH, sheetTrans: S.dragH != null ? 'none' : 'height 0.32s cubic-bezier(0.3,0.9,0.3,1)',
+      sheetDown: e => { e.currentTarget.setPointerCapture(e.pointerId); this._sd = { y: e.clientY, h: sheetH, moved: false }; },
+      sheetMove: e => { if (!this._sd) return; const dy = this._sd.y - e.clientY; if (Math.abs(dy) > 4) this._sd.moved = true; if (this._sd.moved) this.setState({ dragH: Math.max(96, Math.min(720, this._sd.h + dy)) }); },
+      sheetUp: () => {
+        if (!this._sd) return;
+        if (!this._sd.moved) { const next = { collapsed: 'half', half: 'full', full: 'collapsed' }[S.sheet]; this.setState({ sheet: next, dragH: null }); }
+        else { const cur = this.state.dragH || sheetH; const best = Object.entries(sheetHs).sort((a, b) => Math.abs(a[1] - cur) - Math.abs(b[1] - cur))[0][0]; this.setState({ sheet: best, dragH: null }); }
+        this._sd = null;
+      },
+      reportBtnBottom: sheetH + 14, promptBottom: sheetH + 70, toastBottom: sheetH + 24, legendBottom: sheetH + 64,
+      searchFocus: () => this.setState({ sheet: 'half', searchOpen: true, dragH: null }),
+      searchOpen: S.searchOpen,
+      recents: ['210 Lafayette St', 'Christopher Street', 'NYU', 'Penn Station', '217 Bowery'].map(n => ({ n, tap: () => this.say('Routing lives in the native build — tap curbs instead') })),
+      findSpot: () => this.say('Find a Spot (drive mode) is in the TestFlight build'),
+      openP101: () => this.setState({ overlay: 'p101' }),
+      activeNow: 9 + Object.keys(S.fired).length,
+      zoneChips: [['nolita', 'Nolita'], ['soho', 'SoHo'], ['les', 'LES']].map(([k, l]) => ({ l, bg: S.zone === k ? '#0A84FF' : 'rgba(118,118,128,0.16)', fg: S.zone === k ? '#fff' : 'rgba(235,235,245,0.6)', pick: () => this.setState({ zone: k }) })),
+      crewName: this.zones[S.zone].n, crewParkers: this.zones[S.zone].p,
+      canPost: S.zone === 'nolita', awayNote: S.zone !== 'nolita',
+      crewDraft: S.crewDraft, setCrewDraft: e => this.setState({ crewDraft: e.target.value }),
+      crewAnchorLabel: this.tc(this.anchorList()[S.anchorIdx].split('|')[0]),
+      cycleAnchor: () => this.setState({ anchorIdx: (S.anchorIdx + 1) % this.anchorList().length }),
+      sendCrew: () => { const t = S.crewDraft.trim(); if (!t) return; this.needIdentity(() => this.setState({ chats: this.state.chats.concat([{ block: this.anchorList()[this.state.anchorIdx], a: [this.state.handle, this.state.avatar, this.state.rep], text: t, atMin: this.state.nowMin }]), crewDraft: '', rep: this.state.rep + 1 })); },
+      profileOn: !!S.handle, handle: S.handle, avatar: S.avatar, rep: S.rep, acc: S.acc, helped: S.helped,
+      tenure: 'On Mott St since March',
+      sheetFull: sheetH > 560,
+      leaders: [
+        { rank: 1, e: '🚗', n: 'MulberryMike', pts: 412, c: '#EBC200' },
+        { rank: 2, e: '🥯', n: 'Springy', pts: 380, c: 'rgba(235,235,245,0.75)' },
+        { rank: 3, e: '☕', n: 'ElizaBets', pts: 298, c: 'rgba(235,235,245,0.75)' },
+        { rank: S.handle ? 9 : 14, e: S.avatar, n: S.handle || 'You', pts: S.rep, c: '#30D158' }
+      ],
+      feed,
+      carOn: !!S.parked,
+      locate: () => this.setState({ pan: { x: -47, y: 95 } }),
+      findCar: () => this.setState({ pan: { x: -47, y: 95 }, overlay: 'car' }),
+      openUntil: () => this.setState({ overlay: 'until' }),
+      openReport: () => this.setState({ overlay: 'report' }),
+      closeOverlay: () => this.setState({ overlay: null, untilPick: null, repDraft: null }),
+      showBlock: S.overlay === 'block', showCar: S.overlay === 'car', showUntil: S.overlay === 'until',
+      showReport: S.overlay === 'report', showIdentity: S.overlay === 'identity', showP101: S.overlay === 'p101',
+      ...bv, ...cv,
+      chatDraft: S.chatDraft, setChatDraft: e => this.setState({ chatDraft: e.target.value }),
+      sendChat: () => { const t = S.chatDraft.trim(); if (!t) return; this.needIdentity(() => this.setState({ chats: this.state.chats.concat([{ block: this.state.sel || 'MOTT ST|1|E', a: [this.state.handle, this.state.avatar, this.state.rep], text: t, atMin: this.state.nowMin }]), chatDraft: '', rep: this.state.rep + 1 })); },
+      parkHere: () => { this.setState({ parked: { seg: S.sel, atMin: S.nowMin }, overlay: 'car' }); this.say('Pin saved — reminders armed'); },
+      remind: S.remind, toggleRemind: () => this.setState({ remind: !S.remind }),
+      remindBg: S.remind ? '#30D158' : 'rgba(118,118,128,0.35)', remindKnob: S.remind ? 22 : 2,
+      offsetChips: offDefs.map(([k, l]) => ({ l, bg: S.offs[k] ? 'rgba(48,209,88,0.18)' : 'rgba(118,118,128,0.16)', fg: S.offs[k] ? '#30D158' : 'rgba(235,235,245,0.6)', toggle: () => this.setState({ offs: { ...S.offs, [k]: !S.offs[k] } }) })),
+      leaveChips: [5, 10, 15, 20].map(m => ({ l: m + ' min', bg: S.leaveMins === m ? '#0A84FF' : 'rgba(118,118,128,0.2)', fg: S.leaveMins === m ? '#fff' : 'rgba(235,235,245,0.65)', pick: () => this.setState({ leaveMins: m }) })),
+      leaveMins: S.leaveMins,
+      doLeave: () => this.needIdentity(() => this.addReport('leaving', 'Leaving in ~' + this.state.leaveMins + ' min — spot opens up', this.state.leaveMins + 3, this.state.parked && this.state.parked.seg)),
+      clearPin: () => { this.setState({ parked: null, overlay: null }); this.say('Pin cleared — drive safe'); },
+      untilChips: untilOpts.map(o => ({ l: o.l, bg: S.untilPick === o.m ? '#0A84FF' : 'rgba(118,118,128,0.2)', fg: S.untilPick === o.m ? '#fff' : 'rgba(235,235,245,0.75)', pick: () => this.setState({ untilPick: o.m }) })),
+      untilBtnBg: S.untilPick ? '#0A84FF' : 'rgba(118,118,128,0.25)', untilBtnFg: S.untilPick ? '#fff' : 'rgba(235,235,245,0.4)',
+      untilConfirm: () => { if (S.untilPick) { this.setState({ until: S.untilPick, overlay: null }); this.say('Map recolored for your window'); } },
+      untilChip: S.until ? this.fmtWhen(S.until) : false,
+      clearUntil: () => this.setState({ until: null, untilPick: null }),
+      repFor: (() => { const s = g.byKey[this.defRepSeg()]; return this.tc(s.st) + ' (' + this.sideName(s.side).toLowerCase() + ')'; })(),
+      repGrid: !S.repDraft, repStep2: !!S.repDraft,
+      repIcon: S.repDraft ? this.rtMeta(S.repDraft.rt).icon : '', repTypeLabel: S.repDraft ? this.rtMeta(S.repDraft.rt).label : '',
+      repBack: () => this.setState({ repDraft: null }),
+      repBlockOpts: (() => {
+        if (!S.repDraft) return [];
+        const rd = S.repDraft, s0 = g.byKey[rd.seg], cands = [rd.seg];
+        const opp = s0.st + '|' + s0.i + '|' + (s0.v ? (s0.side === 'E' ? 'W' : 'E') : (s0.side === 'N' ? 'S' : 'N'));
+        if (g.byKey[opp]) cands.push(opp);
+        [s0.i - 1, s0.i + 1].forEach(ii => { const k = s0.st + '|' + ii + '|' + s0.side; if (g.byKey[k]) cands.push(k); });
+        return cands.slice(0, 4).map(k => {
+          const s = g.byKey[k], on = rd.seg === k;
+          return { street: this.tc(s.st), side: this.sideName(s.side), between: 'btwn ' + this.tc(s.between[0]) + ' & ' + this.tc(s.between[1]), on, bd: on ? '#0A84FF' : 'rgba(255,255,255,0.08)', pick: () => this.setState({ repDraft: { ...rd, seg: k, dir: null, pos: null, front: null } }) };
+        });
+      })(),
+      repNeedsDir: !!S.repDraft && (S.repDraft.rt === 'enforcement' || S.repDraft.rt === 'sweeper'),
+
+      repDirChips: (() => {
+        if (!S.repDraft) return [];
+        const rd = S.repDraft, s = g.byKey[rd.seg];
+        return [[s.between[0], 'Toward ' + this.tc(s.between[0])], [s.between[1], 'Toward ' + this.tc(s.between[1])], [null, 'Not sure']].map(([v, l]) => {
+          const on = rd.dir === v;
+          return { l, bg: on ? '#0A84FF' : 'rgba(118,118,128,0.2)', fg: on ? '#fff' : 'rgba(235,235,245,0.7)', pick: () => this.setState({ repDraft: { ...rd, dir: v } }) };
+        });
+      })(),
+      repPost: () => {
+        const rd = S.repDraft; if (!rd) return;
+        const dirTxt = rd.dir ? ' — heading toward ' + this.tc(rd.dir) : '';
+        const s = g.byKey[rd.seg];
+        const spotWhere = rd.front ? ' in front of ' + rd.front : rd.pos === 'a' ? ' near ' + this.tc(s.between[0]) : rd.pos === 'b' ? ' near ' + this.tc(s.between[1]) : rd.pos === 'mid' ? ' mid-block' : '';
+        const note = { enforcement: 'Agent working the block' + dirTxt, sweeper: 'Broom came through' + dirTxt, spot: 'Spotted ~1 min ago —' + (spotWhere || ' legal spot'), closure: 'Curb held — photo attached' }[rd.rt];
+        const ttl = { enforcement: 45, sweeper: 120, spot: 3, closure: null }[rd.rt];
+        const frac = rd.rt === 'spot' ? (rd.pos === 'a' ? 0.22 : rd.pos === 'b' ? 0.78 : rd.pos === 'mid' || rd.front ? 0.5 : undefined) : undefined;
+        this.needIdentity(() => { this.addReport(rd.rt, note, ttl, rd.seg, frac); this.setState({ repDraft: null }); });
+      },
+      repEnf: () => this.setState({ repDraft: { rt: 'enforcement', seg: this.defRepSeg(), dir: null } }),
+      repSwp: () => this.setState({ repDraft: { rt: 'sweeper', seg: this.defRepSeg(), dir: null } }),
+      repSpot: () => this.setState({ overlay: null, repDraft: null, placing: true, placeDraft: null, sheet: 'collapsed', dragH: null }),
+      placingHint: S.placing && !S.placeDraft, placeCard: !!S.placeDraft,
+      placeCancel: () => this.setState({ placing: false, placeDraft: null }),
+      placeTitle: S.placeDraft ? (() => { const s = g.byKey[S.placeDraft.seg]; return this.tc(s.st) + ' (' + this.sideName(s.side).toLowerCase() + ')'; })() : '',
+      placeSub: S.placeDraft ? (() => { const s = g.byKey[S.placeDraft.seg]; return this.nearLabel(S.placeDraft.seg, S.placeDraft.frac) + ' · btwn ' + this.tc(s.between[0]) + ' & ' + this.tc(s.between[1]); })() : '',
+      placePost: () => { const pd = S.placeDraft; if (!pd) return; this.needIdentity(() => { this.addReport('spot', 'Spotted just now — ' + this.nearLabel(pd.seg, pd.frac), 3, pd.seg, pd.frac); this.setState({ placing: false, placeDraft: null }); }); },
+      repClosure: () => this.setState({ repDraft: { rt: 'closure', seg: this.defRepSeg(), dir: null } }),
+      avatars: ['🥯', '☕', '🚕', '🌇', '🦝', '🍕', '🗽', '🐿️'].map(e => ({ e, bd: S.avatar === e ? '#30D158' : 'rgba(255,255,255,0.1)', pick: () => this.setState({ avatar: e }) })),
+      handleDraft: S.handleDraft, setHandleDraft: e => this.setState({ handleDraft: e.target.value }),
+      saveIdentity: () => { const fn = S.pending; this.setState({ handle: S.handleDraft.trim() || 'MottStRegular', overlay: null, pending: null }, () => { if (fn) fn(); }); },
+      skipIdentity: () => { const fn = S.pending; this.setState({ overlay: null, pending: null }, () => { if (fn) fn(); }); },
+      legend: [
+        { n: 'Red', c: this.COL.red, d: 'a restriction is active right now' },
+        { n: 'Orange', c: this.COL.orange, d: 'free now, but a restriction starts within 6 hours' },
+        { n: 'Amber', c: this.COL.amber, d: 'metered — pay or move' },
+        { n: 'Green', c: this.COL.green, d: 'free right now, nothing posted near-term' },
+        { n: 'Gray', c: 'rgba(142,142,147,0.7)', d: 'no data — the sign on the pole is the only truth' }
+      ],
+      showLegend: S.showLegend, toggleLegend: () => this.setState({ showLegend: !S.showLegend }),
+      pinLegend: [
+        { i: '🎫', c: '#FF9F0A', l: 'Enforcement active' },
+        { i: '🧹', c: '#30D158', l: 'Sweeper passed' },
+        { i: '🚙', c: '#0A84FF', l: 'Leaving soon (handoff)' },
+        { i: 'P', c: '#0A84FF', l: 'Open spot (passerby)' },
+        { i: '🚧', c: '#E8730D', l: 'Closure — construction/film' },
+        { i: '📌', c: '#9BA1AF', l: 'Block note (durable)' }
+      ],
+      notif: !!S.notif, notifTitle: S.notif ? S.notif.title : '', notifBody: S.notif ? S.notif.body : '',
+      notifTap: () => { const a = S.notif && S.notif.act; this.setState({ notif: null, overlay: a === 'car' ? 'car' : 'block', sel: a === 'block' ? 'MOTT ST|1|E' : S.sel }); },
+      toast: S.toast,
+      prompt: !!S.prompt,
+      promptConfirm: () => { const id = S.prompt; this.setState({ prompt: null, promptDone: true, rep: S.rep + 2, helped: S.helped + 1, confirmed: { ...S.confirmed, [id]: 1 }, reports: S.reports.map(r => r.id === id ? { ...r, conf: r.conf + 1 } : r) }); this.say('+2 rep — 148 neighbors see your confirm'); },
+      promptDismiss: () => this.setState({ prompt: null, promptDone: true }),
+      showRail: this.props.showDemoRail != null ? this.props.showDemoRail : true,
+      railClock: this.fmtT(S.nowMin), railDay: dayName + ' · ASP in effect',
+      playing: S.playing, togglePlay: () => this.setState({ playing: !S.playing }),
+      playBg: S.playing ? 'rgba(48,209,88,0.16)' : '#30D158', playFg: S.playing ? '#30D158' : '#04290F',
+      playLabel: S.playing ? '❚❚ Pause' : '▶ Play',
+      speedChips: [1, 5, 15].map(v => ({ l: v + '×', bg: S.speed === v ? '#0A84FF' : 'rgba(118,118,128,0.16)', fg: S.speed === v ? '#fff' : 'rgba(235,235,245,0.6)', pick: () => this.setState({ speed: v }) })),
+      jumps: [
+        { l: '7:42 AM — before ASP', m: 462 }, { l: '8:20 — mid-cleaning', m: 500 },
+        { l: '9:31 — clear', m: 571 }, { l: 'Wed 2 PM — browse', m: 462 + 1818 }
+      ].map(j => ({ l: j.l, tap: () => this.jump(j.m) })),
+      checklist: ck.map(([l, done]) => ({ l, mark: done ? '✓' : '○', c: done ? '#30D158' : 'rgba(235,235,245,0.3)', tc: done ? '#fff' : 'rgba(235,235,245,0.55)' }))
+    };
+  }
+  anchorList() { return ['MOTT ST|1|E', 'MULBERRY ST|1|E', 'ELIZABETH ST|1|W', 'MOTT ST|2|E']; }
+  untilOpts() {
+    const n = this.state.nowMin, day = Math.floor(n / 1440) * 1440;
+    let tonight = day + 1200; if (tonight <= n) tonight += 1440;
+    return [
+      { l: '30 min', m: n + 30 }, { l: '1 hr', m: n + 60 }, { l: '2 hr', m: n + 120 }, { l: '4 hr', m: n + 240 },
+      { l: 'Tonight', m: tonight }, { l: 'Thu 9 AM', m: day + 2 * 1440 + 540 }
+    ];
+  }
+  confirmRep(id) {
+    this.setState({ confirmed: { ...this.state.confirmed, [id]: 1 }, rep: this.state.rep + 2, reports: this.state.reports.map(r => r.id === id ? { ...r, conf: r.conf + 1 } : r) });
+    this.say('+2 rep — confirm extends the pin');
+  }
+  goneRep(id) {
+    this.setState({ confirmed: { ...this.state.confirmed, [id]: 1 }, reports: this.state.reports.map(r => r.id === id ? { ...r, ttl: Math.max(1, this.state.nowMin - r.atMin + 2) } : r) });
+    this.say('Marked gone — it expires faster now');
+  }
+  claimRep(id) {
+    this.setState({ claimed: { ...this.state.claimed, [id]: 1 } });
+    this.say("Heading there — pin dimmed for others");
+  }
+}
+</script>
+</body>
+</html>
