@@ -75,6 +75,12 @@ begin
   -- TODO: Tier 2 — when 3rd confirm is reached (confirm_count >= 3), increment
   -- author_id's profiles.reputation by 2 per community-1.0-buildplan.md §3.
   -- Not in this sub-PR; add a separate trigger or extend this function then.
+  -- SUPERSEDED 2026-08-26: this TODO's threshold-based, author-only model was never built, and is
+  -- superseded by a different, immediate/per-action model (report +5, confirm +2 to the confirmer,
+  -- chat +1) — see docs/community-2.0-reconciliation-spec.md §2.6 and
+  -- supabase/03-community-2.0-schema.sql (award_report_reputation / award_confirm_reputation /
+  -- award_chat_reputation / award_accuracy_on_first_confirm). Left in place, not deleted, per this
+  -- repo's "link to superseded work, don't delete" convention (spec §5).
 
   return null;  -- AFTER trigger; return value is ignored for row-level triggers.
 end;
