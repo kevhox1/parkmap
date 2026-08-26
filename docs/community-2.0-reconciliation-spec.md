@@ -42,6 +42,17 @@ blocks in practice. **Needs Kevin's go to downgrade "polygon" to "box" rather th
 substituting.**
 
 **OQ-2 — Which TTLs govern: the new design's or FT-1's already-shipped ones?**
+**✅ RESOLVED by Kevin 2026-08-26: the prototype's numbers govern — enforcement 45m, sweeper 120m.**
+His reasoning reframes the pin's semantics: it is not only "agent is here NOW" but "agent already
+came through — unlikely to swing back soon," so an aged pin is *useful history*, not stale noise.
+The staleness is the signal. Two implementation consequences: (1) §2.6's TTL-derivation trigger uses
+45m/120m; FT-1's 5-minute values in `CommunityPinService.ephemeralTTLSeconds(for:)` are updated in
+Phase 1 (with a code comment pointing here — FT-1's "they moved on" observation is answered by
+always showing age, not by expiring fast); (2) every surface that renders these pins MUST show
+relative age ("reported X min ago"), which the design already does on all of them — that display
+rule is what makes the long TTL honest. The confirm-to-extend (+15m, 2h cap) mechanic is unchanged.
+`open_spot` 3m and `leaving_soon` stated+3m are unaffected.
+*(Original question preserved below for the record.)*
 The design prototype (`design/prototype.html:1003`) specifies `enforcement: 45m, sweeper: 120m`.
 But `CommunityPinService.ephemeralTTLSeconds(for:)` (`Services/CommunityPinService.swift:1197-1206`)
 **already ships** `enforcement_active` / `sweeper_passed` at **5 minutes**, a deliberate FT-1 change
