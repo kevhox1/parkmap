@@ -738,8 +738,8 @@ ship) is live well before the push plumbing is ready, rather than both waiting o
 
 | Type | Color | Icon | TTL (design) | TTL (as recommended, pending OQ-2) | Source |
 |---|---|---|---|---|---|
-| `enforcement_active` | `#FF9F0A` | 🎫 | 45m | **5m** (shipped FT-1, unless OQ-2 flips it) | `prototype.html:792,1003`; `CommunityPinService.swift:1197-1206` |
-| `sweeper_passed` | `#30D158` | 🧹 | 120m | **5m** (shipped FT-1, unless OQ-2 flips it) | same |
+| `enforcement_active` | `#FF9F0A` | 🎫 | 45m | **45m** (OQ-2 resolved 2026-08-26: prototype governs) | `prototype.html:792,1003`; `CommunityPinService.swift:1197-1206` |
+| `sweeper_passed` | `#30D158` | 🧹 | 120m | **120m** (OQ-2 resolved 2026-08-26: prototype governs) | same |
 | `open_spot` | `#0A84FF` | `P` glyph | 3m | 3m (net-new, no conflict) | `prototype.html:795,1004` |
 | `leaving_soon` | `#0A84FF` | 🚙 | stated minutes + 3 | stated minutes + 3 (net-new, no conflict) | `prototype.html:794,965` |
 | `construction`/`filming` ("Street closure") | `#E8730D` | 🚧 / 🎬 | durable (no TTL) | durable, unchanged | `prototype.html:796-797,1003` |
