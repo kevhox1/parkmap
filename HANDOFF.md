@@ -201,7 +201,29 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
-### 2026-08-25 — CHECKPOINT for context reset. FT-2 merged; #91 one build from done; three decisions pending.
+### 2026-08-26 — 🚀 COMMUNITY 2.0 (BUILD 20) STARTED. Design handoff landed; Phase 0 schema merged; #91 one rerun from merge.
+
+**The hero design became the active workstream.** Kevin's Claude-design prototype landed at `design/`
+(`cc5a1fe4`, desktop-capture screenshots cropped — repo is public). Tech-lead reconciliation spec:
+`docs/community-2.0-reconciliation-spec.md`. Roadmap (12–15 sessions, session = one PR-sized
+~2–4h block): `docs/community-2.0-roadmap.md`. **Decisions locked 2026-08-26, recorded in the
+roadmap:** leaving-soon handoff IS in v1 (reverses direction-doc §4); TTLs 45m/120m — staleness is
+the signal, age always displayed (reverses FT-1's 5-min baseline); APNs planned (tokens in Phase 0,
+pipeline in Phase 4b); zones = Nolita/SoHo/LES bounding boxes; smart-route renumbers to build 21+.
+
+**✅ S1+S2 DONE — Phase 0 schema merged `9b42a853` (PR #93).** Two QA passes (pass 1 caught two
+real rep-farming holes — vote-replay and unthrottled durable +5s — fixed via append-only
+`reputation_award_log` + widened rate limiting; pass 2 verified all 7 findings cold).
+**⏳ Kevin has NOT yet applied it to prod** — two-step dashboard paste per PR #93 body, then
+`supabase/03-community-2.0-test.sh`. Phase 1 build work does not wait on the apply.
+
+**🟡 PR #91 (iCloud sync): QA returned FIX-THEN-MERGE — no code defects.** The branch predated
+FT-2's merge, so Kevin's 860-test run never compiled the combined suite (860 was coincidental:
+830 + 30, not 842 + 18). Main merged into the branch (`1d84ad77`). **Blocked on Kevin: one Mac
+rerun (~872 expected) + a one-line yes on the spec's OQ-1/2/3** (updatedAt comparator ·
+account-change-as-normal-update · dismiss-on-remote-change). QA report:
+`docs/qa/pr91-icloud-parked-car-sync.md`. Capability gap closed at `aa6ef084` (entitlements in
+both configs); solo device smoke PASSED; cross-device half stays calendar-blocked.
 
 **WHERE WE ARE:** `main` @ `c29631bb`+. **One open PR: #91** (iCloud parked-car sync).
 `CURRENT_PROJECT_VERSION` = 18; **build 1.0 (18) is live on external TestFlight** (dark mode +
