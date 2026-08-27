@@ -376,6 +376,62 @@ final class NotificationSchedulerTests: XCTestCase {
         )
     }
 
+    // MARK: - Build 19: cancelAll(forUUID:) — UUID-only variant used by the remote-clear path
+
+    /// Mirrors T-W6.7 but exercises the UUID-keyed variant added for Build 19's
+    /// `ContentView.handleRemoteCarChanged` — used when `parkPinService.parkedCar` is already
+    /// nil (a remote clear) by the time cancellation needs to run, so a `ParkedCar` value
+    /// isn't available to derive the prefix from.
+    func testCancelAllForUUID_RemovesRequest() {
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "MOTT_N_6",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let car = nsCar(segmentID: "MOTT_N_6")
+
+        scheduler.scheduleForTest(for: car, loadedSegments: [segment], engine: engine, now: now)
+        XCTAssertEqual(mockCenter.pendingRequests.count, 1, "Prereq: one pending request")
+
+        let exp = expectation(description: "cancelAll(forUUID:) completes")
+        DispatchQueue.global().async {
+            self.scheduler.cancelAll(forUUID: car.id)
+            Thread.sleep(forTimeInterval: 0.1)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(mockCenter.pendingRequests.count, 0,
+                       "cancelAll(forUUID:) should remove the car's pending requests by UUID alone")
+        XCTAssertTrue(
+            mockCenter.removedPendingIdentifiers.contains("wepark.pin.\(car.id.uuidString).r2"),
+            "correct identifier removed (r2 = 1h preset after FT-6)"
+        )
+    }
+
+    func testCancelAllForUUID_DifferentUUID_DoesNotRemoveOtherRequests() {
+        let now = nsDate(year: 2026, month: 5, day: 7, hour: 4, minute: 0)
+        let segment = nsSegment(
+            id: "MOTT_N_7",
+            rules: [nsRule(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])]
+        )
+        let carA = nsCar(segmentID: "MOTT_N_7")
+        let unrelatedUUID = UUID()
+
+        scheduler.scheduleForTest(for: carA, loadedSegments: [segment], engine: engine, now: now)
+        XCTAssertEqual(mockCenter.pendingRequests.count, 1, "Prereq: carA scheduled")
+
+        let exp = expectation(description: "cancelAll(forUUID:) for unrelated UUID completes")
+        DispatchQueue.global().async {
+            self.scheduler.cancelAll(forUUID: unrelatedUUID)
+            Thread.sleep(forTimeInterval: 0.1)
+            exp.fulfill()
+        }
+        wait(for: [exp], timeout: 2.0)
+
+        XCTAssertEqual(mockCenter.pendingRequests.count, 1, "carA's request must be untouched")
+    }
+
     // MARK: - T-W6.9: Notification title format matches spec §3.4
 
     func testTW69_NotificationTitleFormat() {
