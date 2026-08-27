@@ -445,3 +445,30 @@ final class CommunityEnabledFlagTests: XCTestCase {
         XCTAssertEqual(first, second)
     }
 }
+
+// MARK: - AppConstants.communityPhase1PinTypes (S4 QA pass 1, PR #94 Finding #1 — BLOCKING fix)
+
+/// The single source of truth every consumer that needs to know "are open_spot/leaving_soon
+/// live yet" reads through — `CommunityPinService.channel2PinTypeQueryValue(communityEnabled:)`
+/// / `isChannel2Member`, `RealtimeMergeGate.mergeablePinTypes`, and
+/// `ContentView.mapMarkerTypes(communityEnabled:)` all delegate here. Each of those three
+/// call sites also has its own direct test (see `CommunityPinServiceTests.swift`,
+/// `RealtimeMergeGateZoneTests`/`CommunityPinServiceTests.swift`'s `mergeablePinTypes` test,
+/// and `FT20StreamCTests.swift`) — this class covers the shared decision logic itself.
+final class CommunityPhase1PinTypesGateTests: XCTestCase {
+
+    func testCommunityPhase1PinTypes_flagFalse_returnsEmpty() {
+        XCTAssertTrue(AppConstants.communityPhase1PinTypes(enabled: false).isEmpty)
+    }
+
+    func testCommunityPhase1PinTypes_flagTrue_returnsBothNewTypes() {
+        XCTAssertEqual(AppConstants.communityPhase1PinTypes(enabled: true), [.openSpot, .leavingSoon])
+    }
+
+    /// Production call sites omit the parameter and get the real, shipped flag value —
+    /// today `false`, so this must resolve identically to the explicit-`false` case above.
+    func testCommunityPhase1PinTypes_defaultParameter_matchesShippedFlag() {
+        XCTAssertEqual(AppConstants.communityPhase1PinTypes(), AppConstants.communityPhase1PinTypes(enabled: AppConstants.communityEnabled))
+        XCTAssertTrue(AppConstants.communityPhase1PinTypes().isEmpty, "communityEnabled ships false today")
+    }
+}

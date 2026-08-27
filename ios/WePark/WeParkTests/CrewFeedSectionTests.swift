@@ -55,6 +55,8 @@ private func crewFeedPinFixture(
     id: String = "10000000-0000-0000-0000-000000000001",
     pinType: String = "enforcement_active",
     zoneId: String? = "nolita",
+    lat: Double = 40.7230,
+    lng: Double = -73.9950,
     segmentId: String? = "MOTT ST|PRINCE ST|SPRING ST|E",
     authorId: String? = "A0000000-0000-0000-0000-000000000001",
     authorUsername: String? = "MulberryMike",
@@ -68,8 +70,8 @@ private func crewFeedPinFixture(
       "pin_type": "\(pinType)",
       "source": "crowd",
       "lifespan": "ephemeral",
-      "lat": 40.7230,
-      "lng": -73.9950,
+      "lat": \(lat),
+      "lng": \(lng),
       "segment_id": \(segmentId.map { "\"\($0)\"" } ?? "null"),
       "zone_id": \(zoneId.map { "\"\($0)\"" } ?? "null"),
       "author_id": \(authorId.map { "\"\($0)\"" } ?? "null"),
@@ -179,16 +181,81 @@ final class CrewFeedMergeOrderingTests: XCTestCase {
         XCTAssertEqual(feed.first?.id, "pin-10000000-0000-0000-0000-000000000001")
     }
 
-    func testMerge_pinWithNilZone_excludedUnderAnySelectedZone() {
-        let noZonePin = crewFeedPinFixture(zoneId: nil)
+    /// S4 QA pass 1, PR #94 Finding #3 fix: a `nil`-`zone_id` pin is NO LONGER unconditionally
+    /// excluded — `CrewFeedMerge.resolvedZoneId(for:)` falls back to a `CommunityZoneBounds`
+    /// lookup by `(lat, lng)`. The fixture's default coordinate (40.7230, -73.9950) falls
+    /// inside nolita's bounding box, so a `nil`-zone pin there now correctly surfaces in the
+    /// nolita feed — this is the whole point of the fix (pre-existing enforcement/sweeper
+    /// pins, which no write path stamps with a zone, must still be visible).
+    func testMerge_pinWithNilZone_includedViaBoundingBoxFallback() {
+        let noZonePin = crewFeedPinFixture(zoneId: nil) // default lat/lng is inside nolita's box
 
         let feed = CrewFeedMerge.merge(messages: [], pins: [noZonePin], zoneId: "nolita")
+
+        XCTAssertEqual(feed.count, 1)
+    }
+
+    /// A `nil`-`zone_id` pin whose coordinate falls OUTSIDE all three known bounding boxes
+    /// is still excluded — the fallback only ever ADMITS a pin into a zone it can actually
+    /// place, it never admits one into every zone indiscriminately.
+    func testMerge_pinWithNilZone_outsideAllBoxes_stillExcluded() {
+        let farAwayPin = crewFeedPinFixture(zoneId: nil, lat: 40.70, lng: -74.02)
+
+        let feed = CrewFeedMerge.merge(messages: [], pins: [farAwayPin], zoneId: "nolita")
 
         XCTAssertTrue(feed.isEmpty)
     }
 
     func testMerge_emptyInputs_returnsEmptyArray() {
         XCTAssertTrue(CrewFeedMerge.merge(messages: [], pins: [], zoneId: "nolita").isEmpty)
+    }
+}
+
+// MARK: - CommunityZoneBounds / CrewFeedMerge.resolvedZoneId (S4 QA pass 1 Finding #3 fix)
+
+final class CommunityZoneBoundsTests: XCTestCase {
+
+    func testZoneId_pointInsideNolita_returnsNolita() {
+        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7230, lng: -73.9950), "nolita")
+    }
+
+    func testZoneId_pointInsideSoho_returnsSoho() {
+        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7225, lng: -74.0000), "soho")
+    }
+
+    func testZoneId_pointInsideLes_returnsLes() {
+        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7200, lng: -73.9850), "les")
+    }
+
+    func testZoneId_pointOutsideAllBoxes_returnsNil() {
+        XCTAssertNil(CommunityZoneBounds.zoneId(forLat: 40.70, lng: -74.02))
+    }
+
+    /// Boundary inclusivity — the applied migration's ranges are closed intervals
+    /// (`gte`/`lte`-equivalent), matching `RealtimeMergeGate.isWithinRegion`'s own
+    /// inclusive-bounds convention.
+    func testZoneId_exactBoundaryCoordinate_included() {
+        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7217, lng: -73.9967), "nolita")
+    }
+}
+
+final class CrewFeedMergeResolvedZoneIdTests: XCTestCase {
+
+    func testResolvedZoneId_pinHasExplicitZoneId_usedDirectly_boundingBoxIgnored() {
+        // zoneId "les" explicit, but the coordinate is inside nolita's box — the explicit
+        // value must win; the bounding-box fallback is nil-zone-only.
+        let pin = crewFeedPinFixture(zoneId: "les", lat: 40.7230, lng: -73.9950)
+        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin), "les")
+    }
+
+    func testResolvedZoneId_nilZoneId_fallsBackToBoundingBox() {
+        let pin = crewFeedPinFixture(zoneId: nil, lat: 40.7200, lng: -73.9850) // inside les
+        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin), "les")
+    }
+
+    func testResolvedZoneId_nilZoneId_outsideAllBoxes_returnsNil() {
+        let pin = crewFeedPinFixture(zoneId: nil, lat: 40.70, lng: -74.02)
+        XCTAssertNil(CrewFeedMerge.resolvedZoneId(for: pin))
     }
 }
 

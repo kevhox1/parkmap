@@ -152,6 +152,36 @@ enum AppConstants {
     /// this session is scoped to model/service-layer files only; a Views-layer consumer wires
     /// this in a later session (S4+).
     static let communityEnabled = false
+
+    /// Community 2.0 Phase 1 (S4 QA pass 1, PR #94 Finding #1 — BLOCKING): the two net-new
+    /// ephemeral crowd pin types (`open_spot`/`leaving_soon`), gated on `enabled`. `[]` while
+    /// `enabled == false` — the SINGLE source of truth every consumer that needs to know
+    /// "are the Community 2.0 Phase 1 pin types live yet" reads through, instead of each
+    /// hardcoding `[.openSpot, .leavingSoon]` separately. QA pass 1 found exactly that
+    /// scattering: `CommunityPinService.buildCrowdEphemeralRequest`'s `pin_type` query list,
+    /// `RealtimeMergeGate.mergeablePinTypes`, and `ContentView.handleVisiblePinsChange`'s
+    /// `mapMarkerTypes` all included the two new types as plain, UNCONDITIONAL `Set`
+    /// literals — meaning any `open_spot`/`leaving_soon` row already live in production
+    /// `pins` (Phase 0's migration is applied — the enum values exist server-side today)
+    /// would fetch, merge, and render as a map marker to every user, flag on or off. All
+    /// three call sites now route through this one function.
+    ///
+    /// `enabled` defaults to the real `communityEnabled` flag for production call sites, so
+    /// nothing downstream needs to pass it explicitly. Tests call this directly with an
+    /// explicit `true`/`false` to assert both branches — this is a PURE function
+    /// parameterized by the flag's value, the same shape this codebase already uses to test
+    /// `ft20BrowseSheetEnabled`-adjacent decision logic (`browseSheetBoundaryTarget`,
+    /// `FT20StreamCTests.swift`) rather than mutating the (deliberately immutable)
+    /// `communityEnabled` `let` itself.
+    ///
+    /// Returns an `Array` (not a `Set`) so callers building a deterministic query string
+    /// (`buildCrowdEphemeralRequest`'s `pin_type=in.(...)` value) get stable ordering;
+    /// `Set`-typed consumers (`RealtimeMergeGate.mergeablePinTypes`, `mapMarkerTypes`) pass
+    /// this array straight into `Set.union(_:)`, which accepts any `Sequence` — no explicit
+    /// `Set(...)` conversion needed at those call sites.
+    nonisolated static func communityPhase1PinTypes(enabled: Bool = communityEnabled) -> [PinType] {
+        enabled ? [.openSpot, .leavingSoon] : []
+    }
 }
 
 // MARK: - MoneyMathConstants (FT-12 §6)

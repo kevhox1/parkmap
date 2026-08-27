@@ -105,6 +105,40 @@ enum CrewFeedItem: Identifiable {
     }
 }
 
+// MARK: - CommunityZoneBounds (S4 QA pass 1, PR #94 Finding #3 — significant, fixed)
+
+/// Client-side bounding-box fallback for pins whose `zone_id` column is `nil` — every
+/// current write path (`Views/ReportSheet.swift:541`'s `zoneId: nil`) never stamps a zone
+/// on insert, so a strict `pin.zoneId == selectedZoneId` filter (this file's original
+/// behavior) shows ZERO pre-existing `enforcement_active`/`sweeper_passed` reports in any
+/// zone, ever — not "fewer than a moved map would produce" (the already-documented
+/// AC-P1.2 limitation), but none at all. This is the same box-not-polygon approximation
+/// OQ-1 already chose for the zones themselves — matched here client-side rather than
+/// waiting on a Phase 2 zone-on-insert story (tracked: `docs/community-2.0-roadmap.md`
+/// S6 row).
+///
+/// Values copied VERBATIM from `supabase/03-community-2.0-schema.sql`'s applied seed rows
+/// (§2.3, including the QA-pass-1-corrected `soho` `lat_max`, 40.7237 not the stale
+/// 40.7280) — if that migration is ever retuned, this table must be updated in the same
+/// commit or this fallback silently drifts from the real zone boundaries.
+enum CommunityZoneBounds {
+    /// (zoneId, latMin, latMax, lngMin, lngMax) — order doesn't matter for lookup (the
+    /// three boxes don't overlap in the applied migration), but is kept in the same
+    /// nolita/soho/les order as the seed SQL for easy side-by-side comparison.
+    private static let boxes: [(zoneId: String, latMin: Double, latMax: Double, lngMin: Double, lngMax: Double)] = [
+        ("nolita", 40.7217, 40.7256, -73.9967, -73.9930),
+        ("soho",   40.7220, 40.7237, -74.0050, -73.9970),
+        ("les",    40.7145, 40.7230, -73.9920, -73.9800),
+    ]
+
+    /// Returns the zone id whose bounding box contains `(lat, lng)`, or `nil` if none does
+    /// (e.g. a coordinate outside all three Phase 1 zones — the legacy `soho-les` box has
+    /// no bounds recorded here since it's a retired, chat-history-only id, spec §2.3).
+    static func zoneId(forLat lat: Double, lng: Double) -> String? {
+        boxes.first { lat >= $0.latMin && lat <= $0.latMax && lng >= $0.lngMin && lng <= $0.lngMax }?.zoneId
+    }
+}
+
 // MARK: - CrewFeedMerge (pure, view-free logic)
 
 /// Pure decision/formatting helpers for the crew feed — no SwiftUI, no networking, no
@@ -113,6 +147,13 @@ enum CrewFeedItem: Identifiable {
 enum CrewFeedMerge {
 
     // MARK: Merge + zone filter
+
+    /// The zone a pin counts toward for feed filtering: its own `zoneId` if set, else a
+    /// `CommunityZoneBounds` lookup by `(lat, lng)` (S4 QA pass 1 Finding #3 fix). `nil` if
+    /// neither resolves (a pin with no `zoneId` outside all three known boxes).
+    static func resolvedZoneId(for pin: CommunityPin) -> String? {
+        pin.zoneId ?? CommunityZoneBounds.zoneId(forLat: pin.lat, lng: pin.lng)
+    }
 
     /// Combines `messages` and `pins` into one newest-first `[CrewFeedItem]`, filtering both
     /// to `zoneId`.
@@ -123,13 +164,16 @@ enum CrewFeedMerge {
     /// the caller passes in, and so it stays independently testable with mixed-zone fixtures.
     /// `pins` (`CommunityPinService.visiblePins`) is NEVER zone-scoped on the read path
     /// (viewport-scoped only — spec §1 delta table) — filtering it by `zoneId` here is load-
-    /// bearing, not defensive.
+    /// bearing, not defensive. Pins filter through `resolvedZoneId(for:)` (bounding-box
+    /// fallback for a `nil` `zone_id`), not raw `pin.zoneId`, so pre-existing
+    /// enforcement/sweeper reports (which no write path stamps with a zone yet) still
+    /// surface in the correct zone's feed.
     static func merge(messages: [ZoneMessage], pins: [CommunityPin], zoneId: String) -> [CrewFeedItem] {
         let chatItems = messages
             .filter { $0.zoneId == zoneId }
             .map(CrewFeedItem.chat)
         let pinItems = pins
-            .filter { $0.zoneId == zoneId }
+            .filter { resolvedZoneId(for: $0) == zoneId }
             .map(CrewFeedItem.pin)
         return (chatItems + pinItems).sorted { $0.timestamp > $1.timestamp }
     }

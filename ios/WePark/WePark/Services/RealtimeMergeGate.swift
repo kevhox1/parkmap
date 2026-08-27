@@ -52,14 +52,34 @@ enum RealtimeMergeGate {
     /// Realtime-adoption pass required when new pin types ship.
     ///
     /// Values mirror `mergeRealtimeChange`'s exact pre-existing set: Tier 1 open-data display
-    /// types + Tier 3 ephemeral crowd pins + FT-15/TF2-15 block-scoped `.construction`
-    /// (`.filming` already covers FT-15's filming case via the Tier 1 line).
-    static let mergeablePinTypes: Set<PinType> = [
+    /// types + Tier 3 ephemeral crowd pins + FT-15/TF2-15 block-scoped `.construction`.
+    /// Community 2.0 Phase 1's `.openSpot`/`.leavingSoon` are NOT in this base set — see
+    /// `computeMergeablePinTypes(communityEnabled:)` below (S4 QA pass 1, PR #94 Finding
+    /// #1 — these two must be gated, not unconditional).
+    static let baseMergeablePinTypes: Set<PinType> = [
         .filming, .specialEvent, .aspSuspendedToday,       // Tier 1
         .enforcementActive, .sweeperPassed, .brokenMeter,   // Tier 3
         .construction,                                       // FT-15/TF2-15
-        .openSpot, .leavingSoon,                             // Community 2.0 Phase 1
     ]
+
+    /// Community 2.0 Phase 1 (S4 QA pass 1, PR #94 Finding #1 — BLOCKING): pure, parameterized
+    /// version of `mergeablePinTypes` so tests can assert both flag states directly. `.openSpot`/
+    /// `.leavingSoon` are unioned in only when `communityEnabled` — via
+    /// `AppConstants.communityPhase1PinTypes(enabled:)`, the single source of truth for this
+    /// gate (also used by `CommunityPinService`'s Channel 2 fetch and
+    /// `ContentView.handleVisiblePinsChange`'s `mapMarkerTypes` — three call sites, one flag
+    /// check).
+    static func computeMergeablePinTypes(communityEnabled: Bool) -> Set<PinType> {
+        baseMergeablePinTypes.union(AppConstants.communityPhase1PinTypes(enabled: communityEnabled))
+    }
+
+    /// Production-facing property — reads the real `AppConstants.communityEnabled` flag.
+    /// Every existing call site (`CommunityPinService.mergeRealtimeChange`, etc.) keeps using
+    /// this unqualified property; only tests need `computeMergeablePinTypes(communityEnabled:)`
+    /// directly.
+    static var mergeablePinTypes: Set<PinType> {
+        computeMergeablePinTypes(communityEnabled: AppConstants.communityEnabled)
+    }
 
     // MARK: - Viewport gating
 

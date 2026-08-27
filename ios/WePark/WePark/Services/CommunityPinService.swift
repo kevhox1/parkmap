@@ -938,13 +938,20 @@ final class CommunityPinService {
     }
 
     /// True if `pin` matches Channel 2's fetch predicate (crowd source, ephemeral lifespan;
-    /// enforcement_active / sweeper_passed / open_spot / leaving_soon — the last two widened in
-    /// Community 2.0 Phase 1, spec §2.8: both are `lifespan='ephemeral'`, same bucket as
-    /// enforcement/sweeper). Mirrors `buildCrowdEphemeralRequest`.
+    /// enforcement_active / sweeper_passed, plus open_spot / leaving_soon when
+    /// `AppConstants.communityEnabled` — both `lifespan='ephemeral'`, same bucket as
+    /// enforcement/sweeper, spec §2.8). Mirrors `buildCrowdEphemeralRequest`'s pin_type list.
+    ///
+    /// S4 QA pass 1, PR #94 Finding #1 (BLOCKING): the two Community 2.0 types used to be
+    /// unconditional here — gated now via `AppConstants.communityPhase1PinTypes(enabled:)`,
+    /// the single source of truth also used by `RealtimeMergeGate.mergeablePinTypes` and
+    /// `ContentView.handleVisiblePinsChange`'s `mapMarkerTypes`.
     private nonisolated static func isChannel2Member(_ pin: CommunityPin) -> Bool {
-        pin.source == .crowd &&
-        pin.lifespan == .ephemeral &&
-        [PinType.enforcementActive, .sweeperPassed, .openSpot, .leavingSoon].contains(pin.pinType)
+        let eligibleTypes: Set<PinType> = [.enforcementActive, .sweeperPassed]
+            .union(AppConstants.communityPhase1PinTypes())
+        return pin.source == .crowd &&
+            pin.lifespan == .ephemeral &&
+            eligibleTypes.contains(pin.pinType)
     }
 
     /// True if `pin` matches Channel 3's fetch predicate (crowd source; filming /
@@ -998,12 +1005,31 @@ final class CommunityPinService {
         return request
     }
 
+    /// Community 2.0 Phase 1 (S4 QA pass 1, PR #94 Finding #1 — BLOCKING): the PostgREST
+    /// `pin_type=in.(...)` value for Channel 2's fetch, gated on `communityEnabled` via
+    /// `AppConstants.communityPhase1PinTypes(enabled:)` — the single source of truth also
+    /// used by `RealtimeMergeGate.mergeablePinTypes` and
+    /// `ContentView.handleVisiblePinsChange`'s `mapMarkerTypes`. `open_spot`/`leaving_soon`
+    /// are appended to the query ONLY when the flag is on, so a flag-off client never even
+    /// REQUESTS (let alone receives, merges, or renders) either type — Phase 0's migration
+    /// is already live in production, so this is closing a real, present-day gap, not a
+    /// hypothetical one.
+    ///
+    /// `nonisolated static` and pure (no instance state) so tests can assert both flag
+    /// states directly without a live `CommunityPinService` or network mock.
+    nonisolated static func channel2PinTypeQueryValue(communityEnabled: Bool) -> String {
+        let types: [PinType] = [.enforcementActive, .sweeperPassed]
+            + AppConstants.communityPhase1PinTypes(enabled: communityEnabled)
+        return "in.(\(types.map(\.rawValue).joined(separator: ",")))"
+    }
+
     /// Builds the PostgREST URLRequest for Channel 2: crowd ephemeral pins.
     ///
-    /// Fetches: enforcement_active, sweeper_passed, open_spot, leaving_soon (the last two
-    ///   widened in Community 2.0 Phase 1, spec §2.8/§3 Phase 1 — same `lifespan='ephemeral'`
+    /// Fetches: enforcement_active, sweeper_passed always; open_spot, leaving_soon only
+    ///   when `AppConstants.communityEnabled` (Community 2.0 Phase 1, spec §2.8/§3 Phase 1 —
+    ///   see `channel2PinTypeQueryValue(communityEnabled:)` above) — same `lifespan='ephemeral'`
     ///   bucket as enforcement/sweeper, so this channel's existing filter shape already covers
-    ///   them without a fourth channel)
+    ///   them without a fourth channel, once the flag is on.
     ///   source = eq.crowd
     ///   lifespan = eq.ephemeral
     ///   resolved_at = is.null       — 3-dispute-resolved pins are excluded (spec §3.9)
@@ -1021,7 +1047,10 @@ final class CommunityPinService {
         )
 
         components?.queryItems = [
-            URLQueryItem(name: "pin_type",    value: "in.(enforcement_active,sweeper_passed,open_spot,leaving_soon)"),
+            URLQueryItem(
+                name: "pin_type",
+                value: Self.channel2PinTypeQueryValue(communityEnabled: AppConstants.communityEnabled)
+            ),
             URLQueryItem(name: "source",      value: "eq.crowd"),
             URLQueryItem(name: "lifespan",    value: "eq.ephemeral"),
             URLQueryItem(name: "resolved_at", value: "is.null"),

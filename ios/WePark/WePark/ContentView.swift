@@ -1363,11 +1363,11 @@ struct ContentView: View {
             onParkingGuideTapped: { activeSheet = .parkingGuide },
             onPeekHeightChange: { browseSheetPeekHeight = $0 },
             onMediumHeightChange: { browseSheetMediumHeight = $0 },
-            // Community 2.0 Phase 1 (S4): mounted by BrowseNavigationSheet ONLY at the
-            // `.large` detent (see that file's `crewFeedBuilder` doc comment). The `if` with
-            // no `else` inside this @ViewBuilder closure resolves to `EmptyView` when the
-            // flag is false — byte-identical to every prior build's `.large` content, which
-            // is exactly AC-P1.3's "flag false = zero behavioral or visual change" contract.
+            // Community 2.0 Phase 1 (S4; QA pass 1 PR #94 Finding #2 fix): `BrowseNavigationSheet`
+            // itself now gates the MOUNT on `AppConstants.communityEnabled` (not just this
+            // closure's content — see that file's `crewFeed` doc comment for why "the closure
+            // resolves to EmptyView" wasn't sufficient by itself). The `if` here is kept as a
+            // second, redundant-but-harmless line of defense, not the authoritative gate.
             crewFeed: {
                 if AppConstants.communityEnabled {
                     CrewFeedSection(
@@ -2468,22 +2468,9 @@ struct ContentView: View {
     /// `ContentView.body` — same pattern as the other `handle*` methods (PR-1 lesson).
     private func handleVisiblePinsChange(_ newPins: [CommunityPin]) {
         // Map markers: Tier 1 display types + Tier 3 ephemeral crowd pins (sub-PR #2) +
-        // Community 2.0 Phase 1 (S4) crowd pins.
-        // filming + special_event: Tier 1 open-data markers (AC-D8).
-        // enforcement_active + sweeper_passed: Tier 3 crowd ephemeral markers (spec §2.1).
-        // open_spot + leaving_soon: Community 2.0 Phase 1 (spec §2.1/§6) — this allow-list is
-        // a SEPARATE gate from `RealtimeMergeGate.mergeablePinTypes` (S3 already widened that
-        // one). Without adding the two new types HERE too, S3's Realtime/fetch-layer work and
-        // this session's `PinMarkerAnnotation` ring-marker rendering would both be reachable
-        // but never actually exercised — `visiblePins` would still be filtered down to the
-        // pre-Phase-1 four types before `communityPins` (and therefore any `MKAnnotation`)
-        // ever sees them. Behind `AppConstants.communityEnabled` this is a no-op today: the
-        // only way an `open_spot`/`leaving_soon` row reaches `visiblePins` at all is via the
-        // (currently dark-shipped) write path, and no UI in this build inserts one yet.
+        // Community 2.0 Phase 1 (S4) crowd pins, gated — see `Self.mapMarkerTypes(communityEnabled:)`.
         // asp_suspended_today drives the banner supplement below, not a map marker.
-        let mapMarkerTypes: Set<PinType> = [
-            .filming, .specialEvent, .enforcementActive, .sweeperPassed, .openSpot, .leavingSoon,
-        ]
+        let mapMarkerTypes = Self.mapMarkerTypes(communityEnabled: AppConstants.communityEnabled)
         communityPins = newPins.filter { mapMarkerTypes.contains($0.pinType) }
 
         // ASP banner supplement (spec §4.2 / AC-D9a through AC-D9d).
@@ -2491,6 +2478,28 @@ struct ContentView: View {
         // overrides the bundle state, otherwise returns bundle state unchanged.
         let bundleState = aspService.suspensionState(at: .nowET)
         bannerState = resolvedBannerState(bundleState: bundleState, aspPins: newPins)
+    }
+
+    /// Which `PinType`s become a map marker (`communityPins`, feeding
+    /// `MapViewRepresentable`'s `syncCommunityPinAnnotations`).
+    ///   - filming + special_event: Tier 1 open-data markers (AC-D8).
+    ///   - enforcement_active + sweeper_passed: Tier 3 crowd ephemeral markers (spec §2.1).
+    ///   - open_spot + leaving_soon: Community 2.0 Phase 1 (spec §2.1/§6), gated on
+    ///     `communityEnabled` via `AppConstants.communityPhase1PinTypes(enabled:)` — the
+    ///     single source of truth also used by `CommunityPinService`'s Channel 2 fetch and
+    ///     `RealtimeMergeGate.mergeablePinTypes`.
+    ///
+    /// S4 QA pass 1, PR #94 Finding #1 (BLOCKING): this allow-list used to include
+    /// `.openSpot`/`.leavingSoon` unconditionally — a SEPARATE gate from
+    /// `RealtimeMergeGate.mergeablePinTypes` that was never actually checked against the
+    /// flag, so any `open_spot`/`leaving_soon` row in `visiblePins` (Phase 0's migration is
+    /// already live in production) would render as a map marker to every user regardless of
+    /// `communityEnabled`. Extracted as a `nonisolated static` pure function (this file's own
+    /// established pattern for testable decision logic, e.g. `browseSheetBoundaryTarget`) so
+    /// both flag states are directly unit-testable without a live `ContentView` instance.
+    nonisolated static func mapMarkerTypes(communityEnabled: Bool) -> Set<PinType> {
+        let base: Set<PinType> = [.filming, .specialEvent, .enforcementActive, .sweeperPassed]
+        return base.union(AppConstants.communityPhase1PinTypes(enabled: communityEnabled))
     }
 
     // MARK: - Drive Mode lifecycle handler

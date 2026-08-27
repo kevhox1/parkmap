@@ -85,6 +85,14 @@
 //   - `makeFixturePin` gains an optional `zoneId` parameter (default `nil` — every pre-existing
 //     call site is unaffected).
 //
+//  S4 QA pass 1 fix (build 20, PR #94 Finding #1 — BLOCKING): S3's widening above was itself
+//  the bug QA found — `.openSpot`/`.leavingSoon` were unconditionally mergeable regardless of
+//  `AppConstants.communityEnabled`. `testMergeablePinTypes_containsExpectedTypes_
+//  excludesIneligibleTypes` (renamed `...AndFlaggedTypes`) now asserts the two types are
+//  EXCLUDED from the production `mergeablePinTypes` property (flag ships `false`), plus two
+//  new pure tests (`testComputeMergeablePinTypes_flagFalse/True_...`) asserting both flag
+//  states directly via `RealtimeMergeGate.computeMergeablePinTypes(communityEnabled:)`.
+//
 //  FT-15 / TF2-15 Stream B4 (docs/ft15-tf215-temporary-block-restrictions-spec.md §12):
 //  fetchPins now issues a 3rd concurrent request (crowd block-scoped, filming/construction).
 //  The 5 request-structure tests + the debounce test above were updated in place
@@ -1180,24 +1188,71 @@ final class RealtimeMergeGateTests: XCTestCase {
 
     /// `mergeablePinTypes` mirrors `mergeRealtimeChange`'s pre-existing set (spec §8.3) — a
     /// personal-only type (`parked_car`) or a durable/non-community type must never be
-    /// Realtime-mergeable. Updated for Community 2.0 Phase 1 (build 20, S3): `.openSpot`/
-    /// `.leavingSoon` widened into `expectedIncluded` (docs/community-2.0-reconciliation-spec.md
-    /// §3 Phase 1's "one-line addition in ONE place" extension seam) — this is an in-place
-    /// widening of the existing assertion, not a new test.
-    func testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypes() {
+    /// Realtime-mergeable.
+    ///
+    /// S4 QA pass 1, PR #94 Finding #1 (BLOCKING) — REVISED from S3's version: `.openSpot`/
+    /// `.leavingSoon` are now gated behind `AppConstants.communityEnabled` (shipped `false`),
+    /// so the production `mergeablePinTypes` property — which reads the REAL flag — must NOT
+    /// include them today. S3's version of this test asserted the opposite (unconditional
+    /// inclusion), which is exactly the bug QA found: any `open_spot`/`leaving_soon` row
+    /// already live in production `pins` would have been Realtime-mergeable regardless of
+    /// the flag. See `testComputeMergeablePinTypes_flagTrue_includesCommunityPhase1Types`
+    /// below for the flag-on assertion.
+    func testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypesAndFlaggedTypes() {
         let expectedIncluded: [PinType] = [
             .filming, .specialEvent, .aspSuspendedToday,
             .enforcementActive, .sweeperPassed, .brokenMeter,
             .construction,
-            .openSpot, .leavingSoon,
         ]
         for type in expectedIncluded {
             XCTAssertTrue(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must be mergeable")
         }
-        let expectedExcluded: [PinType] = [.parkedCar, .signCorrection, .blockNote]
+        let expectedExcluded: [PinType] = [
+            .parkedCar, .signCorrection, .blockNote,
+            .openSpot, .leavingSoon, // gated off — communityEnabled ships false today
+        ]
         for type in expectedExcluded {
-            XCTAssertFalse(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must NOT be mergeable")
+            XCTAssertFalse(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must NOT be mergeable while communityEnabled is false")
         }
+    }
+
+    /// Pure, parameterized version — asserts both flag states directly without needing to
+    /// mutate the (deliberately immutable) `AppConstants.communityEnabled` `let`. Same
+    /// pattern this codebase already uses for `ft20BrowseSheetEnabled`-adjacent decision
+    /// logic (`browseSheetBoundaryTarget`, `FT20StreamCTests.swift`).
+    func testComputeMergeablePinTypes_flagFalse_excludesCommunityPhase1Types() {
+        let types = RealtimeMergeGate.computeMergeablePinTypes(communityEnabled: false)
+        XCTAssertFalse(types.contains(.openSpot))
+        XCTAssertFalse(types.contains(.leavingSoon))
+    }
+
+    func testComputeMergeablePinTypes_flagTrue_includesCommunityPhase1Types() {
+        let types = RealtimeMergeGate.computeMergeablePinTypes(communityEnabled: true)
+        XCTAssertTrue(types.contains(.openSpot))
+        XCTAssertTrue(types.contains(.leavingSoon))
+        // The base Tier 1/3/FT-15 types must still be present regardless of the flag.
+        XCTAssertTrue(types.contains(.enforcementActive))
+        XCTAssertTrue(types.contains(.filming))
+    }
+}
+
+// MARK: - CommunityPinService.channel2PinTypeQueryValue (S4 QA pass 1, PR #94 Finding #1 — BLOCKING fix)
+
+/// Channel 2's fetch `pin_type=in.(...)` value, gated on `communityEnabled` via
+/// `AppConstants.communityPhase1PinTypes(enabled:)` — before this fix the value was a plain
+/// string literal always including `open_spot,leaving_soon`, meaning a flag-off client would
+/// still REQUEST (and, since the server-side enum values already exist in production, likely
+/// receive) rows of the two new types on every fetch cycle.
+final class Channel2PinTypeQueryValueTests: XCTestCase {
+
+    func testChannel2PinTypeQueryValue_flagFalse_excludesCommunityPhase1Types() {
+        let value = CommunityPinService.channel2PinTypeQueryValue(communityEnabled: false)
+        XCTAssertEqual(value, "in.(enforcement_active,sweeper_passed)")
+    }
+
+    func testChannel2PinTypeQueryValue_flagTrue_includesCommunityPhase1Types() {
+        let value = CommunityPinService.channel2PinTypeQueryValue(communityEnabled: true)
+        XCTAssertEqual(value, "in.(enforcement_active,sweeper_passed,open_spot,leaving_soon)")
     }
 }
 
