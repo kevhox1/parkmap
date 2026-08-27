@@ -102,6 +102,29 @@
 //     BlockScopedReportError.rateLimitExceeded case with clear user-facing copy, not a
 //     generic HTTP error.
 //
+//  Community 2.0 Phase 1 (docs/community-2.0-reconciliation-spec.md §1 delta table, §3 Phase 1
+//  — build 20, session S3). Three of this file's own extension seams, each a small, named
+//  change:
+//   - Channel 2 (crowd ephemeral fetch): pin_type list + `isChannel2Member` widened to include
+//     `.openSpot`/`.leavingSoon` (spec §2.8: both are `lifespan='ephemeral'`, same as
+//     enforcement/sweeper). Select list also widened to request `position_fraction`/
+//     `leaving_minutes`/`claimed_by` — otherwise the two new types would fetch successfully but
+//     silently decode those three fields as nil, defeating the point of adding them.
+//   - `ephemeralTTLSeconds(for:leavingMinutes:)` updated to the resolved OQ-2 values: 45m
+//     (`enforcement_active`), 120m (`sweeper_passed`, both a reversal of FT-1's 5-minute
+//     baseline — see the method's own doc comment for the full reasoning), 3m (`open_spot`,
+//     net-new), stated-minutes+3 (`leaving_soon`, net-new). Per spec §0 OQ-2: "staleness is the
+//     signal" — an aged enforcement/sweeper pin is now read as useful history ("agent already
+//     came through"), not stale noise, so every surface rendering these pins must show relative
+//     age. This method drives `insertCrowdPin`'s client-computed `expires_at` (superseded
+//     server-side for `open_spot`/`leaving_soon` by the §2.11 trigger — this client value is
+//     display/decay math, not the write-path source of truth for those two types) and is
+//     reused directly by tests exercising the TTL table.
+//   - `RealtimeMergeGate` gained a THIRD gating dimension (zone_id), alongside pin-type
+//     eligibility and viewport — `selectedZoneId`/`setSelectedZone(_:)` below are this
+//     service's half of that: `nil` (default) = no zone filter, byte-identical to this
+//     service's pre-Phase-1 behavior until S4's zone chips call `setSelectedZone(_:)`.
+//
 
 import Foundation
 import MapKit
@@ -325,6 +348,14 @@ final class CommunityPinService {
     /// True when Drive Mode is active. Set from ContentView via `setDriveModeActive(_:)`.
     private var driveModeActive: Bool = false
 
+    /// The zone currently selected by the crew feed's zone chips (Community 2.0 Phase 1 UI,
+    /// S4). `nil` = no zone filter active — every Realtime event passes the zone dimension
+    /// unconditionally (`RealtimeMergeGate.isInZone`), byte-identical to this service's
+    /// pre-Phase-1 behavior until a caller sets this. `private(set)` so tests can assert the
+    /// value `setSelectedZone(_:)` last wrote, same "narrowest access widening for test
+    /// assertions" precedent as `periodicRefreshTask` above.
+    private(set) var selectedZoneId: String? = nil
+
     /// Tracks pins whose optimistic removal (`deleteCrowdPin`) is still in flight, keyed by
     /// pin id, so a genuine Realtime DELETE echo that lands during the network round trip can
     /// be distinguished from "no echo arrived yet" once the round trip completes.
@@ -470,6 +501,20 @@ final class CommunityPinService {
             // Resume periodic refresh if a region has been fetched (Fix 2).
             startPeriodicRefresh()
         }
+    }
+
+    // MARK: - Zone selection (Community 2.0 Phase 1)
+
+    /// Sets the zone currently selected by the crew feed's zone chips. `nil` clears the filter
+    /// (every pin passes the zone dimension unconditionally — see `selectedZoneId`'s doc
+    /// comment). Purely a gating-state setter: does not itself trigger a fetch or touch
+    /// `visiblePins` — S4's zone-chip UI is expected to pair this with its own REST re-fetch
+    /// scoped to the new zone (mirroring how `onRegionChanged` already drives the bounding-box
+    /// fetch), since this service's channels are viewport-scoped, not zone-scoped, on the read
+    /// path (spec §1 delta table: zone filtering is a Realtime-side, client-side dimension, not
+    /// a second fetch axis this session adds).
+    func setSelectedZone(_ zoneId: String?) {
+        selectedZoneId = zoneId
     }
 
     // MARK: - Periodic refresh (Fix 2 — TF1 Realtime stand-in)
@@ -632,6 +677,9 @@ final class CommunityPinService {
         guard RealtimeMergeGate.mergeablePinTypes.contains(pin.pinType) else { return }
         guard let region = lastFetchedRegion,
               RealtimeMergeGate.isWithinRegion(lat: pin.lat, lng: pin.lng, region: region) else { return }
+        // Community 2.0 Phase 1: third gating dimension. `selectedZoneId == nil` (the default,
+        // pre-S4 state) always passes — see `RealtimeMergeGate.isInZone`'s doc comment.
+        guard RealtimeMergeGate.isInZone(pinZoneId: pin.zoneId, selectedZoneId: selectedZoneId) else { return }
         mergeRealtimeChange(pin: pin)
     }
 
@@ -889,12 +937,14 @@ final class CommunityPinService {
         [PinType.filming, .aspSuspendedToday, .specialEvent].contains(pin.pinType)
     }
 
-    /// True if `pin` matches Channel 2's fetch predicate (crowd source, ephemeral
-    /// lifespan; enforcement_active / sweeper_passed). Mirrors `buildCrowdEphemeralRequest`.
+    /// True if `pin` matches Channel 2's fetch predicate (crowd source, ephemeral lifespan;
+    /// enforcement_active / sweeper_passed / open_spot / leaving_soon — the last two widened in
+    /// Community 2.0 Phase 1, spec §2.8: both are `lifespan='ephemeral'`, same bucket as
+    /// enforcement/sweeper). Mirrors `buildCrowdEphemeralRequest`.
     private nonisolated static func isChannel2Member(_ pin: CommunityPin) -> Bool {
         pin.source == .crowd &&
         pin.lifespan == .ephemeral &&
-        [PinType.enforcementActive, .sweeperPassed].contains(pin.pinType)
+        [PinType.enforcementActive, .sweeperPassed, .openSpot, .leavingSoon].contains(pin.pinType)
     }
 
     /// True if `pin` matches Channel 3's fetch predicate (crowd source; filming /
@@ -950,7 +1000,10 @@ final class CommunityPinService {
 
     /// Builds the PostgREST URLRequest for Channel 2: crowd ephemeral pins.
     ///
-    /// Fetches: enforcement_active, sweeper_passed
+    /// Fetches: enforcement_active, sweeper_passed, open_spot, leaving_soon (the last two
+    ///   widened in Community 2.0 Phase 1, spec §2.8/§3 Phase 1 — same `lifespan='ephemeral'`
+    ///   bucket as enforcement/sweeper, so this channel's existing filter shape already covers
+    ///   them without a fourth channel)
     ///   source = eq.crowd
     ///   lifespan = eq.ephemeral
     ///   resolved_at = is.null       — 3-dispute-resolved pins are excluded (spec §3.9)
@@ -968,7 +1021,7 @@ final class CommunityPinService {
         )
 
         components?.queryItems = [
-            URLQueryItem(name: "pin_type",    value: "in.(enforcement_active,sweeper_passed)"),
+            URLQueryItem(name: "pin_type",    value: "in.(enforcement_active,sweeper_passed,open_spot,leaving_soon)"),
             URLQueryItem(name: "source",      value: "eq.crowd"),
             URLQueryItem(name: "lifespan",    value: "eq.ephemeral"),
             URLQueryItem(name: "resolved_at", value: "is.null"),
@@ -978,8 +1031,13 @@ final class CommunityPinService {
             URLQueryItem(name: "lng",         value: "gte.\(bbox.swLng)"),
             URLQueryItem(name: "lng",         value: "lte.\(bbox.neLng)"),
             URLQueryItem(
+                // Community 2.0 Phase 1: appends position_fraction/leaving_minutes/claimed_by
+                // (spec §2.2's three new pins_with_author columns) — without these, open_spot/
+                // leaving_soon rows would fetch successfully but silently decode those three
+                // fields as nil (CommunityPin's decodeIfPresent is safe either way), defeating
+                // the purpose of adding them. Every existing column stays in its original order.
                 name: "select",
-                value: "id,pin_type,source,lifespan,lat,lng,segment_id,zone_id,expires_at,confirm_count,dispute_count,meta,notes,author_username,created_at,updated_at,resolved_at,author_id"
+                value: "id,pin_type,source,lifespan,lat,lng,segment_id,zone_id,expires_at,confirm_count,dispute_count,meta,notes,author_username,created_at,updated_at,resolved_at,author_id,position_fraction,leaving_minutes,claimed_by"
             ),
         ]
 
@@ -1189,17 +1247,44 @@ final class CommunityPinService {
     /// Lifetime (seconds from report time) for an ephemeral crowd pin type, or nil for
     /// non-expiring types.
     ///
-    /// FT-1: enforcement agents and street sweepers are MOBILE and go stale fast — a
-    /// 30-min lifetime kept them on the map long after they'd moved on. They now expire
-    /// after 5 minutes (a "Still there?" confirm can still extend +15 min up to the 2h
-    /// cap via the extend RPC). Broken meters are NOT mobile — a meter stays broken for a
-    /// while — so they keep the original 30-min lifetime.
-    nonisolated static func ephemeralTTLSeconds(for type: PinType) -> TimeInterval? {
+    /// FT-1 originally shortened enforcement/sweeper to 5 minutes ("mobile, very fresh — a
+    /// 30-min lifetime kept them on the map long after they'd moved on"). **Superseded by
+    /// Community 2.0 OQ-2 (resolved 2026-08-26, `docs/community-2.0-reconciliation-spec.md`
+    /// §0): the prototype's 45m/120m values govern instead.** Kevin's reasoning reframes the
+    /// pin's semantics: it is not only "agent is here NOW" but "agent already came through —
+    /// unlikely to swing back soon," so an aged pin is *useful history*, not stale noise. The
+    /// staleness is the signal — every surface rendering these pins MUST show relative age
+    /// ("reported X min ago") for that display rule to be honest; this method only owns the
+    /// TTL number, not the age-display requirement, which lives on the rendering surfaces
+    /// (Views — S4+). The confirm-to-extend (+15m, 2h cap via `extend_pin_expiry`) mechanic is
+    /// unchanged by this reversal.
+    ///
+    /// `open_spot` (3m) and `leaving_soon` (stated minutes + 3m) are net-new — no prior
+    /// conflict, spec §6 appendix values as-is. `leaving_soon`'s TTL depends on the specific
+    /// pin's user-chosen countdown, so this method takes an optional `leavingMinutes`
+    /// parameter (default `nil` — every existing call site is unaffected); falls back to the
+    /// same `coalesce(..., 10)` default the server-side `derive_pin_expiry()` trigger uses
+    /// (spec §2.11) if the value is unknown.
+    ///
+    /// Broken meters are NOT mobile — a meter stays broken for a while — so they keep the
+    /// original 30-min lifetime, untouched by OQ-2.
+    ///
+    /// Note (Community 2.0 §2.11): the server derives the authoritative `expires_at` for
+    /// `open_spot`/`leaving_soon` on INSERT via a `BEFORE INSERT` trigger — this client value is
+    /// display/decay math (and `insertCrowdPin`'s best-effort client-computed request payload,
+    /// which the trigger then overrides for those two types), not the source of truth for them.
+    nonisolated static func ephemeralTTLSeconds(for type: PinType, leavingMinutes: Int? = nil) -> TimeInterval? {
         switch type {
-        case .enforcementActive, .sweeperPassed:
-            return 5 * 60      // FT-1: mobile, very fresh
+        case .enforcementActive:
+            return 45 * 60      // OQ-2 (2026-08-26): staleness is the signal
+        case .sweeperPassed:
+            return 120 * 60     // OQ-2 (2026-08-26): staleness is the signal
         case .brokenMeter:
-            return 30 * 60     // stationary condition — unchanged
+            return 30 * 60      // stationary condition — unaffected by OQ-2
+        case .openSpot:
+            return 3 * 60       // net-new, spec §6 appendix
+        case .leavingSoon:
+            return TimeInterval((leavingMinutes ?? 10) + 3) * 60   // net-new, mirrors derive_pin_expiry()'s coalesce default
         default:
             return nil          // non-ephemeral types do not auto-expire
         }

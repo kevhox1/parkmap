@@ -133,6 +133,25 @@ enum AppConstants {
     /// UserDefaults key: set to true after the first-launch "Parking 101" prompt banner
     /// has been shown/dismissed once per install (spec §7).
     static let parkingGuidePromptShownKey = "wepark_parking101_prompt_shown"
+
+    // MARK: - Community 2.0 (build 20)
+
+    /// Dark-ship flag for the entire Community 2.0 layer (crew feed, zone chips, new report
+    /// types, identity sheet, reactions extensions, push). `false` for the whole build-out —
+    /// every phase merges to `main` behind this flag per
+    /// `docs/community-2.0-roadmap.md` ("Drive-test gate applies to the flag-flip, not the
+    /// merge"): the model/service layer (this session) and every subsequent UI phase are safe
+    /// to ship dark, since nothing reads this flag to change behavior until a consumer wires
+    /// it up. Flips to `true` only once the build-18 drive test proves Realtime solid on a
+    /// moving car (roadmap "What is genuinely NYC/second-phone blocked" section) — Kevin's
+    /// call, not an engineering session's.
+    ///
+    /// `internal` (not `private`), matching this file's other feature flags/constants that
+    /// downstream consumers (`Views/`) read — mirrors `ContentView.ft20BrowseSheetEnabled`'s
+    /// role for FT-20's sheet, but declared here (not inline in `ContentView.swift`) because
+    /// this session is scoped to model/service-layer files only; a Views-layer consumer wires
+    /// this in a later session (S4+).
+    static let communityEnabled = false
 }
 
 // MARK: - MoneyMathConstants (FT-12 §6)

@@ -66,6 +66,19 @@
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens.
 //
+//  Community 2.0 Phase 1 additions (build 20, session S3 — docs/community-2.0-reconciliation-
+//  spec.md §2.1, §3 Phase 1). PinType gains two new crowd/ephemeral cases, `.openSpot`/
+//  `.leavingSoon`; `testPinType_exactlyTenCases` below is updated IN PLACE to twelve (a real
+//  behavior change, not a new test) since it exists specifically to catch accidental case-count
+//  drift. Two new rawValue round-trip tests added, following the exact `assertRoundTrip`
+//  pattern the other ten already use:
+//    31. testRawValue_openSpot
+//    32. testRawValue_leavingSoon
+//  (Decode tests for the two new types + the three new `pins` columns — `positionFraction`/
+//  `leavingMinutes`/`claimedBy` — live in `Community2Phase1ModelTests.swift`, mirroring the
+//  FT15ModelTests.swift precedent of a dedicated per-feature test file, rather than growing
+//  this file's own fixture-per-type inventory further.)
+//
 
 import XCTest
 @testable import WePark
@@ -482,11 +495,17 @@ final class PinTypeRawValueTests: XCTestCase {
     func testRawValue_sweeperPassed()     throws { try assertRoundTrip(.sweeperPassed, expectedRaw: "sweeper_passed") }
     func testRawValue_brokenMeter()       throws { try assertRoundTrip(.brokenMeter, expectedRaw: "broken_meter") }
     func testRawValue_parkedCar()         throws { try assertRoundTrip(.parkedCar, expectedRaw: "parked_car") }
+    // Community 2.0 Phase 1 (spec §2.1) — two net-new crowd/ephemeral cases.
+    func testRawValue_openSpot()          throws { try assertRoundTrip(.openSpot, expectedRaw: "open_spot") }
+    func testRawValue_leavingSoon()       throws { try assertRoundTrip(.leavingSoon, expectedRaw: "leaving_soon") }
 
-    /// AC-I7 guard: CaseIterable confirms exactly 10 cases — no accidental additions.
-    func testPinType_exactlyTenCases() {
-        XCTAssertEqual(PinType.allCases.count, 10,
-            "PinType must have exactly 10 cases as specified in §4.1 + §10.1")
+    /// AC-I7 guard: CaseIterable confirms exactly 12 cases — no accidental additions.
+    /// Updated from 10 → 12 for Community 2.0 Phase 1's `.openSpot`/`.leavingSoon` additions
+    /// (spec §2.1) — a real behavior change to this assertion, not a new test.
+    func testPinType_exactlyTwelveCases() {
+        XCTAssertEqual(PinType.allCases.count, 12,
+            "PinType must have exactly 12 cases: the original 10 (§4.1 + §10.1) + " +
+            "Community 2.0 Phase 1's open_spot/leaving_soon")
     }
 }
 
