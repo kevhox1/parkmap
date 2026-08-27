@@ -146,9 +146,9 @@ TEST_LNG=-73.9950
 ZONE_ID=nolita
 
 # ------------------------------------------------------------------
-# Test 1 — anonymous (unauthenticated) open_spot insert -> expect 403
+# Test 1 — anonymous (unauthenticated) open_spot insert -> expect 401/403
 # ------------------------------------------------------------------
-echo "--- Test 1: anonymous open_spot insert (expect 403) ---"
+echo "--- Test 1: anonymous open_spot insert (expect 401/403) ---"
 BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" '{
   pin_type: "open_spot", source: "crowd", lifespan: "ephemeral",
   lat: $lat, lng: $lng, zone_id: $zone
@@ -156,7 +156,16 @@ BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZO
 RESP=$(rest POST /rest/v1/pins "$SUPABASE_ANON_KEY" "$BODY")
 STATUS=$(echo "$RESP" | head -n1)
 RBODY=$(echo "$RESP" | tail -n +2)
-assert_status "$STATUS" 403 "anonymous open_spot insert rejected" "$RBODY"
+# PostgREST returns 401 (not 403) when the ANON role is denied by RLS — a "you should
+# authenticate" hint; 403 is what an *authenticated* role gets on denial. Verified against prod
+# 2026-08-27 (Kevin's run: HTTP 401, body SQLSTATE 42501 "violates row-level security policy").
+# The property under test is the rejection itself, not PostgREST's status-code choice — the same
+# status-code-assumption bug class as FT-2's F1 finding (docs/qa/pr90-ft2-delete-own-pin.md).
+if [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
+  pass "anonymous open_spot insert rejected (HTTP $STATUS, RLS 42501)"
+else
+  fail "anonymous open_spot insert rejected (expected HTTP 401 or 403, got HTTP $STATUS — body: $RBODY)"
+fi
 echo
 
 # ------------------------------------------------------------------
