@@ -34,6 +34,15 @@
 //  — see `Community2Phase1ModelTests.swift` for the net-new `open_spot`/`leaving_soon` TTL
 //  table tests.
 //
+//  Community 2.0 Phase 1 (build 20, session S4 — crew feed UI, §3 Phase 1, §6 appendix):
+//  `MarkerImageSafetyNetTests` gains 4 tests covering the compile-break fix this session makes
+//  (`PinType.displayLabel` gaining `.openSpot`/`.leavingSoon` cases) plus the two types' new
+//  "ring" marker image and age-not-expiry callout subtitle:
+//   14. testDisplayLabel_openSpot_and_leavingSoon
+//   15. testMarkerImage_openSpot_returnsNonNil
+//   16. testMarkerImage_leavingSoon_returnsNonNil
+//   17. testSubtitle_openSpot_and_leavingSoon_showRelativeAge_notExpiry
+//
 
 import XCTest
 import MapKit
@@ -568,6 +577,61 @@ final class MarkerImageSafetyNetTests: XCTestCase {
                 "Fix 3 verification: SF Symbol '\(sym.name)' (for \(sym.pinType)) must resolve " +
                 "on iOS 17+. If nil, the symbol was removed and markerStyle(for:) must be updated.")
         }
+    }
+
+    // MARK: - Community 2.0 Phase 1 (S4): open_spot / leaving_soon ring markers
+
+    /// This PR's own compile-break fix (S3 added `.openSpot`/`.leavingSoon` to `PinType`
+    /// with no corresponding `displayLabel` case, leaving the exhaustive switch broken).
+    func testDisplayLabel_openSpot_and_leavingSoon() {
+        XCTAssertEqual(PinType.openSpot.displayLabel, "Open Spot")
+        XCTAssertEqual(PinType.leavingSoon.displayLabel, "Leaving Soon")
+    }
+
+    /// Spec §6 appendix: `.openSpot`/`.leavingSoon` use a "ring" marker (outline + glyph),
+    /// not the filled-circle + SF Symbol treatment every other type uses — see
+    /// `PinMarkerAnnotation.ringMarkerImage(for:)`. Same non-nil / non-zero-size safety-net
+    /// assertion shape as `testMarkerImage_enforcementActive_returnsNonNil` above.
+    func testMarkerImage_openSpot_returnsNonNil() {
+        let pin = decodeTestPin(pinType: .openSpot)
+        let annotation = CommunityPinAnnotation(pin: pin)
+        let view = PinMarkerAnnotation(annotation: annotation, reuseIdentifier: "open-spot-test")
+        view.configure(for: annotation.pin)
+
+        XCTAssertNotNil(view.image, "open_spot configure must set a non-nil ring-marker image")
+        if let img = view.image {
+            XCTAssertGreaterThan(img.size.width, 0)
+            XCTAssertGreaterThan(img.size.height, 0)
+        }
+    }
+
+    func testMarkerImage_leavingSoon_returnsNonNil() {
+        let pin = decodeTestPin(pinType: .leavingSoon)
+        let annotation = CommunityPinAnnotation(pin: pin)
+        let view = PinMarkerAnnotation(annotation: annotation, reuseIdentifier: "leaving-soon-test")
+        view.configure(for: annotation.pin)
+
+        XCTAssertNotNil(view.image, "leaving_soon configure must set a non-nil ring-marker image")
+        if let img = view.image {
+            XCTAssertGreaterThan(img.size.width, 0)
+            XCTAssertGreaterThan(img.size.height, 0)
+        }
+    }
+
+    /// Spec §0 OQ-2: "every surface that renders these pins MUST show relative age" — the map
+    /// callout subtitle is one such surface, widened alongside enforcement_active/sweeper_passed.
+    func testSubtitle_openSpot_and_leavingSoon_showRelativeAge_notExpiry() {
+        let openSpot = decodeTestPin(pinType: .openSpot)
+        let leavingSoon = decodeTestPin(pinType: .leavingSoon)
+
+        XCTAssertEqual(
+            CommunityPinAnnotation(pin: openSpot).subtitle,
+            PinMarkerAnnotation.timeSinceBadge(pin: openSpot, now: Date())
+        )
+        XCTAssertEqual(
+            CommunityPinAnnotation(pin: leavingSoon).subtitle,
+            PinMarkerAnnotation.timeSinceBadge(pin: leavingSoon, now: Date())
+        )
     }
 }
 

@@ -705,6 +705,17 @@ struct ContentView: View {
     /// their default expressions. The service is initialized in the ContentView init (below).
     @State private var pinService: CommunityPinService
 
+    /// Community 2.0 Phase 1 (S4): zone-chat read path for the crew feed
+    /// (`Views/CrewFeedSection.swift`). Mirrors `pinService`'s own "can't reference a sibling
+    /// stored property in a default expression" constraint — initialized in `init` below,
+    /// sharing the app's one `RealtimeClientV2` via `supabaseClients.makeRealtimeZoneMessageChannel()`
+    /// (same reasoning as `pinService`'s own `makeRealtimePinChannel()` call). Instantiated
+    /// unconditionally (cheap — no network call happens until `setSelectedZone`/`startRealtime`
+    /// are invoked, both gated behind `AppConstants.communityEnabled` at their call sites)
+    /// rather than adding an `Optional` here purely for the flag, matching `pinService`'s own
+    /// precedent of existing dark-shipped since Tier 1.
+    @State private var zoneMessageService: ZoneMessageService
+
     /// Map-marker-only subset of visible community pins (filming + special_event).
     /// `asp_suspended_today` is NOT included here — it drives the ASP banner supplement (spec §4).
     ///
@@ -742,6 +753,10 @@ struct ContentView: View {
         self._pinService = State(initialValue: CommunityPinService(
             authService: authService,
             realtimeChannel: supabaseClients.makeRealtimePinChannel()
+        ))
+        // Community 2.0 Phase 1 (S4) — see `zoneMessageService`'s own doc comment.
+        self._zoneMessageService = State(initialValue: ZoneMessageService(
+            realtimeChannel: supabaseClients.makeRealtimeZoneMessageChannel()
         ))
     }
 
@@ -1347,7 +1362,21 @@ struct ContentView: View {
             onCruiseTapped: { enterCruiseMode() },
             onParkingGuideTapped: { activeSheet = .parkingGuide },
             onPeekHeightChange: { browseSheetPeekHeight = $0 },
-            onMediumHeightChange: { browseSheetMediumHeight = $0 }
+            onMediumHeightChange: { browseSheetMediumHeight = $0 },
+            // Community 2.0 Phase 1 (S4): mounted by BrowseNavigationSheet ONLY at the
+            // `.large` detent (see that file's `crewFeedBuilder` doc comment). The `if` with
+            // no `else` inside this @ViewBuilder closure resolves to `EmptyView` when the
+            // flag is false — byte-identical to every prior build's `.large` content, which
+            // is exactly AC-P1.3's "flag false = zero behavioral or visual change" contract.
+            crewFeed: {
+                if AppConstants.communityEnabled {
+                    CrewFeedSection(
+                        pinService: pinService,
+                        zoneMessageService: zoneMessageService,
+                        authService: authService
+                    )
+                }
+            }
         )
         .presentationDetents(
             [.height(browseSheetPeekHeight), .height(browseSheetMediumHeight), .large],
@@ -2438,11 +2467,23 @@ struct ContentView: View {
     /// Extracted from `.onChange` closure to reduce type-checker expression complexity in
     /// `ContentView.body` — same pattern as the other `handle*` methods (PR-1 lesson).
     private func handleVisiblePinsChange(_ newPins: [CommunityPin]) {
-        // Map markers: Tier 1 display types + Tier 3 ephemeral crowd pins (sub-PR #2).
+        // Map markers: Tier 1 display types + Tier 3 ephemeral crowd pins (sub-PR #2) +
+        // Community 2.0 Phase 1 (S4) crowd pins.
         // filming + special_event: Tier 1 open-data markers (AC-D8).
         // enforcement_active + sweeper_passed: Tier 3 crowd ephemeral markers (spec §2.1).
+        // open_spot + leaving_soon: Community 2.0 Phase 1 (spec §2.1/§6) — this allow-list is
+        // a SEPARATE gate from `RealtimeMergeGate.mergeablePinTypes` (S3 already widened that
+        // one). Without adding the two new types HERE too, S3's Realtime/fetch-layer work and
+        // this session's `PinMarkerAnnotation` ring-marker rendering would both be reachable
+        // but never actually exercised — `visiblePins` would still be filtered down to the
+        // pre-Phase-1 four types before `communityPins` (and therefore any `MKAnnotation`)
+        // ever sees them. Behind `AppConstants.communityEnabled` this is a no-op today: the
+        // only way an `open_spot`/`leaving_soon` row reaches `visiblePins` at all is via the
+        // (currently dark-shipped) write path, and no UI in this build inserts one yet.
         // asp_suspended_today drives the banner supplement below, not a map marker.
-        let mapMarkerTypes: Set<PinType> = [.filming, .specialEvent, .enforcementActive, .sweeperPassed]
+        let mapMarkerTypes: Set<PinType> = [
+            .filming, .specialEvent, .enforcementActive, .sweeperPassed, .openSpot, .leavingSoon,
+        ]
         communityPins = newPins.filter { mapMarkerTypes.contains($0.pinType) }
 
         // ASP banner supplement (spec §4.2 / AC-D9a through AC-D9d).
@@ -2702,6 +2743,13 @@ struct ContentView: View {
         // public.pins (spec §5.1). Stays connected through Drive Mode (spec §7).
         pinService.startRealtime()
 
+        // Community 2.0 Phase 1 (S4): mirrors pinService's own Realtime lifecycle, gated
+        // behind the dark-ship flag so this is a genuine no-op (no socket opened) while
+        // AppConstants.communityEnabled == false.
+        if AppConstants.communityEnabled {
+            zoneMessageService.startRealtime()
+        }
+
         tileLoader.loadTiles(forRegion: region)
         lastEvaluatedAt = .now
         rebuildOverlays(at: lastEvaluatedAt)
@@ -2765,6 +2813,9 @@ struct ContentView: View {
             // background-execution entitlement anyway; disconnecting explicitly avoids the
             // Realtime socket dying in an ambiguous half-open state.
             pinService.disconnectRealtime()
+            if AppConstants.communityEnabled {
+                zoneMessageService.disconnectRealtime()
+            }
             return
         }
         guard newPhase == .active else { return }
@@ -2788,6 +2839,10 @@ struct ContentView: View {
         // reconnect for whatever changed on public.pins while backgrounded).
         pinService.reconnectRealtime()
         Task { await pinService.refetchCurrentRegion() }
+        // Community 2.0 Phase 1 (S4): same reconnect treatment, same flag gate as launch.
+        if AppConstants.communityEnabled {
+            zoneMessageService.reconnectRealtime()
+        }
         // Badge fix: the icon badge means "a reminder is waiting" (NotificationScheduler
         // sets content.badge = 1 on every scheduled ASP reminder). Once the user opens the
         // app they've seen whatever fired, so clear it here — standard behavior, what every

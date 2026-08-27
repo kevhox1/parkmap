@@ -374,6 +374,17 @@ enum BrowseSheetDetentMath {
 /// the `.presentationDetents` array). Tracking "which kind" instead of "which value" avoids
 /// that class of bug entirely.
 enum BrowseSheetDetentKind: Equatable {
+    // Community 2.0 Phase 1 (S4, `docs/community-2.0-reconciliation-spec.md` §1 delta table,
+    // §3 Phase 1): `.large` is this ladder's pre-existing THIRD rung — it was already a live,
+    // reachable member of `.browseNav`'s `.presentationDetents` array before this session (see
+    // `ContentView.browseNavigationSheetContent`), used today only to give
+    // `BrowseSearchAreaView`'s recents/suggestions/error-banner content room to render at full
+    // height. The spec calls for a "third, taller state" for the crew feed — mapping that onto
+    // this ALREADY-EXISTING `.large` case (rather than inventing a fourth detent height) is
+    // this session's explicit, minimal-diff choice for the highest-regression-risk file in the
+    // spec: zero new detent math, zero new classification logic, zero new
+    // `.presentationDetents` array entry. See `BrowseNavigationSheet.body`'s `crewFeed` slot
+    // doc comment for where the new content actually mounts.
     case peek, medium, large
 
     /// FT-20 Stream C, PR #87 round 4: whether `BrowseNavigationSheet`'s medium-detent
@@ -489,7 +500,18 @@ func browseSheetDetentSelectionBinding(
 ///     `actionColumn` is mounted at all (`BrowseSheetDetentKind.showsActionContent`) — see
 ///     `body`'s own doc comment for why this is a conditional-rendering gate, not a
 ///     `.presentationDetents` height problem.
-struct BrowseNavigationSheet<SearchArea: View>: View {
+///   - `crewFeed`: Community 2.0 Phase 1 (S4) — a `@ViewBuilder` slot mounted ONLY when
+///     `detentKind == .large` (see `body`'s `crewFeed()` call site). Defaults to `{ EmptyView() }`
+///     so every pre-existing call site (and any future one that doesn't care about the crew
+///     feed) compiles unchanged — `CrewFeed` infers to `EmptyView` when the parameter is
+///     omitted. `ContentView` passes `{ if AppConstants.communityEnabled { CrewFeedSection(...) } }`
+///     — an `if` with no `else` inside a `@ViewBuilder` evaluates to `EmptyView` when the
+///     condition is false, which is BYTE-IDENTICAL to omitting the parameter entirely. This is
+///     the mechanism behind AC-P1.3/AC-P1.5's "flag false = zero behavioral or visual change"
+///     requirement: nothing about `.peek`/`.medium` changes at all (this slot only exists
+///     inside the `detentKind == .large` branch), and even at `.large` with the flag off, the
+///     tree contains an `EmptyView` exactly as it did before this session.
+struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
 
     // MARK: Public interface
     //
@@ -521,13 +543,22 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     let onPeekHeightChange: (CGFloat) -> Void
     let onMediumHeightChange: (CGFloat) -> Void
 
+    /// Community 2.0 Phase 1 (S4) — see this struct's own doc comment for the full
+    /// "why `.large`, why a builder, why the default" reasoning. Built (not stored
+    /// pre-built) for the same `self`-liveness reason `searchAreaBuilder` is a builder —
+    /// though unlike `searchArea` this closure takes no parameters, since the crew feed
+    /// doesn't participate in this file's height-measurement plumbing (`.large` is a system
+    /// detent with a fixed, container-derived height; nothing here needs to measure it).
+    let crewFeedBuilder: () -> CrewFeed
+
     init(
         @ViewBuilder searchArea: @escaping (@escaping (CGFloat) -> Void) -> SearchArea,
         detentKind: BrowseSheetDetentKind,
         onCruiseTapped: @escaping () -> Void,
         onParkingGuideTapped: @escaping () -> Void,
         onPeekHeightChange: @escaping (CGFloat) -> Void,
-        onMediumHeightChange: @escaping (CGFloat) -> Void
+        onMediumHeightChange: @escaping (CGFloat) -> Void,
+        @ViewBuilder crewFeed: @escaping () -> CrewFeed = { EmptyView() }
     ) {
         self.searchAreaBuilder = searchArea
         self.detentKind = detentKind
@@ -535,6 +566,7 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         self.onParkingGuideTapped = onParkingGuideTapped
         self.onPeekHeightChange = onPeekHeightChange
         self.onMediumHeightChange = onMediumHeightChange
+        self.crewFeedBuilder = crewFeed
     }
 
     // MARK: Measured content heights
@@ -640,6 +672,35 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
 
                 actionColumn
                     .frame(height: actionColumnHeight)
+            }
+
+            // Community 2.0 Phase 1 (S4): the crew feed mounts ONLY at `.large` — this is the
+            // "third, taller state" the spec calls for (§3 Phase 1), layered onto the
+            // pre-existing `.large` rung rather than a new detent height (see
+            // `BrowseSheetDetentKind`'s own doc comment). Deliberately a SEPARATE `if` from
+            // `showsActionContent` above (even though `.large` implies `showsActionContent ==
+            // true`) so the condition reads as "only at large," not "only when action content
+            // shows" — the two happen to overlap today but mean different things.
+            //
+            // `.frame(maxHeight: .infinity)` makes this the one FLEXIBLE child in this
+            // `VStack(spacing: 0)` — every sibling above it (`searchArea`'s `.frame(minHeight:)`
+            // floor aside, `actionColumn`'s hard `.frame(height:)`) is effectively fixed-size,
+            // so this claims whatever vertical space the `.large`-sized sheet has left over,
+            // the same role a trailing `Spacer()` would play if this slot had no real content.
+            // `CrewFeedSection` (or whatever `crewFeed` builds) owns its own internal
+            // scrolling — this container makes no assumption about how tall that content is.
+            //
+            // Known interaction, not a regression (flagged for whoever flips
+            // `AppConstants.communityEnabled` on): `BrowseSearchAreaView`'s own recents/
+            // suggestions/error-banner content ALSO expands at `.large` (pre-existing, this
+            // session doesn't touch it) and lives inside `searchArea` above, which has no hard
+            // frame of its own. If both are on-screen at once, `searchArea`'s content and this
+            // crew feed slot compete for the same `.large` sheet's remaining height, same as
+            // any two flexible siblings would. Nothing here makes that WORSE than today's
+            // pre-existing search-only behavior; it's a new co-occurrence, not a new bug class.
+            if detentKind == .large {
+                crewFeedBuilder()
+                    .frame(maxHeight: .infinity)
             }
         }
         // Re-report on every measured change (initial layout, Dynamic Type change, device
