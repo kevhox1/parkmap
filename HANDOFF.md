@@ -201,6 +201,14 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-27 (later) — 🚢 BUILD 1.0 (19) SHIPPED TO EXTERNAL TESTFLIGHT.
+
+iCloud parked-car sync + FT-2 delete-own-pin, distributed to internal + the external public link
+(Kevin confirmed push to external same day). `CURRENT_PROJECT_VERSION` = 19 (`089f9768`).
+What-to-Test copy names the two carry-over known issues (FT-21 wide streets, gray no-data blocks)
+plus the signed-out-of-iCloud caveat. Cross-device iCloud verification still calendar-blocked —
+deliberately NOT in the tester copy (unverified path). Build 18 remains the fallback known-good.
+
 ### 2026-08-27 — ✅ #91 MERGED (`842200c6`). Build 19 iOS scope complete. Phase 1 (S3) dispatched.
 
 **PR #91 (iCloud parked-car sync) squash-merged** after all three gates cleared: combined-suite
