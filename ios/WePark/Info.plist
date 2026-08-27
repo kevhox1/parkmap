@@ -8,15 +8,9 @@
 	<string>$(SUPABASE_ANON_KEY)</string>
 	<key>SUPABASE_URL</key>
 	<string>$(SUPABASE_URL)</string>
-	<!-- FT-20 (2026-08-19): app defaults to dark mode, always, regardless of the device's
-	     system appearance setting. This is the authoritative, whole-app switch — unlike
-	     SwiftUI's `.preferredColorScheme(.dark)` (also set, in WeParkApp.swift, as
-	     defense-in-depth), this Info.plist key covers system-presented UIKit chrome that
-	     SwiftUI's environment modifier does not reliably reach: UIActivityViewController
-	     (share sheets), system alerts, the keyboard, etc. No in-app theme toggle exists;
-	     Kevin approved "always dark" with a system-following/toggleable variant flagged
-	     as a possible small follow-up (docs/field-testing-log.md FT-20). -->
-	<key>UIUserInterfaceStyle</key>
-	<string>Dark</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 </dict>
 </plist>
