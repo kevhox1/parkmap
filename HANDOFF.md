@@ -201,6 +201,23 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-27 — ✅ #91 MERGED (`842200c6`). Build 19 iOS scope complete. Phase 1 (S3) dispatched.
+
+**PR #91 (iCloud parked-car sync) squash-merged** after all three gates cleared: combined-suite
+rerun on Kevin's Mac post-FT-2-merge ("TEST SUCCEEDED"; exact executed count not captured — QA's
+blocking concern was "the combined suite has never compiled/run once," now satisfied), Kevin's
+"yes to all three" on spec OQ-1/2/3 (recorded in `docs/icloud-parked-car-sync-spec.md` §6), and the
+solo device smoke (park → delete → reinstall → restore) PASSED with the iCloud capability verified
+in both build configs. ⚠️ **The squash-commit title retains a stale `[COMPILE-UNVERIFIED]` tag** —
+a gh title edit was swallowed by a GraphQL error mid-merge. The code IS compile-verified and QA'd
+(`docs/qa/pr91-icloud-parked-car-sync.md`); this doc governs, don't re-derive doubt from the tag.
+
+**Build 19 remaining steps, both Kevin's:** (1) archive ceremony when he chooses to ship —
+`CURRENT_PROJECT_VERSION` is still 18, bump to 19 on the Mac; (2) cross-device iCloud verification
+stays calendar-blocked (second phone, back-in-NYC).
+
+**S3 dispatched:** Phase 1 model + service layer (`ios/community-phase1` branch), per roadmap.
+
 ### 2026-08-26 — 🚀 COMMUNITY 2.0 (BUILD 20) STARTED. Design handoff landed; Phase 0 schema merged; #91 one rerun from merge.
 
 **The hero design became the active workstream.** Kevin's Claude-design prototype landed at `design/`
