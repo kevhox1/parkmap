@@ -511,6 +511,10 @@ way, stated plainly rather than implied as covered by the above:**
 
 (Restated from §0 with full context, plus one more found while writing this section.)
 
+> **✅ CONFIRMED by Kevin 2026-08-27 — "yes to all three" (OQ-1/2/3, as recommended below).**
+> Recorded here because QA (docs/qa/pr91-icloud-parked-car-sync.md) flagged the missing paper trail
+> as merge-gating. The code already implemented these recommendations; this note closes the gap.
+
 - **OQ-1 (§0.1):** Use envelope-level `updatedAt` (bumped on every write) as the merge comparator,
   rather than raw `ParkedCar.parkedAt`. Recommendation: yes — it's a strict refinement of the ruling
   that also fixes toggle-edit propagation, not a reversal of it.
