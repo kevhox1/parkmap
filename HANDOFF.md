@@ -201,6 +201,23 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-27 (latest) — ✅ BOTH DOABLE BUILD-20 GATES CLOSED. Only the drive test remains.
+
+**Gate 1 — Phase 0 schema LIVE IN PRODUCTION.** Kevin applied `03-community-2.0-schema.sql`
+(two-step paste) and ran the test script: 14/15, the sole "fail" being a script bug (403 asserted
+where PostgREST returns 401 for anon-role RLS denial — rejection itself confirmed via 42501; fixed
+`7d3a1e1c`). Server-derived expiry ignored tampered client payloads with delta 0s.
+
+**Gate 2 — APNs one-time setup DONE.** Key `CMG824J6L3` (Team `ZAA4UCS6CH`, Sandbox+Production);
+`.p8` on Kevin's Mac outside the repo, loaded into Edge Function secrets at S11. Entitlement commit
+`b509eaa8`: `aps-environment=development` + `UIBackgroundModes=[remote-notification]`.
+⚠️ Side effect, verified harmless: Xcode migrated FT-20's `UIUserInterfaceStyle=Dark` from raw
+Info.plist to `INFOPLIST_KEY_UIUserInterfaceStyle=Dark` in BOTH build configs — same generated
+plist, behavior identical; only the explanatory comment was lost (rationale lives in
+`field-testing-log.md` FT-20). Do not "restore" the raw key — it would then exist twice.
+
+**Remaining gate on the whole build-20 roadmap: the drive test** (flag flip only) — NYC-blocked.
+
 ### 2026-08-27 (later) — 🚢 BUILD 1.0 (19) SHIPPED TO EXTERNAL TESTFLIGHT.
 
 iCloud parked-car sync + FT-2 delete-own-pin, distributed to internal + the external public link
