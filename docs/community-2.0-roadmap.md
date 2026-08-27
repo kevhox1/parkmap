@@ -35,7 +35,7 @@ explicitly below.
 | S8 | **Phase 2b QA → merge** | Includes AC-P2.1 two-device check: **Mac simulator + Kevin's phone** — does NOT need the second phone or NYC | Mac: sim + phone side-by-side (~30 min) |
 | S9 | **Phase 3 → merge** | `ReactionsRow` extension, profile row (div-by-zero guard), leaderboard v1 (live query), QA same session | Mac: test run |
 | S10 | **Phase 4a → merge** | Leaving-soon picker + claim button in `ParkedCarDetailView` (only file colliding with #91 — safely post-merge by now) | Mac: test run + sim smoke |
-| S11 | **Phase 4b backend** | `send-community-push` Edge Function + `pg_net` trigger + token-table wiring | One-time APNs setup: `.p8` key in ASC + `aps-environment` entitlement (flagged NOW to avoid a repeat of the iCloud-capability silent gap) |
+| S11 | **Phase 4b backend** | `send-community-push` Edge Function + `pg_net` trigger + token-table wiring | ✅ **APNs key created 2026-08-27:** Key ID `CMG824J6L3`, Team ID `ZAA4UCS6CH`, Sandbox + Production. The `.p8` lives on Kevin's Mac OUTSIDE the repo — S11 loads it into Supabase Edge Function secrets, never commits it. Entitlement: see the S11-prep commit on main (Push Notifications + remote-notifications background mode) |
 | S12 | **Phase 4b iOS → merge** | APNs registration, zone-scoped token upload, silent-push → on-device relevance gate → local notification | Physical phone + SQL insert verifies AC-P4.3 — works outside NYC |
 | S13 | **Hero-parity pass** | @designer screenshot-by-screenshot audit vs `design/screenshots/`, copy verbatim-check, empty/dark states; fix list worked; final QA | Mac: final smoke |
 
