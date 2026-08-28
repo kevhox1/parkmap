@@ -201,6 +201,21 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-28 — ✅ PHASE 1 MERGED (`8b812041`, PR #94). The community read layer is on main, dark.
+
+Crew feed + zone chips + new-type markers + `ZoneMessageService`, all behind
+`communityEnabled = false`. Two QA passes (pass 1: ungated marker path + List-greedy layout redux,
+both fixed and re-verified cold), two Mac compile rounds (blind-built branch; a Set-literal
+type-inference error and three arg-order drifts, fixed same-hour from the VPS), then Kevin's full
+gate: **982/982 tests** (exact static match) and a complete live smoke — flag-off pixel parity with
+build 19 AND a live prod `open_spot` row correctly invisible; flag-on feed/chips/zone-fallback/empty
+states all correct; **realtime insert visible in ≤2s, delete propagation near-instant** — the first
+live proof of the realtime pipeline for community surfaces. ⚠️ Squash title again carries a stale
+`[COMPILE-UNVERIFIED]` tag (gh retitle race, same as #91) — the code is compile-verified and QA'd;
+this doc governs. 📌 Carried note: hand-inserted test pins render at raw lat/lng (mid-block);
+re-check placement once Phase 2b's curb-snap exists. S6 (Phase 2a: confirm-the-street + closure
+tile + server-side zone stamping) dispatched.
+
 ### 2026-08-27 (latest) — ✅ BOTH DOABLE BUILD-20 GATES CLOSED. Only the drive test remains.
 
 **Gate 1 — Phase 0 schema LIVE IN PRODUCTION.** Kevin applied `03-community-2.0-schema.sql`
