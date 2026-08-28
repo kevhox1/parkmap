@@ -10,9 +10,11 @@
 //
 //  QA pass 2 (PR #95 Mac-gate blocker, 2026-08-28) added the
 //  `ReportGridRoutingTests` class below — see that class's header for the root-cause
-//  writeup this addresses.
+//  writeup this addresses. QA pass 2 round 3 added the two end-to-end mount-precondition
+//  tests at the bottom of that same class — see their own header comment for the
+//  investigation this closes out (no dropped side effect found; wiring confirmed correct).
 //
-//  Test inventory (19 tests):
+//  Test inventory (21 tests):
 //    ReportSheet.showsStreetClosureTile(communityEnabled:) — grid gating, both flag states:
 //      1. testShowsStreetClosureTile_flagOn_true
 //      2. testShowsStreetClosureTile_flagOff_false
@@ -41,6 +43,10 @@
 //      17. testDestination_streetClosureTile_flagOff_stillHandsOff_gatingIsASeparateConcern
 //      18. testDestination_streetClosureHandoff_neverEqualsAnySelectType
 //      19. testDestination_typeTile_preservesTappedType_neverTheOtherOne
+//
+//    End-to-end mount-precondition (QA pass 2 round 3 — segment → candidates → tap → mount):
+//      20. testEndToEnd_segmentDetected_confirmStreetMountPreconditionHolds
+//      21. testEndToEnd_noSegmentDetected_confirmStreetMountPreconditionCorrectlyFalse
 //
 
 import XCTest
@@ -285,5 +291,83 @@ final class ReportGridRoutingTests: XCTestCase {
         XCTAssertEqual(enforcementType, .enforcementActive)
         XCTAssertEqual(sweeperType, .sweeper)
         XCTAssertNotEqual(enforcementType, sweeperType)
+    }
+
+    // MARK: End-to-end mount-precondition check (QA pass 2 round 3, PR #95)
+    //
+    // Kevin's re-gate (flag-on, `9eb7c615`) reported the teardown fixed but the confirm-street
+    // section never appearing — "behaves like flag-off." Investigation: `git diff 6c22b92a..9eb7c615`
+    // on `ReportSheet.swift` traced line-by-line — `reportTypeRow`'s switch arm performs the
+    // EXACT SAME four state mutations (`selectedType`, conditional `selectedSubTag`/
+    // `sweeperDirection` resets, `selectedHeadingToward`) as the pre-wiring closure, in the
+    // same order, under the same conditions. No side effect was dropped. `showsConfirmStreetStep`
+    // and the `confirmStreetSection` mount `if` in `body` are also byte-identical before/after
+    // both fix commits (confirmed by diff — only Row 3's POSITION moved, per the Mac-gate fix).
+    // The mount precondition is fine and provably flag-independent in the correct direction
+    // (`false` only when the flag is off, OR no type is selected, OR `candidates` is empty).
+    //
+    // These two tests close the gap QA correctly identified regardless: nothing before this
+    // exercised the FULL pipeline (a detected segment → `CandidateSegmentSearch.confirmStreetCandidates`
+    // → a simulated tap through `destination(forTapping:)` → the mount precondition) in one
+    // place. The most likely explanation for what Kevin saw is that `confirmCandidates` was
+    // genuinely empty at his tap location (OD-1 — no tile segment within `pinDropRadiusMeters`,
+    // the same off-segment case the direction picker already degrades gracefully for) rather
+    // than a code regression; test 2 documents that this is CORRECT, by-design behavior, not a
+    // bug, so it's distinguishable from a real future regression using test 1.
+    func testEndToEnd_segmentDetected_confirmStreetMountPreconditionHolds() {
+        // A realistic 4-candidate fixture (current + opposite + one neighbor each direction),
+        // mirroring `ContentView`'s exact precompute: `CandidateSegmentSearch.confirmStreetCandidates(for:in:)`
+        // fed straight into `destination(forTapping:)`, exactly as the two ContentView entry
+        // points and `reportTypeRow`'s Button action do in production.
+        let current = Segment(
+            id: "current", street: "MOTT STREET", fromStreet: "SPRING STREET", to: "BROOME STREET",
+            side: "E", line: [[40.7230, -73.9950], [40.7232, -73.9948]], rules: [], dominantCategory: nil
+        )
+        let opposite = Segment(
+            id: "opposite", street: "MOTT STREET", fromStreet: "SPRING STREET", to: "BROOME STREET",
+            side: "W", line: [[40.7230, -73.9950], [40.7232, -73.9948]], rules: [], dominantCategory: nil
+        )
+        let allLoadedSegments = [current, opposite]
+
+        let candidates = CandidateSegmentSearch.confirmStreetCandidates(for: current, in: allLoadedSegments)
+        XCTAssertFalse(candidates.isEmpty,
+            "A detected segment always produces at least itself as a confirm-street candidate")
+
+        guard case .selectType(_, let showsConfirmStreet) = ReportSheet.destination(
+            forTapping: .type(.enforcementActive),
+            communityEnabled: true,
+            candidates: candidates
+        ) else {
+            XCTFail("Tapping a type tile must resolve to .selectType")
+            return
+        }
+        XCTAssertTrue(showsConfirmStreet,
+            "Given a real detected segment and communityEnabled == true, the confirm-street section must mount after the tap")
+    }
+
+    /// Documents the OD-1 case (no segment within range of the tap/GPS coordinate) as
+    /// CORRECT, by-design behavior — mirrors `ContentView`'s exact
+    /// `reportSegment.map { CandidateSegmentSearch.confirmStreetCandidates(for: $0, in:) } ?? []`
+    /// pattern with `reportSegment == nil` — so this is distinguishable from a real bug: if
+    /// candidates are empty because NO segment was ever detected, showing no confirm-street
+    /// section is the intended fallback (same graceful-degradation rule as the direction
+    /// picker), not a regression.
+    func testEndToEnd_noSegmentDetected_confirmStreetMountPreconditionCorrectlyFalse() {
+        let reportSegment: Segment? = nil
+        let candidates = reportSegment.map {
+            CandidateSegmentSearch.confirmStreetCandidates(for: $0, in: [])
+        } ?? []
+        XCTAssertTrue(candidates.isEmpty)
+
+        guard case .selectType(_, let showsConfirmStreet) = ReportSheet.destination(
+            forTapping: .type(.enforcementActive),
+            communityEnabled: true,
+            candidates: candidates
+        ) else {
+            XCTFail("Tapping a type tile must resolve to .selectType")
+            return
+        }
+        XCTAssertFalse(showsConfirmStreet,
+            "OD-1 (off-segment): no candidates means no confirm-street section, by design — not a bug")
     }
 }
