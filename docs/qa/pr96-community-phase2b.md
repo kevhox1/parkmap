@@ -8,12 +8,14 @@
 12-identity-sheet.png`. Historical context cross-referenced: `docs/qa/pr95-community-phase2a.md`
 (the shift-under-finger bug class and the `destination(forTapping:)` routing model).
 
-**Verdict: MERGE-AFTER-MAC-GATE.** No blockers found in a cold code read. Two Significant
-findings, both plausible-but-unverifiable-from-a-code-read-alone and both masked/non-fatal in
-the shipped code paths — one needs a live check against the *real* Supabase schema (can't be
-proven or disproven from static analysis), the other needs a live-sim smoke of a specific
-interaction this codebase has a documented history with. Neither blocks starting the Mac gate;
-both must be resolved (or explicitly waved off by Kevin) before the flag ever flips externally.
+**Verdict (Pass 1, superseded by Pass 2 below): MERGE-AFTER-MAC-GATE.** No blockers found in a
+cold code read. Two Significant findings, both plausible-but-unverifiable-from-a-code-read-alone
+and both masked/non-fatal in the shipped code paths — one needs a live check against the *real*
+Supabase schema (can't be proven or disproven from static analysis), the other needs a live-sim
+smoke of a specific interaction this codebase has a documented history with. Neither blocks
+starting the Mac gate; both must be resolved (or explicitly waved off by Kevin) before the flag
+ever flips externally. **See Pass 2 below — both findings were fixed at `ea0a4b46` and
+independently re-verified; that section carries the operative verdict.**
 
 ## Summary
 
@@ -96,10 +98,12 @@ settle, not further code reading.
       true for the common path but the disclosed edge case (explicitly-cleared handle) fails
       harder against the real schema than the PR body's framing suggests — not a common-path
       failure, but see Finding #1. Not a checklist fail for AC-P2.2 itself (identity sheet
-      show-once gate is correct); flagging under its own finding.
+      show-once gate is correct); flagging under its own finding. **Resolved in Pass 2 — see
+      below.**
 - [ ] Two-device AC-P2.1 and the live overlay-render / toolbar-intact mount-chain check — **not
       verified in this environment** (Linux sandbox, no Xcode/simulator). Required at Kevin's
-      Mac gate; see below.
+      Mac gate; see below. **Still outstanding after Pass 2 — unchanged, still needs the Mac
+      gate.**
 
 ## Findings
 
@@ -112,7 +116,7 @@ None.
 - **#1: `upsertProfile(username: nil, ...)` will hit a real Postgres `NOT NULL` violation on
   the live schema, not just on a user's very-first profile write — the PR's own disclosure
   undersells the mechanism, and the test suite can't catch it because the mock always returns
-  200.**
+  200.** — **FIXED at `ea0a4b46`, verified in Pass 2 below.**
   - Where: `Services/CommunityPinService.swift`, `upsertProfile(username:avatar:)` — `if let
     username { payload["username"] = username }` (username omitted from the JSON body when
     `nil`, not sent as literal `null`); `supabase/01-mvp-schema.sql:10` —
@@ -162,7 +166,7 @@ None.
 - **#2: A second, independent `.sheet(isPresented:)` is now chained directly onto
   `ContentView`'s own top-level view for the spot-placement identity gate — the same *class*
   of pattern this codebase specifically collapsed away from in W5.1, even though the state
-  machine traces clean.**
+  machine traces clean.** — **FIXED at `ea0a4b46`, verified in Pass 2 below.**
   - Where: `ContentView.swift` — `body` is `mapLayerWithEvents.onReceive(...).onReceive(...)
     .onChange(...).sheet(item: $activeSheet, onDismiss: {...}) {...}`; `mapLayerWithEvents`
     (a separate computed `private var`) itself internally chains
@@ -203,7 +207,8 @@ None.
   and contains 10.** Same class of doc-drift as PR #95's Finding #5 (a stale/miscounted test
   inventory comment). Cosmetic; the actual count (verified via `grep -c "func test"` = 10,
   matching the numbered list 1–10 in the same comment block) is correct and consistent with
-  the PR's own 41-test total claim. Owner: `@ios-engineer`, comment fix only.
+  the PR's own 41-test total claim. Owner: `@ios-engineer`, comment fix only. **Fixed at
+  `ea0a4b46` — see Pass 2.**
 
 - **#4: Identity sheet's pre-filled handle is a generic `"Neighbor" + 4 random digits"` rather
   than the prototype's context-aware, street-derived suggestion ("MottStRegular",
@@ -214,7 +219,7 @@ None.
   there's a visible gap between a screenshot's literal content and the shipped default-value
   algorithm, even when (as here) the gap is cosmetic and doesn't affect any acceptance
   criterion. Owner: `@ios-engineer`, only if Kevin wants literal prototype-handle-generation
-  parity — not required.
+  parity — not required. **Addressed at `ea0a4b46` — see Pass 2.**
 
 ### 💡 Out of scope (logged, not fixed)
 
@@ -228,7 +233,7 @@ None.
   risk today since no call site in this PR passes a `leavingMinutes` value, and the
   5/10/15/20 `CHECK` constraint isn't exercised by anything yet.
 
-## Smoke tests run
+## Smoke tests run (Pass 1)
 
 No `xcodebuild`/`xcrun simctl` available in this environment (Linux VPS, confirmed —
 `which xcodebuild xcrun` returns nothing). All verification below is a cold, adversarial code
@@ -272,54 +277,7 @@ Specifically verified by direct comparison (not trusted from the PR body):
   merged into `communityPinAnnotations` (the real pin set) — no leak, confirmed by reading
   both sync functions side by side.
 
-## What Kevin's Mac gate must cover
-
-1. **`xcodebuild build` + `xcodebuild test`, full suite, confirm 1064/1064.** First real
-   compile of this diff — nothing here looks type-unsound, but this is genuinely
-   COMPILE-UNVERIFIED and hasn't touched a real toolchain.
-2. **Full mount-chain live-UI smoke (mandatory per the QA charter — this PR touches
-   `MapViewRepresentable.swift` + `ContentView.swift` overlay-attachment code):**
-   - Launch on sim (UDID `F0820726-15F4-4FA3-8602-A5D7B479A277`), screenshot at rest —
-     confirm toolbar (gear/find-me/find-car/clock/Drive buttons), ASP banner, and Park Until
-     pill all still render (the #31-class regression check). Flag can be off for this step.
-   - Flip `communityEnabled = true` locally, open the report grid, confirm all 4 tiles render
-     in a fixed 2×2 layout matching `08-report-grid.png` and that tapping "Enforcement
-     active"/"Sweeper passed" doesn't shift "Spot open"/"Street closure" out from under a
-     following tap (re-run of PR #95's exact reported repro class, now against the grid).
-3. **Targeted smoke for Finding #2**: flag on, first-ever-install state (identity gate not yet
-   shown), open report grid → "Spot open" → tap a curb → "Post it" → confirm the identity sheet
-   presents cleanly (no console warning about multiple sheets, no visible flash/overlap), Save
-   or Skip resolves it, and the spot-open pin posts + placement mode exits back to
-   `.browseNav`. Then repeat via the *report-submit* path (Enforcement active → Report →
-   identity sheet) to confirm both call sites behave identically. Try a swipe-to-dismiss on the
-   identity sheet mid-flow too — confirm the underlying report is correctly NOT posted (no
-   silent double-behavior), matching the code's intended "swipe = cancel" semantics.
-4. **AC-P2.1 two-device check (Mac simulator + Kevin's phone, no NYC/second-phone needed):**
-   post each of the 4 report types from one device, confirm all 4 (including `open_spot` with
-   its snapped, non-midpoint position) appear correctly positioned on the other within ~2s via
-   Realtime.
-5. **Placement-accuracy check (roadmap S5's carried-over note):** with real, non-synthetic tile
-   data loaded, tap a curb at a few different points along a blockface (near each end + near
-   the middle) and visually confirm the draft pin (and the eventually-posted pin) lands on the
-   actual tapped curb position — not a segment midpoint, and not visibly off the polyline. S5's
-   note flagged that a prior hand-inserted test pin rendered mid-block using raw un-snapped
-   lat/lng; this is the first real exercise of the curb-snap flow this note was waiting on.
-6. **Finding #1 (schema NOT NULL) — verify directly against the live Supabase project**, not
-   just accept the code-level analysis: from the identity sheet, clear the pre-filled handle
-   entirely, pick an avatar, tap "Join the board & post." Expect either (a) the avatar visibly
-   fails to save (confirming the finding, fix needed) or (b) Kevin/`@backend-data` already
-   added a schema default and it succeeds silently (finding closed, no code change needed). If
-   (a), decide client-fallback vs. schema-default per Finding #1's recommendation before this
-   ships externally.
-7. **Flag-off manual pass**: with `communityEnabled = false` (shipped default), confirm the
-   report list still shows exactly the pre-Community-2.0 2-type list (no grid, no "Spot open"/
-   "Street closure" tiles) and the enforcement/sweeper submit flow is pixel-identical to
-   pre-this-PR `main`.
-
-No physical NYC drive-test needed for any of the above — everything is Simulator- or
-phone-in-hand testable, consistent with the roadmap's S8 row.
-
-## What's working
+## What's working (Pass 1)
 
 - The single biggest thing this PR gets right that PR #95 didn't: `destination(forTapping:)`
   is now a live routing authority for the grid, not just documentation-as-tests. That was PR
@@ -348,3 +306,250 @@ phone-in-hand testable, consistent with the roadmap's S8 row.
   discovery, the sheet-vs-ActiveSheet tradeoff) are honest about the actual tradeoffs made —
   even where I disagree with the framing of the NOT NULL fix's severity (Finding #1), the
   underlying fact pattern was surfaced, not hidden.
+
+---
+
+# QA Pass 2 — 2026-08-28 (Fix verification)
+
+**Reviewed:** `7369d265` (Pass 1) → `ea0a4b46` (the fix commit). Diff reviewed:
+`git diff 7369d265..ea0a4b46` — 6 files, +280/-83. Cold re-read; this session did not write
+the fix.
+
+**Verdict: MERGE-AFTER-MAC-GATE.** Both Pass 1 Significant findings are correctly and
+verifiably fixed — not by narrowing the symptom, but by closing the underlying bug class at
+the type level (Finding #1) and by routing through the codebase's own established
+single-sheet architecture (Finding #2). Both nits addressed. One new, narrow, pre-existing-
+class observation surfaced during the re-trace (a `.identityPrompt` vs. async-Combine-event
+collision) — not a defect introduced by this fix, self-heals safely via the same
+swipe-to-dismiss catch-all the fix itself added, not blocking. No blockers. This is now ready
+for Kevin's Mac gate — the complete gate checklist is restated at the bottom of this section.
+
+## 1. Finding #1 (`upsertProfile` NOT NULL) — verified fixed
+
+- **`upsertProfile(username: String, avatar: String?)` — `username` is non-optional.**
+  Verified in `Services/CommunityPinService.swift`: the payload is now built as
+  `["id": userId.uuidString, "username": username]` unconditionally (no `if let` around
+  `username` anymore) — there is no code path left in this function that can construct a
+  payload missing the `username` key or holding an empty one, because the type system no
+  longer accepts `nil`.
+- **Every caller compiles through `resolvedUsername(rawHandle:)`.** Grepped all
+  `IdentitySheet(` instantiation sites — exactly two (`ContentView.swift:1447`,
+  `ReportSheet.swift:553`) — and both only *define* the `onSave`/`onSkip` closures; the
+  actual username resolution happens *inside* `IdentitySheet.swift`'s own `Button` action
+  (`onSave(IdentitySheet.resolvedUsername(rawHandle: handle), selectedAvatar)`), so there is
+  no way for a caller to bypass the resolution and hand a raw, possibly-empty string to
+  `onSave`. `resolvedUsername` itself: `trimmed.isEmpty ? generateDefaultHandle() :
+  trimmed` — and `generateDefaultHandle()` is `"\(streets.randomElement() ?? "Mott")StRegular"`
+  against a static, non-empty 8-element array literal, so it cannot itself produce an empty
+  string (the `?? "Mott"` fallback is unreachable in practice but harmless, not a smell).
+  Hunted for any other path that could still construct an empty username: none — `handle`
+  (the `@State` text field) is never read directly by `onSave` anymore, only
+  `resolvedUsername(rawHandle: handle)`'s *return value* is.
+- **Skip path performs NO upsert.** `onSkip` (`IdentitySheet.swift`) is unchanged by this fix
+  and still only clears `pendingIdentityAction`/`activeSheet` and invokes `action?()` — no
+  call to `upsertProfile` anywhere on that path, confirmed by reading both `onSkip` closures
+  at both call sites.
+- **`try?` is gone at both call sites — confirmed by grep.**
+  `git grep -n "try? await pinService.upsertProfile\|try? await .*upsertProfile"` across the
+  full diff returns zero hits. Both call sites now use `do { try await
+  pinService.upsertProfile(...) } catch { #if DEBUG print(...) #endif }` — verified the
+  `catch` block only logs (DEBUG-gated) and does not rethrow, swallow-and-continue, or block
+  `action?()`, which still fires unconditionally after the `Task` is kicked off — matches the
+  documented intent ("a failed profile save is never fatal to the user's actual
+  contribution").
+- **The replacement tests are real, not tautological.** Three new tests in
+  `IdentitySheetTests.swift` (`testResolvedUsername_normalInput_returnsTrimmed`,
+  `testResolvedUsername_clearedField_returnsNonEmptyFallback`,
+  `testResolvedUsername_whitespaceOnlyInput_returnsNonEmptyFallback`) directly exercise
+  `resolvedUsername(rawHandle:)` with the exact two adversarial inputs the finding named
+  (empty string, whitespace-only) plus a normal-input control — all three assert
+  non-emptiness, and the cleared/whitespace cases are exactly the repro from Pass 1's
+  Finding #1. The boundary coverage is real: it directly calls the pure function under test
+  with the adversarial input, not a mocked network layer. `CommunityPhase2bWritePathTests.swift`'s
+  replacement test (`testUpsertProfile_usernameAlwaysIncludedNonEmpty`) correctly shifted
+  scope to proving the payload-shape guarantee now that the nil case is compile-time
+  impossible, rather than re-testing the (now-unreachable) nil-input case — the right call,
+  not a coverage regression.
+- **Residual risk, disclosed for completeness, not a new finding:** this closes the bug at
+  the client. I have no way to confirm from a code read whether `@backend-data` also wants a
+  schema-level `DEFAULT` as belt-and-suspenders (Finding #1's Option (b)) — the fix took
+  Option (a) only. That's a legitimate, sufficient fix on its own (the client can now never
+  construct an invalid payload), not a half-fix; flagging only so Kevin knows Option (b) was
+  not pursued, in case a *future* caller of `upsertProfile` (or a different, direct
+  PostgREST client — e.g. a hypothetical admin tool) could still hit the same NOT NULL wall
+  without going through `IdentitySheet`. Not blocking.
+
+## 2. Finding #2 (`ActiveSheet.identityPrompt` restructure) — verified fixed, full state-machine trace
+
+- **`ActiveSheet.identityPrompt` is a real new case**, added to the enum with an `id` string
+  (`"identityPrompt"`) and routed through `sheetContent(_:)`'s `switch` like every other
+  case — confirmed it's genuinely part of the single `.sheet(item: $activeSheet)` presenter,
+  not a parallel mechanism with a similar name.
+- **Zero `.sheet(isPresented:)` modifiers remain on `ContentView` — confirmed by grep.**
+  `git grep -n "\.sheet(isPresented" origin/ios/community-phase2b --
+  ios/WePark/WePark/ContentView.swift` returns only comment references to the old pattern (a
+  doc-header bullet and two doc comments explaining the fix), zero live modifiers. The only
+  remaining `.sheet(isPresented:` in the entire PR is `ReportSheet.swift`'s own — confirmed
+  unchanged from Pass 1 (`git diff 7369d265..ea0a4b46 -- .../ReportSheet.swift` shows only a
+  doc-comment addition and the `try?`→`do/catch` change around it, the `.sheet(isPresented:)`
+  modifier itself is untouched) — correctly left alone, since Pass 1 already established this
+  one is the safe "sheet-from-a-sheet" pattern nested inside `ReportSheet`'s own already-
+  presented content, not the at-risk pattern.
+- **Spot-post flow, happy path, traced state-by-state:**
+  `submitSpotPlacement()` → identity needed → `pendingIdentityAction = proceed;
+  activeSheet = .identityPrompt` (same synchronous transaction, confirmed by reading the
+  two assignments back-to-back with no `await` between them) → `.sheet(item:)` presents
+  `IdentitySheet` via `sheetContent(.identityPrompt)` → user taps Save or Skip →
+  `pendingIdentityAction` captured into a local `action` and set to `nil`, `activeSheet` set
+  to `nil` (both synchronous, in that order, inside the same closure) → `action?()` invoked,
+  which runs `proceed()`'s `Task` (posts the pin; on success sets `spotPlacementActive =
+  false`, clears the draft, sets `activeSheet = .browseNav`; on failure shows a toast and
+  leaves placement mode active for a retry). Confirmed correct.
+- **Swipe-to-dismiss mid-flow, traced state-by-state:** user swipes the identity sheet away
+  without tapping Save/Skip → SwiftUI clears the `$activeSheet` binding to `nil` as part of
+  its own dismiss mechanics (standard `.sheet(item:)` behavior) → the `onDismiss` closure
+  fires → `pendingIdentityAction` is still non-nil (neither button ran to clear it) → the new
+  guard (`if pendingIdentityAction != nil { pendingIdentityAction = nil;
+  cancelSpotPlacementMode() }`) fires → `cancelSpotPlacementMode()` clears
+  `spotPlacementActive`/`spotPlacementDraft` and sets `activeSheet =
+  dismissTargetOutsideBrowseNav` (`.browseNav`). **Confirmed: the report/spot-open is
+  correctly NOT posted** — `proceed`/`action` is never invoked on this path, only cleared.
+  The ordering guarantee this relies on (both button paths clear `pendingIdentityAction`
+  *before* triggering the dismiss that fires `onDismiss`, since it's set in the same
+  synchronous closure as `activeSheet = nil`, and `onDismiss` only fires after SwiftUI's
+  dismiss animation, strictly later) holds — read both button closures to confirm the
+  ordering (`pendingIdentityAction = nil` precedes `activeSheet = nil` in both).
+- **The new `!spotPlacementActive` guard on the browse-nav auto-restore — verified it fixes
+  the described race without breaking the normal restore path.** Traced both branches:
+  - *Normal path (report sheet cancel/submit, no spot placement involved):*
+    `spotPlacementActive` is `false` throughout (it's a dedicated `@State` only ever touched
+    by the spot-placement functions), so `!spotPlacementActive` evaluates `true` and the
+    guard imposes no new restriction — the browse-nav restore fires exactly as it did before
+    this fix. No regression.
+  - *Spot-placement path, identity resolved via Save/Skip:* at the moment `onDismiss` fires,
+    `spotPlacementActive` is still `true` (only `proceed()`'s eventual Task completion flips
+    it) *or* has already been set to `.browseNav` directly by `proceed()`'s success branch
+    (in which case `activeSheet == nil` is already false, so the outer condition short-
+    circuits before the new guard even matters). Either way, the guard prevents the
+    onDismiss backstop from racing ahead of `proceed()`'s own eventual `activeSheet`
+    assignment — confirmed this is exactly the race the fix's comment describes, and the
+    guard closes it in both sub-cases.
+- **Any path where `activeSheet` gets clobbered mid-flow by something other than this fix's
+  own machinery?** Grepped every `activeSheet =` assignment in the file (40+ sites). Nearly
+  all are gated behind either a direct user gesture (which can't fire while a modal sheet is
+  up — SwiftUI blocks underlying interaction) or `dismissTargetOutsideBrowseNav`/the
+  onDismiss backstop (both correctly sequenced, per above). **One genuine, narrow,
+  pre-existing-class exception found and worth flagging: `handleFirstPinDropped()`**
+  (`ContentView.swift`, fired from `parkPinService.firstPinDropped`, a Combine publisher —
+  not a direct tap) unconditionally sets `activeSheet = .notificationRationale` gated only
+  on a `UserDefaults` first-time check, with no "is another sheet currently up" guard. In
+  the narrow window where a user's first-ever parked-car pin drop is still resolving
+  asynchronously *and* they separately reach their first-ever community contribution's
+  identity sheet before that publisher fires, `.identityPrompt` could be silently replaced
+  by `.notificationRationale`. This is **not introduced by this fix** — it's the same
+  "last writer wins" property every other case in this single-presenter enum has always had,
+  and it predates this PR entirely (W6). It also **self-heals safely**: `pendingIdentityAction`
+  is left non-nil when this happens (neither Save nor Skip ran), so when
+  `.notificationRationale` is later dismissed, the SAME `onDismiss` swipe-to-dismiss guard
+  this fix added treats it as an unresolved dismissal and correctly cancels the spot
+  placement rather than leaving state dangling. Net effect if this ever fires: the user's
+  contribution silently doesn't post (same outcome as an explicit swipe-away) instead of a
+  crash or corrupted state. Logging this as an observation, not a new finding — it's a
+  pre-existing architectural property surfaced by this fix's own thoroughness, not a defect
+  this fix created, and it degrades safely.
+
+## 3. Nits — verified addressed
+
+- **#3 (header count):** `IdentitySheetTests.swift`'s header now says "Test inventory (13
+  tests)" and lists 1–13, matching `grep -c "func test"` = 13 exactly (10 original + 3 new
+  `resolvedUsername` tests). Fixed.
+- **#4 (street-flavored handle):** `generateDefaultHandle()` now returns
+  `"\(street)StRegular"` from a curated 8-street list (Mott/Mulberry/Elizabeth/Prince/
+  Spring/Bowery/Grand/Broome), matching the prototype screenshot's flavor
+  ("MottStRegular"). **Sanity-checked for empty/absurd output when street context is
+  unavailable:** this function takes no segment/location parameter at all — it was never
+  wired to real geo/segment context (the doc comment explicitly, honestly discloses this:
+  "NOT derived from the user's actual location... just closer in FLAVOR to the prototype's
+  demo content"), so there is no "nil segment" failure mode to guard against — the street
+  name always comes from the fixed, always-non-empty static array, with `?? "Mott"` as a
+  belt-and-suspenders fallback that Swift's own type system makes unreachable
+  (`randomElement()` on a non-empty array literal cannot return `nil`). Cannot produce
+  empty or absurd output under any input, because it takes no input. Verified via the new
+  `testGenerateDefaultHandle_neverEmpty_matchesStreetRegularFormat` test, which asserts
+  every generated handle ends in `"StRegular"` and the street prefix is a member of the
+  known set, across 20 random draws — this is a real, non-tautological boundary check
+  (it would fail if the format regressed or an unexpected street leaked in).
+
+## 4. Count check
+
+`git grep -c "func test" origin/ios/community-phase2b -- ios/WePark/WeParkTests` sums to
+**1067** — matches the expected count exactly (1064 Pass-1 baseline + 3 net-new
+`resolvedUsername` tests; `CommunityPhase2bWritePathTests.swift`'s test count is unchanged,
+one test renamed/repurposed, not added).
+
+## 5. New issues introduced by the fix?
+
+None found that rise above the one observation logged in §2 above (the `.identityPrompt` vs.
+async-Combine-event collision), which is pre-existing-class and self-healing, not introduced
+by this fix. Read the `onDismiss` consolidation twice, specifically hunting for:
+- **Double-firing of `cancelSpotPlacementMode()` or `proceed()`** — not possible;
+  `pendingIdentityAction` is nilled out at the top of every path that reads it
+  (`onSave`/`onSkip`/the new guard), so no path can invoke the captured `action` (or run the
+  cancel branch) twice.
+- **A reintroduced version of the original PR #95 shift-under-finger bug class** — not
+  applicable here; this fix touches sheet *presentation state*, not view layout, so there's
+  no hit-target-shift mechanism in play.
+- **A regression to the pre-existing `dismissTargetOutsideBrowseNav` / block-select /
+  drive-mode guards on the same `onDismiss` closure** — confirmed unchanged; the new code is
+  purely additive (one new `if` block, one new `&&`-guard clause appended to the existing
+  condition), and every pre-existing guard clause (`ft20BrowseSheetEnabled`, `activeSheet ==
+  nil`, `!driveModeActive`, `!blockSelectModeActive`) is untouched, still present, still in
+  the same order.
+- Diff confined to the 6 files listed at the top of this section; nothing outside the
+  claimed scope touched (`MapViewRepresentable.swift`, `ReportSheet.swift`'s own
+  `.sheet(isPresented:)` modifier itself, `BlockRestrictionReportSheet.swift` all remain
+  untouched by this specific fix commit).
+
+## What Kevin's Mac gate must cover (restated, complete, supersedes the Pass 1 list)
+
+1. **`xcodebuild build` + `xcodebuild test`, full suite, confirm 1067/1067.** First real
+   compile of the full PR (base + fix) — still genuinely COMPILE-UNVERIFIED against a real
+   toolchain.
+2. **Full mount-chain live-UI smoke (mandatory — this PR touches `MapViewRepresentable.swift`
+   + `ContentView.swift` overlay-attachment code):** launch on sim (UDID
+   `F0820726-15F4-4FA3-8602-A5D7B479A277`), screenshot at rest — confirm toolbar
+   (gear/find-me/find-car/clock/Drive), ASP banner, and Park Until pill all still render
+   (the #31-class regression check); then flip `communityEnabled = true`, open the report
+   grid, confirm the fixed 2×2 layout matches `08-report-grid.png` and no tile shifts under a
+   tap.
+3. **Targeted identity-sheet flow smoke, including swipe-dismiss mid-flow:** flag on,
+   first-ever-install state, report grid → "Spot open" → tap a curb → "Post it" → confirm
+   `.identityPrompt` presents cleanly (no console sheet-presentation warning) → Save resolves
+   it, pin posts, placement mode exits to `.browseNav`. Repeat and this time **swipe the
+   identity sheet away instead of tapping Save/Skip** — confirm the spot-open report is
+   correctly NOT posted, placement mode fully exits, and the browse sheet restores cleanly
+   (this is the exact new path `ea0a4b46` added — the highest-value single check in this
+   gate). Repeat the happy path via the report-submit flow (Enforcement active → Report →
+   identity sheet) to confirm both call sites still behave identically post-fix.
+4. **AC-P2.1 two-device check (Mac simulator + Kevin's phone, no NYC/second-phone needed):**
+   post each of the 4 report types from one device, confirm all 4 (including `open_spot`
+   with its snapped, non-midpoint position) appear correctly positioned on the other within
+   ~2s via Realtime.
+5. **Placement-accuracy check (roadmap S5's carried-over note):** with real, non-synthetic
+   tile data, tap a curb at a few different points along a blockface (near each end + near
+   the middle) and visually confirm the draft pin (and the eventually-posted pin) lands on
+   the actual tapped curb position — not a segment midpoint, not visibly off the polyline.
+6. **Live cleared-handle test against the real Supabase project (now expected to PASS, not
+   fail):** from the identity sheet, clear the pre-filled handle entirely (or replace it with
+   only spaces), pick an avatar, tap "Join the board & post." Expect the avatar to visibly
+   save successfully this time (a generated `{street}StRegular` handle should appear on the
+   posted contribution, not a blank/failed write) — this is the direct live-schema
+   confirmation that Finding #1 is actually closed against production, not just against the
+   mock.
+7. **Flag-off manual pass:** with `communityEnabled = false` (shipped default), confirm the
+   report list still shows exactly the pre-Community-2.0 2-type list (no grid, no "Spot
+   open"/"Street closure" tiles) and the enforcement/sweeper submit flow is pixel-identical
+   to pre-this-PR `main`.
+
+No physical NYC drive-test needed for any of the above — everything is Simulator- or
+phone-in-hand testable, consistent with the roadmap's S8 row.
