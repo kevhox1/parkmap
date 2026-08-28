@@ -103,6 +103,23 @@ struct ReportSheet: View {
     /// additive change rather than a required initializer parameter everywhere.
     var onRequestStreetClosure: (() -> Void)? = nil
 
+    // MARK: - QA STOP-AND-INSTRUMENT (PR #95) — plain data, DEBUG-only consumer
+
+    /// Human-readable description of where `coordinate` came from — "long-press (resting)"
+    /// vs "current GPS (in-drive)" — threaded from both `ContentView` entry points so the
+    /// `#if DEBUG` diagnostics footer below can show it without guessing. Not read by any
+    /// production behavior; this is plain metadata, harmless to carry in Release builds
+    /// (only the RENDERING/print()-ing of it is `#if DEBUG`-gated — see that section for why
+    /// this property itself isn't also wrapped in `#if DEBUG`).
+    var coordinateSource: String = "unknown"
+
+    /// The radius (meters) `ContentView` used for the segment search that produced `segment`/
+    /// `confirmCandidates` — must match `ContentView.pinDropRadiusMeters` (35.0 today).
+    /// Threaded through rather than duplicated as a literal here, so the diagnostics footer
+    /// can never silently drift from the real constant. Same "plain data, harmless in
+    /// Release" reasoning as `coordinateSource` above.
+    var candidateSearchRadiusMeters: Double = 35.0
+
     // MARK: - Primary type selection
 
     enum ReportType {
@@ -156,7 +173,8 @@ struct ReportSheet: View {
 
     /// Custom init only to seed `confirmedSegment` from `segment` — every other property
     /// keeps its declared default, so existing call sites that don't pass
-    /// `confirmCandidates`/`onRequestStreetClosure` are unaffected.
+    /// `confirmCandidates`/`onRequestStreetClosure`/`coordinateSource`/
+    /// `candidateSearchRadiusMeters` are unaffected.
     init(
         coordinate: CLLocationCoordinate2D,
         pinService: CommunityPinService,
@@ -164,7 +182,9 @@ struct ReportSheet: View {
         streetName: String? = nil,
         segment: Segment? = nil,
         confirmCandidates: [Segment] = [],
-        onRequestStreetClosure: (() -> Void)? = nil
+        onRequestStreetClosure: (() -> Void)? = nil,
+        coordinateSource: String = "unknown",
+        candidateSearchRadiusMeters: Double = 35.0
     ) {
         self.coordinate = coordinate
         self.pinService = pinService
@@ -173,6 +193,8 @@ struct ReportSheet: View {
         self.segment = segment
         self.confirmCandidates = confirmCandidates
         self.onRequestStreetClosure = onRequestStreetClosure
+        self.coordinateSource = coordinateSource
+        self.candidateSearchRadiusMeters = candidateSearchRadiusMeters
         _confirmedSegment = State(initialValue: segment)
     }
 
@@ -408,6 +430,15 @@ struct ReportSheet: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
+
+                #if DEBUG
+                // QA STOP-AND-INSTRUMENT (PR #95, 2026-08-28): rendered whenever the sheet is
+                // up, screenshot-able (Kevin cannot read console logs comfortably on-device).
+                // See `diagnosticsFooter`'s own doc comment for the full rationale. Placed
+                // OUTSIDE the ScrollView, directly below the CTA, so it's visible without
+                // scrolling on every device size.
+                diagnosticsFooter
+                #endif
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -835,6 +866,93 @@ struct ReportSheet: View {
 
         isSubmitting = false
     }
+
+    #if DEBUG
+    // MARK: - QA STOP-AND-INSTRUMENT diagnostics (DEBUG-only, PR #95)
+    //
+    // Two reasoned hypothesis-fix rounds (QA round 2: routing-model dropped side effect —
+    // refuted by diff; QA round 3: no-candidates guess — refuted by Kevin pinning simulator
+    // GPS directly on Mott St between Prince & Spring, 40.7228,-73.9945, and still seeing no
+    // confirm-street section) did not move the symptom. Per the repo's standing rule against
+    // a third blind hypothesis fix, this instruments the ACTUAL live state instead of
+    // guessing again — an on-screen, screenshot-able readout (Kevin cannot read console logs
+    // comfortably) of every input to the confirm-street mount decision, individually.
+    //
+    // Zero behavior change outside DEBUG builds: this entire block, and its two call sites in
+    // `body`, compile out completely in Release — `#if DEBUG` is a compiler conditional, not a
+    // runtime flag, so a TestFlight/App Store build never contains this code at all.
+    @ViewBuilder
+    private var diagnosticsFooter: some View {
+        let candidatesNonEmpty = !confirmCandidates.isEmpty
+        let typeMatches = selectedType == .enforcementActive || selectedType == .sweeper
+
+        VStack(alignment: .leading, spacing: 3) {
+            Text("DEBUG DIAGNOSTICS — confirm-street mount")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.red)
+
+            diagnosticsLine("AppConstants.communityEnabled", "\(AppConstants.communityEnabled)")
+            diagnosticsLine("selectedType", selectedType.map { "\($0)" } ?? "nil")
+            diagnosticsLine(
+                "coordinate",
+                "\(coordinate.latitude), \(coordinate.longitude)  [source: \(coordinateSource)]"
+            )
+            diagnosticsLine(
+                "segment lookup",
+                segment.map { "found: \($0.id)" } ?? "nil (radius \(Int(candidateSearchRadiusMeters))m)"
+            )
+            diagnosticsLine("confirmCandidates.count", "\(confirmCandidates.count)")
+
+            Divider().padding(.vertical, 2)
+
+            Text("mount condition, each term:")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.secondary)
+            diagnosticsLine("· communityEnabled", "\(AppConstants.communityEnabled)")
+            diagnosticsLine("· candidates non-empty", "\(candidatesNonEmpty)")
+            diagnosticsLine("· type is enforcement/sweeper", "\(typeMatches)")
+            diagnosticsLine("→ VERDICT showsConfirmStreetStep", "\(showsConfirmStreetStep)")
+                .font(.system(size: 10, weight: .bold, design: .monospaced))
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red.opacity(0.08))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(Color.red.opacity(0.4))
+        )
+        .padding(.horizontal, 20)
+        .padding(.bottom, 8)
+        .onAppear { logDiagnosticsToConsole(trigger: "onAppear") }
+        .onChange(of: selectedType) { _, _ in logDiagnosticsToConsole(trigger: "selectedType changed") }
+        .onChange(of: confirmCandidates.count) { _, _ in logDiagnosticsToConsole(trigger: "confirmCandidates.count changed") }
+    }
+
+    @ViewBuilder
+    private func diagnosticsLine(_ label: String, _ value: String) -> some View {
+        Text("\(label): \(value)")
+            .font(.system(size: 10, design: .monospaced))
+            .foregroundStyle(.secondary)
+    }
+
+    /// Prints the exact same readout as `diagnosticsFooter` — "for completeness" per the
+    /// dispatch instruction, even though the on-screen footer is the primary artifact (Kevin
+    /// screenshots the sheet; he does not have comfortable console access on-device).
+    private func logDiagnosticsToConsole(trigger: String) {
+        let candidatesNonEmpty = !confirmCandidates.isEmpty
+        let typeMatches = selectedType == .enforcementActive || selectedType == .sweeper
+        print("""
+        [ReportSheet DEBUG diagnostics] trigger=\(trigger)
+          AppConstants.communityEnabled=\(AppConstants.communityEnabled)
+          selectedType=\(selectedType.map { "\($0)" } ?? "nil")
+          coordinate=(\(coordinate.latitude), \(coordinate.longitude)) source=\(coordinateSource)
+          segment=\(segment.map { $0.id } ?? "nil") searchRadius=\(candidateSearchRadiusMeters)m
+          confirmCandidates.count=\(confirmCandidates.count)
+          mount: communityEnabled=\(AppConstants.communityEnabled) candidatesNonEmpty=\(candidatesNonEmpty) typeMatches=\(typeMatches)
+          VERDICT showsConfirmStreetStep=\(showsConfirmStreetStep)
+        """)
+    }
+    #endif
 
     // MARK: - Meta builder (type → insertCrowdPin args)
 

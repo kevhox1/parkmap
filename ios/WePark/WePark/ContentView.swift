@@ -263,7 +263,18 @@ enum ActiveSheet: Identifiable {
     /// "confirm the street" step can render without its own tile-data access — precomputed at
     /// each entry site via `CandidateSegmentSearch.confirmStreetCandidates(for:in:)` (empty
     /// when `segment` is nil, same OD-1 graceful-degradation rule).
-    case reportPin(coord: CLLocationCoordinate2D, streetName: String?, segment: Segment? = nil, confirmCandidates: [Segment] = [])
+    ///
+    /// QA STOP-AND-INSTRUMENT (PR #95, 2026-08-28): coordinateSource added ONLY so
+    /// `ReportSheet`'s `#if DEBUG` diagnostics footer can show, explicitly rather than
+    /// inferred, whether `coord` is the resting long-press point or the in-drive current-GPS
+    /// reading — set literally at each of the two call sites below, never derived/guessed.
+    case reportPin(
+        coord: CLLocationCoordinate2D,
+        streetName: String?,
+        segment: Segment? = nil,
+        confirmCandidates: [Segment] = [],
+        coordinateSource: String = "unknown"
+    )
     /// FT-12: Parking 101 guide, opened from the first-launch prompt banner tap.
     /// (Settings' own entry point uses a plain NavigationLink inside its own
     /// NavigationStack, not this case — this case exists only for the banner, which
@@ -300,7 +311,7 @@ enum ActiveSheet: Identifiable {
         case .parkUntil:                  return "parkUntil"
         case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
-        case .reportPin(let coord, _, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
+        case .reportPin(let coord, _, _, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
         case .signCheckConfirm(let intent): return "signCheckConfirm-\(intent.id)"
         case .parkingGuide:               return "parkingGuide"
         case .blockRestrictionReport(let segments):
@@ -913,7 +924,13 @@ struct ContentView: View {
                         coord: coord,
                         streetName: nil,
                         segment: reportSegment,
-                        confirmCandidates: confirmCandidates
+                        confirmCandidates: confirmCandidates,
+                        // QA STOP-AND-INSTRUMENT (PR #95): `coord` here is `pendingLongPressCoord`
+                        // — the actual long-press map coordinate captured fresh in
+                        // `handleLongPress(at:)` at the moment of the press, not current GPS and
+                        // not stale (consumed once, then cleared above). Labeled explicitly so
+                        // the #if DEBUG diagnostics footer never has to guess.
+                        coordinateSource: "long-press (resting)"
                     )
                 }
                 // FT-15/TF2-15 §4.2 step 1: third action, added per the spec's own
@@ -1158,7 +1175,7 @@ struct ContentView: View {
             // complexity in sheetContent(_:) — same pattern as PR-1 @ViewBuilder extractions.
             pinDetailSheetContent(pin)
 
-        case .reportPin(let coord, let streetName, let seg, let confirmCandidates):
+        case .reportPin(let coord, let streetName, let seg, let confirmCandidates, let coordinateSource):
             // Tier 3 sub-PR #2: Universal community report sheet.
             // Coordinate source depends on entry path:
             //   - Resting: coord = long-press point on map; streetName = nil
@@ -1173,6 +1190,10 @@ struct ContentView: View {
             //     resting long-press dialog's "Report closure" button — zero new code in
             //     `BlockRestrictionReportSheet.swift` (AC-P2.3). `enterBlockSelectMode()`
             //     force-hides `activeSheet` itself, which is what dismisses this sheet.
+            //
+            // QA STOP-AND-INSTRUMENT (PR #95): coordinateSource/pinDropRadiusMeters passed
+            // through to ReportSheet's #if DEBUG diagnostics footer only — no production
+            // behavior reads either.
             ReportSheet(
                 coordinate: coord,
                 pinService: pinService,
@@ -1180,7 +1201,9 @@ struct ContentView: View {
                 streetName: streetName,
                 segment: seg,
                 confirmCandidates: confirmCandidates,
-                onRequestStreetClosure: { enterBlockSelectMode() }
+                onRequestStreetClosure: { enterBlockSelectMode() },
+                coordinateSource: coordinateSource,
+                candidateSearchRadiusMeters: pinDropRadiusMeters
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -2076,7 +2099,10 @@ struct ContentView: View {
                     coord: loc,
                     streetName: drivingContext?.street,
                     segment: driveSegment,
-                    confirmCandidates: confirmCandidates
+                    confirmCandidates: confirmCandidates,
+                    // QA STOP-AND-INSTRUMENT (PR #95): `loc` here is `locationService.userLocation`
+                    // — live current GPS at the moment of the tap, per the guard above.
+                    coordinateSource: "current GPS (in-drive)"
                 )
             } label: {
                 Label("Report", systemImage: "flag.fill")
