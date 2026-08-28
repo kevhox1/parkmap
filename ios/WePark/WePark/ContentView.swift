@@ -287,6 +287,20 @@ enum ActiveSheet: Identifiable {
     /// `blockfaceKey`/coordinates verbatim off these, never re-deriving identity from
     /// text (spec §4.1/§4.3).
     case blockRestrictionReport(segments: [Segment])
+    /// Community 2.0 Phase 2b (build 20 S7, QA pass 1 fix — PR #96 Finding #2): the identity
+    /// sheet ("Say hi to the crew") for the SPOT-POST contribution path
+    /// (`submitSpotPlacement()`'s gate). Routed through the single `ActiveSheet` presenter
+    /// rather than a second, independent `.sheet(isPresented:)` modifier — this codebase's
+    /// W5.1 decision was explicitly single-sheet-only via this enum (HANDOFF documents the
+    /// runtime warning a second concurrent `.sheet` used to trigger), and QA flagged a
+    /// second modifier chained onto `ContentView`'s own view tree as the same *class* of
+    /// pattern even though the intended flows don't overlap. No payload — the pending
+    /// contribution to resume on save/skip lives in `pendingIdentityAction` (a separate
+    /// `@State`, set in the SAME synchronous transaction as this case). The report-submit
+    /// path's OWN identity sheet (nested inside `ReportSheet.swift`'s already-presented
+    /// content — a standard, safe "sheet-from-a-sheet," not this pattern) is UNCHANGED by
+    /// this fix; QA explicitly called that one "not at risk."
+    case identityPrompt
     /// FT-20 Stream A: browse mode's persistent bottom-sheet rest state (spec §4.1, Option
     /// A). Unlike every other case above, this one is designed to NOT be transient — under
     /// the end-state sheet model, dismissing any other case returns `activeSheet` to
@@ -316,6 +330,7 @@ enum ActiveSheet: Identifiable {
         case .parkingGuide:               return "parkingGuide"
         case .blockRestrictionReport(let segments):
             return "blockRestrictionReport-" + segments.map(\.id).joined(separator: ",")
+        case .identityPrompt:              return "identityPrompt"
         case .browseNav:                  return "browseNav"
         }
     }
@@ -729,12 +744,18 @@ struct ContentView: View {
     @State private var spotPlacementSubmitting: Bool = false
 
     /// Community 2.0 Phase 2b: holds the "resume this contribution" closure while the
-    /// identity sheet is up for the SPOT-POST path (the report-submit path has its own,
-    /// entirely local copy of this pattern inside `ReportSheet.swift` — see that file's
-    /// header for why the two don't share one instance: `SpotPlacementConfirmCard`'s "Post
-    /// it" button lives in a `ContentView` map overlay, not inside a sheet, so it needs its
-    /// own gate at this layer). Non-nil drives the identity `.sheet(isPresented:)` attached
-    /// to `mapLayerWithEvents` below.
+    /// identity sheet (`ActiveSheet.identityPrompt`) is up for the SPOT-POST path (the
+    /// report-submit path has its own, entirely local copy of this pattern inside
+    /// `ReportSheet.swift` — see that file's header for why the two don't share one
+    /// instance: `SpotPlacementConfirmCard`'s "Post it" button lives in a `ContentView` map
+    /// overlay, not inside a sheet, so it needs its own gate at this layer). Set in the same
+    /// synchronous transaction as `activeSheet = .identityPrompt`
+    /// (`submitSpotPlacement()`'s gate); cleared by `IdentitySheet`'s `onSave`/`onSkip`
+    /// (`sheetContent(_:)`'s `.identityPrompt` case) or by the top-level `.sheet(item:)`
+    /// `onDismiss` closure's swipe-to-dismiss guard — see that closure's own comment (QA
+    /// pass 1, PR #96, Finding #2: this used to be a second, independent
+    /// `.sheet(isPresented:)` modifier; routed through the single `ActiveSheet` presenter
+    /// now, matching this codebase's W5.1 single-sheet decision).
     @State private var pendingIdentityAction: (() -> Void)? = nil
 
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
@@ -864,6 +885,20 @@ struct ContentView: View {
                 // swipe-to-dismiss that never calls the sheet's own onDismiss closure) —
                 // same catch-all role selectedSegmentID plays above.
                 if !selectedBlockKeys.isEmpty { selectedBlockKeys = [] }
+                // Community 2.0 Phase 2b (build 20 S7, QA pass 1 fix — PR #96 Finding #2):
+                // a still-non-nil `pendingIdentityAction` here means `.identityPrompt` went
+                // away WITHOUT either `onSave` or `onSkip` running (both clear it before
+                // returning) — i.e. an interactive swipe-to-dismiss, or any other non-button
+                // dismissal. Treat that as "cancel the whole spot-placement attempt," same
+                // as tapping Cancel on the confirm card: clear the deferred action (the
+                // underlying report/spot-open must NOT post) and fully exit placement mode.
+                // `cancelSpotPlacementMode()` itself sets `activeSheet` to
+                // `dismissTargetOutsideBrowseNav` (`.browseNav` here), so the `== nil` guard
+                // below correctly skips re-assigning it a second time.
+                if pendingIdentityAction != nil {
+                    pendingIdentityAction = nil
+                    cancelSpotPlacementMode()
+                }
                 // FT-20 Stream A: `.browseNav` is browse mode's persistent rest state, not
                 // "nothing" — restore it here as a backstop for any dismiss path that
                 // doesn't already route through `dismissTargetOutsideBrowseNav` above (an
@@ -884,7 +919,20 @@ struct ContentView: View {
                 // places in the file that can assign `.browseNav` as a dismiss target. Kept
                 // even though the gate is permanently `true` now: it's the same defensive
                 // shape as `dismissTargetOutsideBrowseNav`'s own guard, and costs nothing.
-                if Self.ft20BrowseSheetEnabled, activeSheet == nil, !driveModeActive, !blockSelectModeActive {
+                //
+                // Community 2.0 Phase 2b (build 20 S7, QA pass 1 fix — PR #96 Finding #2):
+                // also guarded on `!spotPlacementActive` — without it, dismissing
+                // `.identityPrompt` via `onSave`/`onSkip` (which set `activeSheet = nil`
+                // themselves, ALSO triggering this same onDismiss closure) would restore
+                // `.browseNav` immediately, before `submitSpotPlacement()`'s deferred
+                // `proceed()` Task has had a chance to resolve — showing the browse sheet
+                // AND the still-active confirm-card map overlay at once for a beat. Spot
+                // placement mode already force-hides the sheet on entry
+                // (`enterSpotPlacementMode()`'s `activeSheet = nil`) for exactly this
+                // "nothing else should compete with placement mode's own chrome" reason —
+                // this guard just extends that same rule across the identity-prompt detour.
+                if Self.ft20BrowseSheetEnabled, activeSheet == nil, !driveModeActive,
+                   !blockSelectModeActive, !spotPlacementActive {
                     activeSheet = .browseNav
                 }
             }) { sheet in sheetContent(sheet) }
@@ -1370,6 +1418,56 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+
+        case .identityPrompt:
+            // Community 2.0 Phase 2b (build 20 S7, QA pass 1 fix): the SPOT-POST identity
+            // gate, now routed through the single `ActiveSheet` presenter instead of a
+            // second `.sheet` modifier — see the case's own doc comment for why.
+            //
+            // onSave/onSkip both dismiss THIS sheet by setting `activeSheet = nil` — the
+            // SAME force-hidden value spot-placement mode was already in before the
+            // identity gate interrupted it (`enterSpotPlacementMode()` sets `activeSheet =
+            // nil`) — then invoke `action` (the deferred `submitSpotPlacement()` closure),
+            // which owns the eventual `activeSheet` transition itself: `.browseNav` on a
+            // successful post, or nil (placement mode resumes, confirm card still visible,
+            // user can retry "Post it") if the network call fails. Deliberately NOT
+            // `dismissTargetOutsideBrowseNav` here — that would jump straight to
+            // `.browseNav` regardless of whether the underlying post actually succeeded.
+            //
+            // Username is REQUIRED (non-optional) — `IdentitySheet.resolvedUsername(rawHandle:)`
+            // guarantees a non-empty value even when the pre-filled handle is cleared (QA
+            // pass 1, PR #96, Finding #1: `profiles.username` is `NOT NULL` with no
+            // `DEFAULT`, and PostgREST's upsert validates that on the constructed INSERT row
+            // BEFORE conflict resolution — an omitted/empty username 400s on every call, not
+            // only a first-ever write). The failure path is surfaced via a DEBUG print
+            // rather than `try?`-swallowed — the underlying report/spot-open still posts on
+            // its own independent network call either way, so a failed profile save is
+            // never fatal to the user's actual contribution, but it shouldn't be silently
+            // invisible to a developer either.
+            IdentitySheet(
+                onSave: { username, avatar in
+                    let action = pendingIdentityAction
+                    pendingIdentityAction = nil
+                    activeSheet = nil
+                    Task {
+                        do {
+                            try await pinService.upsertProfile(username: username, avatar: avatar)
+                        } catch {
+                            #if DEBUG
+                            print("[ContentView] upsertProfile failed: \(error)")
+                            #endif
+                        }
+                    }
+                    action?()
+                },
+                onSkip: {
+                    let action = pendingIdentityAction
+                    pendingIdentityAction = nil
+                    activeSheet = nil
+                    action?()
+                }
+            )
+            .presentationDetents([.medium])
 
         case .browseNav:
             browseNavigationSheetContent
@@ -1858,35 +1956,6 @@ struct ContentView: View {
             // visiblePinsGeneration increments on every visiblePins assignment.
             .onChange(of: pinService.visiblePinsGeneration) { _, _ in handleVisiblePinsChange(pinService.visiblePins) }
             .onReceive(parkPinService.firstPinDropped) { handleFirstPinDropped() }
-            // Community 2.0 Phase 2b (build 20 S7): identity-sheet interception for the
-            // SPOT-POST contribution path (`submitSpotPlacement()`'s gate). Independent of
-            // `ActiveSheet`/`activeSheet` — `SpotPlacementConfirmCard`'s "Post it" button
-            // lives in a map overlay, not inside a presented sheet, so it needs its own
-            // presentation surface here rather than a new `ActiveSheet` case (keeps that
-            // already-fragile enum's dismiss-target machinery untouched). See
-            // `ReportSheet.swift`'s own, entirely separate copy of this same pattern for the
-            // report-submit contribution path.
-            .sheet(isPresented: Binding(
-                get: { pendingIdentityAction != nil },
-                set: { isPresented in
-                    if !isPresented { pendingIdentityAction = nil }
-                }
-            )) {
-                IdentitySheet(
-                    onSave: { username, avatar in
-                        let action = pendingIdentityAction
-                        pendingIdentityAction = nil
-                        Task { try? await pinService.upsertProfile(username: username, avatar: avatar) }
-                        action?()
-                    },
-                    onSkip: {
-                        let action = pendingIdentityAction
-                        pendingIdentityAction = nil
-                        action?()
-                    }
-                )
-                .presentationDetents([.medium])
-            }
     }
 
     // MARK: - Map representable callbacks (extracted for type-checker budget)
@@ -3251,6 +3320,15 @@ struct ContentView: View {
     /// than a shared one. On success: exits placement mode and restores `.browseNav` (the
     /// pin appears via `insertCrowdPin`'s existing optimistic `mergeRealtimeChange` — no
     /// extra state needed here for that).
+    ///
+    /// Community 2.0 Phase 2b (build 20 S7, QA pass 1 fix — PR #96 Finding #2): when the
+    /// identity gate fires, `activeSheet` is set to `.identityPrompt` in the SAME
+    /// synchronous transaction as `pendingIdentityAction` — routes through the single
+    /// `ActiveSheet` presenter instead of a second, independent `.sheet` modifier. Safe to
+    /// do unconditionally here: `enterSpotPlacementMode()` guarantees `activeSheet == nil`
+    /// for the entire duration of placement mode up to this point (the confirm card is a
+    /// map overlay, not a sheet), so this is always a clean nil → `.identityPrompt`
+    /// transition, never a collision with another already-presented sheet.
     private func submitSpotPlacement() {
         guard let draft = spotPlacementDraft else { return }
 
@@ -3283,6 +3361,7 @@ struct ContentView: View {
             identitySheetShouldShow: CommunityIdentityGate().shouldShow()
         ) {
             pendingIdentityAction = proceed
+            activeSheet = .identityPrompt
         } else {
             proceed()
         }

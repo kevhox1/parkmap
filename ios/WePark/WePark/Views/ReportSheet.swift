@@ -535,9 +535,15 @@ struct ReportSheet: View {
         // Community 2.0 Phase 2b (build 20 S7): identity-sheet interception. Presented as a
         // nested sheet-on-sheet (a standard, supported SwiftUI pattern) rather than a new
         // `ActiveSheet` case, so this stays entirely local to `ReportSheet.swift` — no
-        // `ContentView` wiring needed for the report-submit contribution path. See
-        // `submitReport()` for the gating check and `IdentitySheet.swift`'s header for the
-        // full design.
+        // `ContentView` wiring needed for the report-submit contribution path. QA pass 1
+        // (PR #96, Finding #2) confirmed this specific pattern is NOT at risk — nesting one
+        // sheet inside an already-presented sheet's own content is the standard, safe shape;
+        // only `ContentView`'s OWN top-level second `.sheet` (the spot-post path's identity
+        // gate) needed to move onto the single `ActiveSheet` presenter — see that file's
+        // `ActiveSheet.identityPrompt` case for the fix.
+        //
+        // See `submitReport()` for the gating check and `IdentitySheet.swift`'s header for
+        // the full design.
         .sheet(isPresented: Binding(
             get: { pendingIdentityAction != nil },
             set: { isPresented in
@@ -548,7 +554,20 @@ struct ReportSheet: View {
                 onSave: { username, avatar in
                     let action = pendingIdentityAction
                     pendingIdentityAction = nil
-                    Task { try? await pinService.upsertProfile(username: username, avatar: avatar) }
+                    Task {
+                        do {
+                            try await pinService.upsertProfile(username: username, avatar: avatar)
+                        } catch {
+                            // QA pass 1 fix (PR #96, Finding #1): surfaced, not `try?`-swallowed
+                            // — the underlying report still posts on its own independent
+                            // network call regardless (`action?()` below), so a failed profile
+                            // save is never fatal to the user's actual contribution, but it
+                            // shouldn't be silently invisible to a developer either.
+                            #if DEBUG
+                            print("[ReportSheet] upsertProfile failed: \(error)")
+                            #endif
+                        }
+                    }
                     action?()
                 },
                 onSkip: {

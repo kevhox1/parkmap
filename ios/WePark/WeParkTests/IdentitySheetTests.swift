@@ -9,7 +9,14 @@
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never
 //  compiled or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
-//  Test inventory (9 tests):
+//  QA pass 1 (PR #96) Finding #1 fix + Finding #3/#4 nits: `resolvedUsername(rawHandle:)`
+//  tests added (cleared field / whitespace-only / normal input never produce an empty
+//  payload username — the client-side half of closing the real `profiles.username NOT
+//  NULL` violation); `generateDefaultHandle()`'s test updated for the new street-flavored
+//  format (Finding #4); this header's own test count corrected (Finding #3 — it previously
+//  said "9 tests" while both listing and containing 10).
+//
+//  Test inventory (13 tests):
 //    CommunityIdentityGate — mirrors ParkingGuidePromptGateTests' precedent exactly:
 //      1. testFreshInstall_shouldShow_isTrue
 //      2. testMarkShown_thenShouldShow_isFalse
@@ -29,7 +36,13 @@
 //
 //    IdentitySheet.generateDefaultHandle() — non-empty pre-fill (schema NOT NULL guard,
 //    see the field's own doc comment in IdentitySheet.swift):
-//      10. testGenerateDefaultHandle_neverEmpty_startsWithNeighbor
+//      10. testGenerateDefaultHandle_neverEmpty_matchesStreetRegularFormat
+//
+//    IdentitySheet.resolvedUsername(rawHandle:) — QA pass 1 Finding #1: never nil/empty,
+//    under any input, including the two inputs the finding specifically named:
+//      11. testResolvedUsername_normalInput_returnsTrimmed
+//      12. testResolvedUsername_clearedField_returnsNonEmptyFallback
+//      13. testResolvedUsername_whitespaceOnlyInput_returnsNonEmptyFallback
 //
 
 import XCTest
@@ -143,11 +156,46 @@ final class IdentitySheetDefaultHandleTests: XCTestCase {
     /// `upsertProfile` call must never send an empty/nil username. The pre-filled default
     /// handle is what guarantees that on the common "Join the board & post" path (see
     /// `IdentitySheet.handle`'s own doc comment).
-    func testGenerateDefaultHandle_neverEmpty_startsWithNeighbor() {
+    ///
+    /// QA pass 1 (PR #96) Finding #4 nit: format updated to the street-flavored
+    /// `{Street}StRegular` shape (mirrors `design/screenshots/12-identity-sheet.png`'s
+    /// "MottStRegular") — was a generic "Neighbor1234" shape.
+    func testGenerateDefaultHandle_neverEmpty_matchesStreetRegularFormat() {
+        let expectedStreets: Set<String> = ["Mott", "Mulberry", "Elizabeth", "Prince", "Spring", "Bowery", "Grand", "Broome"]
         for _ in 0..<20 {
             let handle = IdentitySheet.generateDefaultHandle()
             XCTAssertFalse(handle.isEmpty)
-            XCTAssertTrue(handle.hasPrefix("Neighbor"), "Got: \(handle)")
+            XCTAssertTrue(handle.hasSuffix("StRegular"), "Got: \(handle)")
+            let street = handle.replacingOccurrences(of: "StRegular", with: "")
+            XCTAssertTrue(expectedStreets.contains(street), "Got unexpected street '\(street)' in handle: \(handle)")
         }
+    }
+}
+
+// MARK: - IdentitySheet.resolvedUsername(rawHandle:)
+
+/// QA pass 1 (PR #96) Finding #1: these three tests are the direct replacement for the
+/// mock-200 `testUpsertProfile_usernameNil_omittedFromPayload` the report flagged — that
+/// test validated a payload shape that 400s against the real (live) Supabase schema.
+/// `resolvedUsername(rawHandle:)` is the actual client-side guarantee that a non-empty
+/// value reaches `upsertProfile` at all; `CommunityPhase2bWritePathTests.swift`'s
+/// `testUpsertProfile_usernameAlwaysIncludedNonEmpty` covers the write-path payload shape
+/// itself now that `upsertProfile` no longer accepts an optional `username`.
+final class IdentitySheetResolvedUsernameTests: XCTestCase {
+
+    func testResolvedUsername_normalInput_returnsTrimmed() {
+        XCTAssertEqual(IdentitySheet.resolvedUsername(rawHandle: "  MottStRegular  "), "MottStRegular")
+    }
+
+    /// The exact scenario QA's Finding #1 repro describes: a user deliberately clears the
+    /// pre-filled handle entirely.
+    func testResolvedUsername_clearedField_returnsNonEmptyFallback() {
+        let result = IdentitySheet.resolvedUsername(rawHandle: "")
+        XCTAssertFalse(result.isEmpty, "A cleared field must still produce a non-empty username")
+    }
+
+    func testResolvedUsername_whitespaceOnlyInput_returnsNonEmptyFallback() {
+        let result = IdentitySheet.resolvedUsername(rawHandle: "   \n  ")
+        XCTAssertFalse(result.isEmpty, "Whitespace-only input must still produce a non-empty username")
     }
 }

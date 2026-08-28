@@ -20,7 +20,8 @@
 //
 //    upsertProfile — payload shape + request headers:
 //      6. testUpsertProfile_payloadShape_idUsernameAvatar
-//      7. testUpsertProfile_usernameNil_omittedFromPayload
+//      7. testUpsertProfile_usernameAlwaysIncludedNonEmpty (QA pass 1 fix, PR #96 Finding
+//         #1 — replaces the old nil-username test; see that test's own doc comment)
 //      8. testUpsertProfile_requestIncludesUpsertPreferHeader
 //
 //  Reuses the SHARED (not file-private) `WriteMockURLProtocol` / `AuthMockURLProtocol`
@@ -266,7 +267,19 @@ final class UpsertProfilePayloadTests: XCTestCase {
         XCTAssertNil(capturedBody?["helped_count"])
     }
 
-    func testUpsertProfile_usernameNil_omittedFromPayload() async throws {
+    /// QA pass 1 fix (PR #96, Finding #1): replaces the old
+    /// `testUpsertProfile_usernameNil_omittedFromPayload`, which validated a payload shape
+    /// (username key omitted) that is a REAL Postgres `NOT NULL` violation against the live
+    /// schema (`public.profiles.username`, `supabase/01-mvp-schema.sql:10`, no `DEFAULT` —
+    /// PostgREST's upsert validates that constraint on the constructed `INSERT` row BEFORE
+    /// conflict resolution, so it fails on every call, not just a first-ever write).
+    /// `upsertProfile` no longer accepts a nil `username` at all — this is now a compile-time
+    /// guarantee for every caller, not a runtime check. This test instead proves the payload
+    /// UNCONDITIONALLY includes a non-empty `username` for whatever value the (now-required)
+    /// parameter holds. The client-side guarantee that a non-empty value reaches this method
+    /// at all in the first place lives in `IdentitySheet.resolvedUsername(rawHandle:)`
+    /// (tested separately, `IdentitySheetTests.swift`).
+    func testUpsertProfile_usernameAlwaysIncludedNonEmpty() async throws {
         let (pinService, _) = await makePhase2bAuthenticatedPair()
         var capturedBody: [String: Any]? = nil
 
@@ -277,10 +290,12 @@ final class UpsertProfilePayloadTests: XCTestCase {
             return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, Data())
         }
 
-        try await pinService.upsertProfile(username: nil, avatar: "🐿️")
+        try await pinService.upsertProfile(username: "MottStRegular", avatar: nil)
 
-        XCTAssertNil(capturedBody?["username"], "An avatar-only pick must not write an empty/placeholder username")
-        XCTAssertEqual(capturedBody?["avatar"] as? String, "🐿️")
+        let username = capturedBody?["username"] as? String
+        XCTAssertNotNil(username)
+        XCTAssertFalse(username?.isEmpty ?? true,
+            "The payload must never carry an empty username — public.profiles.username is NOT NULL with no DEFAULT")
     }
 
     func testUpsertProfile_requestIncludesUpsertPreferHeader() async throws {

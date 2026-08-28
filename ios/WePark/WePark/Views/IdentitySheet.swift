@@ -33,6 +33,14 @@
 //  a pure presentation component with callbacks; the caller owns the gate + the network
 //  write).
 //
+//  QA pass 1 fix (PR #96, Finding #1): `onSave`'s `username` is a non-optional `String` —
+//  `resolvedUsername(rawHandle:)` guarantees a non-empty value even when the pre-filled
+//  handle is cleared/whitespace-only, closing a real Postgres `NOT NULL` violation
+//  (`public.profiles.username`, `supabase/01-mvp-schema.sql:10`, no `DEFAULT` — PostgREST's
+//  upsert validates that constraint on EVERY call, not only a user's first-ever write).
+//  `CommunityPinService.upsertProfile` itself now requires a non-optional `username` too, so
+//  this is enforced at the type level for this and any future caller, not just by convention.
+//
 
 import SwiftUI
 
@@ -112,20 +120,44 @@ struct IdentitySheet: View {
     /// 8-emoji avatar list, verbatim order — `design/prototype.html:1016`.
     static let avatarOptions: [String] = ["🥯", "☕", "🚕", "🌇", "🦝", "🍕", "🗽", "🐿️"]
 
-    /// A short, friendly generated handle for the pre-filled text field — see `handle`'s own
-    /// doc comment for why this exists beyond matching the prototype's screenshot. Not a
-    /// uniqueness-guaranteeing scheme (the reconciliation spec §2.5 explicitly made the
-    /// handle "decorative, not a login identifier... a cosmetic non-issue, not a security
-    /// one" when it dropped the column's UNIQUE constraint) — just non-empty, every time.
+    /// A short, street-flavored generated handle for the pre-filled text field — see
+    /// `handle`'s own doc comment for why this exists beyond matching the prototype's
+    /// screenshot. QA pass 1 nit (PR #96, Finding #4): mirrors the prototype's own
+    /// convention (`design/screenshots/12-identity-sheet.png` shows "MottStRegular" —
+    /// {street}St{Regular}) rather than a generic "Neighbor1234" shape, picking from a
+    /// small curated list of Nolita/SoHo/LES street names — this is NOT derived from the
+    /// user's actual location (that would need geo/segment context threading into this
+    /// view, out of scope for what's a cosmetic nit) — just closer in FLAVOR to the
+    /// prototype's demo content. Not a uniqueness-guaranteeing scheme (the reconciliation
+    /// spec §2.5 explicitly made the handle "decorative, not a login identifier... a
+    /// cosmetic non-issue, not a security one" when it dropped the column's UNIQUE
+    /// constraint) — just non-empty, every time.
     static func generateDefaultHandle() -> String {
-        "Neighbor" + String(Int.random(in: 1000...9999))
+        let streets = ["Mott", "Mulberry", "Elizabeth", "Prince", "Spring", "Bowery", "Grand", "Broome"]
+        let street = streets.randomElement() ?? "Mott"
+        return "\(street)StRegular"
     }
 
-    /// Called when "Join the board & post" is tapped. `username` is the trimmed handle text
-    /// — in practice always non-nil/non-empty, since the field is pre-filled with a
-    /// generated suggestion (see `handle`'s own doc comment for why this matters beyond
-    /// cosmetics). `avatar` is the selected emoji, or nil if none was picked.
-    let onSave: (_ username: String?, _ avatar: String?) -> Void
+    /// QA pass 1 fix (PR #96, Finding #1): resolves the ACTUAL username to send on "Join the
+    /// board & post" — never nil, never empty/whitespace-only. `public.profiles.username` is
+    /// `text ... not null` with no `DEFAULT` (`supabase/01-mvp-schema.sql:10`). PostgREST's
+    /// upsert (`Prefer: resolution=merge-duplicates`) compiles to `INSERT ... ON CONFLICT DO
+    /// UPDATE`, and Postgres validates `NOT NULL` on the constructed `INSERT` row BEFORE
+    /// conflict resolution is applied — an omitted/empty username 400s on EVERY call, not
+    /// just a user's very-first write. Trims `rawHandle`; falls back to a FRESH generated
+    /// suggestion (not the one `handle` started with — that's exactly the value the user just
+    /// cleared) when the trimmed result is empty, covering both a genuinely empty field and a
+    /// whitespace-only one. Pure and `nonisolated` — directly unit-testable.
+    nonisolated static func resolvedUsername(rawHandle: String) -> String {
+        let trimmed = rawHandle.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? generateDefaultHandle() : trimmed
+    }
+
+    /// Called when "Join the board & post" is tapped. `username` is REQUIRED (non-optional)
+    /// — always the result of `resolvedUsername(rawHandle:)`, so it can never be
+    /// nil/empty/whitespace-only regardless of what the user typed (or deleted). `avatar` is
+    /// the selected emoji, or nil if none was picked.
+    let onSave: (_ username: String, _ avatar: String?) -> Void
 
     /// Called when "Post anonymously" is tapped — no `profiles` write happens for this path.
     let onSkip: () -> Void
@@ -134,15 +166,11 @@ struct IdentitySheet: View {
 
     /// Pre-filled with a generated suggestion (`design/screenshots/12-identity-sheet.png`
     /// shows "MottStRegular" already in the field, not typed live in the demo — this is the
-    /// prototype's own actual behavior, not a departure from it). This is NOT just cosmetic:
-    /// `public.profiles.username` is `text ... not null` (`supabase/01-mvp-schema.sql:10`) —
-    /// Phase 0's migration (§2.5) only dropped the column's UNIQUE constraint
-    /// (`profiles_username_key`), not its `NOT NULL`. A user's FIRST-EVER `upsertProfile`
-    /// call may be inserting their `profiles` row for the very first time (before any
-    /// reputation trigger has had a chance to create one) — sending `username: nil` there
-    /// would violate the NOT NULL constraint. Starting the field non-empty means "Join the
-    /// board & post" always sends a real handle without the user needing to type anything,
-    /// closing that gap client-side without touching schema.
+    /// prototype's own actual behavior, not a departure from it). Guarantees a good default
+    /// on the common path (nothing typed), but is NOT the sole guard against an empty
+    /// submission — a user CAN clear this field entirely, which is why `resolvedUsername(rawHandle:)`
+    /// (not this property directly) is what actually gets sent on save. See that function's
+    /// own doc comment for the full NOT NULL reasoning.
     @State private var handle: String = IdentitySheet.generateDefaultHandle()
     @FocusState private var handleFieldFocused: Bool
 
@@ -172,14 +200,11 @@ struct IdentitySheet: View {
                 .accessibilityLabel("Handle")
 
             Button {
-                // `handle` starts pre-filled (see its own doc comment) so `trimmed` is
-                // non-empty on the common path; still guarded here rather than assumed, so
-                // a user who explicitly clears the field gets a `nil` username (not an
-                // empty-string one) — a rare edge case (requires deliberately deleting the
-                // pre-fill) accepted as a known, disclosed gap rather than adding a
-                // disable-the-CTA-on-empty-handle behavior the prototype itself never has.
-                let trimmed = handle.trimmingCharacters(in: .whitespacesAndNewlines)
-                onSave(trimmed.isEmpty ? nil : trimmed, selectedAvatar)
+                // QA pass 1 fix (PR #96, Finding #1): route through `resolvedUsername(rawHandle:)`
+                // rather than a nil-on-empty fallback — a user who explicitly clears the
+                // pre-filled handle (or leaves only whitespace) still gets a real, non-empty
+                // generated handle sent, never a `NOT NULL`-violating write.
+                onSave(IdentitySheet.resolvedUsername(rawHandle: handle), selectedAvatar)
             } label: {
                 Text("Join the board & post")
                     .font(.headline)

@@ -1541,11 +1541,23 @@ final class CommunityPinService {
     /// client never writes its own rep — a standing constraint restated verbatim in the
     /// reconciliation spec's Phase 2 section.
     ///
+    /// QA pass 1 fix (PR #96, Finding #1): `username` is REQUIRED (non-optional), never
+    /// nil/empty. `public.profiles.username` is `text ... not null` with no `DEFAULT`
+    /// (`supabase/01-mvp-schema.sql:10`) — Phase 0's migration (§2.5) only dropped the
+    /// column's UNIQUE constraint, not its `NOT NULL`. PostgREST's upsert
+    /// (`Prefer: resolution=merge-duplicates`) compiles to `INSERT ... ON CONFLICT (id) DO
+    /// UPDATE`, and Postgres validates `NOT NULL` on the row constructed for the `INSERT`
+    /// clause BEFORE conflict resolution is applied — an omitted/null username 400s on
+    /// EVERY call, not only a user's first-ever profile write. Making this parameter
+    /// non-optional closes the bug class at the type level for every current AND future
+    /// caller, rather than relying on each call site to remember a runtime workaround. The
+    /// one production caller, `IdentitySheet.resolvedUsername(rawHandle:)`, guarantees a
+    /// non-empty value (trims, falls back to a generated suggestion when empty).
+    ///
     /// - Parameters:
-    ///   - username: The chosen handle (trimmed, non-empty), or nil to leave it unset — an
-    ///     avatar-only pick is a valid, if unusual, partial identity.
+    ///   - username: The chosen handle, trimmed and guaranteed non-empty by the caller.
     ///   - avatar: The chosen avatar emoji, or nil.
-    func upsertProfile(username: String?, avatar: String?) async throws {
+    func upsertProfile(username: String, avatar: String?) async throws {
         guard let authSvc = authService else {
             throw CommunityPinWriteError.notAuthenticated
         }
@@ -1554,9 +1566,8 @@ final class CommunityPinService {
             throw CommunityPinWriteError.notAuthenticated
         }
 
-        var payload: [String: Any] = ["id": userId.uuidString]
-        if let username { payload["username"] = username }
-        if let avatar   { payload["avatar"] = avatar }
+        var payload: [String: Any] = ["id": userId.uuidString, "username": username]
+        if let avatar { payload["avatar"] = avatar }
 
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
             throw CommunityPinWriteError.encodingFailure
