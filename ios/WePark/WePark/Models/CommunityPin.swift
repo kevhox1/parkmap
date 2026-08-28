@@ -38,6 +38,21 @@
 //     this spec's §10 work-streams table, which explicitly assigns model extension to
 //     this stream (B1).
 //
+//  Community 2.0 Phase 1 (docs/community-2.0-reconciliation-spec.md §1 delta table, §2.1,
+//  §2.2, §3 Phase 1 — build 20, session S3):
+//   - PinType gains `.openSpot` ("open_spot") and `.leavingSoon` ("leaving_soon") — two
+//     net-new crowd/ephemeral types (spec §2.1's `alter type ... add value` pair).
+//   - CommunityPin gains three stored properties, following the exact startsAt/reportGroupId
+//     precedent above: `positionFraction`, `leavingMinutes`, `claimedBy`. All three are
+//     first-class `pins` columns (spec §2.2), NOT meta keys — `OpenSpotMeta`/`LeavingSoonMeta`
+//     below are (deliberately) empty structs.
+//   - `claimedBy` is decode-only (never encoded), mirroring `hasEvidencePhoto`'s precedent:
+//     the column is deliberately NOT in the anon/authenticated INSERT grant list (spec
+//     §2.2-note) — only the `claim_pin` SECURITY DEFINER RPC (§2.10) can ever set it, so a
+//     future `Encodable`-based write path must never send a `claimed_by` key.
+//     `positionFraction`/`leavingMinutes` ARE client-writable (granted `INSERT` — spec
+//     §2.2-note) and so ARE encoded, same treatment as `startsAt`/`reportGroupId`.
+//
 
 import Foundation
 
@@ -58,6 +73,10 @@ enum PinType: String, Codable, CaseIterable {
     case enforcementActive = "enforcement_active"
     case sweeperPassed     = "sweeper_passed"
     case brokenMeter       = "broken_meter"
+    // Community 2.0 Phase 1: crowd, ephemeral (spec §2.1) — net-new, no Tier taxonomy
+    // slot exists for these in the June direction doc; they're the "crew feed" primitives.
+    case openSpot          = "open_spot"
+    case leavingSoon       = "leaving_soon"
     // Personal (W5 local pin; not community-visible by default)
     case parkedCar         = "parked_car"
 }
@@ -165,6 +184,35 @@ struct CommunityPin: Identifiable {
     /// and (b) re-adding to `encode(to:)` only if a write path ever needs to send it
     /// (unlikely — this is normally server-computed, not client-supplied).
     let hasEvidencePhoto: Bool
+
+    // MARK: Community 2.0 Phase 1 — first-class `pins` columns (spec §2.2)
+    //
+    // Spec: docs/community-2.0-reconciliation-spec.md §2.2, §2.10, §3 Phase 1.
+    //
+    // Deliberately NOT meta fields (§1 delta table: "the interesting fields ... are
+    // first-class pins columns, not meta") — see `OpenSpotMeta`/`LeavingSoonMeta` below,
+    // which stay empty for exactly this reason.
+
+    /// Position along the blockface, `[0,1]` from the segment's "from" endpoint to its "to"
+    /// endpoint (same directional convention as `meta.heading_toward`). `nil` = render at the
+    /// segment midpoint — every existing pin type's current, unchanged behavior. Populated for
+    /// `open_spot` reports placed via the map-tap flow (Phase 2); absent on every other type
+    /// and on every pin that predates this migration.
+    let positionFraction: Double?
+
+    /// User-chosen countdown (5/10/15/20 minutes) for a `leaving_soon` pin. Display-only on the
+    /// client — `expires_at` is derived server-side from this value (spec §2.11), never trusted
+    /// from a client-supplied `expires_at`. `nil` for every other pin type.
+    let leavingMinutes: Int?
+
+    /// Single-claimant "I'm heading there" marker for `leaving_soon` pins, set exactly once via
+    /// the `claim_pin` RPC (spec §2.10) — first writer wins, informational only, never a
+    /// reservation. **Decode-only by design — deliberately NOT written by `encode(to:)`**,
+    /// mirroring `hasEvidencePhoto`'s precedent above: `claimed_by` is deliberately absent from
+    /// the anon/authenticated column-privilege INSERT grant (spec §2.2-note), so only
+    /// `claim_pin`'s `SECURITY DEFINER` context can ever set it. A future `Encodable`-based
+    /// write path must never send a `claimed_by` key PostgREST would reject.
+    let claimedBy: UUID?
 }
 
 // MARK: - CommunityPin: Codable
@@ -197,6 +245,9 @@ extension CommunityPin: Codable {
         case notes
         case reportGroupId    = "report_group_id"
         case hasEvidencePhoto = "has_evidence_photo"
+        case positionFraction = "position_fraction"
+        case leavingMinutes   = "leaving_minutes"
+        case claimedBy        = "claimed_by"
     }
 
     init(from decoder: Decoder) throws {
@@ -231,6 +282,12 @@ extension CommunityPin: Codable {
         reportGroupId = try container.decodeIfPresent(UUID.self, forKey: .reportGroupId)
         // §7 / OQ-5: absent key → false (no evidence-photo trust signal available yet).
         hasEvidencePhoto = try container.decodeIfPresent(Bool.self, forKey: .hasEvidencePhoto) ?? false
+
+        // Community 2.0 Phase 1 (spec §2.2): absent on every pin type/row that predates this
+        // migration — decodeIfPresent handles both "key absent" and "key present, value null".
+        positionFraction = try container.decodeIfPresent(Double.self, forKey: .positionFraction)
+        leavingMinutes    = try container.decodeIfPresent(Int.self, forKey: .leavingMinutes)
+        claimedBy         = try container.decodeIfPresent(UUID.self, forKey: .claimedBy)
     }
 
     func encode(to encoder: Encoder) throws {
@@ -266,6 +323,15 @@ extension CommunityPin: Codable {
         // `has_evidence_photo` key to PostgREST the moment a future write path
         // (Stream B3) reaches for `Encodable` instead of a hand-built payload dict.
         // QA pass 1 finding (docs/qa/ft15-b1-ios-models-qa.md, Finding #2).
+
+        // Community 2.0 Phase 1 (spec §2.2-note): positionFraction/leavingMinutes ARE
+        // granted client INSERT privilege, so they encode like startsAt/reportGroupId above.
+        try container.encodeIfPresent(positionFraction, forKey: .positionFraction)
+        try container.encodeIfPresent(leavingMinutes, forKey: .leavingMinutes)
+        // claimedBy is deliberately decode-only — NOT encoded. See its doc comment on the
+        // stored property above: the column is absent from the anon/authenticated INSERT
+        // grant list (spec §2.2-note) — only claim_pin's SECURITY DEFINER context can ever
+        // set it, so a future Encodable-based write path must never send this key.
     }
 }
 
@@ -304,6 +370,9 @@ enum PinMeta: Codable {
     case enforcementActive(EnforcementActiveMeta)
     case sweeperPassed(SweeperPassedMeta)
     case brokenMeter(BrokenMeterMeta)
+    // Community 2.0 Phase 1 (spec §2.1, §3 Phase 1) — net-new, empty-payload meta cases.
+    case openSpot(OpenSpotMeta)
+    case leavingSoon(LeavingSoonMeta)
     case parkedCar(ParkedCarMeta)
 
     // MARK: Internal decoding helper
@@ -347,6 +416,12 @@ enum PinMeta: Codable {
         case .brokenMeter:
             let m = try container.decode(BrokenMeterMeta.self, forKey: .meta)
             return .brokenMeter(m)
+        case .openSpot:
+            let m = try container.decode(OpenSpotMeta.self, forKey: .meta)
+            return .openSpot(m)
+        case .leavingSoon:
+            let m = try container.decode(LeavingSoonMeta.self, forKey: .meta)
+            return .leavingSoon(m)
         case .parkedCar:
             let m = try container.decode(ParkedCarMeta.self, forKey: .meta)
             return .parkedCar(m)
@@ -379,6 +454,8 @@ enum PinMeta: Codable {
         case .enforcementActive(let m): try m.encode(to: encoder)
         case .sweeperPassed(let m):     try m.encode(to: encoder)
         case .brokenMeter(let m):       try m.encode(to: encoder)
+        case .openSpot(let m):          try m.encode(to: encoder)
+        case .leavingSoon(let m):       try m.encode(to: encoder)
         case .parkedCar(let m):         try m.encode(to: encoder)
         }
     }
@@ -580,6 +657,30 @@ struct BrokenMeterMeta: Codable {
         case meterId = "meter_id"
     }
 }
+
+// MARK: OpenSpotMeta
+
+/// `pin_type = 'open_spot'`
+///
+/// Community 2.0 Phase 1 (`docs/community-2.0-reconciliation-spec.md` §1 delta table, §2.2):
+/// deliberately empty. The interesting field — where along the blockface the spot is — is
+/// `CommunityPin.positionFraction`, a first-class `pins` column, NOT `meta` JSONB. Kept as a
+/// distinct (empty) `Codable` struct rather than reusing e.g. `BrokenMeterMeta` so `PinMeta`
+/// has its own named case to grow into if a future revision adds a real meta field (mirrors
+/// the "empty struct, ready to grow" shape already established by this file's convention). A
+/// row with `meta: null` (the expected common case for this type) never reaches this struct at
+/// all — `PinMeta.decode`'s nil-guard returns `nil` before the type switch runs.
+struct OpenSpotMeta: Codable {}
+
+// MARK: LeavingSoonMeta
+
+/// `pin_type = 'leaving_soon'`
+///
+/// Community 2.0 Phase 1 (`docs/community-2.0-reconciliation-spec.md` §1 delta table, §2.2):
+/// deliberately empty, for the same reason as `OpenSpotMeta` above. The countdown the user
+/// picked (5/10/15/20 min) is `CommunityPin.leavingMinutes`, and the claim state is
+/// `CommunityPin.claimedBy` — both first-class `pins` columns, not `meta`.
+struct LeavingSoonMeta: Codable {}
 
 // MARK: ParkedCarMeta
 

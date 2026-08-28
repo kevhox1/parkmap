@@ -45,6 +45,36 @@ final class BrowseSheetDriveBoundaryTests: XCTestCase {
     }
 }
 
+// MARK: - ContentView.mapMarkerTypes(communityEnabled:) Tests (S4 QA pass 1, PR #94 Finding #1 — BLOCKING fix)
+
+/// `handleVisiblePinsChange`'s map-marker allow-list, gated on `communityEnabled` via
+/// `AppConstants.communityPhase1PinTypes(enabled:)` — the third of the three call sites QA
+/// pass 1 found unconditionally including `.openSpot`/`.leavingSoon` (the other two:
+/// `CommunityPinService.channel2PinTypeQueryValue`/`isChannel2Member`,
+/// `RealtimeMergeGate.mergeablePinTypes`). Before this fix, any `open_spot`/`leaving_soon`
+/// row that reached `visiblePins` would render as a map marker to every user regardless of
+/// the flag — Phase 0's schema migration is already live in production, so this was a
+/// present-day gap, not a hypothetical one.
+final class ContentViewMapMarkerTypesTests: XCTestCase {
+
+    func testMapMarkerTypes_flagFalse_excludesCommunityPhase1Types() {
+        let types = ContentView.mapMarkerTypes(communityEnabled: false)
+        XCTAssertFalse(types.contains(.openSpot))
+        XCTAssertFalse(types.contains(.leavingSoon))
+        // Pre-existing Tier 1/3 marker types must be unaffected by the flag.
+        XCTAssertTrue(types.contains(.filming))
+        XCTAssertTrue(types.contains(.specialEvent))
+        XCTAssertTrue(types.contains(.enforcementActive))
+        XCTAssertTrue(types.contains(.sweeperPassed))
+    }
+
+    func testMapMarkerTypes_flagTrue_includesCommunityPhase1Types() {
+        let types = ContentView.mapMarkerTypes(communityEnabled: true)
+        XCTAssertTrue(types.contains(.openSpot))
+        XCTAssertTrue(types.contains(.leavingSoon))
+    }
+}
+
 // MARK: - blockSelectTapShouldBeIgnored(now:guardUntil:) Tests
 
 final class BlockSelectEntrySettlingGuardTests: XCTestCase {

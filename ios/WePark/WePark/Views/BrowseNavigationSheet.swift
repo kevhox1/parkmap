@@ -374,6 +374,17 @@ enum BrowseSheetDetentMath {
 /// the `.presentationDetents` array). Tracking "which kind" instead of "which value" avoids
 /// that class of bug entirely.
 enum BrowseSheetDetentKind: Equatable {
+    // Community 2.0 Phase 1 (S4, `docs/community-2.0-reconciliation-spec.md` §1 delta table,
+    // §3 Phase 1): `.large` is this ladder's pre-existing THIRD rung — it was already a live,
+    // reachable member of `.browseNav`'s `.presentationDetents` array before this session (see
+    // `ContentView.browseNavigationSheetContent`), used today only to give
+    // `BrowseSearchAreaView`'s recents/suggestions/error-banner content room to render at full
+    // height. The spec calls for a "third, taller state" for the crew feed — mapping that onto
+    // this ALREADY-EXISTING `.large` case (rather than inventing a fourth detent height) is
+    // this session's explicit, minimal-diff choice for the highest-regression-risk file in the
+    // spec: zero new detent math, zero new classification logic, zero new
+    // `.presentationDetents` array entry. See `BrowseNavigationSheet.body`'s `crewFeed` slot
+    // doc comment for where the new content actually mounts.
     case peek, medium, large
 
     /// FT-20 Stream C, PR #87 round 4: whether `BrowseNavigationSheet`'s medium-detent
@@ -489,7 +500,20 @@ func browseSheetDetentSelectionBinding(
 ///     `actionColumn` is mounted at all (`BrowseSheetDetentKind.showsActionContent`) — see
 ///     `body`'s own doc comment for why this is a conditional-rendering gate, not a
 ///     `.presentationDetents` height problem.
-struct BrowseNavigationSheet<SearchArea: View>: View {
+///   - `crewFeed`: Community 2.0 Phase 1 (S4; QA pass 1 PR #94 Finding #2 fix) — a
+///     `@ViewBuilder` slot CALLED ONLY when `detentKind == .large` **AND**
+///     `AppConstants.communityEnabled` (see `body`'s mount-site doc comment for the full
+///     reasoning). Defaults to `{ EmptyView() }` so every pre-existing call site (and any
+///     future one that doesn't care about the crew feed) compiles unchanged — `CrewFeed`
+///     infers to `EmptyView` when the parameter is omitted. The flag check lives on the
+///     `if` itself (the MOUNT), not just inside the content the closure builds — QA's
+///     finding: a child that resolves to `EmptyView()` is still a distinct `VStack` child
+///     that claims a share of `.frame(maxHeight:)`'s layout split, so gating only the
+///     closure's CONTENT (this file's original approach) was not sufficient to guarantee
+///     AC-P1.3's "flag false = zero behavioral or visual change" — gating the `if` itself
+///     is. `ContentView`'s own `if AppConstants.communityEnabled` guard inside its
+///     `crewFeed:` closure is now a second, redundant-but-harmless line of defense.
+struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
 
     // MARK: Public interface
     //
@@ -521,13 +545,22 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     let onPeekHeightChange: (CGFloat) -> Void
     let onMediumHeightChange: (CGFloat) -> Void
 
+    /// Community 2.0 Phase 1 (S4) — see this struct's own doc comment for the full
+    /// "why `.large`, why a builder, why the default" reasoning. Built (not stored
+    /// pre-built) for the same `self`-liveness reason `searchAreaBuilder` is a builder —
+    /// though unlike `searchArea` this closure takes no parameters, since the crew feed
+    /// doesn't participate in this file's height-measurement plumbing (`.large` is a system
+    /// detent with a fixed, container-derived height; nothing here needs to measure it).
+    let crewFeedBuilder: () -> CrewFeed
+
     init(
         @ViewBuilder searchArea: @escaping (@escaping (CGFloat) -> Void) -> SearchArea,
         detentKind: BrowseSheetDetentKind,
         onCruiseTapped: @escaping () -> Void,
         onParkingGuideTapped: @escaping () -> Void,
         onPeekHeightChange: @escaping (CGFloat) -> Void,
-        onMediumHeightChange: @escaping (CGFloat) -> Void
+        onMediumHeightChange: @escaping (CGFloat) -> Void,
+        @ViewBuilder crewFeed: @escaping () -> CrewFeed = { EmptyView() }
     ) {
         self.searchAreaBuilder = searchArea
         self.detentKind = detentKind
@@ -535,6 +568,7 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
         self.onParkingGuideTapped = onParkingGuideTapped
         self.onPeekHeightChange = onPeekHeightChange
         self.onMediumHeightChange = onMediumHeightChange
+        self.crewFeedBuilder = crewFeed
     }
 
     // MARK: Measured content heights
@@ -640,6 +674,61 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
 
                 actionColumn
                     .frame(height: actionColumnHeight)
+            }
+
+            // Community 2.0 Phase 1 (S4, QA pass 1 PR #94 Finding #2 — BLOCKING, both fixed):
+            // the crew feed mounts ONLY at `.large` — this is the "third, taller state" the
+            // spec calls for (§3 Phase 1), layered onto the pre-existing `.large` rung rather
+            // than a new detent height (see `BrowseSheetDetentKind`'s own doc comment).
+            // Deliberately a SEPARATE `if` from `showsActionContent` above (even though
+            // `.large` implies `showsActionContent == true`) so the condition reads as "only
+            // at large," not "only when action content shows" — the two happen to overlap
+            // today but mean different things.
+            //
+            // Fix (a) — gate the MOUNT, not just the content: `AppConstants.communityEnabled`
+            // is checked HERE, at the `if`, not only inside `ContentView`'s `crewFeed:`
+            // closure (which resolves to `EmptyView()` when the flag is off, per its own doc
+            // comment above). QA's finding: a `EmptyView`-producing child is still a DISTINCT
+            // VStack child asking for `.frame(maxHeight:)`'s layout share — SwiftUI's stack
+            // layout splits leftover space among however many unbounded-flexible children
+            // EXIST, regardless of whether their content is visually empty. Checking the flag
+            // here means the branch's body (and the `.frame` modifier below) is never even
+            // evaluated while `communityEnabled == false` — the `.large` VStack has the exact
+            // same two children (`searchArea`, conditionally `actionColumn`) it had before
+            // this PR, not a third empty one. `ContentView`'s own `if AppConstants.communityEnabled`
+            // guard inside its `crewFeed:` closure is now belt-and-braces (dead code once this
+            // outer check is false), kept as a second line of defense rather than removed.
+            //
+            // Fix (b) — bounded frame, not a second competing "infinity" sibling:
+            // `BrowseSearchAreaView`'s recents/suggestions/error-banner content ALSO expands
+            // at `.large` (pre-existing, unchanged by this PR) and lives inside `searchArea`
+            // above, which has no hard frame of its own — it relies on being the sheet's ONE
+            // unbounded-flexible child to receive the VStack's full leftover height, the exact
+            // "List inside this VStack is greedy and needs an explicit bound, not a second
+            // implicit one" lesson `docs/ft20-bottom-sheet-navigation-spec.md` §0d finding C1
+            // already paid for once (`actionColumnHeight`'s own formula-based, not measured,
+            // sizing is that fix's other half). `.frame(maxHeight: .infinity)` here would make
+            // THIS the VStack's second unbounded-flexible child, and SwiftUI has no way to
+            // know search's `List` "deserves" more of the split than the crew feed —
+            // `searchArea`'s list would likely lose roughly half its rendered height purely
+            // from this PR's addition, flag on. Capping the crew feed at
+            // `crewFeedMaxHeight` (an explicit, formula-based ceiling — same "compute from a
+            // value we control, don't rely on being the sole greedy child" discipline as
+            // `actionColumnHeight`/`maxAllowedMediumHeight` below) guarantees `searchArea`
+            // keeps AT LEAST half of `.large`'s available height regardless of how tall the
+            // crew feed's own content gets, while still giving the feed a generously large,
+            // independently-scrolling region of its own.
+            //
+            // [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK] Same posture as
+            // `maxAllowedMediumHeight` below — this machine has no simulator. Kevin/QA: with
+            // `communityEnabled` flipped `true` locally, confirm at `.large` that (1) the
+            // search recents/suggestions list still renders at a usable height when the crew
+            // feed is also present, and (2) the crew feed itself isn't uncomfortably cramped
+            // by the cap on a smaller device (SE-class). Flag-off: confirm this whole branch
+            // renders nothing at all (byte-identical VStack child count to `origin/main`).
+            if detentKind == .large, AppConstants.communityEnabled {
+                crewFeedBuilder()
+                    .frame(maxHeight: Self.crewFeedMaxHeight)
             }
         }
         // Re-report on every measured change (initial layout, Dynamic Type change, device
@@ -759,11 +848,37 @@ struct BrowseNavigationSheet<SearchArea: View>: View {
     /// (e.g. a very early launch timing edge case), which this single-window/single-scene
     /// app should never actually hit in practice.
     private static var maxAllowedMediumHeight: CGFloat {
-        let screenHeight = UIApplication.shared.connectedScenes
+        Self.activeScreenHeight * 0.75
+    }
+
+    /// Community 2.0 Phase 1 (S4, QA pass 1 PR #94 Finding #2 — BLOCKING): explicit ceiling
+    /// on the crew feed's height at `.large`, so it is NOT a second unbounded-flexible
+    /// `VStack` sibling competing with `searchArea`'s own greedy `List` for the sheet's
+    /// leftover space (see the mount site's own doc comment in `body` for the full
+    /// reasoning). Half the screen height is generous for the feed's own scrollable content
+    /// while guaranteeing `searchArea` keeps at least the other half, regardless of how much
+    /// content either side has.
+    ///
+    /// [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK] — same posture as
+    /// `maxAllowedMediumHeight` above; this ratio is a reasoned starting point, not a
+    /// measured one. Revisit if Kevin's live smoke shows either side cramped.
+    private static var crewFeedMaxHeight: CGFloat {
+        Self.activeScreenHeight * 0.5
+    }
+
+    /// Shared screen-height lookup for `maxAllowedMediumHeight`/`crewFeedMaxHeight` — reads
+    /// the height off the app's active `UIWindowScene` rather than `UIScreen.main` (QA
+    /// docs/qa/ft20-stream-a-pr85.md Finding #5 — `UIScreen.main` is on Apple's
+    /// deprecation-direction path since iOS 13; per-scene sizing is the supported
+    /// replacement). Falls back to `UIScreen.main` only if no window scene is connected yet
+    /// (e.g. a very early launch timing edge case), which this single-window/single-scene
+    /// app should never actually hit in practice. Extracted (S4 QA fix) so the two ceiling
+    /// computations above share one lookup instead of duplicating it.
+    private static var activeScreenHeight: CGFloat {
+        UIApplication.shared.connectedScenes
             .compactMap { $0 as? UIWindowScene }
             .first?.screen.bounds.height
             ?? UIScreen.main.bounds.height
-        return screenHeight * 0.75
     }
 }
 

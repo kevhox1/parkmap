@@ -141,4 +141,18 @@ struct SupabaseClients: Sendable {
     func makeRealtimePinChannel() -> RealtimePinSubscribing {
         SupabasePinRealtimeChannel(realtimeClient: realtimeClient)
     }
+
+    /// Builds a `RealtimeZoneMessageSubscribing`-conforming channel wrapping this instance's
+    /// shared `realtimeClient` — the `zone_messages` counterpart to `makeRealtimePinChannel()`
+    /// above, added for Community 2.0 Phase 1 (`docs/community-2.0-reconciliation-spec.md` §3
+    /// Phase 1, build 20 session S3). Same reasoning: returns the PROTOCOL type (declared in
+    /// `Services/ZoneMessageService.swift`), not the concrete `SupabaseZoneMessageRealtimeChannel`
+    /// class, so callers never need `import Realtime` themselves. Not yet called from any
+    /// production call site this session — `ZoneMessageService`'s own convenience init falls
+    /// back to a standalone channel when none is injected, same as `CommunityPinService`'s own
+    /// precedent; a future Views-layer wiring session (S4+) should prefer this factory instead,
+    /// so the app shares one `RealtimeClientV2` rather than opening a second socket.
+    func makeRealtimeZoneMessageChannel() -> RealtimeZoneMessageSubscribing {
+        SupabaseZoneMessageRealtimeChannel(realtimeClient: realtimeClient)
+    }
 }

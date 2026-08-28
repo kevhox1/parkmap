@@ -142,6 +142,13 @@ extension CommunityPin {
 
 extension PinType {
     /// Human-readable label for display surfaces.
+    ///
+    /// Community 2.0 Phase 1 (S4, `docs/community-2.0-reconciliation-spec.md` §1 delta
+    /// table, §3 Phase 1): `.openSpot`/`.leavingSoon` added. This is an EXHAUSTIVE switch
+    /// (no `default:` case) — S3 (`a232b75a`) added the two `PinType` enum cases without
+    /// these two, which is the documented compile break this PR resolves. Every other
+    /// `PinType` switch in `Views/` already carries a `default:` case (S3's own PR body,
+    /// confirmed by inspection) — this was the one exception.
     var displayLabel: String {
         switch self {
         case .filming:           return "Filming"
@@ -153,6 +160,8 @@ extension PinType {
         case .enforcementActive: return "Enforcement Active"
         case .sweeperPassed:     return "Sweeper Passed"
         case .brokenMeter:       return "Broken Meter"
+        case .openSpot:          return "Open Spot"
+        case .leavingSoon:       return "Leaving Soon"
         case .parkedCar:         return "Parked Car"
         }
     }
@@ -200,9 +209,13 @@ final class CommunityPinAnnotation: NSObject, MKAnnotation {
     /// shows the time-since badge ("Just now", "5m ago") rather than the expiry time.
     /// This matches the T3-3 decision: ephemeral pins show age, not expiry countdown.
     /// The badge is computed lazily at callout-open time (no timer loop).
+    ///
+    /// Community 2.0 Phase 1 (S4, spec §0 OQ-2): `.openSpot`/`.leavingSoon` widen this same
+    /// age-not-expiry treatment — OQ-2's resolution explicitly requires "every surface that
+    /// renders these pins MUST show relative age," and the map callout is one such surface.
     var subtitle: String? {
         switch pin.pinType {
-        case .enforcementActive, .sweeperPassed:
+        case .enforcementActive, .sweeperPassed, .openSpot, .leavingSoon:
             return PinMarkerAnnotation.timeSinceBadge(pin: pin, now: Date())
         default:
             return pin.displaySubtitle
@@ -338,6 +351,14 @@ final class PinMarkerAnnotation: MKAnnotationView {
             }
             let badge = Self.timeSinceBadge(pin: pin, now: Date())
             accessibilityValue = badge
+        case .openSpot:
+            // Community 2.0 Phase 1 (S4, spec §6 appendix): "P" glyph, ring-only marker.
+            accessibilityLabel = "Open spot"
+            accessibilityValue = Self.timeSinceBadge(pin: pin, now: Date())
+        case .leavingSoon:
+            // Community 2.0 Phase 1 (S4, spec §6 appendix): 🚙 glyph, ring-only marker.
+            accessibilityLabel = "Leaving soon"
+            accessibilityValue = Self.timeSinceBadge(pin: pin, now: Date())
         default:
             accessibilityLabel = "\(pin.pinType.displayLabel): \(pin.displayTitle ?? "")"
             if let subtitle = pin.displaySubtitle {
@@ -362,7 +383,18 @@ final class PinMarkerAnnotation: MKAnnotationView {
     /// No `Calendar.current` or `Calendar.easternTime` usage — pure `timeIntervalSince`
     /// arithmetic only (W3 convention / AC-R28).
     static func timeSinceBadge(pin: CommunityPin, now: Date) -> String {
-        let ageSeconds = now.timeIntervalSince(pin.createdAt)
+        ageString(since: pin.createdAt, now: now)
+    }
+
+    /// Community 2.0 Phase 1 (S4): pure date-based extraction of `timeSinceBadge(pin:now:)`'s
+    /// rules, so a non-`CommunityPin` timestamp (e.g. `ZoneMessage.createdAt` in
+    /// `Views/CrewFeedSection.swift`) can render the identical "reported X min ago" wording
+    /// — spec §0 OQ-2 requires the SAME age-display convention on every surface, not a
+    /// second, slightly-different formatter. `timeSinceBadge(pin:now:)` above is kept as a
+    /// thin wrapper (unchanged call sites, unchanged existing test coverage) rather than
+    /// removed.
+    static func ageString(since date: Date, now: Date) -> String {
+        let ageSeconds = now.timeIntervalSince(date)
         let minutes = Int(ageSeconds / 60)
         switch minutes {
         case ..<1:       return "Just now"
@@ -391,7 +423,17 @@ final class PinMarkerAnnotation: MKAnnotationView {
     /// bearing. The chevron uses a high-contrast white color and is sized at ~30% of the
     /// circle diameter so it does not obscure the primary SF Symbol (AC-24).
     /// When `bearing` is nil: identical to the pre-FT-11 output (OD-3 backward-compat).
+    ///
+    /// Community 2.0 Phase 1 (S4, spec §6 appendix): `.openSpot`/`.leavingSoon` use a
+    /// visually distinct "ring" marker (outlined circle + text/emoji glyph) instead of the
+    /// filled-circle + SF Symbol treatment every other type uses below — see
+    /// `ringMarkerImage(for:)`'s own doc comment for why. Neither type carries a
+    /// `heading_toward` value, so `bearing` is always nil for them in practice; the parameter
+    /// is accepted but unused on this branch for signature symmetry with the call site.
     private static func markerImage(for pinType: PinType, bearing: Double? = nil) -> UIImage {
+        if pinType == .openSpot || pinType == .leavingSoon {
+            return ringMarkerImage(for: pinType)
+        }
         let (symbolName, circleColor) = markerStyle(for: pinType)
         let size = CGSize(width: imageSize, height: imageSize)
         let renderer = UIGraphicsImageRenderer(size: size)
@@ -479,6 +521,69 @@ final class PinMarkerAnnotation: MKAnnotationView {
                 chevron.draw(in: chevronRect)
                 cgCtx.restoreGState()
             }
+        }
+    }
+
+    /// Community 2.0 Phase 1 (S4, spec §6 appendix) — "ring" marker for `.openSpot` /
+    /// `.leavingSoon`: a dark disc with a colored STROKE ring (not a filled colored circle)
+    /// and a centered text/emoji glyph, mirroring `design/prototype.html`'s feed-row marker
+    /// styling (`border:2px solid {color}` over a dark `#232730` fill) rather than the
+    /// SF-Symbol-on-filled-circle treatment `markerStyle(for:)`/`markerImage(for:bearing:)`
+    /// use for every other pin type. Both types use the same ring color — `UIColor.systemBlue`,
+    /// which resolves to exactly `#0A84FF` under this app's forced dark appearance
+    /// (`WeParkApp.swift`'s `.preferredColorScheme(.dark)`) — matching spec §6's verbatim value
+    /// without hardcoding a one-off RGB literal.
+    ///
+    /// Glyphs (spec §6 appendix): `.openSpot` → bold "P" text; `.leavingSoon` → 🚙 emoji.
+    /// Any other `pinType` passed here (should never happen — `markerImage(for:bearing:)`'s
+    /// own guard is the only call site) draws just the ring + dark fill, no glyph — the same
+    /// "never silently disappear" safety-net posture as `markerImage`'s SF Symbol fallback.
+    private static func ringMarkerImage(for pinType: PinType) -> UIImage {
+        let ringColor = UIColor.systemBlue
+        // Prototype's `#232730` dark neutral fill, so the ring reads as an outline against
+        // the map rather than a plain filled disc — visually distinct from every other
+        // marker type at a glance (design intent: these two types are "passerby" reports,
+        // not authoritative/civic-worker ones).
+        let fillColor = UIColor(red: 0x23 / 255.0, green: 0x27 / 255.0, blue: 0x30 / 255.0, alpha: 1.0)
+        let size = CGSize(width: imageSize, height: imageSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+
+        return renderer.image { _ in
+            let strokeWidth: CGFloat = 2.5
+            // Inset by half the stroke width so the ring stays fully inside the 32×32 bounds
+            // (a centered stroke straddles the path — without the inset, half the ring would
+            // be clipped at the image edge).
+            let circleRect = CGRect(origin: .zero, size: size).insetBy(dx: strokeWidth / 2, dy: strokeWidth / 2)
+
+            fillColor.setFill()
+            UIBezierPath(ovalIn: circleRect).fill()
+
+            let ringPath = UIBezierPath(ovalIn: circleRect)
+            ringPath.lineWidth = strokeWidth
+            ringColor.setStroke()
+            ringPath.stroke()
+
+            let glyph: String
+            let isEmoji: Bool
+            switch pinType {
+            case .openSpot:    glyph = "P";  isEmoji = false
+            case .leavingSoon: glyph = "🚙"; isEmoji = true
+            default:           return // Safety net — ring + fill only, no glyph.
+            }
+
+            let attributes: [NSAttributedString.Key: Any] = isEmoji
+                ? [.font: UIFont.systemFont(ofSize: imageSize * 0.5)]
+                : [.font: UIFont.systemFont(ofSize: imageSize * 0.5, weight: .heavy),
+                   .foregroundColor: ringColor]
+            let glyphString = glyph as NSString
+            let glyphSize = glyphString.size(withAttributes: attributes)
+            let glyphRect = CGRect(
+                x: (imageSize - glyphSize.width) / 2,
+                y: (imageSize - glyphSize.height) / 2,
+                width: glyphSize.width,
+                height: glyphSize.height
+            )
+            glyphString.draw(in: glyphRect, withAttributes: attributes)
         }
     }
 

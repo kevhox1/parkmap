@@ -68,6 +68,31 @@
 //  (21 original tests → 5 request tests restructured + 3 crowd merge + 4 locationContextLabel
 //  + 4 channel-isolation = 38 total)
 //
+//  Community 2.0 Phase 1 additions (build 20, session S3 — docs/community-2.0-reconciliation-
+//  spec.md §1 delta table "One Realtime channel per zone", §3 Phase 1). This file also contains
+//  `RealtimeMergeGateTests` and `CommunityPinServiceRealtimeWiringTests` from the later
+//  supabase-swift Stream B work, added after this header's own "38 tests" count above was
+//  written (pre-existing drift, not introduced by this session — noted rather than silently
+//  left for a future QA pass to re-discover). This session's own additions, appended rather
+//  than folded into the stale numbering above:
+//   - `testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypes` widened in place
+//     (not a new test) to assert `.openSpot`/`.leavingSoon` are mergeable.
+//   - `RealtimeMergeGateZoneTests` (4 new pure tests): isInZone no-filter / matching / mismatch
+//     / pin-zone-nil-with-active-filter.
+//   - `CommunityPinServiceRealtimeWiringTests` gains 3 new integration tests exercising
+//     `setSelectedZone(_:)` through `handleRealtimeUpsert`: no-filter-set passthrough,
+//     matching-zone merge, mismatched-zone drop.
+//   - `makeFixturePin` gains an optional `zoneId` parameter (default `nil` — every pre-existing
+//     call site is unaffected).
+//
+//  S4 QA pass 1 fix (build 20, PR #94 Finding #1 — BLOCKING): S3's widening above was itself
+//  the bug QA found — `.openSpot`/`.leavingSoon` were unconditionally mergeable regardless of
+//  `AppConstants.communityEnabled`. `testMergeablePinTypes_containsExpectedTypes_
+//  excludesIneligibleTypes` (renamed `...AndFlaggedTypes`) now asserts the two types are
+//  EXCLUDED from the production `mergeablePinTypes` property (flag ships `false`), plus two
+//  new pure tests (`testComputeMergeablePinTypes_flagFalse/True_...`) asserting both flag
+//  states directly via `RealtimeMergeGate.computeMergeablePinTypes(communityEnabled:)`.
+//
 //  FT-15 / TF2-15 Stream B4 (docs/ft15-tf215-temporary-block-restrictions-spec.md §12):
 //  fetchPins now issues a 3rd concurrent request (crowd block-scoped, filming/construction).
 //  The 5 request-structure tests + the debounce test above were updated in place
@@ -116,7 +141,11 @@ private func makeFixturePin(
     source: PinSource = .openData,
     expiresAt: Date? = kFuture,
     resolvedAt: Date? = nil,
-    metaJSON: String? = nil
+    metaJSON: String? = nil,
+    // Community 2.0 Phase 1 (build 20, S3): default nil preserves every pre-existing call
+    // site's fixture shape (zone_id: null) byte-for-byte; only the new zone-dimension tests
+    // pass a real value.
+    zoneId: String? = nil
 ) -> CommunityPin {
     // Build JSON and decode — matches the production decode path exactly.
     let expiresValue: String
@@ -157,7 +186,7 @@ private func makeFixturePin(
       "lat": 40.7505,
       "lng": -73.9965,
       "segment_id": null,
-      "zone_id": null,
+      "zone_id": \(zoneId.map { #""\#($0)""# } ?? "null"),
       "author_id": null,
       "author_username": null,
       "created_at": "2026-06-01T10:00:00+00:00",
@@ -1160,7 +1189,16 @@ final class RealtimeMergeGateTests: XCTestCase {
     /// `mergeablePinTypes` mirrors `mergeRealtimeChange`'s pre-existing set (spec §8.3) — a
     /// personal-only type (`parked_car`) or a durable/non-community type must never be
     /// Realtime-mergeable.
-    func testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypes() {
+    ///
+    /// S4 QA pass 1, PR #94 Finding #1 (BLOCKING) — REVISED from S3's version: `.openSpot`/
+    /// `.leavingSoon` are now gated behind `AppConstants.communityEnabled` (shipped `false`),
+    /// so the production `mergeablePinTypes` property — which reads the REAL flag — must NOT
+    /// include them today. S3's version of this test asserted the opposite (unconditional
+    /// inclusion), which is exactly the bug QA found: any `open_spot`/`leaving_soon` row
+    /// already live in production `pins` would have been Realtime-mergeable regardless of
+    /// the flag. See `testComputeMergeablePinTypes_flagTrue_includesCommunityPhase1Types`
+    /// below for the flag-on assertion.
+    func testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypesAndFlaggedTypes() {
         let expectedIncluded: [PinType] = [
             .filming, .specialEvent, .aspSuspendedToday,
             .enforcementActive, .sweeperPassed, .brokenMeter,
@@ -1169,10 +1207,88 @@ final class RealtimeMergeGateTests: XCTestCase {
         for type in expectedIncluded {
             XCTAssertTrue(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must be mergeable")
         }
-        let expectedExcluded: [PinType] = [.parkedCar, .signCorrection, .blockNote]
+        let expectedExcluded: [PinType] = [
+            .parkedCar, .signCorrection, .blockNote,
+            .openSpot, .leavingSoon, // gated off — communityEnabled ships false today
+        ]
         for type in expectedExcluded {
-            XCTAssertFalse(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must NOT be mergeable")
+            XCTAssertFalse(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must NOT be mergeable while communityEnabled is false")
         }
+    }
+
+    /// Pure, parameterized version — asserts both flag states directly without needing to
+    /// mutate the (deliberately immutable) `AppConstants.communityEnabled` `let`. Same
+    /// pattern this codebase already uses for `ft20BrowseSheetEnabled`-adjacent decision
+    /// logic (`browseSheetBoundaryTarget`, `FT20StreamCTests.swift`).
+    func testComputeMergeablePinTypes_flagFalse_excludesCommunityPhase1Types() {
+        let types = RealtimeMergeGate.computeMergeablePinTypes(communityEnabled: false)
+        XCTAssertFalse(types.contains(.openSpot))
+        XCTAssertFalse(types.contains(.leavingSoon))
+    }
+
+    func testComputeMergeablePinTypes_flagTrue_includesCommunityPhase1Types() {
+        let types = RealtimeMergeGate.computeMergeablePinTypes(communityEnabled: true)
+        XCTAssertTrue(types.contains(.openSpot))
+        XCTAssertTrue(types.contains(.leavingSoon))
+        // The base Tier 1/3/FT-15 types must still be present regardless of the flag.
+        XCTAssertTrue(types.contains(.enforcementActive))
+        XCTAssertTrue(types.contains(.filming))
+    }
+}
+
+// MARK: - CommunityPinService.channel2PinTypeQueryValue (S4 QA pass 1, PR #94 Finding #1 — BLOCKING fix)
+
+/// Channel 2's fetch `pin_type=in.(...)` value, gated on `communityEnabled` via
+/// `AppConstants.communityPhase1PinTypes(enabled:)` — before this fix the value was a plain
+/// string literal always including `open_spot,leaving_soon`, meaning a flag-off client would
+/// still REQUEST (and, since the server-side enum values already exist in production, likely
+/// receive) rows of the two new types on every fetch cycle.
+final class Channel2PinTypeQueryValueTests: XCTestCase {
+
+    func testChannel2PinTypeQueryValue_flagFalse_excludesCommunityPhase1Types() {
+        let value = CommunityPinService.channel2PinTypeQueryValue(communityEnabled: false)
+        XCTAssertEqual(value, "in.(enforcement_active,sweeper_passed)")
+    }
+
+    func testChannel2PinTypeQueryValue_flagTrue_includesCommunityPhase1Types() {
+        let value = CommunityPinService.channel2PinTypeQueryValue(communityEnabled: true)
+        XCTAssertEqual(value, "in.(enforcement_active,sweeper_passed,open_spot,leaving_soon)")
+    }
+}
+
+// MARK: - RealtimeMergeGate.isInZone tests (Community 2.0 Phase 1, build 20 S3)
+
+/// Pure-function tests for `RealtimeMergeGate.isInZone` — the zone_id gating dimension added
+/// alongside pin-type eligibility and viewport this session
+/// (docs/community-2.0-reconciliation-spec.md §1 delta table, §3 Phase 1). No
+/// `CommunityPinService`, no socket, no `@MainActor` needed — same rationale as
+/// `RealtimeMergeGateTests` above.
+final class RealtimeMergeGateZoneTests: XCTestCase {
+
+    /// No zone filter active (the default, pre-S4 state) — every combination passes, including
+    /// a pin whose own zone is `nil`. This is what keeps every existing (pre-Phase-1) caller's
+    /// behavior byte-identical: nothing changes until a caller actually calls
+    /// `CommunityPinService.setSelectedZone(_:)` with a non-nil value.
+    func testIsInZone_noSelectedZone_alwaysIncluded() {
+        XCTAssertTrue(RealtimeMergeGate.isInZone(pinZoneId: "soho", selectedZoneId: nil))
+        XCTAssertTrue(RealtimeMergeGate.isInZone(pinZoneId: nil, selectedZoneId: nil))
+    }
+
+    /// A pin whose zone matches the selected zone is included.
+    func testIsInZone_matchingZone_included() {
+        XCTAssertTrue(RealtimeMergeGate.isInZone(pinZoneId: "soho", selectedZoneId: "soho"))
+    }
+
+    /// A pin whose zone differs from the selected zone is excluded.
+    func testIsInZone_mismatchedZone_excluded() {
+        XCTAssertFalse(RealtimeMergeGate.isInZone(pinZoneId: "soho", selectedZoneId: "les"))
+    }
+
+    /// A pin with no zone at all cannot match a specific, active zone filter — "unknown" must
+    /// not be silently admitted once a filter is active (mirrors `isWithinRegion`'s own strict
+    /// membership semantics).
+    func testIsInZone_pinZoneNil_selectedZoneActive_excluded() {
+        XCTAssertFalse(RealtimeMergeGate.isInZone(pinZoneId: nil, selectedZoneId: "nolita"))
     }
 }
 
@@ -1298,6 +1414,61 @@ final class CommunityPinServiceRealtimeWiringTests: XCTestCase {
         XCTAssertFalse(
             service.visiblePins.contains { $0.id == pin.id },
             "AC-R4: a pin outside the fetched viewport must be dropped before reaching mergeRealtimeChange"
+        )
+    }
+
+    // MARK: Community 2.0 Phase 1 — zone_id RealtimeMergeGate dimension (build 20, S3)
+
+    /// Default state (no `setSelectedZone(_:)` call): a zoned pin still merges normally —
+    /// byte-identical to this service's pre-Phase-1 behavior.
+    func testRealtimeUpsert_noZoneFilterSet_zonedPinStillMerges() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await seedLastFetchedRegion(service, region: manhattanRegion)
+        await startAndAwaitConnect(service)
+
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture, zoneId: "soho")
+        mock.simulateUpsert(pin)
+
+        XCTAssertTrue(
+            service.visiblePins.contains { $0.id == pin.id },
+            "With no zone filter set, a pin's zone_id must not affect whether it merges"
+        )
+    }
+
+    /// A zone filter is active and the pin's zone matches — it merges.
+    func testRealtimeUpsert_zoneFilterActive_matchingZone_merges() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await seedLastFetchedRegion(service, region: manhattanRegion)
+        await startAndAwaitConnect(service)
+        service.setSelectedZone("soho")
+
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture, zoneId: "soho")
+        mock.simulateUpsert(pin)
+
+        XCTAssertTrue(
+            service.visiblePins.contains { $0.id == pin.id },
+            "A pin whose zone_id matches the selected zone must still merge"
+        )
+    }
+
+    /// A zone filter is active and the pin's zone does NOT match — it is dropped before
+    /// reaching `mergeRealtimeChange`, mirroring the existing viewport-gate test's shape.
+    func testRealtimeUpsert_zoneFilterActive_mismatchedZone_dropped() async {
+        let mock = MockRealtimePinChannel()
+        let service = makeService(realtimeChannel: mock)
+        await seedLastFetchedRegion(service, region: manhattanRegion)
+        await startAndAwaitConnect(service)
+        service.setSelectedZone("les")
+
+        let pin = makeFixturePin(pinType: .filming, expiresAt: kFuture, zoneId: "soho")
+        mock.simulateUpsert(pin)
+
+        XCTAssertFalse(
+            service.visiblePins.contains { $0.id == pin.id },
+            "A pin whose zone_id does not match the selected zone must be dropped before " +
+            "reaching mergeRealtimeChange"
         )
     }
 

@@ -24,6 +24,17 @@
 //   - No force-unwraps.
 //   - Pure functions / a `static let` constant only — no mutable state, no side effects.
 //
+//  Community 2.0 Phase 1 (docs/community-2.0-reconciliation-spec.md §1 delta table "One
+//  Realtime channel per zone", §3 Phase 1 — build 20, session S3):
+//   - `mergeablePinTypes` widened to include `.openSpot`/`.leavingSoon` (one-line addition in
+//     this one place, per this file's own §8.3 design intent above).
+//   - Adds `isInZone(pinZoneId:selectedZoneId:)` — a THIRD gating dimension alongside pin-type
+//     eligibility and viewport, per the spec's explicit recommendation: "keep one channel, add
+//     zone_id as one more RealtimeMergeGate dimension" rather than opening N zone-scoped
+//     channels (which `postgres_changes`' single-column-comparison limitation can't express
+//     compound-predicate anyway — the same reasoning that already ruled out per-source/
+//     per-lifespan channels above). Client-side only; no server-side zone filter.
+//
 
 import Foundation
 import MapKit
@@ -41,13 +52,34 @@ enum RealtimeMergeGate {
     /// Realtime-adoption pass required when new pin types ship.
     ///
     /// Values mirror `mergeRealtimeChange`'s exact pre-existing set: Tier 1 open-data display
-    /// types + Tier 3 ephemeral crowd pins + FT-15/TF2-15 block-scoped `.construction`
-    /// (`.filming` already covers FT-15's filming case via the Tier 1 line).
-    static let mergeablePinTypes: Set<PinType> = [
+    /// types + Tier 3 ephemeral crowd pins + FT-15/TF2-15 block-scoped `.construction`.
+    /// Community 2.0 Phase 1's `.openSpot`/`.leavingSoon` are NOT in this base set — see
+    /// `computeMergeablePinTypes(communityEnabled:)` below (S4 QA pass 1, PR #94 Finding
+    /// #1 — these two must be gated, not unconditional).
+    static let baseMergeablePinTypes: Set<PinType> = [
         .filming, .specialEvent, .aspSuspendedToday,       // Tier 1
         .enforcementActive, .sweeperPassed, .brokenMeter,   // Tier 3
         .construction,                                       // FT-15/TF2-15
     ]
+
+    /// Community 2.0 Phase 1 (S4 QA pass 1, PR #94 Finding #1 — BLOCKING): pure, parameterized
+    /// version of `mergeablePinTypes` so tests can assert both flag states directly. `.openSpot`/
+    /// `.leavingSoon` are unioned in only when `communityEnabled` — via
+    /// `AppConstants.communityPhase1PinTypes(enabled:)`, the single source of truth for this
+    /// gate (also used by `CommunityPinService`'s Channel 2 fetch and
+    /// `ContentView.handleVisiblePinsChange`'s `mapMarkerTypes` — three call sites, one flag
+    /// check).
+    static func computeMergeablePinTypes(communityEnabled: Bool) -> Set<PinType> {
+        baseMergeablePinTypes.union(AppConstants.communityPhase1PinTypes(enabled: communityEnabled))
+    }
+
+    /// Production-facing property — reads the real `AppConstants.communityEnabled` flag.
+    /// Every existing call site (`CommunityPinService.mergeRealtimeChange`, etc.) keeps using
+    /// this unqualified property; only tests need `computeMergeablePinTypes(communityEnabled:)`
+    /// directly.
+    static var mergeablePinTypes: Set<PinType> {
+        computeMergeablePinTypes(communityEnabled: AppConstants.communityEnabled)
+    }
 
     // MARK: - Viewport gating
 
@@ -89,5 +121,30 @@ enum RealtimeMergeGate {
         let neLng = region.center.longitude + halfLng
 
         return lat >= swLat && lat <= neLat && lng >= swLng && lng <= neLng
+    }
+
+    // MARK: - Zone gating (Community 2.0 Phase 1)
+
+    /// True if `pinZoneId` should be admitted under the currently-selected zone filter.
+    ///
+    /// `selectedZoneId == nil` means "no zone filter active" (e.g. Phase 1 UI — S4 — hasn't
+    /// wired a zone chip selection yet, or a future "all zones" view) — every pin passes this
+    /// dimension unconditionally, which is exactly this service's behavior before this session
+    /// (zero change until a caller actually sets a selected zone).
+    ///
+    /// A pin with `pinZoneId == nil` (a row whose zone couldn't be resolved, or one that
+    /// predates the zone seed) can never match a specific, non-nil `selectedZoneId` — it only
+    /// passes when no zone filter is active. This mirrors `isWithinRegion`'s own strict
+    /// membership test: a gate that admits "unknown" pins under an active filter would defeat
+    /// the point of the filter.
+    ///
+    /// - Parameters:
+    ///   - pinZoneId: The pin's `zone_id` (`CommunityPin.zoneId`).
+    ///   - selectedZoneId: The zone currently selected by the crew feed's zone chips
+    ///     (`CommunityPinService.selectedZoneId`). `nil` = no filter.
+    /// - Returns: `true` if the pin should be admitted under the zone dimension.
+    static func isInZone(pinZoneId: String?, selectedZoneId: String?) -> Bool {
+        guard let selectedZoneId else { return true }
+        return pinZoneId == selectedZoneId
     }
 }

@@ -26,6 +26,23 @@
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens or Supabase keys.
 //
+//  Community 2.0 Phase 1 (build 20, session S3 — docs/community-2.0-reconciliation-spec.md §0
+//  OQ-2, §3 Phase 1): `FT1MobilePinTTLTests` (added after this header's own Fix 1/2/3 inventory
+//  was written — pre-existing drift, not introduced by this session) has its enforcement/
+//  sweeper assertions updated IN PLACE (5 min → 45m/120m) and renamed to drop the now-stale
+//  "FT1_" prefix, reflecting OQ-2's reversal of FT-1's 5-minute baseline. No new test count here
+//  — see `Community2Phase1ModelTests.swift` for the net-new `open_spot`/`leaving_soon` TTL
+//  table tests.
+//
+//  Community 2.0 Phase 1 (build 20, session S4 — crew feed UI, §3 Phase 1, §6 appendix):
+//  `MarkerImageSafetyNetTests` gains 4 tests covering the compile-break fix this session makes
+//  (`PinType.displayLabel` gaining `.openSpot`/`.leavingSoon` cases) plus the two types' new
+//  "ring" marker image and age-not-expiry callout subtitle:
+//   14. testDisplayLabel_openSpot_and_leavingSoon
+//   15. testMarkerImage_openSpot_returnsNonNil
+//   16. testMarkerImage_leavingSoon_returnsNonNil
+//   17. testSubtitle_openSpot_and_leavingSoon_showRelativeAge_notExpiry
+//
 
 import XCTest
 import MapKit
@@ -561,6 +578,61 @@ final class MarkerImageSafetyNetTests: XCTestCase {
                 "on iOS 17+. If nil, the symbol was removed and markerStyle(for:) must be updated.")
         }
     }
+
+    // MARK: - Community 2.0 Phase 1 (S4): open_spot / leaving_soon ring markers
+
+    /// This PR's own compile-break fix (S3 added `.openSpot`/`.leavingSoon` to `PinType`
+    /// with no corresponding `displayLabel` case, leaving the exhaustive switch broken).
+    func testDisplayLabel_openSpot_and_leavingSoon() {
+        XCTAssertEqual(PinType.openSpot.displayLabel, "Open Spot")
+        XCTAssertEqual(PinType.leavingSoon.displayLabel, "Leaving Soon")
+    }
+
+    /// Spec §6 appendix: `.openSpot`/`.leavingSoon` use a "ring" marker (outline + glyph),
+    /// not the filled-circle + SF Symbol treatment every other type uses — see
+    /// `PinMarkerAnnotation.ringMarkerImage(for:)`. Same non-nil / non-zero-size safety-net
+    /// assertion shape as `testMarkerImage_enforcementActive_returnsNonNil` above.
+    func testMarkerImage_openSpot_returnsNonNil() {
+        let pin = decodeTestPin(pinType: .openSpot)
+        let annotation = CommunityPinAnnotation(pin: pin)
+        let view = PinMarkerAnnotation(annotation: annotation, reuseIdentifier: "open-spot-test")
+        view.configure(for: annotation.pin)
+
+        XCTAssertNotNil(view.image, "open_spot configure must set a non-nil ring-marker image")
+        if let img = view.image {
+            XCTAssertGreaterThan(img.size.width, 0)
+            XCTAssertGreaterThan(img.size.height, 0)
+        }
+    }
+
+    func testMarkerImage_leavingSoon_returnsNonNil() {
+        let pin = decodeTestPin(pinType: .leavingSoon)
+        let annotation = CommunityPinAnnotation(pin: pin)
+        let view = PinMarkerAnnotation(annotation: annotation, reuseIdentifier: "leaving-soon-test")
+        view.configure(for: annotation.pin)
+
+        XCTAssertNotNil(view.image, "leaving_soon configure must set a non-nil ring-marker image")
+        if let img = view.image {
+            XCTAssertGreaterThan(img.size.width, 0)
+            XCTAssertGreaterThan(img.size.height, 0)
+        }
+    }
+
+    /// Spec §0 OQ-2: "every surface that renders these pins MUST show relative age" — the map
+    /// callout subtitle is one such surface, widened alongside enforcement_active/sweeper_passed.
+    func testSubtitle_openSpot_and_leavingSoon_showRelativeAge_notExpiry() {
+        let openSpot = decodeTestPin(pinType: .openSpot)
+        let leavingSoon = decodeTestPin(pinType: .leavingSoon)
+
+        XCTAssertEqual(
+            CommunityPinAnnotation(pin: openSpot).subtitle,
+            PinMarkerAnnotation.timeSinceBadge(pin: openSpot, now: Date())
+        )
+        XCTAssertEqual(
+            CommunityPinAnnotation(pin: leavingSoon).subtitle,
+            PinMarkerAnnotation.timeSinceBadge(pin: leavingSoon, now: Date())
+        )
+    }
 }
 
 // MARK: - URLProtocol mocks (distinct names to avoid linker collisions)
@@ -632,30 +704,38 @@ final class FeedbackFetchMockURLProtocol: URLProtocol {
     override func stopLoading() {}
 }
 
-// MARK: - FT-1: Mobile-pin lifetime (enforcement / sweeper shortened to 5 min)
+// MARK: - Ephemeral pin TTL table (FT-1, superseded by Community 2.0 OQ-2)
 
-/// Verifies `CommunityPinService.ephemeralTTLSeconds(for:)` — the pure helper that drives
-/// the `expires_at` set on insert. FT-1: enforcement agents + sweepers are mobile and go
-/// stale fast → 5 min; broken meters are stationary → 30 min; other types → no expiry.
+/// Verifies `CommunityPinService.ephemeralTTLSeconds(for:leavingMinutes:)` — the pure helper
+/// that drives the `expires_at` set on insert (and, per Community 2.0 OQ-2, the client-side
+/// staleness/decay display math for the same types).
+///
+/// FT-1 originally shortened enforcement/sweeper to 5 min ("mobile, very fresh — a 30-min
+/// lifetime kept them on the map long after they'd moved on"). **Superseded 2026-08-26 by
+/// Community 2.0 OQ-2** (`docs/community-2.0-reconciliation-spec.md` §0, resolved by Kevin):
+/// the prototype's 45m/120m values govern instead — an aged pin is now read as useful history
+/// ("agent already came through"), not stale noise, so these three tests are updated IN PLACE
+/// with the new values and new names, not left stale alongside a superseding test. Broken
+/// meters are unaffected (still 30 min, stationary condition).
 final class FT1MobilePinTTLTests: XCTestCase {
 
-    func testFT1_enforcementActive_expiresIn5Minutes() {
-        XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .enforcementActive), 5 * 60,
-                       "FT-1: enforcement agent pins must expire after 5 minutes")
+    func testEnforcementActive_expiresIn45Minutes() {
+        XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .enforcementActive), 45 * 60,
+                       "OQ-2 (2026-08-26): enforcement agent pins now expire after 45 minutes — staleness is the signal")
     }
 
-    func testFT1_sweeperPassed_expiresIn5Minutes() {
-        XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .sweeperPassed), 5 * 60,
-                       "FT-1: sweeper pins must expire after 5 minutes")
+    func testSweeperPassed_expiresIn120Minutes() {
+        XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .sweeperPassed), 120 * 60,
+                       "OQ-2 (2026-08-26): sweeper pins now expire after 120 minutes — staleness is the signal")
     }
 
-    func testFT1_brokenMeter_keeps30Minutes() {
+    func testBrokenMeter_keeps30Minutes() {
         XCTAssertEqual(CommunityPinService.ephemeralTTLSeconds(for: .brokenMeter), 30 * 60,
-                       "FT-1: broken-meter pins are stationary and keep the 30-minute lifetime")
+                       "Unaffected by OQ-2: broken-meter pins are stationary and keep the 30-minute lifetime")
     }
 
-    func testFT1_nonEphemeralType_hasNoExpiry() {
+    func testNonEphemeralType_hasNoExpiry() {
         XCTAssertNil(CommunityPinService.ephemeralTTLSeconds(for: .filming),
-                     "FT-1: non-ephemeral (open-data) types must not auto-expire")
+                     "Non-ephemeral (open-data) types must not auto-expire")
     }
 }
