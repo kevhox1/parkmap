@@ -271,6 +271,39 @@ struct ReportSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
 
+                        // Row 3: Street closure (Community 2.0 Phase 2a, build 20 S6).
+                        //
+                        // QA pass 2 / PR #95 Mac-gate blocker fix — POSITION, not just gating:
+                        // this row used to render LAST, after Row 2 and whichever per-type
+                        // detail (subtag/direction toggle, confirm-street section, heading
+                        // picker) that row's own selection had inserted. Selecting Row 1 or
+                        // Row 2 inserts that detail in the SAME synchronous transaction as the
+                        // tap that selected it, which shifts every sibling BELOW the inserted
+                        // content — including a row sitting after Row 2's conditional block.
+                        // For an ordinary row (e.g. Row 2 shifting when Row 1's detail is
+                        // inserted — a pre-existing, harmless pattern already present before
+                        // this PR) a stray mis-hit during that shift is a total non-event: it
+                        // just sets `selectedType` again. For Row 3 it is NOT harmless: its
+                        // action (`onRequestStreetClosure` → `enterBlockSelectMode()`)
+                        // force-hides `activeSheet` — exactly the "report sheet AND browse
+                        // sheet both gone, no crash logged" fingerprint reported at the Mac
+                        // gate. Fix: render Row 3 FIRST, before Row 1/Row 2 and ALL of their
+                        // conditional detail, so nothing dynamic is EVER inserted above it —
+                        // its position (and hit-test target) cannot move for any reason.
+                        //
+                        // Deliberate, disclosed tradeoff: this changes Row 3's VISUAL ORDER
+                        // (now first, not third) in the flag-ON grid only — flag-OFF never
+                        // renders this row at all (`showsStreetClosureTile` gate, unchanged),
+                        // so Rows 1/2 and their per-type detail sections are otherwise
+                        // completely untouched by this fix, preserving flag-off byte-identical
+                        // parity (product rule 7) exactly as before. Re-ordering Row 3 back to
+                        // visually-last, if wanted, needs a structural fix that keeps its
+                        // position stable WITHOUT reintroducing this race — flagged as a
+                        // follow-up, not attempted in this hotfix.
+                        if ReportSheet.showsStreetClosureTile(communityEnabled: AppConstants.communityEnabled) {
+                            streetClosureRow
+                        }
+
                         // MARK: Primary type rows
 
                         // Row 1: Enforcement active
@@ -333,16 +366,6 @@ struct ReportSheet: View {
                             headingTowardPickerRow
                                 .padding(.leading, 20)
                                 .padding(.bottom, 4)
-                        }
-
-                        // Row 3: Street closure (Community 2.0 Phase 2a, build 20 S6).
-                        // Gated behind AppConstants.communityEnabled — see this file's header
-                        // comment: the underlying flow (BlockRestrictionReportSheet) already
-                        // shipped in FT-15, but adding a THIRD tile here is a visible change to
-                        // the report grid, so it follows the same flag every other Community
-                        // 2.0 UI surface follows (product rule 7).
-                        if ReportSheet.showsStreetClosureTile(communityEnabled: AppConstants.communityEnabled) {
-                            streetClosureRow
                         }
 
                     }
@@ -877,6 +900,65 @@ struct ReportSheet: View {
         switch selectedType {
         case .enforcementActive, .sweeper: return true
         case nil: return false
+        }
+    }
+
+    // MARK: - Report grid tap routing (static, for test access — QA pass 2 / PR #95 Mac-gate
+    // blocker fix, build 20 S6)
+
+    /// One of the report grid's three tiles — the tap TARGET, not the resulting state.
+    enum ReportGridTile: Equatable {
+        case type(ReportType)
+        case streetClosure
+    }
+
+    /// What tapping a given grid tile leads to.
+    ///
+    /// Extracted as a pure, `Equatable` model so grid ROUTING is directly testable for both
+    /// `communityEnabled` states without hosting a SwiftUI view (this codebase doesn't use
+    /// ViewInspector or similar — QA pass 1 Finding #2 on this file flagged exactly this gap).
+    /// Root cause of the Mac-gate blocker this fixes: `.streetClosure` (Row 3) used to render
+    /// AFTER Row 1/Row 2 and whichever per-type detail their selection had inserted — so its
+    /// on-screen position (and hit-test target) moved as a direct side effect of tapping a
+    /// `.type` tile, racing the tap's touch-up against the relayout. `body`'s fix moves Row 3
+    /// to render FIRST, before any conditional content can ever be inserted above it, removing
+    /// the PRECONDITION for that race, with zero change to Rows 1/2's own (already flag-off-
+    /// verified) interleaved detail structure. THIS enum is the regression net — a future edit
+    /// that reintroduces layout instability won't be caught by these tests (SwiftUI layout
+    /// stability itself isn't unit-testable here), but a future edit that makes a tile's tap
+    /// handler resolve to the WRONG `ReportGridDestination` case — e.g. a `.streetClosure` tap
+    /// accidentally computing `.selectType(...)`, or vice versa — will be.
+    enum ReportGridDestination: Equatable {
+        /// An enforcement/sweeper tile tap: `selectedType` becomes `type`.
+        /// `showsConfirmStreet`: `true` → the confirm-the-street section renders next, before
+        /// the direction picker; `false` → straight to the direction picker (flag-off, or
+        /// flag-on with no candidates — OD-1), byte-identical to the pre-Community-2.0 flow.
+        case selectType(ReportType, showsConfirmStreet: Bool)
+        /// The street-closure tile tap: hands off to the existing block-select flow via
+        /// `onRequestStreetClosure` — this sheet dismisses entirely, `selectedType` is never
+        /// touched. By construction this case carries no `ReportType` payload, so it can never
+        /// be mistaken for a `.selectType` destination at the type level.
+        case streetClosureHandoff
+    }
+
+    /// Resolves the destination for tapping `tile`, given the current flag/candidate state.
+    static func destination(
+        forTapping tile: ReportGridTile,
+        communityEnabled: Bool,
+        candidates: [Segment]
+    ) -> ReportGridDestination {
+        switch tile {
+        case .type(let type):
+            return .selectType(
+                type,
+                showsConfirmStreet: showsConfirmStreetStep(
+                    communityEnabled: communityEnabled,
+                    selectedType: type,
+                    candidates: candidates
+                )
+            )
+        case .streetClosure:
+            return .streetClosureHandoff
         }
     }
 
