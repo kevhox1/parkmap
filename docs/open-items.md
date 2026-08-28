@@ -104,6 +104,8 @@ Four long-standing items died on real hardware. Recorded here so nobody re-opens
 | 9 | **Duplicate-adjacent-vertex tech debt** — see below | VPS | Fold into the next regen, don't spend a cycle on it alone. **That regen is now most likely FT-21's** (#7) — bundle them |
 | 10 | **359 still-lost zone rows** — the residue after the FT-14/FT-19 fix took 1,624 → 359 (−77.9%) | VPS | Not scheduled. The natural pairing for #9 — **same FT-21 regen, three items one validation pass** |
 
+| 11 | **Diagonal/off-street curb lines in Chinatown–Civic Center** — green segments cutting across block interiors near White St / Benson Pl / NYU Lafayette Hall and Columbus Park; several other lines not hugging their streets | VPS (investigate) | ⚪️ **BACKBURNERED by Kevin 2026-08-28: "look at after all the hero builds are finished."** Observed in the iOS sim during the Phase-1 smoke (build-20 branch, but almost certainly pre-existing tile data, not Phase-1 code — Phase 1 touches no geometry). Probable kin of #9/#10 (same regen would validate all three) and of FT-21's geometry family. Do NOT start before build 20 wraps |
+
 **Duplicate-adjacent-vertex points in tile polylines: 12.4% → 22.7%** — a real, previously-undisclosed
 side effect of the FT-14/FT-19 geometry fix (#80, merged). Found by QA re-running
 `scripts/coverage-report.js` and noticing SoHo "regress" 73%→72%: the extra duplicate points shift
