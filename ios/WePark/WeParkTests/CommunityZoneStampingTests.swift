@@ -70,10 +70,18 @@ final class ResolveZoneIdTests: XCTestCase {
 
 // MARK: - insertCrowdPin integration — payload actually carries the resolved zone_id
 
-/// Local mock plumbing, mirroring `Tier3AuthReactionsTests`'s `WriteMockURLProtocol` /
-/// `AuthMockURLProtocol` pattern but file-scoped (this project's convention: file-private
-/// mock URLProtocols + helpers per test file, to avoid shared static state races between
-/// files running in parallel — see that file's own header comment).
+/// QA pass 1 (PR #95) Finding #5 correction: this does NOT define its own file-scoped mock
+/// URLProtocol. It reuses the existing `internal`-scoped `WriteMockURLProtocol` /
+/// `AuthMockURLProtocol` classes already declared once in `Tier3AuthReactionsTests.swift` —
+/// those classes' `nonisolated(unsafe) static var requestHandler` is genuinely SHARED,
+/// mutable, global state across every file in this test target, not file-private. Only the
+/// constants/functions below (auth-response fixture JSON, mock-session builders, the request-
+/// body decoder) are file-private duplicates of that file's equivalents, so this file doesn't
+/// need to import/expose them — the underlying `URLProtocol` classes and their static
+/// `requestHandler` slot are shared, and tests across files that both assign
+/// `WriteMockURLProtocol.requestHandler` are not safe to run concurrently against each other
+/// (a pre-existing property of this test target's mock pattern, not something introduced or
+/// fixed here — restructuring it is out of scope for this correction).
 private let kZoneStampAuthURL = URL(string: "https://zone-stamp-test.supabase.co")!
 private let kZoneStampAnonKey = "test-anon-key-zone-stamp"
 private let kZoneStampUser = UUID(uuidString: "B0000001-0000-0000-0000-000000000001")!

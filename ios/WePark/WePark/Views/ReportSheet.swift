@@ -636,9 +636,19 @@ struct ReportSheet: View {
     @ViewBuilder
     private var confirmStreetSection: some View {
         VStack(alignment: .leading, spacing: 7) {
+            // QA pass 1 (PR #95) Finding #3: rendered ALL-CAPS via `.textCase(.uppercase)` to
+            // match design/screenshots/09-report-confirm-street.png's letterspaced-caps
+            // section-label treatment (prototype.html:390's "CONFIRM THE STREET") — same
+            // idiom this codebase already uses for other all-caps section labels
+            // (`DriveModeBottomCard.swift`'s eyebrow label, `PinDetailSheet.swift`'s
+            // "Community Check"), layered on top of this file's own `.footnote.weight(.medium)`
+            // + `.secondary` treatment (`subTagPickerRow`/`sweeperDirectionRow`/
+            // `headingTowardPickerRow`'s existing section labels) rather than hardcoding the
+            // string in caps.
             Text("Confirm the street")
                 .font(.footnote.weight(.medium))
                 .foregroundStyle(.secondary)
+                .textCase(.uppercase)
                 .padding(.leading, 4)
 
             VStack(spacing: 7) {

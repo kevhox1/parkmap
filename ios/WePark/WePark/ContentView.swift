@@ -3095,6 +3095,11 @@ struct ContentView: View {
     /// zoom/viewport, or the street genuinely has only one curb in the data).
     ///
     /// Pure (no SwiftUI/instance dependency), directly unit-testable.
+    ///
+    /// Kept in sync with `CandidateSegmentSearch.oppositeSideCandidate(of:in:)` (Community
+    /// 2.0 Phase 2a, build 20 S6) — an intentional, independently-tested duplicate of this
+    /// exact predicate, kept separate to avoid a Services→View dependency. Update both if
+    /// this matching rule ever changes (QA pass 1, PR #95 Finding #4).
     static func oppositeSideSegment(of segment: Segment, in segments: [Segment]) -> Segment? {
         let pair: Set<String> = [segment.fromStreet, segment.to]
         return segments.first { candidate in
