@@ -4,7 +4,10 @@
 `docs/community-2.0-reconciliation-spec.md` §3 Phase 2 (AC-P2.3, AC-P2.5),
 `docs/community-2.0-roadmap.md` S6 row, `design/prototype.html:361-411`,
 `design/screenshots/09-report-confirm-street.png`, `docs/w5-pin-drop-spec.md`.
-**Verdict:** MERGE-AFTER-MAC-GATE
+**Verdict (Pass 1, superseded by Pass 2 below):** MERGE-AFTER-MAC-GATE — one 🟡 Significant
+finding (animation-timing risk on the new `enterBlockSelectMode()` call site), no blockers.
+**This verdict did not hold**: Kevin's live Mac gate found a 🔴 blocker Pass 1 missed (see
+Pass 2). Kept below for the record, not as the operative verdict.
 
 ## Summary
 
@@ -251,3 +254,174 @@ Specifically verified by direct comparison (not by trusting the PR body):
    submitted pin lands with the picked segment's id (not the original detected one).
 
 No physical device or second phone needed — everything above is Simulator-testable.
+
+---
+
+# QA Pass 2 — 2026-08-28 (Mac-gate blocker fix verification)
+
+**Reviewed:** `6c22b92a` (Pass 1's nit-fixes commit — ALL-CAPS confirm-street label, two-way
+`oppositeSideSegment` cross-ref, mock-comment correction; addresses Pass 1 Findings #3/#4/#5,
+not independently re-verified line-by-line since none of them touch the bug below) → `c637438d`
+(the Mac-gate blocker fix). Diff reviewed: `git diff 6c22b92a..c637438d`. Cold re-read — this
+session did not build the fix.
+
+**Reported bug (Kevin, live sim, flag-on, iPhone 17 / iOS 26.5):** tapping "Enforcement active"
+in the report sheet tore down the entire flow — report sheet dismissed, browse sheet also gone,
+bare map, no crash / no `.ips`. Deterministic ("does not work anymore"), not intermittent.
+
+## 1. RCA credibility
+
+**The elimination step is solid and independently verifiable; the specific touch-mechanism
+claim is plausible but not fully nailed down — and it doesn't need to be, because the fix is
+mechanism-agnostic.**
+
+- Verified independently (not trusted from the commit message): the only code path in this
+  file that sets `blockSelectModeActive = true` — required for the browse sheet to stay hidden
+  after dismissal, per `dismissTargetOutsideBrowseNav`'s logic — is `enterBlockSelectMode()`,
+  and its only two callers are the pre-existing long-press-dialog "Report closure" button
+  (`ContentView.swift:934-936`, unreachable from inside an already-open `ReportSheet`) and this
+  PR's `streetClosureRow` → `onRequestStreetClosure` (`ReportSheet.swift:1183`/`:730`). Reported
+  symptom (report sheet AND browse sheet both gone) can therefore *only* be produced by
+  `streetClosureRow`'s Button firing. This part of the RCA is airtight, not just plausible.
+- Verified `reportTypeRow`'s Button action is untouched by this PR (`git diff origin/main -- ...`
+  from Pass 1) and never references `onRequestStreetClosure` — so this was never a simple
+  "wrong handler wired to the wrong button" bug, confirming the commit message's claim that
+  QA's original mis-routing hypothesis was correctly refuted before the fix was written.
+- The specific micro-mechanism ("the SAME touch-up raced the relayout") is plausible but not
+  fully certain from a code read alone: SwiftUI `Button` fires its action on release, and the
+  layout shift (inserting `subTagPickerRow`/`confirmStreetSection`/`headingTowardPickerRow`
+  above Row 3) is a *result* of that action, which makes a same-touch-cycle race for the exact
+  reported tap mechanistically subtle to pin down without instrumenting a real device. An
+  equally consistent alternative mechanism is a second, closely-following tap (e.g. tapping
+  once to select the type, then tapping again near the same screen position to proceed/confirm)
+  landing on Row 3's new position — also fully deterministic for the same repro steps and
+  finger placement. **This nuance doesn't change the verdict**: both variants share the same
+  precondition (Row 3's position/hit-target moves as a side effect of selecting a type), and the
+  fix eliminates that shared precondition outright, so it resolves the observed defect
+  regardless of which precise SwiftUI touch-dispatch behavior was operating. RCA is not
+  "wrong," but the commit message states the touch-racing mechanism with more certainty than a
+  code read alone can support — worth a lighter-touch phrasing next time, not a blocker.
+
+## 2. The fix — position, flag-off parity, and the shift-under-finger class generally
+
+- **Verified the reorder is exactly what's claimed**: `git diff 6c22b92a..c637438d` shows Row 3
+  (`streetClosureRow`, gated by `showsStreetClosureTile`) cut from its old position (after Row
+  2's conditional detail) and pasted as the very first element in the `ScrollView`'s `VStack`,
+  before Row 1. Rows 1/2 and all their per-type conditional detail blocks
+  (`subTagPickerRow`/`confirmStreetSection`/`headingTowardPickerRow`/`sweeperDirectionRow`) are
+  byte-for-byte unchanged — confirmed via diff, not just the commit message's claim.
+- **Flag-off parity survives the reshuffle — verified, not assumed.** `showsStreetClosureTile`
+  returns `false` when `communityEnabled == false`, so Row 3's `if` block renders nothing
+  regardless of where it sits in the `VStack` — an absent element has no positional footprint.
+  Since nothing else in Rows 1/2's code changed, the flag-off rendered tree (order, content,
+  padding) is identical to pre-Phase-2a `main`, exactly as before this fix. The reorder is a
+  no-op for the flag-off path by construction, not by luck.
+- **The Submit ("Report") button is structurally immune to this entire bug class — verified by
+  reading the full `body`.** It lives in a separate `VStack` *outside* the `ScrollView`
+  (`Divider()` → error/CTA `VStack` → `.toolbar`), positioned by the outer
+  `VStack(alignment: .leading, spacing: 0)`. `ScrollView` clips and scrolls its own content but
+  does not resize based on it, so inserting/removing rows inside the `ScrollView` (subtag
+  picker, confirm-street section, heading picker, all of it) never moves the Submit button's
+  on-screen position by even one point. Directly answers the coordinator's question: the
+  heading picker appearing/disappearing below the confirm-street section cannot shift the
+  Report button — it's in a different layout container entirely.
+- **Residual shift-under-finger risk inside the `ScrollView`, post-fix**: tapping Row 1 still
+  shifts Row 2 downward (unchanged pre-existing pattern), and tapping a confirm-street candidate
+  can still cause `headingTowardPickerRow` to newly appear/disappear (if the picked segment's
+  `oneway`/`onewayToward` differs from the original), which can still shift Row 2 further. This
+  is exactly the class the fix's own comment calls out as "harmless" — a mis-hit there only
+  re-fires `selectedType = .sweeper` (same-type-selection destination), not a sheet teardown.
+  Confirmed: with Row 3 now permanently first and never reactive to `selectedType`, Row 2's
+  `reportTypeRow` is the *only* thing that can still be shifted-into by a Row-1-triggered
+  relayout, and its action's blast radius is bounded to "re-selects a type," not "destroys the
+  flow." No other row is exposed to the class of harm Row 3 was.
+
+## 3. `destination(forTapping:communityEnabled:candidates:)` — not wired into the live tap path
+
+**Confirmed: this is a test-only fiction, and the fix's commit message says so almost as
+plainly as this report does — but the framing ("the regression NET") oversells what it
+protects.**
+
+- Grepped the full file: `destination(forTapping` appears exactly once — its own `static func`
+  declaration (line 945). `reportTypeRow`'s Button action still does `selectedType = type`
+  directly; `streetClosureRow`'s Button action still does `onRequestStreetClosure?()` directly.
+  Neither calls through `destination(forTapping:)`. There is no other call site anywhere in the
+  diff. This is a pure, disconnected model — production behavior is governed entirely by the
+  two Button closures, which the routing model merely *describes* without enforcing.
+- The new test file's own doc comment is honest about this ("these tests are the regression
+  NET, not a literal reproduction of the race... even though it wasn't the literal cause this
+  time") — credit for not overclaiming in the code itself. But the top-level commit message's
+  framing ("THIS enum is the regression net") reads as stronger than it is: it is a regression
+  net for a bug class (wrong destination resolved for a tap) that (a) was explicitly *not* the
+  actual root cause here, and (b) is not actually exercised by the real tap handlers, so even a
+  regression *in that hypothetical bug class* would not be caught — a future edit could make
+  `reportTypeRow`'s Button diverge from what `destination(forTapping:)` says it should do, and
+  all 8 new tests would keep passing, because nothing calls the function they're testing.
+- The 8 tests themselves are well-constructed and correctly assert the *model's* stated
+  contract (flag/type/candidates → destination, tile-identity separation, closure-handoff never
+  conflated with a type-select). They're good documentation-as-tests for the intended contract.
+  They are not a regression guard for the shipped code today.
+- **Recommendation** (not required for this merge, since the actual fix doesn't depend on this
+  model): either wire the two Button actions through `destination(forTapping:)` so the model is
+  authoritative (turning the tests into real regression coverage), or soften the commit
+  message's "regression net" framing to "documents the intended contract" so a future reader
+  doesn't mistake test-green for tap-path coverage.
+
+## 4. Count check
+
+`git grep -c "func test"` at `c637438d`: `ReportSheetPhase2aTests.swift` = 19 (was 11, +8
+routing tests), `CandidateSegmentSearchTests.swift` = 11 (unchanged — confirmed untouched by
+this commit's diff), `CommunityZoneStampingTests.swift` = 9 (unchanged). 19 + 11 + 9 = **39**
+(was 31). 982 (S5 baseline) + 39 = **1021** — matches the expected count exactly.
+
+## 5. Disclosed tradeoff — closure tile now first in the flag-ON grid
+
+**Acceptable as shipped.** The prototype's grid order (Enforcement, Sweeper, Spot open, Street
+closure — `prototype.html:361-380`) puts closure last in a planned 2×2 grid; this app currently
+renders a linear `VStack` of rows (Spot open doesn't exist yet — Phase 2b), so "grid order"
+doesn't map cleanly onto the current layout regardless. Moving Street closure to visually-first
+is a real, disclosed, flag-ON-only UX deviation from the prototype's ordering, but:
+(1) `communityEnabled == false` in production today, so zero live-user impact from this
+ordering change until the flag flips; (2) S13's hero-parity pass is already scoped to do a
+screenshot-by-screenshot audit and will restructure this exact grid into the prototype's real
+2×2 layout once Phase 2b lands "Spot open" — the current vertical-list ordering was never going
+to be the final shipped form regardless of this fix; (3) the alternative (a structural fix that
+keeps Row 3 visually-last *and* position-stable) is legitimately harder and not worth blocking
+a safety-relevant fix on. Ruling: ship as-is, let S13 absorb the reordering.
+
+## New issues introduced by the fix?
+
+None found. Diff is confined to `ReportSheet.swift` (Row 3 relocation + new routing model, both
+verified additive/non-destructive to Rows 1/2) and its own test file. `ContentView.swift` and
+every other file in this PR's scope are untouched by `c637438d` — re-confirmed via
+`git diff 6c22b92a..c637438d --stat`.
+
+## What Kevin's Mac gate must specifically re-run
+
+1. **The exact reported repro**: flag on, open report sheet, tap "Enforcement active" — confirm
+   the sheet stays open, sub-tag picker + (if on-segment) confirm-street section appear inline,
+   and the browse sheet is unaffected. This is the one that must not regress.
+2. **Same check for "Street sweeper" (Row 2)** — not the row Kevin's report named, but it has
+   the analogous conditional-detail-insertion pattern; confirm it behaves the same
+   (harmlessly re-selects on a stray shift, never tears anything down).
+3. **Re-run this session's Pass 1 targeted check (Finding #1, still open)**: "Street closure" →
+   immediate map tap, confirm no dead-tap gap / overlay glitch on entry to block-select. Not
+   touched by this fix, still outstanding.
+4. **`xcodebuild test`, full suite, confirm 1021/1021** (was 1013 at Pass 1's expected count;
+   +8 from this fix).
+5. **Visual check of the new tile order**: flag on, confirm "Street closure" now renders first,
+   above "Enforcement active" — expected per the disclosed tradeoff (§5 above), not a bug if
+   seen.
+
+## Verdict
+
+**MERGE-AFTER-MAC-GATE.** The fix correctly and verifiably closes the reported blocker via a
+structural change (Row 3 can never move) that is robust regardless of the exact SwiftUI
+touch-dispatch mechanism at play, and flag-off parity is preserved by construction, not by
+coincidence. No new defect was introduced. The one open item is a documentation/expectations
+gap, not a functional one: `destination(forTapping:)` and its 8 tests are not wired into
+production and should not be read as regression coverage for this bug class — flagging so
+nobody treats "tests green" as "this specific defect can't recur," since the actual protection
+here is the structural reorder, not the test suite. Recommend the `@ios-engineer` either wire
+the routing model into the live Button actions in a fast-follow, or adjust the commit
+message/code comments to stop calling it a "regression net." Neither blocks this merge.

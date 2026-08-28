@@ -31,16 +31,19 @@ explicitly below.
 | S4 | ✅ **Phase 1 UI** (2026-08-28) | Crew feed mounted in the sheet's EXISTING `.large` detent (QA ruled this correct — the spec had mischaracterized FT-20 as two-detent), zone chips, new-type markers, empty states, client-side zone-box fallback for nil `zone_id` | — |
 | S5 | ✅ **Phase 1 QA → MERGED `8b812041`** (2026-08-28) | QA pass 1 caught 2 blockers (ungated marker path; List-greedy layout redux) → fixed → pass 2 verified. Two Mac compile rounds (type-inference + arg-order, fixed same-hour). ⚠️ Squash title carries a stale `[COMPILE-UNVERIFIED]` tag — same gh retitle race as #91; the code is verified, this row governs | ✅ **DONE 2026-08-28:** 982/982 tests · full smoke green — flag-off pixel-parity + gated-marker invisibility vs a live prod row · flag-on feed/chips/fallback/empty-states · realtime insert ≤2s, delete near-instant. 📌 Note for S7: hand-inserted pin rendered mid-block (raw lat/lng, un-snapped test data) — eyeball placement again once 2b's curb-snap flow exists |
 | S6 | **Phase 2a → merge** | Confirm-the-street (W5 pattern reuse) + closure tile → existing `BlockRestrictionReportSheet`. Reuse-heavy, QA same session. **Also**: stamp `zone_id` server-side on `insertCrowdPin` (S4 QA pass 1, PR #94 Finding #3 — every write path today inserts `zone_id: nil`; S4 shipped a client-side bounding-box fallback in `CrewFeedMerge.resolvedZoneId(for:)` so the crew feed still surfaces pre-existing pins, but that's a display-only patch, not a cure — `pins.zone_id` itself should get populated at write time, mirroring OQ-1's box-lookup-by-lat/lng, so a future server-side/analytics query on the column isn't silently null) | Mac: test run |
-| S7 | **Phase 2b build** | `SpotPlacementView` (curb snap + fraction) + `IdentitySheet` (show-once gate, spec §3 fix) + profiles upsert | — |
+| S7 | **Phase 2b build** | `SpotPlacementView` (curb snap + fraction) + `IdentitySheet` (show-once gate, spec §3 fix) + profiles upsert. **+RIDER (gap-inventory WP-small):** report-grid restyle to the prototype's 2×2 tile cards — the file's already open | — |
 | S8 | **Phase 2b QA → merge** | Includes AC-P2.1 two-device check: **Mac simulator + Kevin's phone** — does NOT need the second phone or NYC | Mac: sim + phone side-by-side (~30 min) |
 | S9 | **Phase 3 → merge** | `ReactionsRow` extension, profile row (div-by-zero guard), leaderboard v1 (live query), QA same session | Mac: test run |
-| S10 | **Phase 4a → merge** | Leaving-soon picker + claim button in `ParkedCarDetailView` (only file colliding with #91 — safely post-merge by now) | Mac: test run + sim smoke |
+| S10 | **Phase 4a → merge** | Leaving-soon picker + claim button in `ParkedCarDetailView`. **+RIDER (WP4):** My Car sheet redesign per screenshot 15 — inline reminder-offset chips + live "Swept X ago" banner (same file, one surgery) | Mac: test run + sim smoke |
 | S11 | **Phase 4b backend** | `send-community-push` Edge Function + `pg_net` trigger + token-table wiring | ✅ **APNs key created 2026-08-27:** Key ID `CMG824J6L3`, Team ID `ZAA4UCS6CH`, Sandbox + Production. The `.p8` lives on Kevin's Mac OUTSIDE the repo — S11 loads it into Supabase Edge Function secrets, never commits it. Entitlement: see the S11-prep commit on main (Push Notifications + remote-notifications background mode) |
-| S12 | **Phase 4b iOS → merge** | APNs registration, zone-scoped token upload, silent-push → on-device relevance gate → local notification | Physical phone + SQL insert verifies AC-P4.3 — works outside NYC |
-| S13 | **Hero-parity pass** | @designer screenshot-by-screenshot audit vs `design/screenshots/`, copy verbatim-check, empty/dark states; fix list worked; final QA | Mac: final smoke |
+| S12 | **Phase 4b iOS → merge** | APNs registration, zone-scoped token upload, silent-push → on-device relevance gate → local notification. **+RIDER (WP5):** the in-app "Sweeper reported on your block — did it pass?" confirm card (screenshot 13) — identical relevance predicate, realtime trigger | Physical phone + SQL insert verifies AC-P4.3 — works outside NYC |
+| S13a | **Map chrome parity (WP1+WP2, ~2 sessions)** | Persistent Report pill (bottom-left) + "?" map-key button/legend (screenshots 01/02) + zone-boundary dashed overlay (screenshot 03). Touches `ContentView` + `MapViewRepresentable` — targeted live smoke required | Mac: test run + sim smoke |
+| S13b | **Block detail redesign + chat write path (WP3, ~1.5–2 sessions)** | The gap-inventory's headline: `BlockDetailView` per screenshot 07 (color header, LIVE ON THIS BLOCK, BLOCK CHATTER + compose) + `ZoneMessageService.sendMessage` — the write path that makes the live `award_chat_reputation` trigger reachable. **No spec ever listed this file; added by Kevin's 2026-08-28 expansion decision** | Mac: test run + sim smoke |
+| S13c | **Hero-parity pass** | @designer screenshot-by-screenshot audit vs `design/screenshots/`, copy verbatim-check, empty/dark states, crew-feed icon palette consistency fix; fix list worked; final QA | Mac: final smoke |
 
 **Buffer:** +2 sessions for rework the QA passes surface (historical rate on this repo justifies it).
-**Total: ~12–15 sessions.**
+**Total: ~15–18 sessions** (expanded 2026-08-28 from ~12–15: Kevin adopted the gap-inventory plan —
+`docs/design/community-2.0-hero-gap-inventory.md` — adding S13a/S13b and four near-free riders).
 
 ## Calendar shape
 
@@ -68,6 +71,12 @@ return. External testers see community the day the drive test passes, not before
 4. Zones: Nolita/SoHo/LES as **bounding boxes** (OQ-1 recommendation adopted 2026-08-26 with Kevin's
    "you have everything you need" go-ahead; true NTA polygons only if boxes misclassify in practice).
 5. Build numbering: community = build 20. Smart-route renumbers to 21+ when picked up.
+6. **Prototype-exact fidelity (Kevin 2026-08-28):** "match the claude design hero as exactly as
+   possible" — including the Report pill + map-key chrome (ruled NOT in tension with FT-20 §0f,
+   which covered the sheet's action column, not map chrome). Standing exceptions, both protecting
+   Kevin's own older rules: map markers keep the teal SF-Symbol treatment (prototype's orange rings
+   collide with the sacred curb-legality orange) and the crew feed stays at the `.large` detent.
+   Overruling either requires an explicit new decision, not a parity fix.
 
 ## Top risks, honestly ranked
 
