@@ -1319,6 +1319,34 @@ final class CommunityPinService {
         }
     }
 
+    // MARK: - Community 2.0 Phase 2a / build 20 S6 — write-time zone stamping
+
+    /// Resolves the `zone_id` to write on a crowd pin insert.
+    ///
+    /// An explicit, caller-supplied `explicit` value always wins (a future caller that
+    /// genuinely knows the zone — e.g. from the currently-selected crew-feed zone chip —
+    /// isn't second-guessed). Only when `explicit` is `nil` (every call site as of this
+    /// session, per `Views/ReportSheet.swift`'s `zoneId: nil`) does this fall back to a
+    /// `CommunityZoneBounds` box-match against the pin's own `lat`/`lng` — the same
+    /// bounding-box approximation OQ-1 already chose for the zones themselves, applied here
+    /// at WRITE time instead of only at crew-feed DISPLAY time
+    /// (`CrewFeedMerge.resolvedZoneId(for:)`). Returns `nil` (an honest, correctly-null
+    /// `zone_id` column) when the coordinate falls outside all three known zone boxes —
+    /// never a guessed/default zone.
+    ///
+    /// Pure, `nonisolated` — no network, no actor isolation, directly unit-testable.
+    ///
+    /// Note: this is a client-derived value, same trust level as every other client-supplied
+    /// insert field today (§2.11 of the reconciliation spec already flags `expires_at` as
+    /// entirely client-supplied pre-migration). True server-side stamping — e.g. a
+    /// `BEFORE INSERT` trigger deriving `zone_id` from `lat`/`lng` the same way
+    /// `derive_pin_expiry()` derives `expires_at` — remains an option for a future migration
+    /// if write-time accuracy ever needs to be authoritative rather than best-effort; not
+    /// pursued in this session per the roadmap's S6 scope (client-side box-match only).
+    nonisolated static func resolveZoneId(explicit: String?, lat: Double, lng: Double) -> String? {
+        explicit ?? CommunityZoneBounds.zoneId(forLat: lat, lng: lng)
+    }
+
     // MARK: - Write path: Insert crowd pin (sub-PR #1)
 
     /// Inserts a new crowd-sourced ephemeral pin.
@@ -1341,7 +1369,9 @@ final class CommunityPinService {
     ///   - lat: Latitude of the pin location.
     ///   - lng: Longitude of the pin location.
     ///   - segmentId: Optional segment ID from the tile data.
-    ///   - zoneId: Optional zone ID (e.g. "soho-les").
+    ///   - zoneId: Optional explicit zone ID (e.g. "soho-les"). When `nil`, `resolveZoneId(explicit:lat:lng:)`
+    ///     derives one from `lat`/`lng` at write time (Community 2.0 Phase 2a / build 20 S6)
+    ///     — see that function's doc comment.
     ///   - notes: Optional free-text notes.
     func insertCrowdPin(
         type: PinType,
@@ -1366,6 +1396,14 @@ final class CommunityPinService {
             iso8601String(from: nowProvider().addingTimeInterval($0))
         }
 
+        // Community 2.0 Phase 2a / build 20 S6 (PR #94 QA Finding #3 follow-up): every write
+        // path today calls this with `zoneId: nil`, leaving `pins.zone_id` permanently null —
+        // the crew feed only surfaces these pins via `CrewFeedMerge`'s DISPLAY-time
+        // `CommunityZoneBounds` fallback, which is "a display-only patch, not a cure" per
+        // `docs/community-2.0-roadmap.md` S6. `resolveZoneId` stamps the column at insert time
+        // instead, so a future server-side/analytics query on `zone_id` isn't silently null.
+        let resolvedZoneId = Self.resolveZoneId(explicit: zoneId, lat: lat, lng: lng)
+
         var payload: [String: Any] = [
             "pin_type":  type.rawValue,
             "source":    PinSource.crowd.rawValue,
@@ -1374,11 +1412,11 @@ final class CommunityPinService {
             "lng":       lng,
             "author_id": userId.uuidString,
         ]
-        if let expiresAt { payload["expires_at"] = expiresAt }
-        if let segmentId { payload["segment_id"] = segmentId }
-        if let zoneId    { payload["zone_id"] = zoneId }
-        if let notes     { payload["notes"] = notes }
-        if let meta      { payload["meta"] = meta }
+        if let expiresAt     { payload["expires_at"] = expiresAt }
+        if let segmentId     { payload["segment_id"] = segmentId }
+        if let resolvedZoneId { payload["zone_id"] = resolvedZoneId }
+        if let notes         { payload["notes"] = notes }
+        if let meta          { payload["meta"] = meta }
 
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
             throw CommunityPinWriteError.encodingFailure
