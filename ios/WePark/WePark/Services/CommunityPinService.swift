@@ -947,7 +947,7 @@ final class CommunityPinService {
     /// the single source of truth also used by `RealtimeMergeGate.mergeablePinTypes` and
     /// `ContentView.handleVisiblePinsChange`'s `mapMarkerTypes`.
     private nonisolated static func isChannel2Member(_ pin: CommunityPin) -> Bool {
-        let eligibleTypes: Set<PinType> = [.enforcementActive, .sweeperPassed]
+        let eligibleTypes = Set([PinType.enforcementActive, .sweeperPassed])
             .union(AppConstants.communityPhase1PinTypes())
         return pin.source == .crowd &&
             pin.lifespan == .ephemeral &&
