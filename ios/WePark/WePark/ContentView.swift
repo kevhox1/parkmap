@@ -258,7 +258,23 @@ enum ActiveSheet: Identifiable {
     ///
     /// FT-11: segment added so ReportSheet can show the direction picker with real
     /// cross-street labels and block bearing. Nil when the long-press is off-segment (OD-1).
-    case reportPin(coord: CLLocationCoordinate2D, streetName: String?, segment: Segment? = nil)
+    ///
+    /// Community 2.0 Phase 2a (build 20 S6): confirmCandidates added so ReportSheet's new
+    /// "confirm the street" step can render without its own tile-data access — precomputed at
+    /// each entry site via `CandidateSegmentSearch.confirmStreetCandidates(for:in:)` (empty
+    /// when `segment` is nil, same OD-1 graceful-degradation rule).
+    ///
+    /// QA STOP-AND-INSTRUMENT (PR #95, 2026-08-28): coordinateSource added ONLY so
+    /// `ReportSheet`'s `#if DEBUG` diagnostics footer can show, explicitly rather than
+    /// inferred, whether `coord` is the resting long-press point or the in-drive current-GPS
+    /// reading — set literally at each of the two call sites below, never derived/guessed.
+    case reportPin(
+        coord: CLLocationCoordinate2D,
+        streetName: String?,
+        segment: Segment? = nil,
+        confirmCandidates: [Segment] = [],
+        coordinateSource: String = "unknown"
+    )
     /// FT-12: Parking 101 guide, opened from the first-launch prompt banner tap.
     /// (Settings' own entry point uses a plain NavigationLink inside its own
     /// NavigationStack, not this case — this case exists only for the banner, which
@@ -295,7 +311,7 @@ enum ActiveSheet: Identifiable {
         case .parkUntil:                  return "parkUntil"
         case .arrivalPrompt(let coord):   return "arrivalPrompt-\(coord.latitude)-\(coord.longitude)"
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
-        case .reportPin(let coord, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
+        case .reportPin(let coord, _, _, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
         case .signCheckConfirm(let intent): return "signCheckConfirm-\(intent.id)"
         case .parkingGuide:               return "parkingGuide"
         case .blockRestrictionReport(let segments):
@@ -898,7 +914,24 @@ struct ContentView: View {
                         radius: pinDropRadiusMeters,
                         max: 1
                     ).first?.segment
-                    activeSheet = .reportPin(coord: coord, streetName: nil, segment: reportSegment)
+                    // Community 2.0 Phase 2a (build 20 S6): precompute "confirm the street"
+                    // candidates alongside the existing single-segment lookup above — empty
+                    // when off-segment (OD-1), same as reportSegment itself.
+                    let confirmCandidates = reportSegment.map {
+                        CandidateSegmentSearch.confirmStreetCandidates(for: $0, in: tileLoader.segments)
+                    } ?? []
+                    activeSheet = .reportPin(
+                        coord: coord,
+                        streetName: nil,
+                        segment: reportSegment,
+                        confirmCandidates: confirmCandidates,
+                        // QA STOP-AND-INSTRUMENT (PR #95): `coord` here is `pendingLongPressCoord`
+                        // — the actual long-press map coordinate captured fresh in
+                        // `handleLongPress(at:)` at the moment of the press, not current GPS and
+                        // not stale (consumed once, then cleared above). Labeled explicitly so
+                        // the #if DEBUG diagnostics footer never has to guess.
+                        coordinateSource: "long-press (resting)"
+                    )
                 }
                 // FT-15/TF2-15 §4.2 step 1: third action, added per the spec's own
                 // recommendation to extend this existing dialog rather than add a new
@@ -1142,19 +1175,35 @@ struct ContentView: View {
             // complexity in sheetContent(_:) — same pattern as PR-1 @ViewBuilder extractions.
             pinDetailSheetContent(pin)
 
-        case .reportPin(let coord, let streetName, let seg):
+        case .reportPin(let coord, let streetName, let seg, let confirmCandidates, let coordinateSource):
             // Tier 3 sub-PR #2: Universal community report sheet.
             // Coordinate source depends on entry path:
             //   - Resting: coord = long-press point on map; streetName = nil
             //   - In-drive: coord = user GPS at moment of tap; streetName = drivingContext?.street
             // Bug #4: streetName passed through so ReportSheet shows "Reporting on <street>".
             // FT-11: seg passed through so ReportSheet shows the direction picker.
+            //
+            // Community 2.0 Phase 2a (build 20 S6):
+            //   - confirmCandidates passed through for the new "confirm the street" step.
+            //   - onRequestStreetClosure wires the sheet's new "Street closure" tile to the
+            //     SAME existing hand-off `enterBlockSelectMode()` already uses from the
+            //     resting long-press dialog's "Report closure" button — zero new code in
+            //     `BlockRestrictionReportSheet.swift` (AC-P2.3). `enterBlockSelectMode()`
+            //     force-hides `activeSheet` itself, which is what dismisses this sheet.
+            //
+            // QA STOP-AND-INSTRUMENT (PR #95): coordinateSource/pinDropRadiusMeters passed
+            // through to ReportSheet's #if DEBUG diagnostics footer only — no production
+            // behavior reads either.
             ReportSheet(
                 coordinate: coord,
                 pinService: pinService,
                 onDismiss: { activeSheet = dismissTargetOutsideBrowseNav },
                 streetName: streetName,
-                segment: seg
+                segment: seg,
+                confirmCandidates: confirmCandidates,
+                onRequestStreetClosure: { enterBlockSelectMode() },
+                coordinateSource: coordinateSource,
+                candidateSearchRadiusMeters: pinDropRadiusMeters
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -2041,10 +2090,19 @@ struct ContentView: View {
                     radius: pinDropRadiusMeters,
                     max: 1
                 ).first?.segment
+                // Community 2.0 Phase 2a (build 20 S6): same "confirm the street" candidate
+                // precompute as the resting long-press path above.
+                let confirmCandidates = driveSegment.map {
+                    CandidateSegmentSearch.confirmStreetCandidates(for: $0, in: tileLoader.segments)
+                } ?? []
                 activeSheet = .reportPin(
                     coord: loc,
                     streetName: drivingContext?.street,
-                    segment: driveSegment
+                    segment: driveSegment,
+                    confirmCandidates: confirmCandidates,
+                    // QA STOP-AND-INSTRUMENT (PR #95): `loc` here is `locationService.userLocation`
+                    // — live current GPS at the moment of the tap, per the guard above.
+                    coordinateSource: "current GPS (in-drive)"
                 )
             } label: {
                 Label("Report", systemImage: "flag.fill")
@@ -3063,6 +3121,11 @@ struct ContentView: View {
     /// zoom/viewport, or the street genuinely has only one curb in the data).
     ///
     /// Pure (no SwiftUI/instance dependency), directly unit-testable.
+    ///
+    /// Kept in sync with `CandidateSegmentSearch.oppositeSideCandidate(of:in:)` (Community
+    /// 2.0 Phase 2a, build 20 S6) — an intentional, independently-tested duplicate of this
+    /// exact predicate, kept separate to avoid a Services→View dependency. Update both if
+    /// this matching rule ever changes (QA pass 1, PR #95 Finding #4).
     static func oppositeSideSegment(of segment: Segment, in segments: [Segment]) -> Segment? {
         let pair: Set<String> = [segment.fromStreet, segment.to]
         return segments.first { candidate in
@@ -3509,48 +3572,25 @@ struct ContentView: View {
     // MARK: - W5: findCandidateSegments
 
     /// Finds segments within `radius` meters of the given coordinate, sorted by distance.
-    /// Port of findCandidateSegments() at index.html:5096-5111.
-    ///
-    /// Deduplication: groups by block key (street|from|to) — the same block face may
-    /// span multiple segments. Returns the closest segment per unique block key.
-    /// Returns up to `max` results.
     ///
     /// This is the multi-candidate version of the haversine point-to-segment search
     /// already used in handleMapTap. W5 spec §4.2 path A.
+    ///
+    /// Community 2.0 Phase 2a (build 20 S6): the actual algorithm now lives in
+    /// `CandidateSegmentSearch.findCandidateSegments(lat:lng:in:radius:max:)` (extracted so
+    /// `ReportSheet`'s new "confirm the street" step can reuse the same W5 pattern instead of
+    /// reinventing it — spec §3 Phase 2). This wrapper exists only so every existing
+    /// `findCandidateSegments(lat:lng:radius:max:)` call site in this file keeps reading
+    /// `tileLoader.segments` implicitly, unchanged.
     private func findCandidateSegments(
         lat: Double,
         lng: Double,
         radius: Double,
         max maxResults: Int
     ) -> [CandidateSegment] {
-
-        let tapCoord = CLLocationCoordinate2D(latitude: lat, longitude: lng)
-        // Track closest segment per block key (street|from|to) to deduplicate.
-        var bestByBlockKey: [String: (segment: Segment, distance: Double)] = [:]
-
-        for segment in tileLoader.segments {
-            let coords = segment.coordinates
-            guard coords.count >= 2 else { continue }
-            let dist = pointToPolylineDistance(from: tapCoord, polyline: coords)
-            guard dist <= radius else { continue }
-
-            // Block key: same as the PWA's dedup key — street|from|to (case-insensitive).
-            // We keep all-caps (as stored in tile data) for consistency.
-            let key = "\(segment.street)|\(segment.fromStreet)|\(segment.to)"
-            if let existing = bestByBlockKey[key] {
-                if dist < existing.distance {
-                    bestByBlockKey[key] = (segment, dist)
-                }
-            } else {
-                bestByBlockKey[key] = (segment, dist)
-            }
-        }
-
-        // Sort by distance, take top `maxResults`.
-        return bestByBlockKey.values
-            .sorted { $0.distance < $1.distance }
-            .prefix(maxResults)
-            .map { CandidateSegment(segment: $0.segment, distanceMeters: $0.distance) }
+        CandidateSegmentSearch.findCandidateSegments(
+            lat: lat, lng: lng, in: tileLoader.segments, radius: radius, max: maxResults
+        )
     }
 
     // MARK: - Geometry helpers (unchanged from W4)
