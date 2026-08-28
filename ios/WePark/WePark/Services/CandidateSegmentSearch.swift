@@ -135,6 +135,95 @@ enum CandidateSegmentSearch {
         }
     }
 
+    // MARK: - Community 2.0 Phase 2b (build 20 S7) — spot placement: nearest segment + fraction
+
+    /// Result of `nearestSegmentSnap`: the closest segment to a tapped coordinate, together
+    /// with WHERE along that segment the tap landed.
+    struct SpotPlacementSnap {
+        let segment: Segment
+
+        /// [0,1] from the segment's "from" endpoint to its "to" endpoint — the same
+        /// directional convention as `meta.heading_toward` and the `pins.position_fraction`
+        /// column (spec §2.2). Computed by cumulative-length interpolation across every
+        /// vertex of the segment's polyline, not just the nearest two-point sub-segment in
+        /// isolation, so a multi-vertex polyline's fraction is continuous end-to-end.
+        let positionFraction: Double
+
+        let distanceMeters: Double
+
+        /// The point ON the segment's polyline at `positionFraction` — NOT the raw tap
+        /// coordinate. `insertCrowdPin` should be given THIS coordinate so the eventual map
+        /// marker renders snapped to the curb rather than at a possibly-off-the-line tap
+        /// point (AC-P2.4).
+        let snappedCoordinate: CLLocationCoordinate2D
+    }
+
+    /// Finds the single closest segment to a tapped coordinate, within `radius` meters, and
+    /// the position along that segment's polyline the tap landed at.
+    ///
+    /// Port of the prototype's `placeFromEvent` (`design/prototype.html:806-820`): scans
+    /// every candidate segment, keeps the nearest point-to-polyline match, and returns nil
+    /// when nothing is within `radius` (prototype: "Tap closer to a curb",
+    /// `design/prototype.html:821`).
+    nonisolated static func nearestSegmentSnap(
+        lat: Double,
+        lng: Double,
+        in segments: [Segment],
+        radius: Double
+    ) -> SpotPlacementSnap? {
+        let tapCoord = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        var best: SpotPlacementSnap? = nil
+
+        for segment in segments {
+            let coords = segment.coordinates
+            guard coords.count >= 2 else { continue }
+            guard let match = nearestPointOnPolyline(from: tapCoord, polyline: coords) else { continue }
+            guard match.distanceMeters <= radius else { continue }
+            if best == nil || match.distanceMeters < best!.distanceMeters {
+                best = SpotPlacementSnap(
+                    segment: segment,
+                    positionFraction: match.fraction,
+                    distanceMeters: match.distanceMeters,
+                    snappedCoordinate: match.coordinate
+                )
+            }
+        }
+        return best
+    }
+
+    /// Finds the nearest point on a multi-vertex polyline to `point`, returning its
+    /// distance, its coordinate, and its fraction [0,1] along the ENTIRE polyline (start →
+    /// end) via cumulative-length interpolation across every vertex.
+    private static func nearestPointOnPolyline(
+        from point: CLLocationCoordinate2D,
+        polyline: [CLLocationCoordinate2D]
+    ) -> (distanceMeters: Double, fraction: Double, coordinate: CLLocationCoordinate2D)? {
+        guard polyline.count >= 2 else { return nil }
+
+        var cumulative: [Double] = [0]
+        for i in 1..<polyline.count {
+            cumulative.append(cumulative[i - 1] + haversine(from: polyline[i - 1], to: polyline[i]))
+        }
+        let totalLength = cumulative.last ?? 0
+
+        var bestDistance = Double.infinity
+        var bestFraction = 0.0
+        var bestCoordinate = polyline[0]
+
+        for i in 0..<(polyline.count - 1) {
+            let a = polyline[i], b = polyline[i + 1]
+            let (distance, t, closest) = pointToSegmentDistanceDetailed(point: point, a: a, b: b)
+            if distance < bestDistance {
+                bestDistance = distance
+                let segLength = cumulative[i + 1] - cumulative[i]
+                let lengthAlong = cumulative[i] + t * segLength
+                bestFraction = totalLength > 0 ? lengthAlong / totalLength : 0
+                bestCoordinate = closest
+            }
+        }
+        return (bestDistance, min(1, max(0, bestFraction)), bestCoordinate)
+    }
+
     // MARK: - Geometry helpers (duplicated from ContentView — see file header)
     //
     // Already duplicated 3x across this codebase (ContentView, DrivingContextService,
@@ -160,6 +249,20 @@ enum CandidateSegmentSearch {
         a: CLLocationCoordinate2D,
         b: CLLocationCoordinate2D
     ) -> Double {
+        pointToSegmentDistanceDetailed(point: point, a: a, b: b).distance
+    }
+
+    /// Community 2.0 Phase 2b (build 20 S7): same point-to-segment projection math as
+    /// `pointToSegmentDistance` above, but also returns `t` (the [0,1] fraction along THIS
+    /// two-point sub-segment) and the closest coordinate — needed by
+    /// `nearestPointOnPolyline`'s fraction/snap computation. `pointToSegmentDistance` now
+    /// delegates here for its distance-only case rather than duplicating the projection math
+    /// a second time.
+    private static func pointToSegmentDistanceDetailed(
+        point: CLLocationCoordinate2D,
+        a: CLLocationCoordinate2D,
+        b: CLLocationCoordinate2D
+    ) -> (distance: Double, t: Double, closest: CLLocationCoordinate2D) {
         let metersPerDegLat = 111_320.0
         let cosLat = cos(a.latitude * .pi / 180.0)
         let metersPerDegLng = metersPerDegLat * cosLat
@@ -171,7 +274,7 @@ enum CandidateSegmentSearch {
 
         let abLenSq = bx * bx + by * by
         if abLenSq == 0 {
-            return haversine(from: point, to: a)
+            return (haversine(from: point, to: a), 0, a)
         }
 
         let t = max(0, min(1, (px * bx + py * by) / abLenSq))
@@ -180,7 +283,7 @@ enum CandidateSegmentSearch {
         let closestLat = a.latitude  + closestY / metersPerDegLat
         let closestLng = a.longitude + closestX / metersPerDegLng
         let closest = CLLocationCoordinate2D(latitude: closestLat, longitude: closestLng)
-        return haversine(from: point, to: closest)
+        return (haversine(from: point, to: closest), t, closest)
     }
 
     private static func haversine(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> Double {

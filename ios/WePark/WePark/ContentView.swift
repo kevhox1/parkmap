@@ -706,6 +706,37 @@ struct ContentView: View {
     /// See `blockSelectTapShouldBeIgnored(now:guardUntil:)` for the pure comparison logic.
     @State private var blockSelectEntryGuardUntil: Date? = nil
 
+    // MARK: - Community 2.0 Phase 2b (build 20 S7): spot placement mode
+
+    /// True while the "Spot open" map-tap placement flow is active — mirrors
+    /// `blockSelectModeActive`'s shape (a mutually-exclusive, map-tap-intercepting mode
+    /// entered from a sheet action, force-hiding `activeSheet` for its duration). Entered
+    /// via `enterSpotPlacementMode()` (called from `ReportSheet`'s "Spot open" grid tile,
+    /// `onRequestSpotPlacement`), exited via `cancelSpotPlacementMode()` (Cancel tap on
+    /// either the hint banner or the confirm card) or `submitSpotPlacement()`'s success path.
+    @State private var spotPlacementActive: Bool = false
+
+    /// The current snapped draft position, or nil before the first tap (or right after
+    /// `enterSpotPlacementMode()`). Non-nil drives the confirm card
+    /// (`spotPlacementConfirmOverlay`) and the map's dashed draft-pin annotation
+    /// (`MapViewRepresentable.draftSpotCoordinate`). Replaced (not appended) on every
+    /// subsequent tap while still in placement mode — "tap elsewhere to move the pin"
+    /// (`design/prototype.html:102`).
+    @State private var spotPlacementDraft: SpotPlacementDraft? = nil
+
+    /// True while `submitSpotPlacement()`'s network write is in flight — drives the confirm
+    /// card's "Post it" button spinner.
+    @State private var spotPlacementSubmitting: Bool = false
+
+    /// Community 2.0 Phase 2b: holds the "resume this contribution" closure while the
+    /// identity sheet is up for the SPOT-POST path (the report-submit path has its own,
+    /// entirely local copy of this pattern inside `ReportSheet.swift` — see that file's
+    /// header for why the two don't share one instance: `SpotPlacementConfirmCard`'s "Post
+    /// it" button lives in a `ContentView` map overlay, not inside a sheet, so it needs its
+    /// own gate at this layer). Non-nil drives the identity `.sheet(isPresented:)` attached
+    /// to `mapLayerWithEvents` below.
+    @State private var pendingIdentityAction: (() -> Void)? = nil
+
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
     /// Community pin service. Fetches filming / asp_suspended_today / special_event pins
@@ -1191,6 +1222,10 @@ struct ContentView: View {
             //     `BlockRestrictionReportSheet.swift` (AC-P2.3). `enterBlockSelectMode()`
             //     force-hides `activeSheet` itself, which is what dismisses this sheet.
             //
+            // Community 2.0 Phase 2b (build 20 S7): onRequestSpotPlacement wires the grid's
+            // "Spot open" tile to `enterSpotPlacementMode()` — same shape as
+            // onRequestStreetClosure above, a different hand-off destination.
+            //
             // QA STOP-AND-INSTRUMENT (PR #95): coordinateSource/pinDropRadiusMeters passed
             // through to ReportSheet's #if DEBUG diagnostics footer only — no production
             // behavior reads either.
@@ -1202,6 +1237,7 @@ struct ContentView: View {
                 segment: seg,
                 confirmCandidates: confirmCandidates,
                 onRequestStreetClosure: { enterBlockSelectMode() },
+                onRequestSpotPlacement: { enterSpotPlacementMode() },
                 coordinateSource: coordinateSource,
                 candidateSearchRadiusMeters: pinDropRadiusMeters
             )
@@ -1706,6 +1742,54 @@ struct ContentView: View {
             // FT-20 Stream C / Kevin's live-smoke Ruling 2 (spec §0e) — see
             // `parkingGuideBannerOverlay`'s own doc comment.
             parkingGuideBannerOverlay
+            // Community 2.0 Phase 2b (build 20 S7): spot-placement mode's two floating
+            // layers — same "VStack + Spacer() pinning content to one edge, inside this
+            // outer ZStack(alignment: .top)" pattern as `parkingGuideBannerOverlay`/
+            // `ToastHostView` just above, not a new positioning mechanism.
+            spotPlacementHintOverlay
+            spotPlacementConfirmOverlay
+        }
+    }
+
+    /// The blue "Tap the curb where the spot is / Cancel" pill — visible while placement
+    /// mode is active and no draft has been placed yet. Positioned to clear both the status
+    /// bar and the ASP banner, matching `recenterButtonStack`'s own `.padding(.top, 100)`
+    /// convention for "float below the ASP banner" (`design/screenshots/10-spot-placement.png`).
+    @ViewBuilder
+    private var spotPlacementHintOverlay: some View {
+        if spotPlacementActive && spotPlacementDraft == nil {
+            VStack(spacing: 0) {
+                SpotPlacementHintBanner(onCancel: cancelSpotPlacementMode)
+                    .padding(.top, 100)
+                    .padding(.horizontal, 16)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// The "Spot open — {street} (side)" confirm card — visible once a draft position
+    /// exists. Floats above the browse sheet's peek, same offset convention
+    /// `parkingGuideBannerOverlay` already uses (`browseSheetPeekHeight + 12`).
+    @ViewBuilder
+    private var spotPlacementConfirmOverlay: some View {
+        if spotPlacementActive, let draft = spotPlacementDraft {
+            VStack(spacing: 0) {
+                Spacer()
+                SpotPlacementConfirmCard(
+                    title: SpotPlacementCopy.confirmTitle(segment: draft.segment),
+                    subtitle: SpotPlacementCopy.confirmSubtitle(
+                        segment: draft.segment,
+                        positionFraction: draft.positionFraction
+                    ),
+                    onPost: submitSpotPlacement,
+                    onCancel: cancelSpotPlacementMode,
+                    isSubmitting: spotPlacementSubmitting
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, browseSheetPeekHeight + 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -1774,6 +1858,35 @@ struct ContentView: View {
             // visiblePinsGeneration increments on every visiblePins assignment.
             .onChange(of: pinService.visiblePinsGeneration) { _, _ in handleVisiblePinsChange(pinService.visiblePins) }
             .onReceive(parkPinService.firstPinDropped) { handleFirstPinDropped() }
+            // Community 2.0 Phase 2b (build 20 S7): identity-sheet interception for the
+            // SPOT-POST contribution path (`submitSpotPlacement()`'s gate). Independent of
+            // `ActiveSheet`/`activeSheet` — `SpotPlacementConfirmCard`'s "Post it" button
+            // lives in a map overlay, not inside a presented sheet, so it needs its own
+            // presentation surface here rather than a new `ActiveSheet` case (keeps that
+            // already-fragile enum's dismiss-target machinery untouched). See
+            // `ReportSheet.swift`'s own, entirely separate copy of this same pattern for the
+            // report-submit contribution path.
+            .sheet(isPresented: Binding(
+                get: { pendingIdentityAction != nil },
+                set: { isPresented in
+                    if !isPresented { pendingIdentityAction = nil }
+                }
+            )) {
+                IdentitySheet(
+                    onSave: { username, avatar in
+                        let action = pendingIdentityAction
+                        pendingIdentityAction = nil
+                        Task { try? await pinService.upsertProfile(username: username, avatar: avatar) }
+                        action?()
+                    },
+                    onSkip: {
+                        let action = pendingIdentityAction
+                        pendingIdentityAction = nil
+                        action?()
+                    }
+                )
+                .presentationDetents([.medium])
+            }
     }
 
     // MARK: - Map representable callbacks (extracted for type-checker budget)
@@ -1822,6 +1935,12 @@ struct ContentView: View {
             segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
             // FT-15/TF2-15 Stream B2: multi-segment block-select highlight (§4.2 step 3).
             blockSelectKeys: selectedBlockKeys,
+            // Community 2.0 Phase 2b (build 20 S7): dashed draft-pin annotation for the
+            // "Spot open" placement flow — nil outside placement mode / before the first
+            // tap. Driven straight from `@State`, same "optional coordinate in → add/remove
+            // annotation, mechanical sync only" contract as `destinationCoordinate` above
+            // (see `MapViewRepresentable.updateUIView`'s own architecture-invariant comment).
+            draftSpotCoordinate: spotPlacementDraft?.coordinate,
             driveHeading: effectiveDriveHeading,  // TF2-16: course, or street-snap at low confidence
             driveModeActive: driveModeActive,
             onDrivePanDetected: handleDrivePanDetected,
@@ -2934,6 +3053,17 @@ struct ContentView: View {
     // MARK: - Tap handling (unchanged from W4 — only gesture source changed)
 
     private func handleMapTap(at coordinate: CLLocationCoordinate2D) {
+        // Community 2.0 Phase 2b (build 20 S7): in spot-placement mode, a tap snaps to the
+        // nearest curb instead of opening BlockDetailView. Checked FIRST — same reasoning as
+        // the block-select check below (spot placement and block-select are mutually
+        // exclusive by construction: block-select is entered from the resting long-press
+        // dialog, spot placement from inside the report sheet's grid; neither entry path can
+        // fire while the other mode's map-tap-intercepting state is active).
+        if spotPlacementActive {
+            handleSpotPlacementTap(at: coordinate)
+            return
+        }
+
         // FT-15/TF2-15 §4.2 step 3: in block-select mode, a tap toggles the closest
         // segment's blockfaceKey in/out of the selection instead of opening
         // BlockDetailView. Checked FIRST so none of the normal-mode tap behavior below
@@ -3069,6 +3199,93 @@ struct ContentView: View {
 
         guard closestDistance <= tapHitThresholdMeters, let segment = closestSegment else { return }
         toggleBlockSelection(segment)
+    }
+
+    // MARK: - Community 2.0 Phase 2b (build 20 S7): Spot placement mode
+
+    /// Entered via `ReportSheet`'s "Spot open" grid tile (`onRequestSpotPlacement`).
+    /// Dismisses the report sheet and starts intercepting map taps — same force-hide shape
+    /// as `enterBlockSelectMode()`'s `activeSheet = nil` (a deliberate hide, not an ordinary
+    /// sheet dismiss back to `.browseNav`, since the whole point is a clear map for tapping).
+    private func enterSpotPlacementMode() {
+        activeSheet = nil
+        spotPlacementDraft = nil
+        spotPlacementActive = true
+    }
+
+    /// Exits placement mode without posting anything (hint banner's or confirm card's
+    /// Cancel). Restores the sheet to `.browseNav` — same reasoning as
+    /// `cancelBlockSelectMode()`.
+    private func cancelSpotPlacementMode() {
+        spotPlacementActive = false
+        spotPlacementDraft = nil
+        activeSheet = dismissTargetOutsideBrowseNav
+    }
+
+    /// A tap while in placement mode: snap to the nearest segment + position fraction
+    /// (`CandidateSegmentSearch.nearestSegmentSnap`, the W5 haversine search extended to
+    /// return a fraction along the segment) within `pinDropRadiusMeters`. Within radius →
+    /// replaces `spotPlacementDraft` (never appends — "tap elsewhere to move the pin",
+    /// `design/prototype.html:102`). Outside radius (or no segment loaded within it) →
+    /// the "Tap closer to a curb" toast (`design/prototype.html:821`), draft unchanged.
+    private func handleSpotPlacementTap(at coordinate: CLLocationCoordinate2D) {
+        guard let snap = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: coordinate.latitude,
+            lng: coordinate.longitude,
+            in: tileLoader.segments,
+            radius: pinDropRadiusMeters
+        ) else {
+            ToastService.shared.show(message: SpotPlacementCopy.tapCloserToastMessage)
+            return
+        }
+        spotPlacementDraft = SpotPlacementDraft(
+            segment: snap.segment,
+            positionFraction: snap.positionFraction,
+            coordinate: snap.snappedCoordinate
+        )
+    }
+
+    /// "Post it" on the confirm card. Identity-gated (spec §3 Phase 2: "every contribution
+    /// path... spot post") the SAME way `ReportSheet.submitReport()` gates its own path —
+    /// see `pendingIdentityAction`'s doc comment for why this is a separate instance rather
+    /// than a shared one. On success: exits placement mode and restores `.browseNav` (the
+    /// pin appears via `insertCrowdPin`'s existing optimistic `mergeRealtimeChange` — no
+    /// extra state needed here for that).
+    private func submitSpotPlacement() {
+        guard let draft = spotPlacementDraft else { return }
+
+        let proceed: () -> Void = {
+            Task {
+                spotPlacementSubmitting = true
+                do {
+                    try await pinService.insertCrowdPin(
+                        type: .openSpot,
+                        meta: nil,
+                        lat: draft.coordinate.latitude,
+                        lng: draft.coordinate.longitude,
+                        segmentId: draft.segment.id,
+                        zoneId: nil,
+                        notes: nil,
+                        positionFraction: draft.positionFraction
+                    )
+                    spotPlacementActive = false
+                    spotPlacementDraft = nil
+                    activeSheet = dismissTargetOutsideBrowseNav
+                } catch {
+                    ToastService.shared.show(message: "Couldn't post. Check your connection and try again.")
+                }
+                spotPlacementSubmitting = false
+            }
+        }
+
+        if CommunityIdentityInterception.shouldShowIdentitySheet(
+            communityEnabled: AppConstants.communityEnabled,
+            identitySheetShouldShow: CommunityIdentityGate().shouldShow()
+        ) {
+            pendingIdentityAction = proceed
+        } else {
+            proceed()
+        }
     }
 
     /// AC-R1/AC-R2: toggles `segment`'s blockfaceKey in/out of `selectedBlockKeys`. When

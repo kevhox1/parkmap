@@ -38,6 +38,18 @@
 //     `segmentId` written to `insertCrowdPin` changes when a different candidate is picked —
 //     `coordinate` (the actual GPS/tap point) is never altered.
 //
+//  Community 2.0 Phase 2b (build 20 S7) additions — spec: docs/community-2.0-reconciliation-spec.md
+//  §3 Phase 2 + roadmap S7 rider, design/screenshots/08-report-grid.png,
+//  design/prototype.html:358-382. Flag-gated the same way as Phase 2a's additions above:
+//   - Report grid restyle: the type rows become a 2×2 `LazyVGrid` of tile cards (flag-ON
+//     only — `showsReportGrid`; `body`'s `else` branch keeps the flag-off list byte-identical
+//     to PR #95's shipped code). A 4th tile, "Spot open," routes into the new map-tap
+//     placement flow (`Views/SpotPlacementView.swift`) via `onRequestSpotPlacement`.
+//   - Identity-sheet interception (`Views/IdentitySheet.swift`) in front of `submitReport()`
+//     — gated on BOTH `AppConstants.communityEnabled` (this report-submit path predates
+//     Community 2.0 entirely; flag-off must see zero behavior change) AND the show-once
+//     `CommunityIdentityGate`.
+//
 
 import SwiftUI
 import MapKit
@@ -102,6 +114,14 @@ struct ReportSheet: View {
     /// (only its pure static helpers), so an optional with a safe no-op default keeps this an
     /// additive change rather than a required initializer parameter everywhere.
     var onRequestStreetClosure: (() -> Void)? = nil
+
+    /// Community 2.0 Phase 2b (build 20 S7): called when the user taps the "Spot open" grid
+    /// tile. Hands off to `ContentView`'s new map-tap placement flow
+    /// (`SpotPlacementView`/`enterSpotPlacementMode()`) rather than this sheet's own
+    /// type-select-then-submit path — same shape as `onRequestStreetClosure` above. `nil` by
+    /// default for the same reason: no test in this file constructs a `ReportSheet` view
+    /// instance directly.
+    var onRequestSpotPlacement: (() -> Void)? = nil
 
     // MARK: - QA STOP-AND-INSTRUMENT (PR #95) — plain data, DEBUG-only consumer
 
@@ -171,12 +191,18 @@ struct ReportSheet: View {
     /// `segment`, preserving today's flow byte-for-byte (product rule 7).
     @State private var confirmedSegment: Segment?
 
+    /// Community 2.0 Phase 2b (build 20 S7): holds the "resume this contribution" closure
+    /// while the identity sheet is up. Non-nil drives the identity `.sheet(isPresented:)`
+    /// below (see `body`) — set by `submitReport()`'s interception check, cleared and
+    /// invoked (in that order) by `IdentitySheet`'s `onSave`/`onSkip` callbacks.
+    @State private var pendingIdentityAction: (() -> Void)? = nil
+
     // MARK: - Init
 
     /// Custom init only to seed `confirmedSegment` from `segment` — every other property
     /// keeps its declared default, so existing call sites that don't pass
-    /// `confirmCandidates`/`onRequestStreetClosure`/`coordinateSource`/
-    /// `candidateSearchRadiusMeters` are unaffected.
+    /// `confirmCandidates`/`onRequestStreetClosure`/`onRequestSpotPlacement`/
+    /// `coordinateSource`/`candidateSearchRadiusMeters` are unaffected.
     init(
         coordinate: CLLocationCoordinate2D,
         pinService: CommunityPinService,
@@ -185,6 +211,7 @@ struct ReportSheet: View {
         segment: Segment? = nil,
         confirmCandidates: [Segment] = [],
         onRequestStreetClosure: (() -> Void)? = nil,
+        onRequestSpotPlacement: (() -> Void)? = nil,
         coordinateSource: String = "unknown",
         candidateSearchRadiusMeters: Double = 35.0
     ) {
@@ -195,6 +222,7 @@ struct ReportSheet: View {
         self.segment = segment
         self.confirmCandidates = confirmCandidates
         self.onRequestStreetClosure = onRequestStreetClosure
+        self.onRequestSpotPlacement = onRequestSpotPlacement
         self.coordinateSource = coordinateSource
         self.candidateSearchRadiusMeters = candidateSearchRadiusMeters
         _confirmedSegment = State(initialValue: segment)
@@ -295,101 +323,157 @@ struct ReportSheet: View {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
 
-                        // Row 3: Street closure (Community 2.0 Phase 2a, build 20 S6).
-                        //
-                        // QA pass 2 / PR #95 Mac-gate blocker fix — POSITION, not just gating:
-                        // this row used to render LAST, after Row 2 and whichever per-type
-                        // detail (subtag/direction toggle, confirm-street section, heading
-                        // picker) that row's own selection had inserted. Selecting Row 1 or
-                        // Row 2 inserts that detail in the SAME synchronous transaction as the
-                        // tap that selected it, which shifts every sibling BELOW the inserted
-                        // content — including a row sitting after Row 2's conditional block.
-                        // For an ordinary row (e.g. Row 2 shifting when Row 1's detail is
-                        // inserted — a pre-existing, harmless pattern already present before
-                        // this PR) a stray mis-hit during that shift is a total non-event: it
-                        // just sets `selectedType` again. For Row 3 it is NOT harmless: its
-                        // action (`onRequestStreetClosure` → `enterBlockSelectMode()`)
-                        // force-hides `activeSheet` — exactly the "report sheet AND browse
-                        // sheet both gone, no crash logged" fingerprint reported at the Mac
-                        // gate. Fix: render Row 3 FIRST, before Row 1/Row 2 and ALL of their
-                        // conditional detail, so nothing dynamic is EVER inserted above it —
-                        // its position (and hit-test target) cannot move for any reason.
-                        //
-                        // Deliberate, disclosed tradeoff: this changes Row 3's VISUAL ORDER
-                        // (now first, not third) in the flag-ON grid only — flag-OFF never
-                        // renders this row at all (`showsStreetClosureTile` gate, unchanged),
-                        // so Rows 1/2 and their per-type detail sections are otherwise
-                        // completely untouched by this fix, preserving flag-off byte-identical
-                        // parity (product rule 7) exactly as before. Re-ordering Row 3 back to
-                        // visually-last, if wanted, needs a structural fix that keeps its
-                        // position stable WITHOUT reintroducing this race — flagged as a
-                        // follow-up, not attempted in this hotfix.
-                        if ReportSheet.showsStreetClosureTile(communityEnabled: AppConstants.communityEnabled) {
-                            streetClosureRow
-                        }
-
-                        // MARK: Primary type rows
-
-                        // Row 1: Enforcement active
-                        reportTypeRow(
-                            label: "Enforcement active",
-                            sublabel: "Officer or cleaning truck on the block",
-                            symbolName: "shield.fill",
-                            tintColor: .blue,
-                            type: .enforcementActive
-                        )
-
-                        // Sub-tag picker: visible only when Enforcement active is selected
-                        if selectedType == .enforcementActive {
-                            subTagPickerRow
-                                .padding(.leading, 20)
-                                .padding(.bottom, 4)
-                        }
-
-                        // Community 2.0 Phase 2a (build 20 S6): "confirm the street" —
-                        // communityEnabled-gated, so flag-off skips straight to the direction
-                        // picker below exactly as it did before this session.
-                        if selectedType == .enforcementActive && showsConfirmStreetStep {
-                            confirmStreetSection
+                        if ReportSheet.showsReportGrid(communityEnabled: AppConstants.communityEnabled) {
+                            // Community 2.0 Phase 2b (build 20 S7 rider) — report grid restyle.
+                            // design/screenshots/08-report-grid.png, prototype.html:358-382.
+                            // Flag-ON only: this ENTIRELY replaces the flag-off list below (the
+                            // `else` branch), rather than co-existing with it — see
+                            // `showsReportGrid`'s doc comment.
+                            //
+                            // Resolves S6's disclosed closure-row-order deviation (open-items
+                            // #12 / gap-inventory WP-small): in a 2×2 grid, every tile has a
+                            // FIXED slot — closure takes its prototype position (bottom-right,
+                            // 4th cell) without needing the list's "render first" workaround,
+                            // because nothing is ever inserted BETWEEN grid cells (see below).
+                            reportGridSection
                                 .padding(.horizontal, 20)
                                 .padding(.bottom, 4)
-                        }
 
-                        // FT-11: Direction picker for enforcement (always when segment non-nil).
-                        if selectedType == .enforcementActive && shouldShowDirectionPicker {
-                            headingTowardPickerRow
-                                .padding(.leading, 20)
-                                .padding(.bottom, 4)
-                        }
+                            // Per-type detail sections — PRESERVES the S6 fix's invariant (no
+                            // tile's hit-target may shift as a side effect of selecting another
+                            // tile): rendered BELOW the WHOLE grid, never between cells, so a
+                            // grid cell's fixed slot never moves regardless of what gets
+                            // selected. Byte-for-byte the SAME conditionals/views as the
+                            // flag-off list's own (below), just placed once after the grid
+                            // instead of interleaved between Row 1/Row 2.
+                            if selectedType == .enforcementActive {
+                                subTagPickerRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+                            if selectedType == .enforcementActive && showsConfirmStreetStep {
+                                confirmStreetSection
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 4)
+                            }
+                            if selectedType == .enforcementActive && shouldShowDirectionPicker {
+                                headingTowardPickerRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+                            if selectedType == .sweeper {
+                                sweeperDirectionRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+                            if selectedType == .sweeper && showsConfirmStreetStep {
+                                confirmStreetSection
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 4)
+                            }
+                            if selectedType == .sweeper && shouldShowDirectionPicker {
+                                headingTowardPickerRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+                        } else {
+                            // Flag-OFF: byte-identical to the pre-S7 list flow (PR #95,
+                            // unchanged by this session). Do NOT restructure this branch — see
+                            // PR #95's "S6 saga" (this file's own header comment) for why
+                            // flag-off parity here is treated as sacred.
 
-                        // Row 2: Sweeper
-                        reportTypeRow(
-                            label: "Street sweeper",
-                            sublabel: "Sweeping truck on or near this block",
-                            symbolName: "exclamationmark.triangle.fill",
-                            tintColor: .orange,
-                            type: .sweeper
-                        )
+                            // Row 3: Street closure (Community 2.0 Phase 2a, build 20 S6).
+                            //
+                            // QA pass 2 / PR #95 Mac-gate blocker fix — POSITION, not just gating:
+                            // this row used to render LAST, after Row 2 and whichever per-type
+                            // detail (subtag/direction toggle, confirm-street section, heading
+                            // picker) that row's own selection had inserted. Selecting Row 1 or
+                            // Row 2 inserts that detail in the SAME synchronous transaction as the
+                            // tap that selected it, which shifts every sibling BELOW the inserted
+                            // content — including a row sitting after Row 2's conditional block.
+                            // For an ordinary row (e.g. Row 2 shifting when Row 1's detail is
+                            // inserted — a pre-existing, harmless pattern already present before
+                            // this PR) a stray mis-hit during that shift is a total non-event: it
+                            // just sets `selectedType` again. For Row 3 it is NOT harmless: its
+                            // action (`onRequestStreetClosure` → `enterBlockSelectMode()`)
+                            // force-hides `activeSheet` — exactly the "report sheet AND browse
+                            // sheet both gone, no crash logged" fingerprint reported at the Mac
+                            // gate. Fix: render Row 3 FIRST, before Row 1/Row 2 and ALL of their
+                            // conditional detail, so nothing dynamic is EVER inserted above it —
+                            // its position (and hit-test target) cannot move for any reason.
+                            //
+                            // This branch only fires when `communityEnabled == false`, at which
+                            // point `showsStreetClosureTile` below is always false too — Row 3
+                            // never actually renders here; the row-ordering fix is kept verbatim
+                            // anyway so this branch stays a literal, provably-unchanged copy of
+                            // PR #95's shipped code (byte-identical diff-ability over cleverness).
+                            if ReportSheet.showsStreetClosureTile(communityEnabled: AppConstants.communityEnabled) {
+                                streetClosureRow
+                            }
 
-                        // Sweeper direction toggle: visible only when sweeper is selected
-                        if selectedType == .sweeper {
-                            sweeperDirectionRow
-                                .padding(.leading, 20)
-                                .padding(.bottom, 4)
-                        }
+                            // MARK: Primary type rows
 
-                        // Community 2.0 Phase 2a (build 20 S6): "confirm the street" for sweeper.
-                        if selectedType == .sweeper && showsConfirmStreetStep {
-                            confirmStreetSection
-                                .padding(.horizontal, 20)
-                                .padding(.bottom, 4)
-                        }
+                            // Row 1: Enforcement active
+                            reportTypeRow(
+                                label: "Enforcement active",
+                                sublabel: "Officer or cleaning truck on the block",
+                                symbolName: "shield.fill",
+                                tintColor: .blue,
+                                type: .enforcementActive
+                            )
 
-                        // FT-11: Direction picker for sweeper (only when not auto-derived).
-                        if selectedType == .sweeper && shouldShowDirectionPicker {
-                            headingTowardPickerRow
-                                .padding(.leading, 20)
-                                .padding(.bottom, 4)
+                            // Sub-tag picker: visible only when Enforcement active is selected
+                            if selectedType == .enforcementActive {
+                                subTagPickerRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+
+                            // Community 2.0 Phase 2a (build 20 S6): "confirm the street" —
+                            // communityEnabled-gated, so flag-off skips straight to the direction
+                            // picker below exactly as it did before this session.
+                            if selectedType == .enforcementActive && showsConfirmStreetStep {
+                                confirmStreetSection
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 4)
+                            }
+
+                            // FT-11: Direction picker for enforcement (always when segment non-nil).
+                            if selectedType == .enforcementActive && shouldShowDirectionPicker {
+                                headingTowardPickerRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+
+                            // Row 2: Sweeper
+                            reportTypeRow(
+                                label: "Street sweeper",
+                                sublabel: "Sweeping truck on or near this block",
+                                symbolName: "exclamationmark.triangle.fill",
+                                tintColor: .orange,
+                                type: .sweeper
+                            )
+
+                            // Sweeper direction toggle: visible only when sweeper is selected
+                            if selectedType == .sweeper {
+                                sweeperDirectionRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+
+                            // Community 2.0 Phase 2a (build 20 S6): "confirm the street" for sweeper.
+                            if selectedType == .sweeper && showsConfirmStreetStep {
+                                confirmStreetSection
+                                    .padding(.horizontal, 20)
+                                    .padding(.bottom, 4)
+                            }
+
+                            // FT-11: Direction picker for sweeper (only when not auto-derived).
+                            if selectedType == .sweeper && shouldShowDirectionPicker {
+                                headingTowardPickerRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
                         }
 
                     }
@@ -448,6 +532,33 @@ struct ReportSheet: View {
             .onChange(of: confirmCandidates.count) { _, _ in logDiagnosticsToConsole(trigger: "confirmCandidates.count changed") }
             #endif
         }
+        // Community 2.0 Phase 2b (build 20 S7): identity-sheet interception. Presented as a
+        // nested sheet-on-sheet (a standard, supported SwiftUI pattern) rather than a new
+        // `ActiveSheet` case, so this stays entirely local to `ReportSheet.swift` — no
+        // `ContentView` wiring needed for the report-submit contribution path. See
+        // `submitReport()` for the gating check and `IdentitySheet.swift`'s header for the
+        // full design.
+        .sheet(isPresented: Binding(
+            get: { pendingIdentityAction != nil },
+            set: { isPresented in
+                if !isPresented { pendingIdentityAction = nil }
+            }
+        )) {
+            IdentitySheet(
+                onSave: { username, avatar in
+                    let action = pendingIdentityAction
+                    pendingIdentityAction = nil
+                    Task { try? await pinService.upsertProfile(username: username, avatar: avatar) }
+                    action?()
+                },
+                onSkip: {
+                    let action = pendingIdentityAction
+                    pendingIdentityAction = nil
+                    action?()
+                }
+            )
+            .presentationDetents([.medium])
+        }
     }
 
     // MARK: - Report type row builder
@@ -485,6 +596,11 @@ struct ReportSheet: View {
                 // Unreachable: this row always taps `.type(type)`, which `destination(forTapping:)`
                 // always resolves to `.selectType` (tested — `testDestination_typeTile_preservesTappedType_neverTheOtherOne`
                 // and the streetClosureHandoff-never-equals-selectType tests). Defensive no-op.
+                break
+            case .spotPlacementHandoff:
+                // Unreachable for the same reason as `.streetClosureHandoff` above —
+                // Community 2.0 Phase 2b (build 20 S7): this row always taps `.type(type)`,
+                // never `.spotOpen`. Defensive no-op.
                 break
             }
         } label: {
@@ -796,6 +912,11 @@ struct ReportSheet: View {
                 // Unreachable: this row always taps `.streetClosure`, which always resolves
                 // to `.streetClosureHandoff` (tested). Defensive no-op.
                 break
+            case .spotPlacementHandoff:
+                // Unreachable for the same reason as `.selectType` above — Community 2.0
+                // Phase 2b (build 20 S7): this row always taps `.streetClosure`, never
+                // `.spotOpen`. Defensive no-op.
+                break
             }
         } label: {
             HStack(spacing: 14) {
@@ -825,10 +946,185 @@ struct ReportSheet: View {
         .accessibilityHint("Filming or construction holding the curb — photo helps. Opens the closure report flow.")
     }
 
+    // MARK: - Community 2.0 Phase 2b (build 20 S7 rider): Report grid restyle
+
+    /// The 2×2 tile grid — `design/screenshots/08-report-grid.png`,
+    /// `design/prototype.html:358-382`. Flag-ON only (see `showsReportGrid`); `body`'s
+    /// `else` branch keeps the flag-off list untouched.
+    ///
+    /// Icon choice per the gap-inventory's judgment call #4 (`docs/design/community-2.0-hero-gap-inventory.md`):
+    /// restyle toward native SF Symbols rather than a pixel port of the prototype's card
+    /// styling — reuses the SAME symbols the pre-existing list rows already established
+    /// (`shield.fill` / `exclamationmark.triangle.fill`), plus the prototype's own literal
+    /// "P" glyph for Spot open (not an emoji — the prototype itself uses plain bold text
+    /// here) and the closure tile's already-shipped "🚧" (PR #95, kept as-is rather than
+    /// "fixed" to an SF Symbol — that's an S6-shipped call, out of this rider's scope).
+    /// Border tints ARE prototype-exact (`design/prototype.html:365,369,373,377` /
+    /// spec §6 appendix) — community blue #0A84FF + the other per-type colors already in
+    /// the reconciliation spec's palette table, per Kevin's locked decision #6
+    /// ("prototype-exact fidelity") for this net-new surface.
+    @ViewBuilder
+    private var reportGridSection: some View {
+        LazyVGrid(columns: [GridItem(.flexible(), spacing: 10), GridItem(.flexible(), spacing: 10)], spacing: 10) {
+            reportGridCard(
+                tile: .type(.enforcementActive),
+                borderColor: ReportSheet.gridColor(hex: 0xFF9F0A),
+                title: "Enforcement active",
+                sublabel: "Agent working this block — heads-up to move or feed the meter"
+            ) {
+                Image(systemName: "shield.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(ReportSheet.gridColor(hex: 0xFF9F0A))
+            }
+            reportGridCard(
+                tile: .type(.sweeper),
+                borderColor: ReportSheet.gridColor(hex: 0x30D158),
+                title: "Sweeper passed",
+                sublabel: "The broom came through — block's been cleaned"
+            ) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(ReportSheet.gridColor(hex: 0x30D158))
+            }
+            reportGridCard(
+                tile: .spotOpen,
+                borderColor: ReportSheet.gridColor(hex: 0x0A84FF),
+                title: "Spot open",
+                sublabel: "Walking past an empty legal spot? Takes 2 seconds, earns rep"
+            ) {
+                Text("P")
+                    .font(.system(size: 20, weight: .heavy))
+                    .foregroundStyle(ReportSheet.gridColor(hex: 0x0A84FF))
+            }
+            reportGridCard(
+                tile: .streetClosure,
+                borderColor: ReportSheet.gridColor(hex: 0xE8730D),
+                title: "Street closure",
+                sublabel: "Filming or construction holding the curb — photo helps"
+            ) {
+                Text("🚧").font(.system(size: 20))
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func reportGridCard<Icon: View>(
+        tile: ReportGridTile,
+        borderColor: Color,
+        title: String,
+        sublabel: String,
+        @ViewBuilder icon: () -> Icon
+    ) -> some View {
+        let isSelected = isGridTileSelected(tile)
+        Button {
+            handleGridTileTap(tile)
+        } label: {
+            VStack(alignment: .leading, spacing: 6) {
+                icon()
+                Text(title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                Text(sublabel)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(Color(.systemGray6).opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16)
+                    .strokeBorder(borderColor.opacity(isSelected ? 0.9 : 0.35), lineWidth: isSelected ? 2 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .contentShape(Rectangle())
+        .accessibilityLabel("\(title). \(sublabel)")
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    /// Whether a given grid tile should render in its "selected" visual state. Only
+    /// `.type` tiles can ever be selected (they set `selectedType`); `.streetClosure` and
+    /// `.spotOpen` are one-tap hand-offs to a different flow entirely and are never
+    /// "selected" within this sheet's own state.
+    private func isGridTileSelected(_ tile: ReportGridTile) -> Bool {
+        if case .type(let type) = tile { return selectedType == type }
+        return false
+    }
+
+    /// Single tap-routing entry point for all 4 grid tiles. Kept SEPARATE from
+    /// `reportTypeRow`'s / `streetClosureRow`'s own inline `destination(forTapping:)`
+    /// switches (each of which just grew one additive no-op arm for the new
+    /// `.spotPlacementHandoff` case) rather than refactoring those two into calling this —
+    /// per this session's "keep the diff minimal" constraint, not touching QA'd, shipped
+    /// PR #95 code beyond the mechanical exhaustive-switch addition it needs to compile.
+    private func handleGridTileTap(_ tile: ReportGridTile) {
+        switch ReportSheet.destination(
+            forTapping: tile,
+            communityEnabled: AppConstants.communityEnabled,
+            candidates: confirmCandidates
+        ) {
+        case .selectType(let resolvedType, _):
+            selectedType = resolvedType
+            if resolvedType != .enforcementActive { selectedSubTag = nil }
+            if resolvedType != .sweeper { sweeperDirection = .passed }
+            selectedHeadingToward = nil
+        case .streetClosureHandoff:
+            onRequestStreetClosure?()
+        case .spotPlacementHandoff:
+            onRequestSpotPlacement?()
+        }
+    }
+
+    /// Small per-file hex→Color helper (matches `CrewFeedSection`'s own `fileprivate
+    /// static func color(hex:)` precedent — duplicated rather than shared, per this
+    /// codebase's established house style; see `CandidateSegmentSearch`'s duplicated
+    /// geometry helpers for the same reasoning).
+    fileprivate static func gridColor(hex: UInt32) -> Color {
+        Color(
+            red: Double((hex >> 16) & 0xFF) / 255,
+            green: Double((hex >> 8) & 0xFF) / 255,
+            blue: Double(hex & 0xFF) / 255
+        )
+    }
+
     // MARK: - Submit
 
+    /// Community 2.0 Phase 2b (build 20 S7): identity-sheet interception in front of the
+    /// report-submit contribution path (spec §3 Phase 2: "wire needIdentity-style
+    /// interception in front of every contribution path (report post, spot post)").
+    ///
+    /// Gated on BOTH `AppConstants.communityEnabled` AND the show-once gate
+    /// (`CommunityIdentityInterception.shouldShowIdentitySheet`) — this report-submit path
+    /// predates Community 2.0 entirely and is live for every user today, flag-off or not, so
+    /// flag-off must see ZERO behavior change here: no sheet ever shown, no `UserDefaults`
+    /// write ever made, `performSubmit(type:)` called immediately exactly as `submitReport()`
+    /// used to do its whole job inline before this session.
     private func submitReport() async {
         guard let type = selectedType else { return }
+
+        if CommunityIdentityInterception.shouldShowIdentitySheet(
+            communityEnabled: AppConstants.communityEnabled,
+            identitySheetShouldShow: CommunityIdentityGate().shouldShow()
+        ) {
+            // Defer the actual submit until the identity sheet resolves (save or skip).
+            // `isSubmitting` deliberately stays false here — the CTA isn't "in flight" while
+            // the identity sheet is up, matching the prototype's needIdentity(cb)
+            // gate-then-proceed shape (`design/prototype.html:1014`'s `placePost`/`repPost`
+            // pattern of wrapping the real action in `this.needIdentity(() => {...})`).
+            pendingIdentityAction = { Task { await performSubmit(type: type) } }
+            return
+        }
+
+        await performSubmit(type: type)
+    }
+
+    /// The actual network submit — split out of `submitReport()` so the identity
+    /// interception above can defer this call until "Join the board & post" / "Post
+    /// anonymously" resolves, without duplicating the meta-building/heading-resolution logic.
+    /// Byte-for-byte the same body `submitReport()` had before this session.
+    private func performSubmit(type: ReportType) async {
         isSubmitting = true
         submitError = nil
 
@@ -988,6 +1284,16 @@ struct ReportSheet: View {
         communityEnabled
     }
 
+    /// Community 2.0 Phase 2b (build 20 S7 rider): whether the report grid (2×2 tile
+    /// cards, `design/screenshots/08-report-grid.png`) should render instead of the
+    /// pre-S7 list. `true` exactly when `communityEnabled` — the SAME flag
+    /// `showsStreetClosureTile` already gates on, so grid-vs-list and closure-tile
+    /// visibility can never disagree with each other. Flag-off keeps the list byte-
+    /// identical to before this rider (`body`'s `else` branch).
+    static func showsReportGrid(communityEnabled: Bool) -> Bool {
+        communityEnabled
+    }
+
     /// Whether the "confirm the street" candidate list should render.
     ///
     /// `false` whenever `communityEnabled` is `false` — regardless of `selectedType`/
@@ -1013,10 +1319,16 @@ struct ReportSheet: View {
     // MARK: - Report grid tap routing (static, for test access — QA pass 2 / PR #95 Mac-gate
     // blocker fix, build 20 S6)
 
-    /// One of the report grid's three tiles — the tap TARGET, not the resulting state.
+    /// One of the report grid's four tiles — the tap TARGET, not the resulting state.
     enum ReportGridTile: Equatable {
         case type(ReportType)
         case streetClosure
+        /// Community 2.0 Phase 2b (build 20 S7): the grid's 4th tile ("Spot open",
+        /// `design/prototype.html:371-375`). Routes into the map-tap placement flow — never
+        /// into `selectedType` (this sheet has no `.spotOpen` `ReportType` case; placement
+        /// is its own flow, entirely separate from the select-a-type-then-submit path the
+        /// other 3 tiles share).
+        case spotOpen
     }
 
     /// What tapping a given grid tile leads to.
@@ -1049,6 +1361,11 @@ struct ReportSheet: View {
         /// touched. By construction this case carries no `ReportType` payload, so it can never
         /// be mistaken for a `.selectType` destination at the type level.
         case streetClosureHandoff
+        /// Community 2.0 Phase 2b (build 20 S7): the spot-open tile tap — hands off to
+        /// `onRequestSpotPlacement` (map-tap placement flow), same shape as
+        /// `.streetClosureHandoff`: this sheet dismisses entirely, `selectedType` is never
+        /// touched, and by construction this case carries no `ReportType` payload either.
+        case spotPlacementHandoff
     }
 
     /// Resolves the destination for tapping `tile`, given the current flag/candidate state.
@@ -1069,6 +1386,8 @@ struct ReportSheet: View {
             )
         case .streetClosure:
             return .streetClosureHandoff
+        case .spotOpen:
+            return .spotPlacementHandoff
         }
     }
 
