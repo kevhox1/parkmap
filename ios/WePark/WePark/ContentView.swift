@@ -1999,17 +1999,19 @@ struct ContentView: View {
             overlayPayload: overlayPayload,
             activeRoute: activeRoute,
             destinationCoordinate: driveDestinationCoordinate,
-            communityPins: communityPins,
-            onCommunityPinTapped: handleCommunityPinTapped(_:),
-            segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
-            // FT-15/TF2-15 Stream B2: multi-segment block-select highlight (§4.2 step 3).
-            blockSelectKeys: selectedBlockKeys,
             // Community 2.0 Phase 2b (build 20 S7): dashed draft-pin annotation for the
             // "Spot open" placement flow — nil outside placement mode / before the first
             // tap. Driven straight from `@State`, same "optional coordinate in → add/remove
             // annotation, mechanical sync only" contract as `destinationCoordinate` above
             // (see `MapViewRepresentable.updateUIView`'s own architecture-invariant comment).
+            // NB: argument order must match the memberwise init (declaration order) —
+            // draftSpotCoordinate is declared directly after destinationCoordinate.
             draftSpotCoordinate: spotPlacementDraft?.coordinate,
+            communityPins: communityPins,
+            onCommunityPinTapped: handleCommunityPinTapped(_:),
+            segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
+            // FT-15/TF2-15 Stream B2: multi-segment block-select highlight (§4.2 step 3).
+            blockSelectKeys: selectedBlockKeys,
             driveHeading: effectiveDriveHeading,  // TF2-16: course, or street-snap at low confidence
             driveModeActive: driveModeActive,
             onDrivePanDetected: handleDrivePanDetected,
