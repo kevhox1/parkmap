@@ -429,12 +429,31 @@ struct ReportSheet: View {
     ) -> some View {
         let isSelected = selectedType == type
         Button {
-            selectedType = type
-            // Reset sub-state when type changes
-            if type != .enforcementActive { selectedSubTag = nil }
-            if type != .sweeper { sweeperDirection = .passed }
-            // FT-11: Reset direction picker selection when the top-level type changes.
-            selectedHeadingToward = nil
+            // QA pass 2 round 2 (PR #95): routed through the pure `destination(forTapping:)`
+            // model instead of setting `selectedType` directly, so this button's ACTUAL
+            // behavior is what the 8 `ReportGridRoutingTests` assert against — a future edit
+            // that breaks the routing contract now breaks this button too, not just a
+            // disconnected test double. `showsConfirmStreet` isn't consumed here (the
+            // confirm-street section reads the instance `showsConfirmStreetStep` computed
+            // property when rendering); only the `type` payload drives this closure.
+            switch ReportSheet.destination(
+                forTapping: .type(type),
+                communityEnabled: AppConstants.communityEnabled,
+                candidates: confirmCandidates
+            ) {
+            case .selectType(let resolvedType, _):
+                selectedType = resolvedType
+                // Reset sub-state when type changes
+                if resolvedType != .enforcementActive { selectedSubTag = nil }
+                if resolvedType != .sweeper { sweeperDirection = .passed }
+                // FT-11: Reset direction picker selection when the top-level type changes.
+                selectedHeadingToward = nil
+            case .streetClosureHandoff:
+                // Unreachable: this row always taps `.type(type)`, which `destination(forTapping:)`
+                // always resolves to `.selectType` (tested — `testDestination_typeTile_preservesTappedType_neverTheOtherOne`
+                // and the streetClosureHandoff-never-equals-selectType tests). Defensive no-op.
+                break
+            }
         } label: {
             HStack(spacing: 14) {
                 Image(systemName: symbolName)
@@ -729,7 +748,22 @@ struct ReportSheet: View {
     @ViewBuilder
     private var streetClosureRow: some View {
         Button {
-            onRequestStreetClosure?()
+            // QA pass 2 round 2 (PR #95): routed through `destination(forTapping:)` — same
+            // reasoning as `reportTypeRow`'s Button above. `communityEnabled`/`candidates`
+            // don't change `.streetClosure`'s resolved destination, but the call site still
+            // passes the real values so the model always evaluates the live decision.
+            switch ReportSheet.destination(
+                forTapping: .streetClosure,
+                communityEnabled: AppConstants.communityEnabled,
+                candidates: confirmCandidates
+            ) {
+            case .streetClosureHandoff:
+                onRequestStreetClosure?()
+            case .selectType:
+                // Unreachable: this row always taps `.streetClosure`, which always resolves
+                // to `.streetClosureHandoff` (tested). Defensive no-op.
+                break
+            }
         } label: {
             HStack(spacing: 14) {
                 Text("🚧")
@@ -923,11 +957,14 @@ struct ReportSheet: View {
     /// `.type` tile, racing the tap's touch-up against the relayout. `body`'s fix moves Row 3
     /// to render FIRST, before any conditional content can ever be inserted above it, removing
     /// the PRECONDITION for that race, with zero change to Rows 1/2's own (already flag-off-
-    /// verified) interleaved detail structure. THIS enum is the regression net — a future edit
-    /// that reintroduces layout instability won't be caught by these tests (SwiftUI layout
-    /// stability itself isn't unit-testable here), but a future edit that makes a tile's tap
-    /// handler resolve to the WRONG `ReportGridDestination` case — e.g. a `.streetClosure` tap
-    /// accidentally computing `.selectType(...)`, or vice versa — will be.
+    /// verified) interleaved detail structure.
+    ///
+    /// QA pass 2 round 2: `reportTypeRow`'s and `streetClosureRow`'s Button actions both
+    /// `switch` on `destination(forTapping:communityEnabled:candidates:)`'s result to perform
+    /// their actual side effects — this is not a parallel/decorative model, it is THE decision
+    /// both live buttons execute. A future edit that makes a tile's tap handler resolve to the
+    /// WRONG `ReportGridDestination` case — e.g. a `.streetClosure` tap accidentally computing
+    /// `.selectType(...)`, or vice versa — breaks both a test AND the actual button.
     enum ReportGridDestination: Equatable {
         /// An enforcement/sweeper tile tap: `selectedType` becomes `type`.
         /// `showsConfirmStreet`: `true` → the confirm-the-street section renders next, before

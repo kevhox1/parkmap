@@ -171,11 +171,15 @@ final class SideDisplayNameTests: XCTestCase {
 /// tradeoff this implies for the flag-ON grid only).
 ///
 /// SwiftUI layout-stability itself isn't unit-testable in this codebase without ViewInspector
-/// (QA pass 1 Finding #2), so these tests are the regression NET, not a literal reproduction
-/// of the race — they assert the pure ROUTING CONTRACT `body`'s tap handlers are supposed to
-/// honor for every (tile, flag, candidates) combination, so a FUTURE edit that makes a tile's
-/// handler resolve to the wrong `ReportGridDestination` (the class of bug QA's hypothesis
-/// described, even though it wasn't the literal cause this time) fails a test immediately.
+/// (QA pass 1 Finding #2), so these tests can't reproduce the layout race directly — but as of
+/// QA pass 2 round 2, `reportTypeRow`'s and `streetClosureRow`'s Button actions both `switch`
+/// on `destination(forTapping:communityEnabled:candidates:)`'s result to perform their real
+/// side effects — two live call sites in `Views/ReportSheet.swift`, not just this test file.
+/// These tests therefore assert the actual routing CONTRACT the shipped buttons execute, for
+/// every (tile, flag, candidates) combination — a FUTURE edit that makes a tile's handler
+/// resolve to the wrong `ReportGridDestination` (the class of bug QA's hypothesis originally
+/// described) fails a test immediately AND changes the live button's behavior, not a
+/// disconnected model's.
 final class ReportGridRoutingTests: XCTestCase {
 
     private func aSegment() -> Segment {
