@@ -45,6 +45,12 @@ explicitly below.
 **Total: ~15–18 sessions** (expanded 2026-08-28 from ~12–15: Kevin adopted the gap-inventory plan —
 `docs/design/community-2.0-hero-gap-inventory.md` — adding S13a/S13b and four near-free riders).
 
+**⚠️ Flag-flip prerequisite discovered 2026-08-28:** running the suite with `communityEnabled = true`
+fails 3 tests (found accidentally via a stale working-tree flag during PR #95's gate; suite is
+1021/1021 with the flag off). The eventual launch commit that flips the flag MUST identify and
+adjust those flag-value-dependent tests in the same PR — budget it into the flip, don't discover it
+at launch.
+
 ## Calendar shape
 
 At the usual pace (1–2 sessions/day driven from the phone, Mac gates batched), this is **roughly
