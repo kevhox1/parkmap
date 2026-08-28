@@ -107,17 +107,19 @@ struct ReportSheet: View {
 
     /// Human-readable description of where `coordinate` came from — "long-press (resting)"
     /// vs "current GPS (in-drive)" — threaded from both `ContentView` entry points so the
-    /// `#if DEBUG` diagnostics footer below can show it without guessing. Not read by any
-    /// production behavior; this is plain metadata, harmless to carry in Release builds
-    /// (only the RENDERING/print()-ing of it is `#if DEBUG`-gated — see that section for why
-    /// this property itself isn't also wrapped in `#if DEBUG`).
+    /// `#if DEBUG`-only console diagnostics (`logDiagnosticsToConsole`) can show it without
+    /// guessing. The on-screen footer this originally also fed was removed once the STOP-AND-
+    /// INSTRUMENT root cause was found (no code bug — a discoverability/scroll finding, not a
+    /// mount-condition defect); this property stays because the console print path still
+    /// reads it. Not read by any production behavior; plain metadata, harmless to carry in
+    /// Release builds (only the print()-ing of it is `#if DEBUG`-gated).
     var coordinateSource: String = "unknown"
 
     /// The radius (meters) `ContentView` used for the segment search that produced `segment`/
     /// `confirmCandidates` — must match `ContentView.pinDropRadiusMeters` (35.0 today).
-    /// Threaded through rather than duplicated as a literal here, so the diagnostics footer
-    /// can never silently drift from the real constant. Same "plain data, harmless in
-    /// Release" reasoning as `coordinateSource` above.
+    /// Threaded through rather than duplicated as a literal here, so the console diagnostics
+    /// can never silently drift from the real constant. Same reasoning as `coordinateSource`
+    /// above — kept for `logDiagnosticsToConsole`, the on-screen footer was removed.
     var candidateSearchRadiusMeters: Double = 35.0
 
     // MARK: - Primary type selection
@@ -430,21 +432,21 @@ struct ReportSheet: View {
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 16)
-
-                #if DEBUG
-                // QA STOP-AND-INSTRUMENT (PR #95, 2026-08-28): rendered whenever the sheet is
-                // up, screenshot-able (Kevin cannot read console logs comfortably on-device).
-                // See `diagnosticsFooter`'s own doc comment for the full rationale. Placed
-                // OUTSIDE the ScrollView, directly below the CTA, so it's visible without
-                // scrolling on every device size.
-                diagnosticsFooter
-                #endif
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { onDismiss() }
                 }
             }
+            #if DEBUG
+            // QA STOP-AND-INSTRUMENT (PR #95, 2026-08-28) — root cause found (no code bug;
+            // discoverability finding logged for S13), on-screen footer removed post-diagnosis.
+            // These triggers are kept — console-only, free, useful later — see
+            // `logDiagnosticsToConsole`'s own doc comment.
+            .onAppear { logDiagnosticsToConsole(trigger: "onAppear") }
+            .onChange(of: selectedType) { _, _ in logDiagnosticsToConsole(trigger: "selectedType changed") }
+            .onChange(of: confirmCandidates.count) { _, _ in logDiagnosticsToConsole(trigger: "confirmCandidates.count changed") }
+            #endif
         }
     }
 
@@ -874,70 +876,23 @@ struct ReportSheet: View {
     // refuted by diff; QA round 3: no-candidates guess — refuted by Kevin pinning simulator
     // GPS directly on Mott St between Prince & Spring, 40.7228,-73.9945, and still seeing no
     // confirm-street section) did not move the symptom. Per the repo's standing rule against
-    // a third blind hypothesis fix, this instruments the ACTUAL live state instead of
-    // guessing again — an on-screen, screenshot-able readout (Kevin cannot read console logs
-    // comfortably) of every input to the confirm-street mount decision, individually.
+    // a third blind hypothesis fix, this instrumented the ACTUAL live state instead of
+    // guessing again.
     //
-    // Zero behavior change outside DEBUG builds: this entire block, and its two call sites in
-    // `body`, compile out completely in Release — `#if DEBUG` is a compiler conditional, not a
-    // runtime flag, so a TestFlight/App Store build never contains this code at all.
-    @ViewBuilder
-    private var diagnosticsFooter: some View {
-        let candidatesNonEmpty = !confirmCandidates.isEmpty
-        let typeMatches = selectedType == .enforcementActive || selectedType == .sweeper
+    // Root cause found via the instrumentation: NOT a code bug. The confirm-street section
+    // mounted correctly all along — it landed below the sheet's visible fold before the user
+    // scrolled. Discoverability finding logged for the S13 hero-parity pass, not a functional
+    // defect. The on-screen, screenshot-able footer that made this diagnosable has served its
+    // purpose and is removed post-diagnosis; `logDiagnosticsToConsole` below is KEPT —
+    // console-only, free, useful if a similar question comes up again later.
+    //
+    // Zero behavior change outside DEBUG builds: this entire block and its trigger call sites
+    // in `body` compile out completely in Release — `#if DEBUG` is a compiler conditional, not
+    // a runtime flag, so a TestFlight/App Store build never contains this code at all.
 
-        VStack(alignment: .leading, spacing: 3) {
-            Text("DEBUG DIAGNOSTICS — confirm-street mount")
-                .font(.caption2.weight(.bold))
-                .foregroundStyle(.red)
-
-            diagnosticsLine("AppConstants.communityEnabled", "\(AppConstants.communityEnabled)")
-            diagnosticsLine("selectedType", selectedType.map { "\($0)" } ?? "nil")
-            diagnosticsLine(
-                "coordinate",
-                "\(coordinate.latitude), \(coordinate.longitude)  [source: \(coordinateSource)]"
-            )
-            diagnosticsLine(
-                "segment lookup",
-                segment.map { "found: \($0.id)" } ?? "nil (radius \(Int(candidateSearchRadiusMeters))m)"
-            )
-            diagnosticsLine("confirmCandidates.count", "\(confirmCandidates.count)")
-
-            Divider().padding(.vertical, 2)
-
-            Text("mount condition, each term:")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.secondary)
-            diagnosticsLine("· communityEnabled", "\(AppConstants.communityEnabled)")
-            diagnosticsLine("· candidates non-empty", "\(candidatesNonEmpty)")
-            diagnosticsLine("· type is enforcement/sweeper", "\(typeMatches)")
-            diagnosticsLine("→ VERDICT showsConfirmStreetStep", "\(showsConfirmStreetStep)")
-                .font(.system(size: 10, weight: .bold, design: .monospaced))
-        }
-        .padding(10)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Color.red.opacity(0.08))
-        .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .strokeBorder(Color.red.opacity(0.4))
-        )
-        .padding(.horizontal, 20)
-        .padding(.bottom, 8)
-        .onAppear { logDiagnosticsToConsole(trigger: "onAppear") }
-        .onChange(of: selectedType) { _, _ in logDiagnosticsToConsole(trigger: "selectedType changed") }
-        .onChange(of: confirmCandidates.count) { _, _ in logDiagnosticsToConsole(trigger: "confirmCandidates.count changed") }
-    }
-
-    @ViewBuilder
-    private func diagnosticsLine(_ label: String, _ value: String) -> some View {
-        Text("\(label): \(value)")
-            .font(.system(size: 10, design: .monospaced))
-            .foregroundStyle(.secondary)
-    }
-
-    /// Prints the exact same readout as `diagnosticsFooter` — "for completeness" per the
-    /// dispatch instruction, even though the on-screen footer is the primary artifact (Kevin
-    /// screenshots the sheet; he does not have comfortable console access on-device).
+    /// Prints a readout of every input to the confirm-street mount decision — console-only
+    /// (the on-screen footer this used to also drive was removed once the root cause was
+    /// found; this function is kept for future debugging, per the dispatch instruction).
     private func logDiagnosticsToConsole(trigger: String) {
         let candidatesNonEmpty = !confirmCandidates.isEmpty
         let typeMatches = selectedType == .enforcementActive || selectedType == .sweeper
