@@ -158,7 +158,7 @@ final class ZoneMessageDecodeTests: XCTestCase {
     /// `01-mvp-schema.sql:76`'s CHECK constraint's other value — cross-pollination messages
     /// from the tracker (inserted via a SECURITY DEFINER RPC, not directly by a user).
     func testDecode_systemTrackerMessageType_decodesCorrectly() throws {
-        let json = zoneMessageJSON(messageType: "system_tracker", authorId: nil, authorUsername: nil,
+        let json = zoneMessageJSON(authorId: nil, messageType: "system_tracker", authorUsername: nil,
                                     authorReputation: nil)
         let message = try decoder.decode(ZoneMessage.self, from: Data(json.utf8))
 
@@ -205,8 +205,8 @@ final class ZoneMessageServiceFetchTests: XCTestCase {
     /// PostgREST returns `created_at.desc` (most-recent-first); `fetchMessages` must reverse
     /// that to oldest-first for display.
     func testFetchMessages_success_reversesToOldestFirst() async {
-        let oldest = zoneMessageJSON(id: 1, createdAt: "2026-08-27T09:00:00+00:00", body: "first")
-        let newest = zoneMessageJSON(id: 2, createdAt: "2026-08-27T09:05:00+00:00", body: "second")
+        let oldest = zoneMessageJSON(id: 1, body: "first", createdAt: "2026-08-27T09:00:00+00:00")
+        let newest = zoneMessageJSON(id: 2, body: "second", createdAt: "2026-08-27T09:05:00+00:00")
         // Server order: newest first (what created_at.desc actually returns).
         let body = zoneMessagesArrayJSON([newest, oldest])
 
