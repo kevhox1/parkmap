@@ -1,15 +1,27 @@
-# Community 2.0 Phase 3 (build 20 S9) — reactions, profile row, leaderboard — QA Pass 1
+# Community 2.0 Phase 3 (build 20 S9) — reactions, profile row, leaderboard
 
-**Reviewed:** branch `ios/community-phase3` at `480901ed`, against
-`docs/community-2.0-reconciliation-spec.md` §3 Phase 3 (AC-P3.1–P3.4) + roadmap S9 +
+**Pass 1 reviewed:** branch `ios/community-phase3` at `480901ed`.
+**Pass 2 reviewed:** same branch at `e9fb9e8c` (fix commit for Pass 1's findings).
+Both against `docs/community-2.0-reconciliation-spec.md` §3 Phase 3 (AC-P3.1–P3.4) + roadmap S9 +
 `design/prototype.html:161-189,941-946` + `design/screenshots/05-feed-full.png`. Schema ground
 truth: `supabase/03-community-2.0-schema.sql` (already applied — `claim_pin` RPC §2.10,
 `profiles_select_all` RLS, `pins_with_author` view).
 
-**Verdict: MERGE-AFTER-MAC-GATE** (right-sized gate below — no live-sim mount-chain smoke
-required for this PR class, but two 🟡 findings should be fixed before or shortly after merge).
+**FINAL VERDICT (Pass 2): MERGE-AFTER-MAC-GATE.** All four Pass 1 findings (#1–#4) verified fixed
+cold at `e9fb9e8c`, including the adversarial race-interleaving trace for Finding #1. No new
+blocking or significant issues found. One new minor observation (visible leaderboard flash on
+every zone switch) is logged as an accepted v1 trade-off, not a defect. Kevin's gate is
+unchanged in shape from Pass 1 (Mac toolchain build/test + a flag-on visual check); expect
+1111/1111 tests.
 
-## Summary
+---
+
+## Pass 1 (below, superseded findings kept for history)
+
+**Verdict at Pass 1: MERGE-AFTER-MAC-GATE** (two 🟡 findings should be fixed before or shortly
+after merge — both were fixed in Pass 2, see below).
+
+### Summary
 
 This is a clean, well-scoped Phase 3 PR. The core architectural claim — both `PinDetailSheet.ReactionsRow`
 and `CrewFeedSection.PinFeedRow` route through the same pure `CommunityPin.reactionsRowKind(currentUserId:)`
@@ -23,7 +35,7 @@ same effect. Neither is severe enough to block merge (this is UI polish behind `
 not a data-integrity or security issue), but both should be fixed, ideally before Kevin's TestFlight
 gate opens.
 
-## Acceptance criteria checklist
+### Acceptance criteria checklist
 
 - [x] AC-P3.1 — Confirm tap still awards +2 rep/+1 helped-count and extends `expires_at` via the
       existing `upsertVote`/`callExtendPinExpiry` calls, unchanged, for every type that routes to
@@ -42,17 +54,17 @@ gate opens.
       switch, but (a) it's not cancellation-safe against out-of-order completion when a user
       switches zones twice quickly, and (b) a fetch failure deliberately leaves the previous
       zone's entries on screen. Both can result in the leaderboard showing a different zone's
-      data than the currently-selected zone chip. See Finding #1.
+      data than the currently-selected zone chip. See Finding #1. **Fixed in Pass 2 — see below.**
 
-## Findings
+### Findings
 
-### 🔴 Blocking
+#### 🔴 Blocking
 
 None.
 
-### 🟡 Significant
+#### 🟡 Significant
 
-- **#1: Leaderboard can show stale/wrong-zone data after a fast zone switch or a fetch hiccup — the exact thing AC-P3.4 rules out**
+- **#1: Leaderboard can show stale/wrong-zone data after a fast zone switch or a fetch hiccup — the exact thing AC-P3.4 rules out** — **FIXED in Pass 2.**
   - Where: `Views/CrewFeedSection.swift`, `CrewFeedSection.loadLeaderboard(zone:)` (called from
     `.onAppear`'s `Task` and `.onChange(of: selectedZone)`'s `Task`).
   - What: `loadLeaderboard(zone:)` fires an unstructured `Task { await loadLeaderboard(zone: newZone) }`
@@ -83,7 +95,7 @@ None.
     not silent carry-over.
   - Owner: `@ios-engineer`
 
-- **#2: Leaderboard fetch has no `limit`/`order` — unbounded result size for a busy zone**
+- **#2: Leaderboard fetch has no `limit`/`order` — unbounded result size for a busy zone** — **FIXED in Pass 2.**
   - Where: `Services/CommunityPinService.swift`, `buildLeaderboardRequest(zoneId:sevenDaysAgoISO:)`.
   - What: The PostgREST query filters by `source=eq.crowd`, `confirm_count=gt.0`,
     `created_at=gte.<7d ago>`, and the zone's lat/lng box, but has no `limit=` or `order=`
@@ -98,9 +110,9 @@ None.
     change today's behavior for realistic MVP volume.
   - Owner: `@ios-engineer`
 
-### 🟢 Minor / nit
+#### 🟢 Minor / nit
 
-- **#3: "Someone's heading there" copy doesn't distinguish the claimant's own successful claim**
+- **#3: "Someone's heading there" copy doesn't distinguish the claimant's own successful claim** — **FIXED in Pass 2.**
   - Where: `Views/PinDetailSheet.swift` `ReactionsRow.claimSection`; `Views/CrewFeedSection.swift`
     `PinFeedRow.leavingSoonAction`. Both: `if pin.claimedBy != nil { Label("Someone's heading
     there — first come, first served"...) }` — unconditional, doesn't check
@@ -123,13 +135,13 @@ None.
     rough edge worth tightening given it's copy-visible.
   - Owner: `@ios-engineer` (bundle with #1 if convenient — same file).
 
-- **#4: Minor error-copy inconsistency between the two claim call sites**
+- **#4: Minor error-copy inconsistency between the two claim call sites** — **FIXED in Pass 2.**
   - Where: `PinDetailSheet.swift` `handleClaim`: `"Couldn't claim — please try again."` vs.
     `CrewFeedSection.swift` `PinFeedRow.handleClaim`: `"Couldn't claim — try again."`. Cosmetic
     only, not user-facing enough to matter, noting for completeness.
   - Owner: `@ios-engineer`
 
-### 💡 Out of scope (logged, not fixed)
+#### 💡 Out of scope (logged, not fixed)
 
 - **Leaderboard avatars.** Confirmed via `supabase/03-community-2.0-schema.sql:635-660`:
   `pins_with_author` selects `pr.username`/`pr.reputation` but not `pr.avatar`. This is genuinely
@@ -144,7 +156,7 @@ None.
 - **MapKit POI storefront naming**, **true NTA polygon zones** — pre-existing spec §5 deferrals,
   untouched by this PR, nothing new to log.
 
-## Deviation ruling (task's three disclosed + the one undisclosed one found above)
+### Deviation ruling (task's three disclosed + the one undisclosed one found above)
 
 1. **Tenure copy (duration-based, not "On {street} since {month}") — ACCEPTABLE, correctly
    reasoned.** Verified: no per-user home-street column exists in `profiles` or
@@ -173,7 +185,7 @@ None.
    repeated "real data or nothing" framing echoed throughout this PR's comments). **Rule: skip is
    correct, not a dodge — the reasoning survives an adversarial check.**
 
-## Cross-file / regression checks
+### Cross-file / regression checks
 
 - **Pre-existing `ReactionsRow` behavior for shipped types (`enforcement_active`,
   `sweeper_passed`) is unchanged.** Before this PR, `PinDetailSheet.ReactionsRow.body` was
@@ -236,7 +248,7 @@ None.
   "fine", "evasion", "dodge" (case-insensitive) — zero user-facing hits. The only "ticket"-adjacent
   text is a doc comment explaining why the tickets-dodged stat was skipped, not shipped copy.
 
-## Tests
+### Tests (Pass 1)
 
 35 new tests read in full (`WeParkTests/CommunityPhase3TrustLoopTests.swift`). Assessment:
 behavior-asserting throughout, not shape-checking placeholders.
@@ -269,7 +281,7 @@ behavior-asserting throughout, not shape-checking placeholders.
 Suite count: stated 1067 → 1102 (+35), matches the orchestrator's independently-verified static
 count.
 
-## Smoke tests run
+### Smoke tests run (Pass 1)
 
 No live-simulator build/launch was performed for this pass — correctly out of scope for this PR
 class. Verified instead:
@@ -293,7 +305,7 @@ class. Verified instead:
 - Did **not** run `xcodebuild` (Linux VPS, no toolchain, matches every prior Community 2.0 PR's
   posture) — compile/test execution is Kevin's Mac gate, per below.
 
-## What's working
+### What's working (Pass 1)
 
 - The `reactionsRowKind` unification is a genuinely good fix, not just a refactor — it closes a
   real, pre-existing gap (leaving_soon showing vote buttons in the detail sheet) while also
@@ -311,32 +323,202 @@ class. Verified instead:
 - Nothing in this PR touches RLS, schema, or any file outside the stated Phase 3 surface — a clean,
   disjoint diff against a well-understood file set.
 
-## Kevin's gate (right-sized for this PR class)
+---
+
+## Pass 2 — verification of the fix commit `e9fb9e8c`
+
+Read cold via `git show e9fb9e8c:<path>` (learned my own Pass 1 lesson — did not trust the
+worktree's on-disk checkout, which is still on `main`). Diffed `480901ed..e9fb9e8c` file by file.
+
+### Finding #1 (leaderboard zone-switch race) — VERIFIED FIXED
+
+- **`.task(id: selectedZone)` genuinely replaces the manual `Task`/`onChange` orchestration.**
+  Grepped the fixed `CrewFeedSection.swift` for `Task {` — the only remaining manual `Task {}`
+  call sites are the three user-action button handlers (`handleStillThere`, `handleGone`,
+  `handleClaim`), which are correctly still manual (they're tap-triggered, not
+  zone-switch-triggered — not leftovers). `body`'s `.onAppear`/`.onChange(of: selectedZone)` now
+  only call the synchronous `selectZone(_:)` (sets the two services' zone filters); the async
+  profile+leaderboard load moved entirely into `.task(id: selectedZone) { await
+  loadProfileIfNeeded(); await loadLeaderboard(zone: selectedZone) }`.
+- **`.task(id:)` fires on first appear.** Confirmed this is standard, documented SwiftUI
+  behavior (`.task(id:)` runs its closure when the view first appears, in addition to re-running
+  on every `id` change) — the leaderboard still loads on initial mount; nothing regressed here.
+- **`loadLeaderboard` clears entries BEFORE the await, not after failure.** Verified:
+  `leaderboardEntries = []` is the *first* statement in the function body, executed
+  synchronously before `await pinService.fetchLeaderboardPins(...)`. The old "keep stale data on
+  failure" doc comment is gone, replaced with an explicit note that an empty leaderboard section
+  is now the deliberate "loading or failed" state.
+- **`LeaderboardPublishGuard.shouldPublish` semantics correct for all 4 combinations, and it's
+  load-bearing, not decorative.** `shouldPublish(fetchedZone:currentZone:isCancelled:) = !isCancelled
+  && fetchedZone == currentZone`. Verified at the actual publish site:
+  ```swift
+  guard LeaderboardPublishGuard.shouldPublish(
+      fetchedZone: zone, currentZone: selectedZone, isCancelled: Task.isCancelled
+  ) else { return }
+  leaderboardEntries = built
+  ```
+  This directly gates the state write — not a logged/asserted-only check. `currentZone:
+  selectedZone` reads the view's live `@State` at call time (SwiftUI's `@State` storage is a
+  stable box independent of the struct's value-type re-creation, so this correctly reflects the
+  zone at publish time, not a value captured at fetch-start). `Task.isCancelled` reflects the
+  enclosing `.task(id:)` task's cancellation state, since `loadLeaderboard` runs as a direct
+  `await` within that task's closure, not a detached/unstructured child.
+- **Adversarial interleaving traced: zone A slow → user switches to B → B publishes → A
+  completes late.** Two independent layers both block A's stale write, so it can't land under
+  any interleaving:
+  1. When `selectedZone` changes from A to B, SwiftUI cancels A's `.task(id:)` task. Swift's
+     `URLSession.data(for:)` async bridge is cancellation-aware and throws when its enclosing
+     `Task` is cancelled — so A's in-flight `fetchLeaderboardPins` call is very likely to throw
+     before it ever returns data, and `try? await pinService.fetchLeaderboardPins(...)` turns
+     that into `nil`, hitting `guard let pins = ... else { return }` — A's flow terminates
+     *before* it ever reaches the publish guard.
+  2. Even in the degenerate case where A's fetch somehow still returns data despite
+     cancellation (e.g. a test double that ignores cancellation), the explicit guard at the
+     publish site catches it two ways: `Task.isCancelled` is true for A's own task (cancelled by
+     the id change), OR even if that flag somehow lagged, `fetchedZone` (A) `!= currentZone`
+     (B, the live `selectedZone` by the time A's `await` resumes) — either condition alone fails
+     `shouldPublish`. A's rows cannot land under any ordering.
+  - This is genuinely defense-in-depth, not redundant boilerplate: it protects against exactly
+    the case its own doc comment names — a request that got cancelled but had already returned
+    data microseconds before the cancellation flag propagated.
+- **Tests (4, `LeaderboardPublishGuardTests`) cover the full truth table**, not just the happy
+  path: `(same zone, not cancelled) → true`; `(zone changed, not cancelled) → false` (the exact
+  Finding #1 scenario, explicitly commented as such); `(same zone, cancelled) → false`;
+  `(zone changed, cancelled) → false`. All 4 logical combinations of the two boolean-ish inputs
+  are exercised.
+
+**Verdict: Finding #1 is correctly and robustly fixed**, with a genuine understanding of why the
+explicit guard is needed on top of `.task(id:)`'s own cancellation (not just cargo-culted).
+
+### Finding #2 (unbounded leaderboard query) — VERIFIED FIXED
+
+- `buildLeaderboardRequest` now appends `URLQueryItem(name: "order", value: "confirm_count.desc")`
+  and `URLQueryItem(name: "limit", value: "200")` to the existing filter set. Confirmed present
+  in the actual request-building code, not just mentioned in a comment.
+- **Test inspects the built request directly**: `testFetchLeaderboardPins_queryIncludesOrderAndLimit`
+  captures the real `URLRequest.url` and asserts `url.contains("order=confirm_count.desc")` and
+  `url.contains("limit=200")` — a genuine request-shape assertion, not a stub.
+- **Top-5-over-top-200 semantic is honestly documented in two places**, not just tucked into a
+  commit message: `CommunityLeaderboard.build`'s doc comment now explicitly states that for a
+  zone with >200 qualifying pins/week, an author with many lower-confirm-count pins could rank
+  slightly lower than an unbounded scan would show, and `buildLeaderboardRequest`'s own comment
+  explains why 200 rows ordered by `confirm_count.desc` keeps the truncation biased toward the
+  most-relevant rows rather than an arbitrary slice.
+- **Ranking code makes no completeness assumption.** Read `CommunityLeaderboard.build` again at
+  `e9fb9e8c` — unchanged from Pass 1 except the doc comment; it purely groups/counts/ranks
+  whatever `pins` array it's handed, with no logic anywhere that assumes it has seen every
+  qualifying pin in the zone (no total-count cross-check, no "did I get everything" branch).
+  Correct: the query-level bound and the pure ranking function are cleanly separated, exactly as
+  the fix's own comment claims.
+
+**Verdict: Finding #2 is correctly fixed, with the accepted-tradeoff semantics documented
+honestly rather than silently.**
+
+### Finding #3 / #4 (claim copy) — VERIFIED FIXED
+
+- New shared, pure `CommunityPin.claimStatusCopy(currentUserId:) -> String?`
+  (`PinMarkerAnnotation.swift`): `nil` when unclaimed; `"You're heading there — first come, first
+  served"` when `claimedBy == currentUserId`; `"Someone's heading there — first come, first
+  served"` otherwise. Matches `prototype.html:207`'s `claimedTag`/`claimable` distinction.
+- **Both surfaces call it.** Grepped both files: `PinDetailSheet.swift`'s `ReactionsRow.claimSection`
+  and `CrewFeedSection.swift`'s `PinFeedRow.leavingSoonAction` both now do
+  `if let statusCopy = pin.claimStatusCopy(currentUserId: authService.currentUserId) { Text/Label(statusCopy) }`
+  — no independent re-derivation, same discipline as `reactionsRowKind`.
+- **`currentUserId == nil` case:** `claimedBy == currentUserId` compares a non-optional `UUID`
+  (unwrapped via `guard let claimedBy`) against `UUID?` via Swift's standard `Optional`
+  promotion — when `currentUserId` is `nil`, this is always `false`, so the function safely falls
+  through to the generic "Someone's heading there" copy. Explicitly tested
+  (`testClaimStatusCopy_claimedByOther_nilCurrentUser_returnsSomeonesHeadingThere`).
+- **Anonymous user who claimed:** an anonymous session still has a real `auth.uid()` from
+  Supabase's anonymous auth, which is exactly what gets written to `claimed_by` and exactly what
+  `authService.currentUserId` returns — there is no separate "anonymous" branch anywhere in this
+  logic. An anonymous claimant correctly sees "You're heading there," same as a
+  handle-picking user. Verified via `testClaimStatusCopy_claimedByCurrentUser_returnsYoureHeadingThere`,
+  which doesn't distinguish handle-vs-anonymous because the underlying model doesn't either — the
+  right behavior for the right reason.
+- **Error strings unified.** Both `ReactionsRow.handleClaim` and `PinFeedRow.handleClaim` now
+  read `"Couldn't claim — try again."` verbatim.
+
+**Verdict: Finding #3 and #4 are both correctly fixed**, including the specific edge cases
+(`nil` currentUserId, anonymous claimant) the coordinator flagged for adversarial checking.
+
+### New tests (9) — assessment
+
+`git grep -c "func test" e9fb9e8c -- ios/WePark/WeParkTests` sums to **1111** — matches
+1102 (Pass 1) + 9 (Pass 2) exactly, independently verified via `git grep`, not taken from the
+commit message.
+
+- `ClaimStatusCopyTests` (4): unclaimed→nil, own-claim→"You're heading there", other's
+  claim→"Someone's heading there", other's claim with `nil` currentUserId→"Someone's heading
+  there". All four are genuine behavioral assertions against the real function, covering exactly
+  the edge cases (nil-user, anonymous-claimant-is-just-a-UUID) the coordinator asked about.
+- `testFetchLeaderboardPins_queryIncludesOrderAndLimit` (1): inspects the real captured URL for
+  both new query params — a real request-shape test.
+- `LeaderboardPublishGuardTests` (4): full truth table over `(fetchedZone == currentZone,
+  isCancelled)`, including the exact Finding #1 scenario (`zoneChangedSinceFetchStarted →
+  false`) called out by name in a doc comment. This is the strongest evidence that the fix's
+  author understood *why* the guard exists, not just that a QA finding demanded one.
+
+All 9 are behavior-asserting; none are shape-only/placeholder tests. The adversarial case
+(zone-changed-since-fetch-started) is directly covered, not just implied by the happy-path test.
+
+### New observation — leaderboard flash on every zone switch (not a defect, logging per instruction)
+
+`loadLeaderboard` now unconditionally clears `leaderboardEntries` to `[]` **before** the await,
+on *every* invocation of `.task(id: selectedZone)` — including switching back to a zone whose
+data was already fetched and rendered a moment ago (there is no per-zone cache; each switch is a
+fresh clear-then-refetch). Combined with `leaderboardSection`'s `if !leaderboardEntries.isEmpty`
+guard, this means the "THIS WEEK" card visibly disappears and reappears on **every** zone chip
+tap, even round-trips (Nolita → SoHo → Nolita), not just switches to never-before-seen zones.
+
+This is a real, easily-observable UI side effect, but I'm not logging it as a new finding:
+correctness-over-smoothness is the right call for a v1 fix to a data-integrity finding, the flash
+is brief (bounded by the fetch latency, typically sub-second), and building a proper per-zone
+cache with staleness tracking is a legitimate but separate polish task, not something this fix
+needed to solve to close Finding #1. Recommend a `docs/community-2.0-roadmap.md` one-liner if a
+future pass wants to smooth this (e.g. keep the OLD zone's entries visible with reduced opacity
+until the new zone's fetch resolves, rather than clearing to empty) — not blocking anything today.
+
+### Pass 2 smoke tests run
+
+- `git fetch origin` + `git show e9fb9e8c:<path>` for all 5 changed files (not the worktree
+  checkout, which remains on `main` — applied my own Pass 1 lesson from the start this time).
+- `git diff 480901ed..e9fb9e8c` read in full, file by file, for all 5 changed files.
+- `git grep -c "func test" e9fb9e8c -- ios/WePark/WeParkTests` to independently verify the 1111
+  count rather than trusting the fix commit's message.
+- Manually traced the adversarial slow-A/fast-B/late-A interleaving against both the
+  cancellation-propagation behavior of Swift's `URLSession` async bridge and the explicit
+  `LeaderboardPublishGuard` check, per the coordinator's specific instruction — not just read the
+  code and asserted it "looks right."
+- Did not re-run `xcodebuild` (still a Linux VPS, no toolchain) — unchanged posture from Pass 1.
+
+## Kevin's gate (right-sized for this PR class — unchanged in shape from Pass 1, count updated)
 
 This PR does not touch `MapViewRepresentable.swift`, `ContentView.swift`, any
 `Views/DriveMode*.swift`, or any `.safeAreaInset`/overlay-attachment code — the mount-chain live-UI
-smoke gate does not apply. Recommended gate instead:
+smoke gate does not apply. Recommended gate:
 
 1. **Mac toolchain gate (required):** `xcodebuild build` then `xcodebuild test` on
    `ios/WePark/WePark.xcodeproj` — this PR is `[COMPILE-UNVERIFIED]` like every prior Community 2.0
-   PR; confirm 1102/1102 passes, paying particular attention to the `CommunityPhase3TrustLoopTests`
-   file since it's never been compiled.
+   PR; confirm **1111/1111** passes (updated from Pass 1's 1102 — verify the 9 new
+   `ClaimStatusCopyTests`/`LeaderboardPublishGuardTests`/bounded-query tests compile and pass
+   cleanly, since none of this has ever touched a real Swift compiler).
 2. **Targeted flag-on visual check (recommended, not blocking):** with `communityEnabled = true`
-   and a seeded profile (post at least one report/confirm/chat from the test account so a
-   `profiles` row exists), pull `BrowseNavigationSheet` to its `.large` detent and visually confirm
-   the profile row (avatar/handle/tenure line/rep badge) and "THIS WEEK" leaderboard render as
-   expected against `design/screenshots/05-feed-full.png` — this is a new-content render check, not
-   a mount-chain regression check, so a single screenshot suffices.
+   and a seeded profile, pull `BrowseNavigationSheet` to its `.large` detent and visually confirm
+   the profile row + "THIS WEEK" leaderboard render as expected against
+   `design/screenshots/05-feed-full.png`. While there, also just look at the leaderboard-flash
+   behavior noted above (tap between zone chips) — purely to confirm it's the brief, acceptable
+   flash this pass describes and not something worse in practice.
 3. **Two specific interaction live-tests (recommended before flipping `communityEnabled` on for
    testers, not before merge):**
-   - **Claim race:** two anonymous sessions (two sim devices or two accounts), both tap "I'm
-     heading there" on the same `leaving_soon` pin — confirm the second gets "someone beat you to
-     it" copy, not an error, and confirm (per Finding #3) whether the first session's own UI shows
-     confusing "someone's heading there" copy about their own successful claim.
-   - **Zone-switch leaderboard:** tap between zone chips several times quickly, then again with
-     network conditioning (Network Link Conditioner, "Very Bad Network" or airplane-mode-toggle
-     mid-switch) — confirm whether Finding #1's stale-cross-zone-leaderboard scenario reproduces
-     live, since that's a timing-dependent bug the test suite structurally cannot catch.
-4. Findings #1 and #2 do not need to block merge (this is pre-TestFlight, low-traffic,
-   `communityEnabled`-gated code), but should be fixed before Kevin's drive-test opens
-   `communityEnabled` to external testers, since #1 directly contradicts a written AC.
+   - **Claim race + own-claim copy:** two anonymous sessions both tap "I'm heading there" on the
+     same `leaving_soon` pin — confirm the second gets "someone beat you to it," and confirm the
+     *first* (winning) session now shows "You're heading there" once Realtime catches up, not the
+     old generic "someone's heading there" copy.
+   - **Zone-switch leaderboard under bad network:** tap between zone chips with Network Link
+     Conditioner set to "Very Bad Network" — confirm the leaderboard never shows a zone mismatch
+     (this is now a genuinely hard bug to hit given the fix, but worth one real-device pass since
+     it's the AC-P3.4 criterion that failed Pass 1).
+4. No findings from either pass block merge as of Pass 2 — all four are fixed and verified. The
+   only open item is the out-of-scope leaderboard-avatars follow-up ticket (§ "Out of scope"
+   above), which doesn't block this PR.
