@@ -728,6 +728,10 @@ ship) is live well before the push plumbing is ready, rather than both waiting o
 - **`02e-auto-resolve-trigger.sql`'s dormant TODO comment** (lines 75-77) should get a one-line
   pointer to §2.6 of this spec rather than being silently orphaned — small, but the kind of stale
   comment that costs a future agent real time re-deriving "wait, is this built or not."
+- **Expose `profiles.avatar` on `pins_with_author`** (one-line view change: `pr.avatar as author_avatar`)
+  so leaderboard/feed rows can show other neighbors' avatars — queued by PR #97 QA (2026-08-31) as a
+  real follow-up, not a permanent gap. Lands in the next migration file that touches the view
+  (natural candidate: S11's Phase-4 backend PR); Kevin applies by hand as always.
 - **Retiring the name "patrol mode"** — already recommended in `patrol-mode-feasibility-spec.md` §0
   and unrelated to this feature; repeating only to note that this spec introduces zero new use of
   that name, so there's nothing here to clean up on that front.
