@@ -129,6 +129,14 @@ final class DestinationPinAnnotation: MKPointAnnotation {
     // No extra state needed — identity is by type.
 }
 
+/// Community 2.0 Phase 2b (build 20 S7): MKPointAnnotation subclass for the "Spot open"
+/// placement flow's draft pin — the tentative, not-yet-posted position shown while
+/// `SpotPlacementConfirmCard` is up. Distinct from `CarPinAnnotation`/`DestinationPinAnnotation`
+/// by type, same as those two.
+final class DraftSpotPinAnnotation: MKPointAnnotation {
+    // No extra state needed — identity is by type.
+}
+
 // MARK: - MapViewRepresentable
 
 struct MapViewRepresentable: UIViewRepresentable {
@@ -175,6 +183,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Drive Mode destination coordinate. Non-nil → red destination pin annotation on map.
     /// Nil → destination pin removed.
     let destinationCoordinate: CLLocationCoordinate2D?
+
+    // MARK: Community 2.0 Phase 2b (build 20 S7): Spot placement draft pin
+
+    /// The "Spot open" placement flow's current draft position. Non-nil → a dashed-ring
+    /// draft-pin annotation renders at this coordinate. Nil → removed. Driven straight from
+    /// `ContentView`'s `@State spotPlacementDraft` — same "optional coordinate in, mechanical
+    /// add/remove sync in `updateUIView`" contract as `destinationCoordinate` above.
+    var draftSpotCoordinate: CLLocationCoordinate2D? = nil
 
     // MARK: Community 1.0 / Tier 1: Community pin annotations
 
@@ -824,6 +840,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             forAnnotationViewWithReuseIdentifier: Coordinator.destinationPinReuseID
         )
 
+        // Community 2.0 Phase 2b (build 20 S7): Register the DraftSpotPinAnnotation view class.
+        mapView.register(
+            MKMarkerAnnotationView.self,
+            forAnnotationViewWithReuseIdentifier: Coordinator.draftSpotPinReuseID
+        )
+
         // Community 1.0 / Tier 1: Register community pin annotation view class.
         mapView.register(
             PinMarkerAnnotation.self,
@@ -1131,6 +1153,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.syncRoutePolyline(activeRoute, on: mapView)
         context.coordinator.syncDestinationPin(destinationCoordinate, on: mapView)
 
+        // Community 2.0 Phase 2b (build 20 S7): sync the "Spot open" draft-pin annotation.
+        // Same mechanical add/remove-only contract as syncDestinationPin above — safe inside
+        // updateUIView, no camera mutation.
+        context.coordinator.syncDraftSpotPin(draftSpotCoordinate, on: mapView)
+
         // Community 1.0 / Tier 1: sync community pin annotations.
         //
         // Architectural contract (spec §5.2, invariant I-1):
@@ -1234,6 +1261,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         private var destinationPinAnnotation: DestinationPinAnnotation? = nil
         /// The coordinate of the currently-rendered destination pin (encoded as a tuple for equality).
         private var renderedDestinationCoord: (Double, Double)? = nil
+
+        // Community 2.0 Phase 2b (build 20 S7): Spot placement draft pin state.
+        static let draftSpotPinReuseID = "DraftSpotPinAnnotation"
+        /// The currently-rendered draft-spot-pin annotation.
+        private var draftSpotPinAnnotation: DraftSpotPinAnnotation? = nil
+        /// The coordinate of the currently-rendered draft-spot pin (tuple for equality) —
+        /// same shape as `renderedDestinationCoord` above.
+        private var renderedDraftSpotCoord: (Double, Double)? = nil
 
         // Community 1.0 / Tier 1: community pin annotation state.
         /// Map from pin UUID → CommunityPinAnnotation for currently-rendered community markers.
@@ -1469,6 +1504,37 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
 
             renderedDestinationCoord = newCoord
+        }
+
+        // MARK: - Community 2.0 Phase 2b (build 20 S7): Spot placement draft pin management
+
+        /// Syncs the draft-spot-pin annotation to match the current `draftSpotCoordinate`.
+        /// Byte-for-byte the same add/remove-diff shape as `syncDestinationPin` above —
+        /// mechanical sync only (no camera mutation), safe to call from `updateUIView`.
+        func syncDraftSpotPin(_ coordinate: CLLocationCoordinate2D?, on mapView: MKMapView) {
+            let newCoord = coordinate.map { ($0.latitude, $0.longitude) }
+
+            // Fast path: same coordinate already rendered.
+            if let existing = renderedDraftSpotCoord, let new = newCoord,
+               existing.0 == new.0, existing.1 == new.1 { return }
+            if renderedDraftSpotCoord == nil && newCoord == nil { return }
+
+            // Remove old annotation.
+            if let old = draftSpotPinAnnotation {
+                mapView.removeAnnotation(old)
+                draftSpotPinAnnotation = nil
+            }
+
+            // Add new annotation if a draft position is set.
+            if let coordinate = coordinate {
+                let annotation = DraftSpotPinAnnotation()
+                annotation.coordinate = coordinate
+                annotation.accessibilityLabel = "Draft spot-open position, not yet posted"
+                draftSpotPinAnnotation = annotation
+                mapView.addAnnotation(annotation)
+            }
+
+            renderedDraftSpotCoord = newCoord
         }
 
         // MARK: - Community 1.0 / Tier 1: Community pin annotation sync
@@ -1848,6 +1914,31 @@ struct MapViewRepresentable: UIViewRepresentable {
                 view.canShowCallout = false
                 view.isAccessibilityElement = true
                 view.accessibilityLabel = "Drive Mode destination"
+                view.accessibilityTraits = .staticText
+                return view
+            }
+
+            // Handle DraftSpotPinAnnotation (Community 2.0 Phase 2b, build 20 S7) — blue
+            // "tentative" pin for the Spot open placement flow. `mappin.and.ellipse` (a pin
+            // over a dashed ellipse) is the closest native SF Symbol equivalent to the
+            // prototype's dashed draft marker — restyled toward the native idiom rather than
+            // a pixel port of a literal dashed circle (gap-inventory judgment call #4's same
+            // "native over pixel-port" bias), reinforced with reduced alpha so it visually
+            // reads as "not yet posted."
+            if annotation is DraftSpotPinAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: Coordinator.draftSpotPinReuseID,
+                    for: annotation
+                ) as? MKMarkerAnnotationView ?? MKMarkerAnnotationView(
+                    annotation: annotation,
+                    reuseIdentifier: Coordinator.draftSpotPinReuseID
+                )
+                view.markerTintColor = .systemBlue
+                view.glyphImage = UIImage(systemName: "mappin.and.ellipse")
+                view.alpha = 0.85
+                view.canShowCallout = false
+                view.isAccessibilityElement = true
+                view.accessibilityLabel = "Draft spot-open position, not yet posted"
                 view.accessibilityTraits = .staticText
                 return view
             }

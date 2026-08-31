@@ -48,6 +48,15 @@
 //      20. testEndToEnd_segmentDetected_confirmStreetMountPreconditionHolds
 //      21. testEndToEnd_noSegmentDetected_confirmStreetMountPreconditionCorrectlyFalse
 //
+//  Community 2.0 Phase 2b (build 20 S7 rider) additions — the 4th grid tile ("Spot open")
+//  extends `ReportGridRoutingTests` per the dispatch's explicit instruction, plus
+//  `showsReportGrid(communityEnabled:)`'s own small test class:
+//      22. testShowsReportGrid_flagOn_true
+//      23. testShowsReportGrid_flagOff_false
+//      24. testDestination_spotOpenTile_flagOn_handsOff
+//      25. testDestination_spotOpenTile_flagOff_stillHandsOff_gatingIsASeparateConcern
+//      26. testDestination_spotPlacementHandoff_neverEqualsAnySelectTypeOrStreetClosureHandoff
+//
 
 import XCTest
 @testable import WePark
@@ -369,5 +378,58 @@ final class ReportGridRoutingTests: XCTestCase {
         }
         XCTAssertFalse(showsConfirmStreet,
             "OD-1 (off-segment): no candidates means no confirm-street section, by design — not a bug")
+    }
+
+    // MARK: Spot-open tile → .spotPlacementHandoff (Community 2.0 Phase 2b, build 20 S7)
+
+    func testDestination_spotOpenTile_flagOn_handsOff() {
+        let result = ReportSheet.destination(
+            forTapping: .spotOpen,
+            communityEnabled: true,
+            candidates: [aSegment()]
+        )
+        XCTAssertEqual(result, .spotPlacementHandoff)
+    }
+
+    /// Same reasoning as `testDestination_streetClosureTile_flagOff_stillHandsOff_gatingIsASeparateConcern`
+    /// above: the grid itself is gated off at the UI layer (`showsReportGrid`) when the flag
+    /// is off, so this exact call is unreachable in production with `communityEnabled ==
+    /// false` — but routing is a separate concern from gating, and must not silently
+    /// reinterpret a `.spotOpen` tap under any flag state.
+    func testDestination_spotOpenTile_flagOff_stillHandsOff_gatingIsASeparateConcern() {
+        let result = ReportSheet.destination(
+            forTapping: .spotOpen,
+            communityEnabled: false,
+            candidates: []
+        )
+        XCTAssertEqual(result, .spotPlacementHandoff)
+    }
+
+    /// Structural regression net, mirroring `testDestination_streetClosureHandoff_neverEqualsAnySelectType`
+    /// — `.spotPlacementHandoff` must never be mistaken for any `.selectType` case, and the
+    /// two hand-off destinations must never be mistaken for EACH OTHER either (a future edit
+    /// that made both cases carry no payload could otherwise accidentally conflate them).
+    func testDestination_spotPlacementHandoff_neverEqualsAnySelectTypeOrStreetClosureHandoff() {
+        let spotHandoff = ReportSheet.destination(forTapping: .spotOpen, communityEnabled: true, candidates: [aSegment()])
+        let closureHandoff = ReportSheet.destination(forTapping: .streetClosure, communityEnabled: true, candidates: [aSegment()])
+        XCTAssertNotEqual(spotHandoff, .selectType(.enforcementActive, showsConfirmStreet: true))
+        XCTAssertNotEqual(spotHandoff, .selectType(.enforcementActive, showsConfirmStreet: false))
+        XCTAssertNotEqual(spotHandoff, .selectType(.sweeper, showsConfirmStreet: true))
+        XCTAssertNotEqual(spotHandoff, .selectType(.sweeper, showsConfirmStreet: false))
+        XCTAssertNotEqual(spotHandoff, closureHandoff)
+    }
+}
+
+// MARK: - showsReportGrid (Community 2.0 Phase 2b, build 20 S7 rider — grid gating)
+
+final class ShowsReportGridTests: XCTestCase {
+
+    func testShowsReportGrid_flagOn_true() {
+        XCTAssertTrue(ReportSheet.showsReportGrid(communityEnabled: true))
+    }
+
+    func testShowsReportGrid_flagOff_false() {
+        XCTAssertFalse(ReportSheet.showsReportGrid(communityEnabled: false),
+            "Flag-off must keep the pre-S7 list layout — the grid restyle is a visible change (product rule 7)")
     }
 }

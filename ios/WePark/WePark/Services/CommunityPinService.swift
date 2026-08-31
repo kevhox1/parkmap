@@ -1373,6 +1373,21 @@ final class CommunityPinService {
     ///     derives one from `lat`/`lng` at write time (Community 2.0 Phase 2a / build 20 S6)
     ///     — see that function's doc comment.
     ///   - notes: Optional free-text notes.
+    ///   - positionFraction: Community 2.0 Phase 2b (build 20 S7, spec §3 Phase 2): position
+    ///     along the blockface, [0,1] from the segment's "from" endpoint to its "to"
+    ///     endpoint (spec §2.2's `pins.position_fraction` column). Included in the payload
+    ///     only when non-nil — every pre-existing call site (`nil` default) is unaffected.
+    ///     Used by the `open_spot` placement flow (`SpotPlacementView`).
+    ///   - leavingMinutes: Community 2.0 Phase 2b: the `leaving_soon` pin's user-chosen
+    ///     countdown (5/10/15/20). Included in the payload only when non-nil. Also threaded
+    ///     into `ephemeralTTLSeconds(for:leavingMinutes:)` below so the client-computed
+    ///     `expires_at` reflects it (the server's `derive_pin_expiry()` trigger is the
+    ///     authoritative source, per spec §2.11 — this is best-effort display/decay math,
+    ///     same caveat as every other client-supplied `expires_at` value here). Net-new in
+    ///     this session; no `leaving_soon` UI call site exists yet (that's Phase 4a, S10) —
+    ///     added now because the reconciliation spec's Phase 2 section describes both new
+    ///     parameters together as one unit of work, and adding both today avoids a second
+    ///     future touch to this file's most-multi-phase-touched write path.
     func insertCrowdPin(
         type: PinType,
         meta: [String: Any]?,
@@ -1380,7 +1395,9 @@ final class CommunityPinService {
         lng: Double,
         segmentId: String?,
         zoneId: String?,
-        notes: String?
+        notes: String?,
+        positionFraction: Double? = nil,
+        leavingMinutes: Int? = nil
     ) async throws {
         guard let authSvc = authService else {
             throw CommunityPinWriteError.notAuthenticated
@@ -1391,8 +1408,9 @@ final class CommunityPinService {
         }
 
         // expires_at for ephemeral types. Uses nowProvider() for testability (AC-I1).
-        // TTL is resolved by the pure `ephemeralTTLSeconds(for:)` helper (FT-1).
-        let expiresAt: String? = Self.ephemeralTTLSeconds(for: type).map {
+        // TTL is resolved by the pure `ephemeralTTLSeconds(for:leavingMinutes:)` helper
+        // (FT-1; `leavingMinutes` threaded through since Community 2.0 Phase 2b, S7).
+        let expiresAt: String? = Self.ephemeralTTLSeconds(for: type, leavingMinutes: leavingMinutes).map {
             iso8601String(from: nowProvider().addingTimeInterval($0))
         }
 
@@ -1417,6 +1435,10 @@ final class CommunityPinService {
         if let resolvedZoneId { payload["zone_id"] = resolvedZoneId }
         if let notes         { payload["notes"] = notes }
         if let meta          { payload["meta"] = meta }
+        // Community 2.0 Phase 2b (build 20 S7): included only when non-nil — every
+        // pre-existing call site leaves both nil and sees no payload change.
+        if let positionFraction { payload["position_fraction"] = positionFraction }
+        if let leavingMinutes   { payload["leaving_minutes"] = leavingMinutes }
 
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
             throw CommunityPinWriteError.encodingFailure
@@ -1491,6 +1513,72 @@ final class CommunityPinService {
             jwt: jwt,
             body: body,
             // PostgREST upsert: on conflict (pin_id, user_id), update the vote column.
+            extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"]
+        )
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw CommunityPinWriteError.httpError(statusCode: status)
+        }
+    }
+
+    // MARK: - Write path: Identity (Community 2.0 Phase 2b, build 20 S7)
+
+    /// Upserts the current user's `profiles` row with a chosen handle/avatar — the "Join the
+    /// board & post" identity save (`Views/IdentitySheet.swift`,
+    /// `design/prototype.html:415-429`, spec §3 Phase 2).
+    ///
+    /// Reuses the exact upsert shape `upsertVote` already established above
+    /// (`Prefer: resolution=merge-duplicates`, resolving on the row's primary key `id`) — a
+    /// second call from the same device safely overwrites rather than duplicating.
+    ///
+    /// Deliberately sets ONLY `username`/`avatar` — never `reputation` /
+    /// `helped_count` / `accurate_report_count` / `total_report_count`, all of which are
+    /// server-computed via §2.6's insert-on-conflict triggers
+    /// (`award_report_reputation`/`award_confirm_reputation`/`award_chat_reputation`). The
+    /// client never writes its own rep — a standing constraint restated verbatim in the
+    /// reconciliation spec's Phase 2 section.
+    ///
+    /// QA pass 1 fix (PR #96, Finding #1): `username` is REQUIRED (non-optional), never
+    /// nil/empty. `public.profiles.username` is `text ... not null` with no `DEFAULT`
+    /// (`supabase/01-mvp-schema.sql:10`) — Phase 0's migration (§2.5) only dropped the
+    /// column's UNIQUE constraint, not its `NOT NULL`. PostgREST's upsert
+    /// (`Prefer: resolution=merge-duplicates`) compiles to `INSERT ... ON CONFLICT (id) DO
+    /// UPDATE`, and Postgres validates `NOT NULL` on the row constructed for the `INSERT`
+    /// clause BEFORE conflict resolution is applied — an omitted/null username 400s on
+    /// EVERY call, not only a user's first-ever profile write. Making this parameter
+    /// non-optional closes the bug class at the type level for every current AND future
+    /// caller, rather than relying on each call site to remember a runtime workaround. The
+    /// one production caller, `IdentitySheet.resolvedUsername(rawHandle:)`, guarantees a
+    /// non-empty value (trims, falls back to a generated suggestion when empty).
+    ///
+    /// - Parameters:
+    ///   - username: The chosen handle, trimmed and guaranteed non-empty by the caller.
+    ///   - avatar: The chosen avatar emoji, or nil.
+    func upsertProfile(username: String, avatar: String?) async throws {
+        guard let authSvc = authService else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken(),
+              let userId = authSvc.currentUserId else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+
+        var payload: [String: Any] = ["id": userId.uuidString, "username": username]
+        if let avatar { payload["avatar"] = avatar }
+
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw CommunityPinWriteError.encodingFailure
+        }
+
+        let request = buildAuthenticatedRequest(
+            path: "rest/v1/profiles",
+            method: "POST",
+            jwt: jwt,
+            body: body,
+            // PostgREST upsert: on conflict (id, the primary key), update username/avatar.
             extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"]
         )
 

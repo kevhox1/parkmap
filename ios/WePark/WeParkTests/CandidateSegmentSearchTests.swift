@@ -31,6 +31,17 @@
 //      10. testNeighborSegment_noMatch_returnsNil
 //      11. testNeighborSegment_ignoresOtherSide
 //
+//  Community 2.0 Phase 2b (build 20 S7) additions — nearestSegmentSnap(lat:lng:in:radius:),
+//  spot-placement curb-snap + position-fraction math (spec §3 Phase 2):
+//    12. testNearestSegmentSnap_tapAtFromEndpoint_fractionNearZero
+//    13. testNearestSegmentSnap_tapAtMidpoint_fractionNearHalf
+//    14. testNearestSegmentSnap_tapAtToEndpoint_fractionNearOne
+//    15. testNearestSegmentSnap_tapOutsideRadius_returnsNil
+//    16. testNearestSegmentSnap_offsetFromLine_withinRadius_sameFractionSmallDistance
+//    17. testNearestSegmentSnap_multipleSegments_picksClosest
+//    18. testNearestSegmentSnap_multiVertexPolyline_cumulativeFractionNotPerSubSegment
+//    19. testNearestSegmentSnap_emptySegments_returnsNil
+//
 //  Baseline before this suite: see PR body for the running total.
 //
 
@@ -226,6 +237,113 @@ final class CandidateSegmentSearchPredicateTests: XCTestCase {
         let wrongSide = candidateFixtureSegment(id: "2", street: "MOTT STREET", from: "PRINCE STREET", to: "SPRING STREET", side: "W")
 
         let result = CandidateSegmentSearch.neighborSegment(of: a, sharingCrossStreet: "SPRING STREET", in: [a, wrongSide])
+        XCTAssertNil(result)
+    }
+}
+
+// MARK: - nearestSegmentSnap(lat:lng:in:radius:) — Community 2.0 Phase 2b (build 20 S7)
+
+final class NearestSegmentSnapTests: XCTestCase {
+
+    /// A straight, ~84m two-point east-west line at the query latitude — easy fraction math
+    /// (constant latitude, varying longitude only).
+    private func straightLine() -> Segment {
+        candidateFixtureSegment(
+            id: "line", street: "MOTT STREET", from: "SPRING STREET", to: "BROOME STREET", side: "E",
+            line: [[40.7230, -73.9950], [40.7230, -73.9940]]
+        )
+    }
+
+    func testNearestSegmentSnap_tapAtFromEndpoint_fractionNearZero() {
+        let seg = straightLine()
+        let result = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: 40.7230, lng: -73.9950, in: [seg], radius: 35
+        )
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.positionFraction ?? -1, 0.0, accuracy: 0.01)
+        XCTAssertEqual(result?.distanceMeters ?? -1, 0.0, accuracy: 1.0)
+        XCTAssertEqual(result?.segment.id, "line")
+    }
+
+    func testNearestSegmentSnap_tapAtMidpoint_fractionNearHalf() {
+        let seg = straightLine()
+        let result = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: 40.7230, lng: -73.9945, in: [seg], radius: 35
+        )
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.positionFraction ?? -1, 0.5, accuracy: 0.02)
+    }
+
+    func testNearestSegmentSnap_tapAtToEndpoint_fractionNearOne() {
+        let seg = straightLine()
+        let result = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: 40.7230, lng: -73.9940, in: [seg], radius: 35
+        )
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.positionFraction ?? -1, 1.0, accuracy: 0.01)
+    }
+
+    /// ~110m away — well outside a 35m radius (same "35m bound" convention as
+    /// `testFindCandidateSegments_outsideRadius_excluded` above).
+    func testNearestSegmentSnap_tapOutsideRadius_returnsNil() {
+        let seg = straightLine()
+        let result = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: 40.7240, lng: -73.9945, in: [seg], radius: 35
+        )
+        XCTAssertNil(result, "prototype.html:821 — a tap farther than the radius must return nil (\"Tap closer to a curb\")")
+    }
+
+    /// A tap ~11m perpendicular from the midpoint (within the 35m radius) must snap to the
+    /// SAME fraction as tapping directly on the line at that point — the position fraction
+    /// comes from the perpendicular PROJECTION onto the polyline, not the raw tap point.
+    func testNearestSegmentSnap_offsetFromLine_withinRadius_sameFractionSmallDistance() {
+        let seg = straightLine()
+        let result = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: 40.72310, lng: -73.9945, in: [seg], radius: 35
+        )
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.positionFraction ?? -1, 0.5, accuracy: 0.02)
+        XCTAssertGreaterThan(result?.distanceMeters ?? 0, 5, "A perpendicular offset tap must report a non-trivial distance")
+        XCTAssertLessThan(result?.distanceMeters ?? 999, 35, "Must still be within the search radius")
+    }
+
+    /// Two segments within radius — the CLOSER one must win, same "keep the nearest match"
+    /// contract as `findCandidateSegments`'s own dedup-by-distance logic.
+    func testNearestSegmentSnap_multipleSegments_picksClosest() {
+        let near = candidateFixtureSegment(
+            id: "near", street: "MOTT STREET", from: "SPRING STREET", to: "BROOME STREET", side: "E",
+            line: [[40.7230, -73.9950], [40.7230, -73.9940]]
+        )
+        let far = candidateFixtureSegment(
+            id: "far", street: "MULBERRY STREET", from: "SPRING STREET", to: "BROOME STREET", side: "E",
+            line: [[40.7233, -73.9950], [40.7233, -73.9940]]
+        )
+        let result = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: 40.7230, lng: -73.9945, in: [near, far], radius: 35
+        )
+        XCTAssertEqual(result?.segment.id, "near")
+    }
+
+    /// A 3-vertex polyline (short first sub-segment ~8.4m, long second sub-segment
+    /// ~413m — both collinear, so this reduces to the same overall line as the 2-point
+    /// fixture above): a tap at the JOINT vertex must report a fraction reflecting
+    /// CUMULATIVE length across both sub-segments (~0.02), not a naive per-sub-segment
+    /// reset (which would read either 0.0 or 1.0 depending on which sub-segment "won").
+    func testNearestSegmentSnap_multiVertexPolyline_cumulativeFractionNotPerSubSegment() {
+        let seg = candidateFixtureSegment(
+            id: "multi", street: "MOTT STREET", from: "SPRING STREET", to: "BROOME STREET", side: "E",
+            line: [[40.7230, -73.9950], [40.7230, -73.9949], [40.7230, -73.9900]]
+        )
+        let result = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: 40.7230, lng: -73.9949, in: [seg], radius: 35
+        )
+        XCTAssertNotNil(result)
+        XCTAssertEqual(result?.positionFraction ?? -1, 0.02, accuracy: 0.01,
+            "Fraction at the joint vertex must reflect cumulative length (~8.4m / ~421m total), not a per-sub-segment reset to 0 or 1")
+    }
+
+    func testNearestSegmentSnap_emptySegments_returnsNil() {
+        let result = CandidateSegmentSearch.nearestSegmentSnap(lat: 40.7230, lng: -73.9945, in: [], radius: 35)
         XCTAssertNil(result)
     }
 }
