@@ -502,12 +502,15 @@ private struct ReactionsRow: View {
     ///   1. `pin.claimedBy != nil` — already claimed (by anyone, including this viewer): show
     ///      the informational tag, no button. `claimedBy` is decode-only and reflects real
     ///      server state (never client-writable) — always trustworthy the instant it decodes.
+    ///      QA pass 1 Finding #3 (PR #97): the tag's COPY distinguishes the viewer's own
+    ///      successful claim from anyone else's via the shared
+    ///      `CommunityPin.claimStatusCopy(currentUserId:)`.
     ///   2. Unclaimed, not loading: the "I'm heading there" button.
     ///   3. Loading: spinner, matching every other in-flight state in this view.
     @ViewBuilder
     private var claimSection: some View {
-        if pin.claimedBy != nil {
-            Label("Someone's heading there — first come, first served", systemImage: "car.fill")
+        if let statusCopy = pin.claimStatusCopy(currentUserId: authService.currentUserId) {
+            Label(statusCopy, systemImage: "car.fill")
                 .font(.subheadline.weight(.medium))
                 .foregroundStyle(.blue)
         } else if isLoading {
@@ -693,7 +696,9 @@ private struct ReactionsRow: View {
                 claimMessage = "Someone beat you to it — first come, first served."
             }
         } catch {
-            errorMessage = "Couldn't claim — please try again."
+            // QA pass 1 Finding #4 (PR #97): unified with CrewFeedSection.PinFeedRow's
+            // handleClaim wording — both claim call sites now show identical copy.
+            errorMessage = "Couldn't claim — try again."
         }
         isLoading = false
     }

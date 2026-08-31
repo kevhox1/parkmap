@@ -12,6 +12,12 @@
 //  or run. A Mac `xcodebuild test` pass is a required gate before merge, matching every other
 //  Community 2.0 file's posture.
 //
+//  QA pass 1 (PR #97) fixes, tests 36-40 below: leaderboard zone-switch race (AC-P3.4,
+//  Finding #1 — `LeaderboardPublishGuard`, a pure race-safety guard backing
+//  `CrewFeedSection.loadLeaderboard(zone:)`'s new `.task(id: selectedZone)`-driven fetch) and
+//  the bounded leaderboard query (Finding #2 — `order`/`limit` added to
+//  `fetchLeaderboardPins`'s request).
+//
 //  Test inventory:
 //    ReactionsRowKind routing (CommunityPin.reactionsRowKind):
 //      1. testReactionsRowKind_openSpot_notOwn_returnsVote
@@ -21,6 +27,12 @@
 //      5. testReactionsRowKind_openSpot_own_returnsDelete
 //      6. testReactionsRowKind_openData_returnsHidden (showsReactionsRow gate still applies)
 //      7. testReactionsRowKind_nilCurrentUserId_notOwn_returnsVote
+//
+//    CommunityPin.claimStatusCopy (QA pass 1 Finding #3):
+//      7a. testClaimStatusCopy_unclaimed_returnsNil
+//      7b. testClaimStatusCopy_claimedByCurrentUser_returnsYoureHeadingThere
+//      7c. testClaimStatusCopy_claimedBySomeoneElse_returnsSomeonesHeadingThere
+//      7d. testClaimStatusCopy_claimedByOther_nilCurrentUser_returnsSomeonesHeadingThere
 //
 //    claimPin write path:
 //      8. testClaimPin_trueResponse_returnsTrue
@@ -59,6 +71,15 @@
 //      33. testLeaderboard_hasProfile_belowTopFive_appendsRealRankAndCount
 //      34. testLeaderboard_hasProfile_zeroQualifyingReports_appendsNilRankZeroCount
 //      35. testLeaderboard_emptyPins_hasProfile_appendsZeroRankRow
+//
+//    fetchLeaderboardPins bounded query (QA pass 1 Finding #2):
+//      36. testFetchLeaderboardPins_queryIncludesOrderAndLimit
+//
+//    LeaderboardPublishGuard (QA pass 1 Finding #1):
+//      37. testShouldPublish_sameZoneNotCancelled_returnsTrue
+//      38. testShouldPublish_zoneChangedSinceFetchStarted_returnsFalse
+//      39. testShouldPublish_cancelled_returnsFalse
+//      40. testShouldPublish_cancelledAndZoneChanged_returnsFalse
 //
 
 import XCTest
@@ -102,7 +123,8 @@ private func phase3PinFixture(
     lat: Double = 40.7230,
     lng: Double = -73.9950,
     createdAt: String = "2026-08-27T09:00:00+00:00",
-    confirmCount: Int = 0
+    confirmCount: Int = 0,
+    claimedBy: String? = nil
 ) -> CommunityPin {
     let json = """
     {
@@ -118,6 +140,7 @@ private func phase3PinFixture(
       "author_username": \(authorUsername.map { "\"\($0)\"" } ?? "null"),
       "created_at": "\(createdAt)",
       "updated_at": "\(createdAt)",
+      "claimed_by": \(claimedBy.map { "\"\($0)\"" } ?? "null"),
       "expires_at": null,
       "resolved_at": null,
       "confirm_count": \(confirmCount),
@@ -201,6 +224,45 @@ final class ReactionsRowKindTests: XCTestCase {
     func testReactionsRowKind_nilCurrentUserId_notOwn_returnsVote() {
         let pin = phase3PinFixture(pinType: "sweeper_passed", authorId: kPhase3UserA.uuidString)
         XCTAssertEqual(pin.reactionsRowKind(currentUserId: nil), .vote)
+    }
+}
+
+// MARK: - CommunityPin.claimStatusCopy (QA pass 1 Finding #3, PR #97)
+
+/// @MainActor required — `phase3PinFixture` decodes `CommunityPin`; see
+/// `ReactionsRowKindTests`'s doc comment above.
+@MainActor
+final class ClaimStatusCopyTests: XCTestCase {
+
+    func testClaimStatusCopy_unclaimed_returnsNil() {
+        let pin = phase3PinFixture(pinType: "leaving_soon", claimedBy: nil)
+        XCTAssertNil(pin.claimStatusCopy(currentUserId: kPhase3UserB))
+    }
+
+    /// The claimant's own successful claim shows "You're heading there..." — distinct from
+    /// the generic message (prototype.html:207's `f.claimedTag` state).
+    func testClaimStatusCopy_claimedByCurrentUser_returnsYoureHeadingThere() {
+        let pin = phase3PinFixture(pinType: "leaving_soon", claimedBy: kPhase3UserB.uuidString)
+        XCTAssertEqual(
+            pin.claimStatusCopy(currentUserId: kPhase3UserB),
+            "You're heading there — first come, first served"
+        )
+    }
+
+    func testClaimStatusCopy_claimedBySomeoneElse_returnsSomeonesHeadingThere() {
+        let pin = phase3PinFixture(pinType: "leaving_soon", claimedBy: kPhase3UserA.uuidString)
+        XCTAssertEqual(
+            pin.claimStatusCopy(currentUserId: kPhase3UserB),
+            "Someone's heading there — first come, first served"
+        )
+    }
+
+    func testClaimStatusCopy_claimedByOther_nilCurrentUser_returnsSomeonesHeadingThere() {
+        let pin = phase3PinFixture(pinType: "leaving_soon", claimedBy: kPhase3UserA.uuidString)
+        XCTAssertEqual(
+            pin.claimStatusCopy(currentUserId: nil),
+            "Someone's heading there — first come, first served"
+        )
     }
 }
 
@@ -466,6 +528,24 @@ final class ProfileAndLeaderboardFetchTests: XCTestCase {
         XCTAssertTrue(pins.isEmpty)
         XCTAssertEqual(callCount, 0, "No network call should fire for a zone id with no known bounding box")
     }
+
+    /// QA pass 1 fix (PR #97, Finding #2): the request must be bounded by `order`/`limit`, not
+    /// just by time + predicate — an unbounded query would download a busy zone's entire
+    /// matching row set.
+    func testFetchLeaderboardPins_queryIncludesOrderAndLimit() async throws {
+        var capturedURL: String?
+        let service = makeService { request in
+            capturedURL = request.url?.absoluteString
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
+        }
+
+        _ = try await service.fetchLeaderboardPins(zoneId: "nolita")
+
+        let url = capturedURL ?? ""
+        XCTAssertTrue(url.contains("order=confirm_count.desc"), "Got: \(url)")
+        XCTAssertTrue(url.contains("limit=200"), "Got: \(url)")
+    }
 }
 
 // MARK: - ProfileRowFormatting.accuracyLabel (AC-P3.3 boundaries)
@@ -652,5 +732,41 @@ final class CommunityLeaderboardTests: XCTestCase {
         XCTAssertEqual(entries.first?.username, "You")
         XCTAssertNil(entries.first?.rank)
         XCTAssertEqual(entries.first?.confirmedCount, 0)
+    }
+}
+
+// MARK: - LeaderboardPublishGuard (QA pass 1 Finding #1, PR #97)
+
+/// Pure decision-logic tests for the race-safety guard backing
+/// `CrewFeedSection.loadLeaderboard(zone:)` — no `Task`/async machinery needed, since
+/// `shouldPublish` is a plain, `nonisolated`, stateless function.
+final class LeaderboardPublishGuardTests: XCTestCase {
+
+    func testShouldPublish_sameZoneNotCancelled_returnsTrue() {
+        XCTAssertTrue(LeaderboardPublishGuard.shouldPublish(
+            fetchedZone: .nolita, currentZone: .nolita, isCancelled: false
+        ))
+    }
+
+    /// The core stale-cross-zone-data case (QA Finding #1): a fetch that was FOR nolita
+    /// resolving after the user has already switched to soho must not publish.
+    func testShouldPublish_zoneChangedSinceFetchStarted_returnsFalse() {
+        XCTAssertFalse(LeaderboardPublishGuard.shouldPublish(
+            fetchedZone: .nolita, currentZone: .soho, isCancelled: false
+        ))
+    }
+
+    /// The `.task(id:)`-cancellation case — even if (hypothetically) the zone somehow still
+    /// matched, a cancelled task's result must never publish.
+    func testShouldPublish_cancelled_returnsFalse() {
+        XCTAssertFalse(LeaderboardPublishGuard.shouldPublish(
+            fetchedZone: .nolita, currentZone: .nolita, isCancelled: true
+        ))
+    }
+
+    func testShouldPublish_cancelledAndZoneChanged_returnsFalse() {
+        XCTAssertFalse(LeaderboardPublishGuard.shouldPublish(
+            fetchedZone: .nolita, currentZone: .les, isCancelled: true
+        ))
     }
 }

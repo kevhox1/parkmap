@@ -385,6 +385,15 @@ enum CommunityLeaderboard {
     ///   - pins: Pre-filtered pins — the direct result of `fetchLeaderboardPins(zoneId:)`
     ///     (source=crowd, confirm_count>0, within the trailing 7-day window, within the
     ///     zone's bounding box). This function does not re-filter by zone or date.
+    ///     QA pass 1 Finding #2 (PR #97): `fetchLeaderboardPins` now bounds its own request
+    ///     to `order=confirm_count.desc&limit=200` — for a zone with more than 200 qualifying
+    ///     pins in a week, `pins` here is the top-200-by-confirm_count subset, not the full
+    ///     trailing-week set. Accepted v1 semantics: an author whose reports individually have
+    ///     LOWER confirm counts (but there are many of them) could rank slightly lower here
+    ///     than an unbounded full-scan would show, since some of their qualifying pins might
+    ///     fall outside the 200-row cutoff. `build` itself makes no full-data assumption — it
+    ///     purely groups/ranks whatever `pins` it's handed — so no code change was needed here
+    ///     beyond this note; only the query's own bound (§ `buildLeaderboardRequest`) changed.
     ///   - currentUserId: The signed-in user's id (`authService.currentUserId`), or `nil`.
     ///   - hasProfile: Whether the current user has a `profiles` row
     ///     (`CrewFeedSection.currentProfile != nil`). Matches `prototype.html:945`'s
@@ -461,6 +470,40 @@ enum CommunityLeaderboard {
     }
 }
 
+// MARK: - LeaderboardPublishGuard (QA pass 1 Finding #1, PR #97)
+
+/// Pure "should this fetch's result actually reach the UI" decision, factored out of
+/// `CrewFeedSection.loadLeaderboard(zone:)` so the race-safety logic is directly
+/// unit-testable without spinning up a real, cancellable `Task` — mirrors this file's
+/// `CrewFeedMerge`/`CommunityLeaderboard` convention of pure, view-adjacent logic.
+///
+/// `loadLeaderboard(zone:)` is driven by `.task(id: selectedZone)` (not a manual `Task {}` in
+/// `onChange`), which auto-cancels an in-flight fetch for the OLD zone the instant
+/// `selectedZone` changes. This guard is defense-in-depth on top of that cancellation, not a
+/// replacement for it: `Task.isCancelled` alone can lag by the tiny window between
+/// cancellation firing and an already-in-flight `await` actually observing it, and checking
+/// the fetched zone against the CURRENTLY selected zone catches that window directly rather
+/// than relying on cancellation propagation timing.
+///
+/// `nonisolated` (build's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`) — pure, no actor state.
+enum LeaderboardPublishGuard {
+
+    /// - Parameters:
+    ///   - fetchedZone: The zone this now-resolved fetch was FOR.
+    ///   - currentZone: `selectedZone`'s value AT THE MOMENT the fetch resolved (read fresh,
+    ///     not captured at fetch-start — a zone switch mid-flight must change this).
+    ///   - isCancelled: `Task.isCancelled`, checked at the same moment.
+    /// - Returns: `true` only when the fetch's own zone still matches what's currently
+    ///   selected AND the task wasn't cancelled — i.e. this result is still relevant.
+    nonisolated static func shouldPublish(
+        fetchedZone: CommunityZone,
+        currentZone: CommunityZone,
+        isCancelled: Bool
+    ) -> Bool {
+        !isCancelled && fetchedZone == currentZone
+    }
+}
+
 // MARK: - CrewFeedSection
 
 /// The crew feed's top-level view: zone chips, zone header, and the merged feed (or its
@@ -483,6 +526,13 @@ struct CrewFeedSection: View {
     /// This zone's "THIS WEEK" leaderboard — recomputed on every zone switch (AC-P3.4).
     @State private var leaderboardEntries: [LeaderboardEntry] = []
 
+    /// Guards `loadProfileIfNeeded()` against refetching on every zone switch — the profile
+    /// isn't zone-scoped, so once an attempt has been made (successful or not), subsequent
+    /// `.task(id: selectedZone)` invocations skip straight to the leaderboard load. Stays
+    /// `false` if `authService.currentUserId` was nil at attempt time (shouldn't happen given
+    /// anonymous auth, but this lets a later invocation retry rather than permanently give up).
+    @State private var hasAttemptedProfileLoad = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             zoneChipsRow
@@ -496,19 +546,20 @@ struct CrewFeedSection: View {
             feedContent
         }
         .padding(.top, 6)
-        .onAppear {
-            selectZone(selectedZone)
-            Task {
-                await loadProfile()
-                // Reload now that `hasProfile` is known — closes the race where `selectZone`'s
-                // own leaderboard fetch (fired moments earlier, profile not loaded yet) would
-                // have incorrectly omitted the "You" row for a user who does have one.
-                await loadLeaderboard(zone: selectedZone)
-            }
-        }
-        .onChange(of: selectedZone) { _, newZone in
-            selectZone(newZone)
-            Task { await loadLeaderboard(zone: newZone) }
+        .onAppear { selectZone(selectedZone) }
+        .onChange(of: selectedZone) { _, newZone in selectZone(newZone) }
+        // QA pass 1 fix (PR #97, Finding #1 — AC-P3.4): `.task(id: selectedZone)` replaces the
+        // old manual `Task {}` fired from `onAppear`/`onChange`. SwiftUI automatically cancels
+        // the in-flight task for the PREVIOUS zone the instant `selectedZone` changes, closing
+        // the out-of-order-completion race where a slower earlier zone's response could
+        // overwrite a faster later zone's already-rendered result. Also folds in the one-time
+        // profile load (`loadProfileIfNeeded()` no-ops after its first successful attempt), so
+        // the "profile known before the leaderboard's hasProfile decision" sequencing the old
+        // onAppear/onChange split needed is now just "await it first, every time" — cheap and
+        // race-free rather than a bespoke double-load.
+        .task(id: selectedZone) {
+            await loadProfileIfNeeded()
+            await loadLeaderboard(zone: selectedZone)
         }
     }
 
@@ -528,9 +579,10 @@ struct CrewFeedSection: View {
     /// `ZoneMessageService`'s zone param" — no map-region change is in that list).
     ///
     /// Community 2.0 Phase 3 (build 20 S9): does NOT itself trigger the leaderboard reload —
-    /// callers (`onAppear`/`onChange` above) pair this with `loadLeaderboard(zone:)`
-    /// separately, since the leaderboard is a one-shot network fetch independent of the two
-    /// services' own zone-filter state.
+    /// that's `body`'s separate `.task(id: selectedZone)` modifier, since the leaderboard is a
+    /// one-shot, independently-cancellable network fetch, not part of the two services' own
+    /// zone-filter state (QA pass 1, PR #97: `.task(id:)` replaced the original manual
+    /// `Task {}` this comment used to describe here — see `loadLeaderboard`'s own doc comment).
     private func selectZone(_ zone: CommunityZone) {
         pinService.setSelectedZone(zone.id)
         zoneMessageService.setSelectedZone(zone.id)
@@ -538,26 +590,51 @@ struct CrewFeedSection: View {
 
     // MARK: - Profile + leaderboard loading (Community 2.0 Phase 3, build 20 S9)
 
-    /// Loads the current user's own profile once, on appear. A fetch failure (network hiccup)
-    /// leaves `currentProfile` at its previous value (`nil` on first load) rather than
-    /// crashing or showing an error — the profile row simply doesn't render, same degrade as
-    /// "no profile exists yet."
-    private func loadProfile() async {
-        guard let userId = authService.currentUserId else { return }
+    /// Loads the current user's own profile once — `hasAttemptedProfileLoad` makes every
+    /// invocation after the first a no-op, so calling this unconditionally from
+    /// `.task(id: selectedZone)` on every zone switch doesn't refetch a profile that isn't
+    /// zone-scoped in the first place. A fetch failure (network hiccup) leaves `currentProfile`
+    /// at its previous value (`nil` on first load) rather than crashing or showing an error —
+    /// the profile row simply doesn't render, same degrade as "no profile exists yet." Does
+    /// NOT set `hasAttemptedProfileLoad` when `authService.currentUserId` is nil, so a later
+    /// call can retry rather than permanently give up (defensive; shouldn't occur given
+    /// anonymous auth's silent on-launch session).
+    private func loadProfileIfNeeded() async {
+        guard !hasAttemptedProfileLoad, let userId = authService.currentUserId else { return }
         currentProfile = try? await pinService.fetchOwnProfile(userId: userId)
+        hasAttemptedProfileLoad = true
     }
 
     /// Fetches + ranks this zone's "THIS WEEK" leaderboard (AC-P3.4: recomputed on every zone
-    /// switch — no stale cross-zone data). A fetch failure leaves the previous zone's entries
-    /// showing rather than blanking the section — this file's existing degrade-gracefully
-    /// convention (never a broken/blank state for a transient network hiccup).
+    /// switch — no stale cross-zone data).
+    ///
+    /// QA pass 1 fix (PR #97, Finding #1): clears `leaderboardEntries` to `[]` BEFORE the
+    /// await, not after a failure — so a zone switch (or a network hiccup mid-switch) never
+    /// leaves the PREVIOUS zone's rows on screen under the NEW zone's header. An empty section
+    /// (`leaderboardSection`'s own `if !leaderboardEntries.isEmpty` guard renders nothing) is
+    /// now the explicit "loading or failed" state, never a stale one. This replaces the old
+    /// "keep prior zone's entries showing on failure" choice the original doc comment described
+    /// — QA correctly flagged that choice as having the same stale-cross-zone-data effect the
+    /// race did.
+    ///
+    /// `LeaderboardPublishGuard.shouldPublish` is checked immediately before the final publish
+    /// as defense-in-depth alongside `.task(id: selectedZone)`'s own cancellation (see that
+    /// type's doc comment for why both checks matter) — belt-and-braces, not a replacement for
+    /// `.task(id:)` doing the actual cancellation.
     private func loadLeaderboard(zone: CommunityZone) async {
+        leaderboardEntries = []
         guard let pins = try? await pinService.fetchLeaderboardPins(zoneId: zone.id) else { return }
-        leaderboardEntries = CommunityLeaderboard.build(
+        let built = CommunityLeaderboard.build(
             pins: pins,
             currentUserId: authService.currentUserId,
             hasProfile: currentProfile != nil
         )
+        guard LeaderboardPublishGuard.shouldPublish(
+            fetchedZone: zone,
+            currentZone: selectedZone,
+            isCancelled: Task.isCancelled
+        ) else { return }
+        leaderboardEntries = built
     }
 
     // MARK: - Zone chips
@@ -959,8 +1036,12 @@ private struct PinFeedRow: View {
     /// client-writable — `Models/CommunityPin.swift`).
     @ViewBuilder
     private var leavingSoonAction: some View {
-        if pin.claimedBy != nil {
-            Text("Someone's heading there — first come, first served")
+        // QA pass 1 Finding #3 (PR #97): distinguishes the viewer's own successful claim
+        // ("You're heading there...") from anyone else's, via the shared
+        // `CommunityPin.claimStatusCopy(currentUserId:)` — same function
+        // `PinDetailSheet.ReactionsRow.claimSection` uses, so the two surfaces agree.
+        if let statusCopy = pin.claimStatusCopy(currentUserId: authService.currentUserId) {
+            Text(statusCopy)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(icon.color)
                 .padding(.top, 4)

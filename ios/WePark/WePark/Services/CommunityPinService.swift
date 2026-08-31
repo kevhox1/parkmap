@@ -1278,6 +1278,21 @@ final class CommunityPinService {
                 name: "select",
                 value: "id,pin_type,source,lifespan,lat,lng,segment_id,zone_id,confirm_count,dispute_count,meta,notes,author_username,created_at,updated_at,author_id"
             ),
+            // QA pass 1 fix (PR #97, Finding #2): bounds the worst-case payload for a busy
+            // zone. Without a `limit`, the client would download EVERY matching row (bounded
+            // only by time + confirm_count>0, not by count) and rank/truncate to top-5
+            // on-device — fine for a quiet MVP zone, not fine once a zone genuinely gets busy
+            // (the whole point of the feature). `order=confirm_count.desc` means the 200 rows
+            // returned are the HIGHEST-confirm_count pins in the window, so the eventual
+            // top-5-by-author-pin-count ranking (`CommunityLeaderboard.build`) is computed over
+            // the most-relevant slice, not an arbitrary one. Accepted v1 semantic (noted in
+            // `CommunityLeaderboard.build`'s doc comment): for a zone with >200 qualifying pins
+            // in a week, an author with many LOWER-confirm-count pins could rank slightly lower
+            // here than an unbounded full scan would show. 200 is generous relative to any
+            // realistic MVP zone's weekly crowd-report volume; retune the same way as every
+            // other tunable constant in this codebase if live use shows otherwise.
+            URLQueryItem(name: "order", value: "confirm_count.desc"),
+            URLQueryItem(name: "limit", value: "200"),
         ]
         guard let url = components?.url else { return nil }
 

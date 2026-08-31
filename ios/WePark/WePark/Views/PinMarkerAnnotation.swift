@@ -146,6 +146,25 @@ extension CommunityPin {
         return .vote
     }
 
+    /// Claim-status copy for a `leaving_soon` pin, once claimed — QA pass 1 Finding #3 (PR
+    /// #97): distinguishes the claimant's OWN successful claim from anyone else's, matching
+    /// `design/prototype.html:207`'s `f.claimedTag` state ("You're heading there..." vs. the
+    /// generic "Someone's heading there..." for every other viewer). Both `PinDetailSheet`'s
+    /// `ReactionsRow.claimSection` and `CrewFeedSection`'s `PinFeedRow.leavingSoonAction` call
+    /// this shared, pure function rather than each re-deriving the comparison, so the two
+    /// surfaces can't drift — same discipline as `reactionsRowKind(currentUserId:)` above.
+    ///
+    /// `nil` when `claimedBy` is `nil` (not yet claimed — no tag to show at all; the caller
+    /// renders the claim button instead).
+    ///
+    /// - Parameter currentUserId: `authService.currentUserId`, or `nil` if unauthenticated.
+    func claimStatusCopy(currentUserId: UUID?) -> String? {
+        guard let claimedBy else { return nil }
+        return claimedBy == currentUserId
+            ? "You're heading there — first come, first served"
+            : "Someone's heading there — first come, first served"
+    }
+
     /// Formats an expiry Date for the subtitle / detail sheet.
     ///
     /// If `expiresAt` is the same calendar day as now (ET), returns "Until HH:mm".
