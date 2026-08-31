@@ -201,6 +201,33 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-08-31 — ✅ PHASE 2 COMPLETE. #95 (`1fbee567`) + #96 (`ebf16b64`) merged; the whole contribution loop is on main, dark. Suite 1023→1067.
+
+**S6 / PR #95 (Phase 2a: confirm-the-street + closure tile + zone stamping)** was the grind of the
+build: 2 QA passes, then a live-gate BLOCKER (tapping Enforcement tore down every sheet — root cause:
+selecting a type synchronously inserted detail content that shifted the closure row under the finger,
+whose action legitimately calls the block-select teardown; fixed by rendering that row where nothing
+can shift it), a routing model wired into the live buttons after QA caught it disconnected, and a
+**stop-and-instrument round** (the rule held: two failed hypotheses → on-screen DEBUG readout → one
+screenshot proved there was NO second bug, just the confirm-street section mounting below the sheet's
+visible fold). Four UX findings logged at `open-items.md` #12, all S13 scope.
+
+**S7–S8 / PR #96 (Phase 2b: spot placement + identity + 2×2 tile grid).** QA caught a silently
+`try?`-masked NOT-NULL violation (username made non-optional at the type level) and a second stacked
+`.sheet` (restructured into the single-sheet `ActiveSheet.identityPrompt` pattern per the W5.1 rule).
+Kevin's full gate, all green: 1067/1067 exact · flag-off parity · tile grid with per-type detail
+below (S6's invariant now holds by construction) · **spot pin verified landing ON the tapped curb** ·
+cleared-handle write vs real prod ✓ · show-once ✓ · swipe-dismiss cancels cleanly ✓ · **the pin
+lifecycle verified end-to-end in production including the cron soft-close** (`resolved_at` stamped on
+schedule, 3 days of evidence). ⚠️ **AC-P2.1's literal two-device run DEFERRED TO S12** — Kevin's Mac
+can't carry an Xcode device build (16GB/full disk; freed ~9.5GB of caches en route) and a second sim
+overloads it; both halves are separately proven (client→server via live posts; server→client via SQL
+insert propagating ≤2s). S12's internal-TestFlight phone build (flag-on, internal group = Kevin only)
+closes it — and the phone's dev-build friction must be sorted before S12 regardless.
+
+**S9 dispatched** (Phase 3 trust loop: reactions on new types, claim wired to the live `claim_pin`
+RPC, profile row, leaderboard v1). Roadmap: S1–S8 ✅, ~7–8 sessions remain incl. S13a/b/c.
+
 ### 2026-08-28 — ✅ PHASE 1 MERGED (`8b812041`, PR #94). The community read layer is on main, dark.
 
 Crew feed + zone chips + new-type markers + `ZoneMessageService`, all behind
