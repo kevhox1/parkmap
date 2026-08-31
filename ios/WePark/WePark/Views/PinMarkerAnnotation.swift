@@ -32,6 +32,23 @@ import MapKit
 import SwiftUI
 import UIKit
 
+// MARK: - ReactionsRowKind (Community 2.0 Phase 3, build 20 S9)
+
+/// Which reactions-row variant a pin's viewer sees — see
+/// `CommunityPin.reactionsRowKind(currentUserId:)` below. `nonisolated` implicit (a plain,
+/// stateless enum with no actor context) — safe to use from a synchronous `XCTestCase`.
+enum ReactionsRowKind: Equatable {
+    /// No reactions row at all — `showsReactionsRow == false`.
+    case hidden
+    /// The caller's own pin — FT-2's delete affordance.
+    case delete
+    /// `leaving_soon`, not the caller's own — claim-only ("I'm heading there").
+    case claim
+    /// Every other crowd/ephemeral (or block-scoped) pin, not the caller's own —
+    /// confirm/dispute vote buttons.
+    case vote
+}
+
 // MARK: - CommunityPin display extensions
 
 extension CommunityPin {
@@ -109,6 +126,24 @@ extension CommunityPin {
         guard source == .crowd else { return false }
         if lifespan == .ephemeral { return true }
         return reportGroupId != nil
+    }
+
+    /// Community 2.0 Phase 3 (build 20 S9): which reactions-row variant this pin should show,
+    /// for a viewer identified by `currentUserId`. Factors the identical branching that both
+    /// `PinDetailSheet.ReactionsRow.body` and `Views/CrewFeedSection.swift`'s
+    /// `PinFeedRow.actionRow` independently implement (`isOwnPin` → delete; `leaving_soon`,
+    /// not own → claim; otherwise, if `showsReactionsRow` → vote; else hidden) into one pure,
+    /// directly unit-testable source of truth, so a future change to this routing can't drift
+    /// between the two call sites. `open_spot` needs NO special case here — it already falls
+    /// through to `.vote` via the existing `showsReactionsRow` gate (crowd + ephemeral),
+    /// exactly like `enforcement_active`/`sweeper_passed` — verified, not assumed.
+    ///
+    /// - Parameter currentUserId: `authService.currentUserId`, or `nil` if unauthenticated.
+    func reactionsRowKind(currentUserId: UUID?) -> ReactionsRowKind {
+        guard showsReactionsRow else { return .hidden }
+        if let authorId, authorId == currentUserId { return .delete }
+        if pinType == .leavingSoon { return .claim }
+        return .vote
     }
 
     /// Formats an expiry Date for the subtitle / detail sheet.

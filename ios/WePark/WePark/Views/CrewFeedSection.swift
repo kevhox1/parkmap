@@ -5,14 +5,22 @@
 //  Community 2.0 Phase 1 (S4) — the crew feed: zone chips + a merged, newest-first list of
 //  `ZoneMessageService` chat messages and `CommunityPinService` crowd pins, scoped to one
 //  selected zone at a time.
+//  Community 2.0 Phase 3 (build 20 S9) additions — the trust loop: the "I'm heading there"
+//  claim button now calls the real `claim_pin` RPC (was a disabled stub through Phase 1); a
+//  profile row (avatar/handle/tenure/accuracy/helped-count/rep); a live-queried "THIS WEEK"
+//  leaderboard, both net-new to this file.
 //  Spec: docs/community-2.0-reconciliation-spec.md §1 delta table ("Crew feed"), §2.3
-//  (zones), §3 Phase 1, §6 (verbatim design values). Visual reference:
+//  (zones), §2.5/§2.6 (profile/rep columns + triggers), §2.10 (claim_pin), §3 Phase 1 / Phase
+//  3, §6 (verbatim design values). Visual reference:
 //  design/prototype.html:842-859 (feed construction), :931 (zone chips), :834 (sheet model),
-//  design/screenshots/04-feed-half.png / 05-feed-full.png / 06-feed-away-zone.png.
+//  :161-173 (profile row), :179-189 (leaderboard), design/screenshots/05-feed-full.png.
 //
 //  Mounted ONLY inside `BrowseNavigationSheet`'s `.large`-detent `crewFeed` slot, and only
 //  when `AppConstants.communityEnabled == true` (`ContentView.browseNavigationSheetContent`) —
 //  with the flag `false` (today's shipped default) this file is never instantiated at all.
+//  Every new Phase 3 surface (profile row, leaderboard, claim button) is therefore ALSO
+//  flag-gated for free — none of it can render with `communityEnabled == false` (verified,
+//  not assumed: there is no separate mount path for any of this file's content).
 //
 //  What lives here:
 //   - `CommunityZone` — the three Community 2.0 zones (spec §2.3's seeded rows), a thin
@@ -24,8 +32,12 @@
 //     codebase's `RealtimeMergeGate`/`BrowseSheetDetentMath` house style of separating
 //     testable decision logic from the view that consumes it). Directly unit-testable
 //     without hosting any SwiftUI view.
-//   - `CrewFeedSection` — the view: zone chips, zone header, and the merged feed list (or an
-//     intentional "no reports yet" empty state — AC-P1.2/AC-P1.4, never a blank list).
+//   - `ProfileRowFormatting` (S9) — pure tenure/accuracy formatting for the profile row.
+//   - `LeaderboardEntry` / `CommunityLeaderboard` (S9) — pure ranking logic for the "THIS
+//     WEEK" leaderboard, same house style as `CrewFeedMerge`.
+//   - `CrewFeedSection` — the view: zone chips, zone header, profile row, leaderboard, and the
+//     merged feed list (or an intentional "no reports yet" empty state — AC-P1.2/AC-P1.4,
+//     never a blank list).
 //
 //  Known, explicitly-flagged simplifications (see PR body for the full list):
 //   - Row `sub` text includes "btwn X & Y" only when `pin.segmentId` is the 4-part
@@ -45,9 +57,20 @@
 //     abstract line rather than real coordinates). `positionFraction` is decoded (S3) and
 //     available for a future display-only use, but the map already places these pins at
 //     their true reported location with zero placement code in this PR.
-//   - "I'm heading there" (leaving_soon claim) is an explicit, disabled stub — `claim_pin`
-//     wiring is out of this session's read-only scope (dispatch instruction: "Phase 3 wires
-//     claim_pin").
+//   - (S9) Tenure copy is duration-based ("Member for N months"), NOT the prototype's literal
+//     "On {street} since {month}" — see `ProfileRowFormatting.tenure`'s doc comment for why
+//     (no per-user home-street column exists anywhere in the schema).
+//   - (S9) "Tickets dodged this month" (`prototype.html:175-178`) is DELIBERATELY NOT
+//     implemented — no honest derivation exists from live data (no schema field or query
+//     represents "a ticket that would have been issued but wasn't"); fabricating one would be
+//     exactly the engagement-bait number this codebase's product principle rejects. Flagged
+//     in the PR body per this session's explicit dispatch instruction to skip and say so
+//     rather than fake it.
+//   - (S9) Leaderboard avatars: `pins_with_author` (the only per-author read path this session
+//     verified) does not expose `profiles.avatar` for any author besides the current user's
+//     own profile fetch — other neighbors' leaderboard rows show a plain rank/handle/count,
+//     no avatar glyph (`prototype.html:184`'s `{{ l.e }}` emoji is demo-fixture data with no
+//     live equivalent here), rather than fabricating one.
 //
 
 import SwiftUI
@@ -273,6 +296,171 @@ enum CrewFeedMerge {
     }
 }
 
+// MARK: - ProfileRowFormatting (Community 2.0 Phase 3, build 20 S9)
+
+/// Pure formatting helpers for the crew-feed profile row — mirrors `CrewFeedMerge`'s house
+/// style of view-free, directly-testable logic. Spec: §2.5/§3 Phase 3,
+/// `design/prototype.html:161-173`.
+///
+/// `nonisolated` throughout (build's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`) — these are
+/// pure functions with no actor-isolated state, and must stay callable from a plain
+/// synchronous `XCTestCase` without `await`.
+enum ProfileRowFormatting {
+
+    /// Elapsed-time tenure string derived from `profiles.created_at` — spec §3 Phase 3's own
+    /// wording: "tenure (`now() - profiles.created_at`, already available)".
+    ///
+    /// Deliberately NOT the prototype's literal "On {street} since {month}" copy
+    /// (`prototype.html:939`, `"On Mott St since March"`) — no per-user home-street column
+    /// exists anywhere in `profiles` or the `pins_with_author`/`profiles` read path this
+    /// session verified, and a user's profile isn't anchored to any one blockface (they can
+    /// post/react anywhere across all three zones). Fabricating a street would misrepresent
+    /// data the app doesn't have. This is a deliberate substitution of the AUTHORITATIVE
+    /// spec's own duration-based definition for the dispatch's prototype-quoted phrasing —
+    /// flagged in the PR body per this session's fidelity discipline, not silently swapped.
+    nonisolated static func tenure(createdAt: Date, now: Date) -> String {
+        let days = max(0, Int(now.timeIntervalSince(createdAt) / 86400))
+        if days < 7 {
+            return "New this week"
+        }
+        if days < 30 {
+            let weeks = max(1, days / 7)
+            return weeks == 1 ? "Member for 1 week" : "Member for \(weeks) weeks"
+        }
+        if days < 365 {
+            let months = max(1, days / 30)
+            return months == 1 ? "Member for 1 month" : "Member for \(months) months"
+        }
+        let years = max(1, days / 365)
+        return years == 1 ? "Member for 1 year" : "Member for \(years) years"
+    }
+
+    /// Accuracy percentage — "—" on divide-by-zero (AC-P3.3: a brand-new poster with zero
+    /// reports must never show a false "0%"). Rounds to the nearest whole percent.
+    nonisolated static func accuracyLabel(accurate: Int, total: Int) -> String {
+        guard total > 0 else { return "—" }
+        let pct = Int((Double(accurate) / Double(total) * 100).rounded())
+        return "\(pct)%"
+    }
+}
+
+// MARK: - LeaderboardEntry (Community 2.0 Phase 3, build 20 S9)
+
+/// One row of the "THIS WEEK" leaderboard (`design/prototype.html:179-189`).
+struct LeaderboardEntry: Identifiable {
+    /// The author's `auth.uid()`.
+    let id: UUID
+    /// 1-based rank across every qualifying author in the zone this week, or `nil` when the
+    /// current user has a profile but zero qualifying reports this week (AC-P3.3-style honest
+    /// "—" rather than a fabricated rank — see `CommunityLeaderboard.build`'s doc comment).
+    let rank: Int?
+    let username: String
+    let confirmedCount: Int
+    let isCurrentUser: Bool
+}
+
+// MARK: - CommunityLeaderboard (pure, view-free logic; Community 2.0 Phase 3, build 20 S9)
+
+/// Pure ranking logic for the Phase 3 "THIS WEEK" leaderboard — mirrors `CrewFeedMerge`'s
+/// house style of keeping testable decision logic separate from the view that renders it.
+///
+/// Spec §3 Phase 3: "Top 5 authors in the selected zone by count of pins they authored with
+/// confirm_count > 0 in the trailing 7 days — a live query against existing columns, no new
+/// table." The zone/window/confirm-count filtering already happened server-side
+/// (`CommunityPinService.fetchLeaderboardPins(zoneId:)`) — this only groups the already-
+/// filtered pins by author, counts, and ranks.
+///
+/// Deliberately counts by REPORT COUNT (`confirm_count > 0` pins authored), NOT by the
+/// prototype's literal `pts` column (`prototype.html:942-945`, which is total `rep` points —
+/// a different, unbounded-lifetime metric). The authoritative spec's own wording (§3 Phase 3)
+/// specifies the report-count metric; the prototype's `pts`/rep-points display is its own
+/// demo-data shorthand, not a separate requirement this implementation needs to also satisfy.
+///
+/// `nonisolated` (build's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`) — pure, no actor state.
+enum CommunityLeaderboard {
+
+    /// Builds the ranked top-5 + (conditionally) a trailing "You" row.
+    ///
+    /// - Parameters:
+    ///   - pins: Pre-filtered pins — the direct result of `fetchLeaderboardPins(zoneId:)`
+    ///     (source=crowd, confirm_count>0, within the trailing 7-day window, within the
+    ///     zone's bounding box). This function does not re-filter by zone or date.
+    ///   - currentUserId: The signed-in user's id (`authService.currentUserId`), or `nil`.
+    ///   - hasProfile: Whether the current user has a `profiles` row
+    ///     (`CrewFeedSection.currentProfile != nil`). Matches `prototype.html:945`'s
+    ///     `profileOn` gate — no "You" row at all until a profile exists.
+    /// - Returns: Up to 5 top entries (by confirmed-report count, ties broken by username for
+    ///   deterministic ordering), PLUS a trailing "You" row when `hasProfile` is true and the
+    ///   current user isn't already inside the top 5 (no duplicate row for someone who's
+    ///   already visibly ranked). A user with a profile but zero qualifying reports this week
+    ///   gets a "You" row with `rank: nil` (renders as "—") and `confirmedCount: 0` — an
+    ///   honest zero, not the prototype's fabricated demo rank (`rank: 9`/`14`,
+    ///   `prototype.html:945`; product principle: real data or nothing).
+    nonisolated static func build(
+        pins: [CommunityPin],
+        currentUserId: UUID?,
+        hasProfile: Bool
+    ) -> [LeaderboardEntry] {
+        // Group by author. Pins with no author_id are excluded — an unattributed report
+        // can't credit anyone (shouldn't occur for source=crowd in practice; every
+        // `insertCrowdPin` call sets `author_id`, but this stays defensive).
+        var countsByAuthor: [UUID: (username: String, count: Int)] = [:]
+        for pin in pins {
+            guard let authorId = pin.authorId else { continue }
+            let username = pin.authorUsername ?? "Neighbor"
+            if let existing = countsByAuthor[authorId] {
+                countsByAuthor[authorId] = (existing.username, existing.count + 1)
+            } else {
+                countsByAuthor[authorId] = (username, 1)
+            }
+        }
+
+        // Deterministic sort: count desc, then username asc (stable tie-break, both for
+        // tests and for two neighbors who genuinely tie in a real week).
+        let ranked = countsByAuthor
+            .map { (id: $0.key, username: $0.value.username, count: $0.value.count) }
+            .sorted {
+                if $0.count != $1.count { return $0.count > $1.count }
+                return $0.username < $1.username
+            }
+
+        var entries: [LeaderboardEntry] = ranked.prefix(5).enumerated().map { index, row in
+            LeaderboardEntry(
+                id: row.id,
+                rank: index + 1,
+                username: row.username,
+                confirmedCount: row.count,
+                isCurrentUser: row.id == currentUserId
+            )
+        }
+
+        guard hasProfile, let currentUserId else { return entries }
+        // Already visible in the top 5 above — no duplicate "You" row.
+        if entries.contains(where: { $0.id == currentUserId }) { return entries }
+
+        if let ownIndex = ranked.firstIndex(where: { $0.id == currentUserId }) {
+            let own = ranked[ownIndex]
+            entries.append(LeaderboardEntry(
+                id: own.id,
+                rank: ownIndex + 1,
+                username: "You",
+                confirmedCount: own.count,
+                isCurrentUser: true
+            ))
+        } else {
+            // Has a profile, zero qualifying reports this week — honest zero, no rank.
+            entries.append(LeaderboardEntry(
+                id: currentUserId,
+                rank: nil,
+                username: "You",
+                confirmedCount: 0,
+                isCurrentUser: true
+            ))
+        }
+        return entries
+    }
+}
+
 // MARK: - CrewFeedSection
 
 /// The crew feed's top-level view: zone chips, zone header, and the merged feed (or its
@@ -286,6 +474,15 @@ struct CrewFeedSection: View {
 
     @State private var selectedZone: CommunityZone = .nolita
 
+    /// Community 2.0 Phase 3 (build 20 S9): the current user's own `profiles` row, or `nil`
+    /// when none exists yet (an anonymous device that's never authored/voted/chatted — see
+    /// `CommunityPinService.fetchOwnProfile(userId:)`'s doc comment). Drives `profileRow`
+    /// (renders nothing when `nil`) and `CommunityLeaderboard.build`'s `hasProfile` gate.
+    @State private var currentProfile: CommunityProfile? = nil
+
+    /// This zone's "THIS WEEK" leaderboard — recomputed on every zone switch (AC-P3.4).
+    @State private var leaderboardEntries: [LeaderboardEntry] = []
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             zoneChipsRow
@@ -293,11 +490,26 @@ struct CrewFeedSection: View {
 
             Divider()
 
+            profileRow
+            leaderboardSection
+
             feedContent
         }
         .padding(.top, 6)
-        .onAppear { selectZone(selectedZone) }
-        .onChange(of: selectedZone) { _, newZone in selectZone(newZone) }
+        .onAppear {
+            selectZone(selectedZone)
+            Task {
+                await loadProfile()
+                // Reload now that `hasProfile` is known — closes the race where `selectZone`'s
+                // own leaderboard fetch (fired moments earlier, profile not loaded yet) would
+                // have incorrectly omitted the "You" row for a user who does have one.
+                await loadLeaderboard(zone: selectedZone)
+            }
+        }
+        .onChange(of: selectedZone) { _, newZone in
+            selectZone(newZone)
+            Task { await loadLeaderboard(zone: newZone) }
+        }
     }
 
     // MARK: - Zone selection
@@ -314,9 +526,38 @@ struct CrewFeedSection: View {
     /// crowd-pin fetch bounding filter" clause (explicitly out of this session's stated
     /// scope: "Zone chips: ... driving `CommunityPinService.setSelectedZone` +
     /// `ZoneMessageService`'s zone param" — no map-region change is in that list).
+    ///
+    /// Community 2.0 Phase 3 (build 20 S9): does NOT itself trigger the leaderboard reload —
+    /// callers (`onAppear`/`onChange` above) pair this with `loadLeaderboard(zone:)`
+    /// separately, since the leaderboard is a one-shot network fetch independent of the two
+    /// services' own zone-filter state.
     private func selectZone(_ zone: CommunityZone) {
         pinService.setSelectedZone(zone.id)
         zoneMessageService.setSelectedZone(zone.id)
+    }
+
+    // MARK: - Profile + leaderboard loading (Community 2.0 Phase 3, build 20 S9)
+
+    /// Loads the current user's own profile once, on appear. A fetch failure (network hiccup)
+    /// leaves `currentProfile` at its previous value (`nil` on first load) rather than
+    /// crashing or showing an error — the profile row simply doesn't render, same degrade as
+    /// "no profile exists yet."
+    private func loadProfile() async {
+        guard let userId = authService.currentUserId else { return }
+        currentProfile = try? await pinService.fetchOwnProfile(userId: userId)
+    }
+
+    /// Fetches + ranks this zone's "THIS WEEK" leaderboard (AC-P3.4: recomputed on every zone
+    /// switch — no stale cross-zone data). A fetch failure leaves the previous zone's entries
+    /// showing rather than blanking the section — this file's existing degrade-gracefully
+    /// convention (never a broken/blank state for a transient network hiccup).
+    private func loadLeaderboard(zone: CommunityZone) async {
+        guard let pins = try? await pinService.fetchLeaderboardPins(zoneId: zone.id) else { return }
+        leaderboardEntries = CommunityLeaderboard.build(
+            pins: pins,
+            currentUserId: authService.currentUserId,
+            hasProfile: currentProfile != nil
+        )
     }
 
     // MARK: - Zone chips
@@ -377,6 +618,113 @@ struct CrewFeedSection: View {
             pins: pinService.visiblePins
         )
         return count == 1 ? "1 neighbor posting" : "\(count) neighbors posting"
+    }
+
+    // MARK: - Profile row (Community 2.0 Phase 3, build 20 S9)
+
+    /// `design/prototype.html:161-173`: avatar, handle, tenure/accuracy/helped-count line,
+    /// rep badge. Renders NOTHING when `currentProfile` is `nil` (matches the prototype's own
+    /// `profileOn = !!handle` gate — an anonymous-no-profile user sees no row at all, not an
+    /// empty/placeholder one).
+    @ViewBuilder
+    private var profileRow: some View {
+        if let profile = currentProfile {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(Color(white: 0.16))
+                        .frame(width: 42, height: 42)
+                    if let avatar = profile.avatar {
+                        Text(avatar)
+                            .font(.system(size: 20))
+                    } else {
+                        Image(systemName: "person.fill")
+                            .font(.system(size: 16))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(profile.username)
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.white)
+                    Text(profileSubLine(for: profile))
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 0)
+
+                VStack(alignment: .trailing, spacing: 0) {
+                    Text("\(profile.reputation)")
+                        .font(.system(size: 19, weight: .heavy))
+                        .foregroundStyle(CrewFeedMerge.color(hex: 0x30D158))
+                    Text("REP")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(white: 0.46).opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    /// "<tenure> · <accuracy>% accurate · helped <N> neighbors" (`prototype.html:166`'s shape;
+    /// see `ProfileRowFormatting.tenure`'s doc comment for the tenure-copy deviation).
+    private func profileSubLine(for profile: CommunityProfile) -> String {
+        let tenure = ProfileRowFormatting.tenure(createdAt: profile.createdAt, now: .now)
+        let accuracy = ProfileRowFormatting.accuracyLabel(
+            accurate: profile.accurateReportCount,
+            total: profile.totalReportCount
+        )
+        return "\(tenure) · \(accuracy) accurate · helped \(profile.helpedCount) neighbors"
+    }
+
+    // MARK: - Leaderboard (Community 2.0 Phase 3, build 20 S9)
+
+    /// `design/prototype.html:179-189`'s "THIS WEEK" card. Renders nothing when there are no
+    /// qualifying entries — no fabricated placeholder rows (product principle: real data or
+    /// nothing).
+    @ViewBuilder
+    private var leaderboardSection: some View {
+        if !leaderboardEntries.isEmpty {
+            VStack(alignment: .leading, spacing: 7) {
+                Text("THIS WEEK")
+                    .font(.caption2.weight(.bold))
+                    .tracking(1)
+                    .foregroundStyle(.secondary)
+
+                ForEach(leaderboardEntries) { entry in
+                    leaderboardRow(entry)
+                }
+            }
+            .padding(12)
+            .background(Color(white: 0.46).opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+            .accessibilityElement(children: .contain)
+        }
+    }
+
+    private func leaderboardRow(_ entry: LeaderboardEntry) -> some View {
+        HStack(spacing: 10) {
+            Text(entry.rank.map(String.init) ?? "—")
+                .font(.caption.weight(.bold))
+                .foregroundStyle(.tertiary)
+                .frame(width: 16, alignment: .leading)
+
+            Text(entry.username)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(.white)
+
+            Spacer(minLength: 0)
+
+            Text("\(entry.confirmedCount)")
+                .font(.subheadline.weight(.bold))
+                .foregroundStyle(entry.isCurrentUser ? CrewFeedMerge.color(hex: 0x30D158) : .secondary)
+        }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
     }
 
     // MARK: - Feed content
@@ -494,6 +842,11 @@ private struct PinFeedRow: View {
     @State private var isLoading = false
     @State private var errorMessage: String?
 
+    /// Community 2.0 Phase 3 (build 20 S9): the "someone beat you to it" race-safe outcome
+    /// of a failed `claim_pin` call — deliberately separate from `errorMessage` (see
+    /// `handleClaim`'s doc comment) so it never renders with error-red styling.
+    @State private var claimMessage: String?
+
     var body: some View {
         HStack(alignment: .top, spacing: 11) {
             iconBadge
@@ -558,14 +911,19 @@ private struct PinFeedRow: View {
 
     // MARK: - Action row
 
+    /// Community 2.0 Phase 3 (build 20 S9): routes through the shared, pure
+    /// `CommunityPin.reactionsRowKind(currentUserId:)` (`Views/PinMarkerAnnotation.swift`)
+    /// rather than re-deriving this branching inline, so this compact feed row and
+    /// `PinDetailSheet.ReactionsRow` can never disagree about which pins get which action.
+    /// `.delete` maps to no action row here (unchanged Phase 1 behavior — the feed's compact
+    /// row has never shown a delete affordance for the caller's own pin; that lives only in
+    /// the full `PinDetailSheet`, reached by tapping the pin).
     @ViewBuilder
     private var actionRow: some View {
-        // `pin.showsReactionsRow` (`Views/PinMarkerAnnotation.swift`) is the SAME model-level
-        // gate `PinDetailSheet` uses — reused here rather than re-derived, so the feed and the
-        // detail sheet never disagree about which pins get vote buttons.
-        if pin.pinType == .leavingSoon {
+        switch pin.reactionsRowKind(currentUserId: authService.currentUserId) {
+        case .claim:
             leavingSoonAction
-        } else if pin.showsReactionsRow && !isOwnPin {
+        case .vote:
             HStack(spacing: 7) {
                 Button {
                     Task { await handleStillThere() }
@@ -588,15 +946,17 @@ private struct PinFeedRow: View {
                 .accessibilityLabel("Gone — dispute this report")
             }
             .padding(.top, 4)
+        case .delete, .hidden:
+            EmptyView()
         }
     }
 
-    /// `leaving_soon` special case (spec §3 Phase 3 / this session's explicit dispatch
-    /// instruction): no confirm/dispute row — a claim-only affordance instead. The claim
-    /// button itself is a DISABLED, explicit stub in this Phase 1 session — `claim_pin`
-    /// wiring is out of read-only scope. `pin.claimedBy != nil` already reflects a real
-    /// server-side claim (decoded, never client-writable — `Models/CommunityPin.swift`), so
-    /// that branch is fully live even though the button that WOULD set it is not.
+    /// `leaving_soon` special case (spec §3 Phase 3, `design/prototype.html:203-208`): no
+    /// confirm/dispute row — a claim-only affordance instead. Community 2.0 Phase 3 (build 20
+    /// S9): wired to the real `CommunityPinService.claimPin(pinId:)` RPC call — this was a
+    /// disabled "Coming soon" stub through Phase 1 (read-only scope had no write path yet).
+    /// `pin.claimedBy != nil` already reflects a real server-side claim (decoded, never
+    /// client-writable — `Models/CommunityPin.swift`).
     @ViewBuilder
     private var leavingSoonAction: some View {
         if pin.claimedBy != nil {
@@ -607,21 +967,23 @@ private struct PinFeedRow: View {
         } else if !isOwnPin {
             VStack(alignment: .leading, spacing: 2) {
                 Button {
-                    // Intentionally a no-op. TODO(Phase 3, spec §2.10/§3): wire to
-                    // `CommunityPinService.claimPin(pinId:)` once that RPC call exists —
-                    // read-only Phase 1 has no write path for `claim_pin`.
+                    Task { await handleClaim() }
                 } label: {
                     Text("I'm heading there")
                         .font(.caption.weight(.semibold))
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(icon.color)
-                .disabled(true)
-                .accessibilityLabel("Claim this spot — coming soon")
+                .disabled(isLoading)
+                .accessibilityLabel("I'm heading there — claim this spot")
 
-                Text("Coming soon")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                // Race-safe "someone beat you to it" outcome (spec §2.10/§3 Phase 4) —
+                // deliberately not styled as an error; see `claimMessage`'s doc comment.
+                if let claimMessage {
+                    Text(claimMessage)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(.top, 4)
         }
@@ -648,6 +1010,27 @@ private struct PinFeedRow: View {
             try await pinService.upsertVote(pinId: pin.id, vote: .dispute)
         } catch {
             errorMessage = "Couldn't report — try again."
+        }
+        isLoading = false
+    }
+
+    /// "I'm heading there" tap (Community 2.0 Phase 3, build 20 S9) — mirrors
+    /// `PinDetailSheet.ReactionsRow.handleClaim` exactly: `false` routes to `claimMessage`
+    /// (expected, race-safe outcome), a thrown error routes to `errorMessage` (genuine
+    /// failure). No local optimistic patch of `pin.claimedBy` — decode-only field, relies on
+    /// the existing Realtime pipeline, same precedent as `handleStillThere`/`handleGone`
+    /// above never locally patching `confirmCount`/`disputeCount` either.
+    private func handleClaim() async {
+        isLoading = true
+        errorMessage = nil
+        claimMessage = nil
+        do {
+            let claimed = try await pinService.claimPin(pinId: pin.id)
+            if !claimed {
+                claimMessage = "Someone beat you to it — first come, first served."
+            }
+        } catch {
+            errorMessage = "Couldn't claim — try again."
         }
         isLoading = false
     }
