@@ -111,7 +111,7 @@ private func makePin(
     return try! decoder.decode(CommunityPin.self, from: json)
 }
 
-private func makeSegment(id: String = "SEG1") -> Segment {
+private func makePhase4aSegment(id: String = "SEG1") -> Segment {
     Segment(
         id: id,
         street: "BOWERY",
@@ -354,7 +354,7 @@ final class ParkedCarDetailLeavingSoonInsertParamsTests: XCTestCase {
     private let radius: Double = 35.0
 
     func testOnSegment_includesLeavingMinutesSegmentIdAndAFraction() {
-        let seg = makeSegment()
+        let seg = makePhase4aSegment()
         let car = makeCar(lat: 40.7186, lng: -73.9941, segmentId: seg.id)
         let params = ParkedCarDetailLogic.leavingSoonInsertParams(
             parkedCar: car, resolvedSegment: seg, leavingMinutes: 15,
@@ -383,7 +383,7 @@ final class ParkedCarDetailLeavingSoonInsertParamsTests: XCTestCase {
     }
 
     func testCarFarFromSegmentLine_segmentIdStillSet_fractionNil() {
-        let seg = makeSegment()
+        let seg = makePhase4aSegment()
         // Roughly 9km away — well outside a 35m projection radius, but this is still the
         // car's OWN resolved `detectedSegmentID`; only the best-effort polyline projection
         // (positionFraction) should come back nil, not segmentId.
@@ -397,7 +397,7 @@ final class ParkedCarDetailLeavingSoonInsertParamsTests: XCTestCase {
     }
 
     func testLeavingMinutes_threadsThroughAllFourPresets() {
-        let seg = makeSegment()
+        let seg = makePhase4aSegment()
         let car = makeCar(lat: 40.7186, lng: -73.9941, segmentId: seg.id)
         for minutes in ParkedCarDetailLogic.leavingSoonChipMinutes {
             let params = ParkedCarDetailLogic.leavingSoonInsertParams(
@@ -420,7 +420,7 @@ final class ParkedCarDetailLeavingSoonInsertParamsTests: XCTestCase {
     /// client sends a value, the server's `derive_pin_expiry` trigger overrides it
     /// unconditionally (spec §2.11, verified live — HANDOFF 2026-08-27 "Gate 1").
     func testLeavingSoonInsertParamsStruct_hasNoExpiryShapedField() {
-        let seg = makeSegment()
+        let seg = makePhase4aSegment()
         let car = makeCar(lat: 40.7186, lng: -73.9941, segmentId: seg.id)
         let params = ParkedCarDetailLogic.leavingSoonInsertParams(
             parkedCar: car, resolvedSegment: seg, leavingMinutes: 15,
