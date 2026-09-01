@@ -201,6 +201,30 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-09-01 — ✅ PHASES 3 + 4a MERGED same day. Trust loop + leaving-soon handoff live (dark). Suite 1111→1154.
+
+**PR #97 (`c581d65f`, Phase 3 / S9):** reactions on the new pin types via one shared pure routing fn
+(also fixed a pre-existing leaving_soon gap in PinDetailSheet), claim wired to the live `claim_pin`
+RPC, profile row, THIS WEEK leaderboard (cancellable `.task(id:)` + bounded query after QA).
+**Tickets-dodged honestly skipped** → Kevin replaced it with a derivable garage-savings stat (S13c
+decision). The Mac gate caught a real test-fixture bug (6-way tie + alphabetical tie-break ranked
+"Me" #1 — test wrong, impl right). Kevin's live screenshot closed it: "Moose", +5 REP paid by the
+live trigger, You-row honest. **⚠️ Xcode 26.5→26.6 wiped every simulator mid-gate** — devices are
+now resolved dynamically (list-or-create) in every Mac block; memory updated.
+
+**PR #98 (`5452ccc9`, Phase 4a / S10):** "Hand your spot to the crew" (FCFS copy verbatim,
+identity-gated via the QA-cleared nested-sheet shape, server-derived expiry) + WP4 My Car redesign
+(offset chips, swept badge, screenshot-15 layout) + the direction-doc §4 superseded-marker in the
+same PR per spec §5. QA rounds fixed a truth-derived duplicate-post guard and — the important one —
+a **pre-existing reminder-offsets lost-update bug** (ContentView's stale cache vs SettingsView's
+full-struct write-back) that the chips made reachable; Kevin verified both edit orders live.
+Claim UI was never missing (S9 shipped it; stale roadmap wording).
+
+**State: Phases 0–4a all merged and live-verified. Remaining: S11–S12 (push pipeline + the
+internal-TestFlight phone build that closes the deferred two-device check) and S13a/b/c (Report
+pill + map key + zone overlay · block-detail redesign + chat write path · final parity audit).
+S11 (backend push) in flight.**
+
 ### 2026-08-31 — ✅ PHASE 2 COMPLETE. #95 (`1fbee567`) + #96 (`ebf16b64`) merged; the whole contribution loop is on main, dark. Suite 1023→1067.
 
 **S6 / PR #95 (Phase 2a: confirm-the-street + closure tile + zone stamping)** was the grind of the
