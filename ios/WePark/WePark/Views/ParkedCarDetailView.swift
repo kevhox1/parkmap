@@ -41,15 +41,12 @@
 //  the flag is `false` this sheet renders and behaves byte-identically to the pre-S10 shipped
 //  version (plain reminder toggle, no offset chips, no swept badge, no leaving-soon card).
 //
-//  Scope note (flagged for orchestrator review, not silently decided): the spec's Phase 4
-//  section also describes a "claim" button ("I'm heading there" → `claim_pin` RPC) for
-//  OTHER users viewing someone else's `leaving_soon` pin. That surface lives wherever other
-//  users see pins they didn't post (map annotation callout / crew feed row) — not this car's
-//  own detail sheet, and this session's file scope is `ParkedCarDetailView.swift` only among
-//  Views (no `BrowseNavigationSheet`/`MapViewRepresentable`/`ReportSheet` changes). The claim
-//  button is therefore NOT built in this PR; only the posting side (this car's own "Hand your
-//  spot to the crew" card) is. `claim_pin` (spec §2.10) and `CommunityPin.claimedBy` already
-//  exist server/model-side, unconsumed, ready for that follow-up.
+//  Scope note (flagged for orchestrator review at the time, since RESOLVED): the spec's
+//  Phase 4 section also describes a "claim" button ("I'm heading there" → `claim_pin` RPC)
+//  for OTHER users viewing someone else's `leaving_soon` pin. This file never built one —
+//  QA pass 1 (PR #98) traced the consumer side and confirmed it's a non-issue: `claim_pin`
+//  consumption already shipped in PR #97 (S9, `c581d65f`) via
+//  `CrewFeedSection.leavingSoonAction` / `PinDetailSheet.claimSection`. Nothing is missing.
 //
 //  Identity-gate routing: presented as a nested sheet-on-sheet, local to this file — the
 //  SAME pattern `ReportSheet.swift` already uses for its own report-submit identity
@@ -57,30 +54,48 @@
 //  already-presented sheet's own content is the standard SwiftUI shape; only a SECOND,
 //  independent TOP-LEVEL `.sheet` competing with ContentView's single `ActiveSheet` presenter
 //  would be a risk). `ParkedCarDetailView` is itself presented via `ActiveSheet.parkedCarDetail`
-//  in `ContentView.swift`, so this is exactly that same shape — no new `ActiveSheet` case, no
-//  `ContentView.swift` changes needed at all for this feature.
+//  in `ContentView.swift`, so this is exactly that same shape — no new `ActiveSheet` case
+//  needed for this. (PR #98 QA round 1 DID need one small `ContentView.swift` touch for a
+//  DIFFERENT reason — see the WP4 rider paragraph below.)
 //
 //  WP4 rider — reminder-offset chips sit on top of the EXISTING global-settings offset
 //  mechanism (`Services/ReminderOffsets.swift`, edited in `SettingsView.swift`), not a
 //  replacement for it (hero-gap-inventory WP4 judgment call #5). This view loads/saves the
 //  SAME `UserDefaults`-backed `ReminderOffsets` blob directly and calls
 //  `NotificationScheduler.shared` directly — it does NOT thread a `@Binding` through
-//  `ContentView` (which would need new constructor params on an existing `ActiveSheet` case,
-//  outside this session's approved file scope). Known, deliberate limitation from that
-//  choice: if a user edits chips here and then opens Settings in the SAME foreground session
-//  (no backgrounding/relaunch in between), Settings' own toggles read `ContentView`'s cached
-//  `@State reminderOffsets` and may show stale values until the next foreground-resync
-//  (`ContentView`'s existing `scenePhase == .active` handler already reloads it). The actual
-//  scheduled notifications are always correct regardless — `NotificationScheduler.schedule`
-//  reads `ReminderOffsets.load(from: .standard)` fresh on every call, never a cached copy —
-//  this is a display-only edge case in a DIFFERENT sheet, not a functional bug. Flagged
-//  explicitly rather than silently fixed by touching `ContentView.swift` outside this
-//  session's stated scope; a one-line resync in `ContentView`'s sheet-dismiss handler would
-//  close it if wanted.
+//  `ContentView`.
+//
+//  QA pass 1 (PR #98, Finding #2) FIX: the original version of this PR flagged (rather than
+//  fixed) a same-session cross-sheet race — `ContentView`'s cached `@State reminderOffsets`
+//  (read/written by `SettingsView`) only resynced on `scenePhase == .active`, so editing a
+//  chip here, dismissing, then toggling anything in Settings could make Settings write back
+//  its stale FULL struct and silently revert the chip edit. This is now closed: `ContentView`'s
+//  single `.sheet(item:)` `onDismiss` closure resyncs `reminderOffsets` from `UserDefaults` on
+//  EVERY sheet dismiss (one line, `ContentView.swift`), so `SettingsView` can never observe a
+//  copy older than whatever this view last wrote. No scheduling-semantics change —
+//  `NotificationScheduler.schedule`/`cancelAllThenSchedule` already read
+//  `ReminderOffsets.load(from: .standard)` fresh on every call, never a cached copy; this fix
+//  only keeps `SettingsView`'s DISPLAY (and its own write-back) honest. Flag-off is
+//  unaffected: nothing writes this `UserDefaults` key while `AppConstants.communityEnabled ==
+//  false` (this view's chip row never mounts), so the added resync is a no-op re-read of
+//  whatever was already there.
+//
+//  QA pass 1 (PR #98, Finding #1) FIX: the leaving-soon "posted" confirmation state used to
+//  be plain view-local `@State` (`leavingSoonPosted`), which reset to `false` on every
+//  dismiss/reopen of this sheet — reopening My Car mid-countdown showed the chips/CTA again,
+//  letting a user post a second, independent `leaving_soon` pin for the same still-active
+//  countdown. Fixed by deriving the card's state from TRUTH, not memory: `ownLiveLeavingSoonPin`
+//  reads `pinService.visiblePins` (same source `sweptStatusPin` already used) for a still-live
+//  `leaving_soon` pin THIS device authored, anchored to this car (matching segment, or within a
+//  tight radius of the car's coordinate when no segment matched). A transient `@State`
+//  (`leavingSoonJustPosted`) is kept ONLY to bridge the brief window between a successful post
+//  and `visiblePins` reflecting it (normally synchronous — `insertCrowdPin` merges the response
+//  before returning — but not guaranteed if response decoding fails).
 //
 //  No Calendar.current use. No import SwiftUI in Models/ or Services/.
 //
 
+import CoreLocation
 import SwiftUI
 
 // MARK: - ParkedCarDetailView
@@ -135,7 +150,16 @@ struct ParkedCarDetailView: View {
 
     @State private var leavingMinutes: Int = 10
     @State private var leavingSoonSubmitting: Bool = false
-    @State private var leavingSoonPosted: Bool = false
+
+    /// QA pass 1 (PR #98, Finding #1): transient bridge ONLY, for the brief window between a
+    /// successful post and `pinService.visiblePins` reflecting it (normally already true by
+    /// the time `performPostLeavingSoon()` returns — `insertCrowdPin` merges the decoded
+    /// response before returning — but not guaranteed if response decoding fails). The
+    /// durable source of truth for "is there already a live leaving-soon pin for this car" is
+    /// `ownLiveLeavingSoonPin`, derived fresh every render from `visiblePins` — NOT this flag.
+    /// Resets to `false` on every sheet reconstruct, which is fine: `ownLiveLeavingSoonPin`
+    /// alone is what prevents a duplicate post after a dismiss/reopen.
+    @State private var leavingSoonJustPosted: Bool = false
     @State private var leavingSoonError: String? = nil
 
     /// Holds the "resume posting" closure while the local identity sheet is up. Mirrors
@@ -196,6 +220,45 @@ struct ParkedCarDetailView: View {
             now: pinService?.nowProvider() ?? now,
             communityEnabled: AppConstants.communityEnabled
         )
+    }
+
+    /// QA pass 1 fix (PR #98, Finding #1): the still-live `leaving_soon` pin THIS device
+    /// already posted for this car, if any — the durable source of truth for whether to show
+    /// the leaving-soon CTA or its confirmation state (NOT `leavingSoonJustPosted`, which is
+    /// only a transient post-tap bridge — see that property's own doc comment).
+    private var ownLiveLeavingSoonPin: CommunityPin? {
+        ParkedCarDetailLogic.ownLiveLeavingSoonPin(
+            in: pinService?.visiblePins ?? [],
+            authorId: pinService?.authService?.currentUserId,
+            segmentId: resolvedSegment?.id,
+            carLatitude: parkedCar.latitude,
+            carLongitude: parkedCar.longitude,
+            now: pinService?.nowProvider() ?? now,
+            communityEnabled: AppConstants.communityEnabled
+        )
+    }
+
+    /// `true` when the leaving-soon card should show its confirmation state instead of the
+    /// chips/CTA — either because a post is still in flight/just completed this session
+    /// (`leavingSoonJustPosted`) or because a live own pin already exists for this car
+    /// (`ownLiveLeavingSoonPin`, re-derived on every reopen).
+    private var isLeavingSoonPosted: Bool {
+        ParkedCarDetailLogic.isLeavingSoonPosted(
+            justPosted: leavingSoonJustPosted,
+            ownLivePin: ownLiveLeavingSoonPin
+        )
+    }
+
+    /// Confirmation copy for the leaving-soon card. Shows remaining minutes when a real,
+    /// truth-derived pin is available (cheap — `expiresAt` is already decoded); falls back to
+    /// the plain confirmation string in the brief just-posted-but-not-yet-merged window.
+    private var leavingSoonConfirmationText: String {
+        guard let pin = ownLiveLeavingSoonPin, let expiresAt = pin.expiresAt else {
+            return "The crew's been told"
+        }
+        let remainingMinutes = Int(max(0, expiresAt.timeIntervalSince(pinService?.nowProvider() ?? now)) / 60)
+        guard remainingMinutes > 0 else { return "The crew's been told" }
+        return "The crew's been told \u{2014} \(remainingMinutes) min left"
     }
 
     /// Evaluate once at sheet-open time.
@@ -536,8 +599,8 @@ struct ParkedCarDetailView: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if leavingSoonPosted {
-                Label("The crew's been told", systemImage: "checkmark.circle.fill")
+            if isLeavingSoonPosted {
+                Label(leavingSoonConfirmationText, systemImage: "checkmark.circle.fill")
                     .font(.subheadline.bold())
                     .foregroundStyle(Color.accentColor)
                     .padding(.top, 2)
@@ -641,8 +704,15 @@ struct ParkedCarDetailView: View {
     /// ... it does not need the `parked_car` precedent's lockdown"). The car's own
     /// `parked_car` local pin (W5's `ParkedCar` model) is never itself uploaded by this or
     /// any other call — only this ONE explicit, opt-in leaving-soon post shares the
-    /// coordinate, and only for the duration of its short TTL (stated minutes + 3, server-
-    /// derived per spec §2.11 — this client never sends its own `expires_at`).
+    /// coordinate, and only for the duration of its short TTL (stated minutes + 3). QA pass 1
+    /// (PR #98, Finding #3) corrected this comment's original overclaim: `insertCrowdPin`
+    /// (pre-existing, unchanged by this PR — `CommunityPinService.swift:1552-1572`) DOES
+    /// compute and send a client-side `expires_at` in the POST body for every ephemeral type
+    /// including `leaving_soon`. What's actually true, and what spec §2.11 guarantees, is
+    /// that the server's `derive_pin_expiry` trigger is AUTHORITATIVE — it overrides whatever
+    /// `expires_at` the client sent (HANDOFF 2026-08-27 "Gate 1": verified live in prod
+    /// against a tampered client value, delta 0s). So: client sends a value, server ignores
+    /// it and derives its own — not "the client never sends one."
     private func performPostLeavingSoon() async {
         guard let pinService else { return }
         leavingSoonSubmitting = true
@@ -668,7 +738,7 @@ struct ParkedCarDetailView: View {
                 leavingMinutes: params.leavingMinutes
             )
             leavingSoonSubmitting = false
-            leavingSoonPosted = true
+            leavingSoonJustPosted = true
         } catch {
             leavingSoonSubmitting = false
             // Same wording as ReportSheet.submitError — one error string for every
@@ -748,6 +818,57 @@ enum ParkedCarDetailLogic {
         count == 1 ? "1 confirm" : "\(count) confirms"
     }
 
+    // MARK: - Own-pin dedupe (QA pass 1, PR #98 Finding #1)
+
+    /// The still-live `leaving_soon` pin THIS device already posted for `carLatitude`/
+    /// `carLongitude`, if any — the durable "have I already posted for this car" check that
+    /// replaces trusting transient view `@State` across a sheet dismiss/reopen.
+    ///
+    /// `nil` whenever: `communityEnabled` is `false` (flag-off parity); `authorId` is `nil`
+    /// (no authenticated session to compare against — can't safely claim ownership of
+    /// anything); or no pin in `pins` matches ALL of: type `leaving_soon`, `authorId` equal,
+    /// not resolved, not expired, AND anchored to this car (either the SAME `segmentId` when
+    /// both the pin and the car have one, or — the fallback for a car with no resolved
+    /// segment, or a pin whose own `segmentId` didn't survive the write — within
+    /// `tightRadiusMeters` of the car's raw coordinate).
+    ///
+    /// Same expiry defense-in-depth reasoning as `liveSweeperPin` above: re-checks
+    /// `resolvedAt`/`expiresAt` independently rather than trusting an upstream filter, so an
+    /// injected expired/resolved fixture exercises a REAL test case here.
+    nonisolated static func ownLiveLeavingSoonPin(
+        in pins: [CommunityPin],
+        authorId: UUID?,
+        segmentId: String?,
+        carLatitude: Double,
+        carLongitude: Double,
+        now: Date,
+        communityEnabled: Bool,
+        tightRadiusMeters: Double = 30.0
+    ) -> CommunityPin? {
+        guard communityEnabled, let authorId else { return nil }
+        return pins.first { pin in
+            guard pin.pinType == .leavingSoon,
+                  pin.authorId == authorId,
+                  pin.resolvedAt == nil,
+                  (pin.expiresAt.map { $0 > now } ?? true)
+            else { return false }
+
+            if let segmentId, let pinSegmentId = pin.segmentId, pinSegmentId == segmentId {
+                return true
+            }
+            let carLocation = CLLocation(latitude: carLatitude, longitude: carLongitude)
+            let pinLocation = CLLocation(latitude: pin.lat, longitude: pin.lng)
+            return carLocation.distance(from: pinLocation) <= tightRadiusMeters
+        }
+    }
+
+    /// Whether the leaving-soon card should show its confirmation state. `true` if EITHER a
+    /// post just completed this session (`justPosted` — the transient post-tap bridge) OR a
+    /// live own pin already exists (`ownLivePin`, re-derived every render from truth).
+    nonisolated static func isLeavingSoonPosted(justPosted: Bool, ownLivePin: CommunityPin?) -> Bool {
+        justPosted || ownLivePin != nil
+    }
+
     // MARK: - Reminder-offset chips (WP4 rider)
 
     /// The 5 reminder-offset chips, prototype order (`design/prototype.html:307-311`):
@@ -793,12 +914,21 @@ enum ParkedCarDetailLogic {
         )
     }
 
-    /// The exact `CommunityPinService.insertCrowdPin` params the "Leaving in N min" button
-    /// sends — extracted so the payload SHAPE (a `leavingMinutes` value; no client-supplied
-    /// `expires_at` of any kind, by construction — this struct has no such field) is
-    /// unit-testable without a live network call. `positionFraction` is derived via the same
-    /// `CandidateSegmentSearch.nearestSegmentSnap` helper the `open_spot` placement flow
-    /// uses, `nil` when there's no resolved segment to project onto.
+    /// The `positionFraction`/`leavingMinutes`/`segmentId`/`lat`/`lng` params THIS view's
+    /// "Leaving in N min" button passes into `CommunityPinService.insertCrowdPin` — extracted
+    /// so that wiring is unit-testable without a live network call. `positionFraction` is
+    /// derived via the same `CandidateSegmentSearch.nearestSegmentSnap` helper the
+    /// `open_spot` placement flow uses, `nil` when there's no resolved segment to project
+    /// onto.
+    ///
+    /// QA pass 1 (PR #98, Finding #3) correction: this struct having no `expires_at` field
+    /// is a fact about THIS EXTRACTED PARAMETER TYPE, not a claim about the real
+    /// `insertCrowdPin` network payload — that call (one layer up, pre-existing/unchanged by
+    /// this session) DOES compute and send a client-side `expires_at` for every ephemeral
+    /// type including `leaving_soon` (`CommunityPinService.swift:1552-1572`). The server's
+    /// `derive_pin_expiry` trigger is what makes that harmless (spec §2.11, verified live —
+    /// HANDOFF 2026-08-27 "Gate 1"): it overrides the client's value unconditionally. Tests
+    /// on this struct verify THIS view's payload shape, not the network wire format.
     struct LeavingSoonInsertParams: Equatable {
         let lat: Double
         let lng: Double

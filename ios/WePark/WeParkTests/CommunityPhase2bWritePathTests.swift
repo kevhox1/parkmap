@@ -10,19 +10,23 @@
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never
 //  compiled or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
-//  Test inventory (8 tests):
+//  Test inventory (9 tests):
 //    insertCrowdPin — positionFraction/leavingMinutes payload inclusion:
 //      1. testInsertCrowdPin_positionFractionProvided_includedInPayload
 //      2. testInsertCrowdPin_positionFractionNil_omittedFromPayload
 //      3. testInsertCrowdPin_leavingMinutesProvided_includedInPayload
 //      4. testInsertCrowdPin_leavingMinutesNil_omittedFromPayload
 //      5. testInsertCrowdPin_openSpotType_positionFraction_bothWrittenTogether
+//      6. testInsertCrowdPin_leavingSoonType_expiresAtIsClientComputed_notOmitted (QA pass 1,
+//         PR #98 Finding #3 — proves the REAL wire payload includes a client-computed
+//         `expires_at` for `leaving_soon`, correcting PR #98's original "never sends one"
+//         overclaim, which only Mirror-inspected a same-file view-layer struct)
 //
 //    upsertProfile — payload shape + request headers:
-//      6. testUpsertProfile_payloadShape_idUsernameAvatar
-//      7. testUpsertProfile_usernameAlwaysIncludedNonEmpty (QA pass 1 fix, PR #96 Finding
+//      7. testUpsertProfile_payloadShape_idUsernameAvatar
+//      8. testUpsertProfile_usernameAlwaysIncludedNonEmpty (QA pass 1 fix, PR #96 Finding
 //         #1 — replaces the old nil-username test; see that test's own doc comment)
-//      8. testUpsertProfile_requestIncludesUpsertPreferHeader
+//      9. testUpsertProfile_requestIncludesUpsertPreferHeader
 //
 //  Reuses the SHARED (not file-private) `WriteMockURLProtocol` / `AuthMockURLProtocol`
 //  classes declared once in `Tier3AuthReactionsTests.swift` — see
@@ -229,6 +233,39 @@ final class InsertCrowdPinPhase2bPayloadTests: XCTestCase {
         XCTAssertEqual(capturedBody?["position_fraction"] as? Double, 0.72)
         XCTAssertNil(capturedBody?["leaving_minutes"])
         XCTAssertEqual(capturedBody?["segment_id"] as? String, "seg-open-spot")
+    }
+
+    /// QA pass 1 (PR #98, Community 2.0 Phase 4a S10, Finding #3): inspects the REAL wire
+    /// payload — not `ParkedCarDetailLogic.LeavingSoonInsertParams` (a view-layer struct that
+    /// was designed without an `expires_at` field and can only prove something about ITSELF,
+    /// not about this method). `insertCrowdPin` DOES compute and send a client-side
+    /// `expires_at` for `leaving_soon` (`ephemeralTTLSeconds(for:leavingMinutes:)` above,
+    /// pre-existing/unchanged by S10). This is fine — the server's `derive_pin_expiry`
+    /// trigger is authoritative and overrides it unconditionally (spec §2.11, verified live —
+    /// HANDOFF 2026-08-27 "Gate 1") — but the claim "the client never sends one" was wrong,
+    /// and this test proves the correct claim ("the client sends one; the server ignores it")
+    /// directly against the actual network payload instead of a same-file structural proxy.
+    func testInsertCrowdPin_leavingSoonType_expiresAtIsClientComputed_notOmitted() async throws {
+        let (pinService, _) = await makePhase2bAuthenticatedPair()
+        var capturedBody: [String: Any]? = nil
+
+        WriteMockURLProtocol.requestHandler = { request in
+            if let body = phase2bBodyData(from: request) {
+                capturedBody = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        try await pinService.insertCrowdPin(
+            type: .leavingSoon, meta: nil, lat: 40.7230, lng: -73.9950,
+            segmentId: nil, zoneId: nil, notes: nil,
+            leavingMinutes: 15
+        )
+
+        let expiresAt = capturedBody?["expires_at"] as? String
+        XCTAssertNotNil(expiresAt,
+            "the client DOES send a computed expires_at for leaving_soon — the server (derive_pin_expiry, spec §2.11) is what makes trusting it unnecessary, not the client withholding it")
+        XCTAssertFalse(expiresAt?.isEmpty ?? true)
     }
 }
 
