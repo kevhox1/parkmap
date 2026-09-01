@@ -275,7 +275,9 @@ where PostgREST returns 401 for anon-role RLS denial — rejection itself confir
 `7d3a1e1c`). Server-derived expiry ignored tampered client payloads with delta 0s.
 
 **Gate 2 — APNs one-time setup DONE.** Key `CMG824J6L3` (Team `ZAA4UCS6CH`, Sandbox+Production);
-`.p8` on Kevin's Mac outside the repo, loaded into Edge Function secrets at S11. Entitlement commit
+`.p8` on Kevin's Mac outside the repo. ⚠️ CLARIFIED 2026-09-01 (PR #99 QA #2): at Gate 2 the key
+was only DOWNLOADED and stashed — loading it into Edge Function secrets is S11's deploy Step 1,
+still Kevin's to run (`supabase secrets list` first, don't assume either state). Entitlement commit
 `b509eaa8`: `aps-environment=development` + `UIBackgroundModes=[remote-notification]`.
 ⚠️ Side effect, verified harmless: Xcode migrated FT-20's `UIUserInterfaceStyle=Dark` from raw
 Info.plist to `INFOPLIST_KEY_UIUserInterfaceStyle=Dark` in BOTH build configs — same generated
