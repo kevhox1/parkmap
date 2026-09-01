@@ -154,6 +154,34 @@ enum CommunityPinWriteError: Error {
     case encodingFailure
 }
 
+// MARK: - CommunityProfile (Community 2.0 Phase 3, build 20 S9)
+
+/// A lean read of one `profiles` row — backs the crew-feed profile row
+/// (`design/prototype.html:161-173`, spec §2.5/§3 Phase 3). Deliberately not the full
+/// `profiles` schema shape (no `updated_at`) — only what the profile row + leaderboard
+/// "You" row need to render. `Decodable` only; this is a read-only model, never encoded
+/// (`CommunityPinService.upsertProfile` already owns the write path with its own narrower
+/// username/avatar-only payload — the client never writes its own reputation/counts,
+/// spec §2.6/§3 Phase 2's standing constraint).
+struct CommunityProfile: Decodable {
+    let id: UUID
+    let username: String
+    let avatar: String?
+    let reputation: Int
+    let createdAt: Date
+    let helpedCount: Int
+    let accurateReportCount: Int
+    let totalReportCount: Int
+
+    private enum CodingKeys: String, CodingKey {
+        case id, username, avatar, reputation
+        case createdAt           = "created_at"
+        case helpedCount         = "helped_count"
+        case accurateReportCount = "accurate_report_count"
+        case totalReportCount    = "total_report_count"
+    }
+}
+
 // MARK: - FT-15 / TF2-15: Block-scoped report write path (Stream B3)
 
 /// One blockface to include in a block-scoped restriction report.
@@ -1147,11 +1175,12 @@ final class CommunityPinService {
 
     // MARK: - Response decoder
 
-    /// Decodes a PostgREST JSON array response into `[CommunityPin]`.
-    ///
-    /// Uses `CommunityPin.gracefulDecode` per element so a single malformed row
-    /// does not crash the entire feed.
-    private func decodeResponse(data: Data) throws -> [CommunityPin] {
+    /// A `JSONDecoder` configured for PostgREST's ISO 8601 timestamp format (with or without
+    /// fractional seconds) — factored out of `decodeResponse` (Community 2.0 Phase 3, build 20
+    /// S9) so every REST decode path in this file shares one date-parsing behavior rather than
+    /// drifting between `decodeResponse` (pins) and newer read paths (`fetchOwnProfile`,
+    /// `fetchLeaderboardPins` below). Pure/`nonisolated` — no instance state.
+    nonisolated static func makeDateDecodingJSONDecoder() -> JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .custom { decoder in
             let container = try decoder.singleValueContainer()
@@ -1173,6 +1202,15 @@ final class CommunityPinService {
                 )
             )
         }
+        return decoder
+    }
+
+    /// Decodes a PostgREST JSON array response into `[CommunityPin]`.
+    ///
+    /// Uses `CommunityPin.gracefulDecode` per element so a single malformed row
+    /// does not crash the entire feed.
+    private func decodeResponse(data: Data) throws -> [CommunityPin] {
+        let decoder = Self.makeDateDecodingJSONDecoder()
 
         // PostgREST returns a JSON array.
         // Decode element-by-element using gracefulDecode to tolerate future unknown pin_types.
@@ -1191,6 +1229,107 @@ final class CommunityPinService {
 
         let trampoline = try decoder.decode(PinArrayTrampoline.self, from: data)
         return trampoline.pins.compactMap { $0 }
+    }
+
+    // MARK: - Read path: Leaderboard (Community 2.0 Phase 3, build 20 S9)
+
+    /// Builds the PostgREST URLRequest backing the Phase 3 leaderboard: crowd-authored pins
+    /// within a zone's bounding box, confirmed by at least one neighbor (`confirm_count > 0`),
+    /// created in the trailing 7 days — spec §3 Phase 3 ("a live query against existing
+    /// columns, no new table").
+    ///
+    /// Deliberately does NOT reuse the debounced Channel 1-3 pipeline (`buildOpenDataRequest`/
+    /// `buildCrowdEphemeralRequest`/`buildCrowdBlockScopedRequest`): every one of those filters
+    /// out expired/resolved rows (`clientSideFilter` does the same again client-side), which
+    /// would silently drop most of a trailing-7-day window's ephemeral pins — a
+    /// `sweeper_passed` pin's 120-minute TTL is long gone by the time this query runs three
+    /// days later, but its `confirm_count` should still count toward this week's leaderboard.
+    /// This is a separate, one-shot fetch with no expiry/resolved-at filter at all.
+    ///
+    /// No `pin_type` filter — any crowd report type (enforcement, sweeper, open_spot, a
+    /// crowd-authored closure) with at least one confirm counts, matching spec §3 Phase 3's
+    /// literal "pins they authored with confirm_count > 0" wording (not narrowed to ephemeral
+    /// types only).
+    private func buildLeaderboardRequest(zoneId: String, sevenDaysAgoISO: String) -> URLRequest? {
+        guard let box = CommunityZoneBounds.box(for: zoneId) else { return nil }
+
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/pins_with_author"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "source",       value: "eq.crowd"),
+            URLQueryItem(name: "confirm_count", value: "gt.0"),
+            URLQueryItem(name: "created_at",   value: "gte.\(sevenDaysAgoISO)"),
+            URLQueryItem(name: "lat",          value: "gte.\(box.latMin)"),
+            URLQueryItem(name: "lat",          value: "lte.\(box.latMax)"),
+            URLQueryItem(name: "lng",          value: "gte.\(box.lngMin)"),
+            URLQueryItem(name: "lng",          value: "lte.\(box.lngMax)"),
+            URLQueryItem(
+                // Deliberately omits `expires_at`/`resolved_at` — the leaderboard doesn't
+                // read either (no client-side expiry re-check; the trailing-7-day window +
+                // `confirm_count > 0` predicates above are the only filters that matter here),
+                // and dropping them keeps the request's own query string free of any
+                // expiry-shaped substring, matching this method's "no expiry/resolved-at
+                // filter at all" doc comment literally, not just in spirit. Every other field
+                // `CommunityPin.init(from:)` requires non-optionally (id, pin_type, source,
+                // lifespan, lat, lng, created_at, updated_at, confirm_count, dispute_count) is
+                // still selected, so decoding never fails on a missing-required-key error.
+                name: "select",
+                value: "id,pin_type,source,lifespan,lat,lng,segment_id,zone_id,confirm_count,dispute_count,meta,notes,author_username,created_at,updated_at,author_id"
+            ),
+            // QA pass 1 fix (PR #97, Finding #2): bounds the worst-case payload for a busy
+            // zone. Without a `limit`, the client would download EVERY matching row (bounded
+            // only by time + confirm_count>0, not by count) and rank/truncate to top-5
+            // on-device — fine for a quiet MVP zone, not fine once a zone genuinely gets busy
+            // (the whole point of the feature). `order=confirm_count.desc` means the 200 rows
+            // returned are the HIGHEST-confirm_count pins in the window, so the eventual
+            // top-5-by-author-pin-count ranking (`CommunityLeaderboard.build`) is computed over
+            // the most-relevant slice, not an arbitrary one. Accepted v1 semantic (noted in
+            // `CommunityLeaderboard.build`'s doc comment): for a zone with >200 qualifying pins
+            // in a week, an author with many LOWER-confirm-count pins could rank slightly lower
+            // here than an unbounded full scan would show. 200 is generous relative to any
+            // realistic MVP zone's weekly crowd-report volume; retune the same way as every
+            // other tunable constant in this codebase if live use shows otherwise.
+            URLQueryItem(name: "order", value: "confirm_count.desc"),
+            URLQueryItem(name: "limit", value: "200"),
+        ]
+        guard let url = components?.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        return request
+    }
+
+    /// Fetches the raw pins backing the Phase 3 leaderboard — see `buildLeaderboardRequest`'s
+    /// doc comment for why this bypasses the usual channel/expiry pipeline. Pure network +
+    /// decode; grouping/ranking/the "You" row is `CommunityLeaderboard.build(...)`
+    /// (`Views/CrewFeedSection.swift`), kept view-adjacent per this codebase's existing
+    /// "pure decision logic lives near its one consumer" convention (mirrors `CrewFeedMerge`).
+    ///
+    /// Returns `[]` (rather than throwing) when `zoneId` doesn't match any known zone box —
+    /// defensive; every real caller passes a `CommunityZone.id`, which always resolves.
+    ///
+    /// - Parameter zoneId: One of `CommunityZone`'s raw values ("nolita"/"soho"/"les").
+    func fetchLeaderboardPins(zoneId: String) async throws -> [CommunityPin] {
+        let sevenDaysAgo = nowProvider().addingTimeInterval(-7 * 24 * 60 * 60)
+        guard let request = buildLeaderboardRequest(
+            zoneId: zoneId,
+            sevenDaysAgoISO: iso8601String(from: sevenDaysAgo)
+        ) else {
+            return []
+        }
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw CommunityPinFetchError.httpError(statusCode: status)
+        }
+
+        return try decodeResponse(data: data)
     }
 
     // MARK: - Realtime merge core (unchanged by supabase-swift Stream B — see spec §8.1)
@@ -1590,6 +1729,52 @@ final class CommunityPinService {
         }
     }
 
+    // MARK: - Read path: Own profile (Community 2.0 Phase 3, build 20 S9)
+
+    /// Fetches the current user's own `profiles` row for the crew-feed profile row
+    /// (spec §2.5/§3 Phase 3, `design/prototype.html:161-173`). Returns `nil` — rather than
+    /// throwing — when no row exists yet, since that's a common, expected state (a device
+    /// that has never authored a report, voted, or chatted has no `profiles` row at all, per
+    /// §2.6's insert-on-conflict triggers being the only writer besides `upsertProfile`), not
+    /// a failure. The profile row itself renders nothing in that case (this file's
+    /// `CrewFeedSection.profileRow`), matching the prototype's own `profileOn` gate.
+    ///
+    /// Public read (`profiles_select_all`, `01-mvp-schema.sql`) — no JWT required for a
+    /// `select`, consistent with every other user's profile being publicly readable (that's
+    /// also what makes `author_username`/leaderboard entries visible to everyone).
+    ///
+    /// - Parameter userId: The current user's `auth.uid()` (`authService.currentUserId`).
+    func fetchOwnProfile(userId: UUID) async throws -> CommunityProfile? {
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/profiles"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "id", value: "eq.\(userId.uuidString)"),
+            URLQueryItem(
+                name: "select",
+                value: "id,username,avatar,reputation,created_at,helped_count,accurate_report_count,total_report_count"
+            ),
+            URLQueryItem(name: "limit", value: "1"),
+        ]
+        guard let url = components?.url else { return nil }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw CommunityPinFetchError.httpError(statusCode: status)
+        }
+
+        let profiles = try Self.makeDateDecodingJSONDecoder().decode([CommunityProfile].self, from: data)
+        return profiles.first
+    }
+
     // MARK: - Write path: Extend pin expiry
 
     /// Calls the `extend_pin_expiry` RPC to extend an ephemeral pin's TTL by 15 minutes.
@@ -1626,6 +1811,66 @@ final class CommunityPinService {
             let status = (response as? HTTPURLResponse)?.statusCode ?? 0
             throw CommunityPinWriteError.httpError(statusCode: status)
         }
+    }
+
+    // MARK: - Write path: Claim a leaving_soon pin (Community 2.0 Phase 3, build 20 S9)
+
+    /// Calls the `claim_pin` RPC (spec §2.10) — the "I'm heading there" affordance for
+    /// `leaving_soon` pins. Single `UPDATE ... WHERE claimed_by IS NULL` server-side, so the
+    /// first caller wins and every subsequent caller gets `false` back — race-safe by
+    /// construction, no client-side locking needed.
+    ///
+    /// Deliberately does NOT locally patch `visiblePins` on a `true` result — `claimed_by` is
+    /// a decode-only field (`CommunityPin.claimedBy`'s doc comment) with no local mutation
+    /// path on an immutable struct, and this mirrors `upsertVote`'s existing precedent:
+    /// neither call locally patches its counter/field, both rely on the already-live Realtime
+    /// UPDATE echo (the RPC's `UPDATE public.pins SET claimed_by = ...` is a normal row
+    /// update, so it flows through the same `mergeRealtimeChange` pipeline `votes_refresh_pin_counts`
+    /// already relies on for confirm/dispute counts) to reflect the change everywhere,
+    /// including this caller's own UI.
+    ///
+    /// - Parameter pinId: The `leaving_soon` pin's UUID.
+    /// - Returns: `true` if this call won the claim; `false` if someone already claimed it —
+    ///   spec §2.10 and §3 Phase 4 are explicit that `false` is the expected, race-safe
+    ///   outcome ("someone beat you to it — first come, first served"), never surfaced as an
+    ///   error by any caller of this method.
+    /// - Throws: `CommunityPinWriteError.notAuthenticated` with no session;
+    ///   `.httpError(statusCode:)` for any non-2xx response (a genuine failure, distinct from
+    ///   the `false` race-safe return above).
+    func claimPin(pinId: UUID) async throws -> Bool {
+        guard let authSvc = authService else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken() else {
+            throw CommunityPinWriteError.notAuthenticated
+        }
+
+        let payload: [String: Any] = ["p_pin_id": pinId.uuidString]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw CommunityPinWriteError.encodingFailure
+        }
+
+        let request = buildAuthenticatedRequest(
+            path: "rest/v1/rpc/claim_pin",
+            method: "POST",
+            jwt: jwt,
+            body: body,
+            extraHeaders: [:]
+        )
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+            throw CommunityPinWriteError.httpError(statusCode: status)
+        }
+
+        // `claim_pin` returns a bare `boolean` scalar (`true`/`false`), not a row/array —
+        // decode directly rather than via decodeResponse(...) (which expects [CommunityPin]).
+        // A 2xx response with an unparseable/empty body (shouldn't happen, but defensive)
+        // reads as `false` rather than throwing — "not claimed" is always a safe fallback
+        // here, never a state that would corrupt anything downstream.
+        return (try? JSONDecoder().decode(Bool.self, from: data)) ?? false
     }
 
     // MARK: - Write path: Delete own pin (FT-2)

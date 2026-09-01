@@ -52,4 +52,17 @@ enum CommunityZoneBounds {
     static func zoneId(forLat lat: Double, lng: Double) -> String? {
         boxes.first { lat >= $0.latMin && lat <= $0.latMax && lng >= $0.lngMin && lng <= $0.lngMax }?.zoneId
     }
+
+    /// Community 2.0 Phase 3 (build 20 S9) — the reverse lookup: given a zone id, return its
+    /// bounding box. New consumer: `CommunityPinService.fetchLeaderboardPins(zoneId:)`, which
+    /// needs to filter a one-shot REST fetch to one zone's geography (the leaderboard query is
+    /// a trailing-7-day historical fetch, not the viewport-scoped `visiblePins` pipeline — see
+    /// that method's doc comment for why it can't reuse the existing channels). `nil` for any
+    /// id not in `boxes` (e.g. the retired `soho-les` id, or a typo). `nonisolated` explicit
+    /// (build's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` — a pure, stateless lookup like
+    /// this one must stay callable from a plain synchronous XCTestCase without `await`).
+    nonisolated static func box(for zoneId: String) -> (latMin: Double, latMax: Double, lngMin: Double, lngMax: Double)? {
+        guard let match = boxes.first(where: { $0.zoneId == zoneId }) else { return nil }
+        return (match.latMin, match.latMax, match.lngMin, match.lngMax)
+    }
 }

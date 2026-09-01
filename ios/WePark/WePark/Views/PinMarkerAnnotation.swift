@@ -32,6 +32,23 @@ import MapKit
 import SwiftUI
 import UIKit
 
+// MARK: - ReactionsRowKind (Community 2.0 Phase 3, build 20 S9)
+
+/// Which reactions-row variant a pin's viewer sees — see
+/// `CommunityPin.reactionsRowKind(currentUserId:)` below. `nonisolated` implicit (a plain,
+/// stateless enum with no actor context) — safe to use from a synchronous `XCTestCase`.
+enum ReactionsRowKind: Equatable {
+    /// No reactions row at all — `showsReactionsRow == false`.
+    case hidden
+    /// The caller's own pin — FT-2's delete affordance.
+    case delete
+    /// `leaving_soon`, not the caller's own — claim-only ("I'm heading there").
+    case claim
+    /// Every other crowd/ephemeral (or block-scoped) pin, not the caller's own —
+    /// confirm/dispute vote buttons.
+    case vote
+}
+
 // MARK: - CommunityPin display extensions
 
 extension CommunityPin {
@@ -109,6 +126,43 @@ extension CommunityPin {
         guard source == .crowd else { return false }
         if lifespan == .ephemeral { return true }
         return reportGroupId != nil
+    }
+
+    /// Community 2.0 Phase 3 (build 20 S9): which reactions-row variant this pin should show,
+    /// for a viewer identified by `currentUserId`. Factors the identical branching that both
+    /// `PinDetailSheet.ReactionsRow.body` and `Views/CrewFeedSection.swift`'s
+    /// `PinFeedRow.actionRow` independently implement (`isOwnPin` → delete; `leaving_soon`,
+    /// not own → claim; otherwise, if `showsReactionsRow` → vote; else hidden) into one pure,
+    /// directly unit-testable source of truth, so a future change to this routing can't drift
+    /// between the two call sites. `open_spot` needs NO special case here — it already falls
+    /// through to `.vote` via the existing `showsReactionsRow` gate (crowd + ephemeral),
+    /// exactly like `enforcement_active`/`sweeper_passed` — verified, not assumed.
+    ///
+    /// - Parameter currentUserId: `authService.currentUserId`, or `nil` if unauthenticated.
+    func reactionsRowKind(currentUserId: UUID?) -> ReactionsRowKind {
+        guard showsReactionsRow else { return .hidden }
+        if let authorId, authorId == currentUserId { return .delete }
+        if pinType == .leavingSoon { return .claim }
+        return .vote
+    }
+
+    /// Claim-status copy for a `leaving_soon` pin, once claimed — QA pass 1 Finding #3 (PR
+    /// #97): distinguishes the claimant's OWN successful claim from anyone else's, matching
+    /// `design/prototype.html:207`'s `f.claimedTag` state ("You're heading there..." vs. the
+    /// generic "Someone's heading there..." for every other viewer). Both `PinDetailSheet`'s
+    /// `ReactionsRow.claimSection` and `CrewFeedSection`'s `PinFeedRow.leavingSoonAction` call
+    /// this shared, pure function rather than each re-deriving the comparison, so the two
+    /// surfaces can't drift — same discipline as `reactionsRowKind(currentUserId:)` above.
+    ///
+    /// `nil` when `claimedBy` is `nil` (not yet claimed — no tag to show at all; the caller
+    /// renders the claim button instead).
+    ///
+    /// - Parameter currentUserId: `authService.currentUserId`, or `nil` if unauthenticated.
+    func claimStatusCopy(currentUserId: UUID?) -> String? {
+        guard let claimedBy else { return nil }
+        return claimedBy == currentUserId
+            ? "You're heading there — first come, first served"
+            : "Someone's heading there — first come, first served"
     }
 
     /// Formats an expiry Date for the subtitle / detail sheet.

@@ -8,9 +8,15 @@
 //  reactions gate, construction glyph/color.
 //  FT-2 addition: own-pin delete affordance ("I reported this by mistake") replaces the
 //  vote buttons when the current user is the pin's author.
+//  Community 2.0 Phase 3 (build 20 S9) additions: `open_spot` reuses the existing
+//  confirm/dispute `voteSection` unchanged (already covered by `showsReactionsRow`'s
+//  crowd+ephemeral gate — no code change needed there, verified not assumed); `leaving_soon`
+//  is special-cased to a claim-only `claimSection` ("I'm heading there" — no confirm/dispute
+//  row at all).
 //  Spec: docs/tier1-pin-display-spec.md §8, docs/tier3-auth-and-reactions-spec.md §3.10,
 //  docs/ft15-tf215-temporary-block-restrictions-spec.md §9.2/§9.3,
-//  docs/ft2-delete-own-pin-spec.md §4.2.
+//  docs/ft2-delete-own-pin-spec.md §4.2,
+//  docs/community-2.0-reconciliation-spec.md §2.10, §3 Phase 3.
 //
 //  Surfaces:
 //   - filming (open_data, reportGroupId == nil): type icon + label, open-data badge,
@@ -413,18 +419,37 @@ private struct ReactionsRow: View {
     /// Drives the FT-2 delete confirmation `.confirmationDialog` presentation.
     @State private var showDeleteConfirmation: Bool = false
 
+    /// Community 2.0 Phase 3 (build 20 S9): the "someone beat you to it" race-safe outcome of
+    /// a failed `claim_pin` call (spec §2.10/§3 Phase 4 — `claimPin(pinId:)` returning `false`).
+    /// Kept deliberately SEPARATE from `errorMessage` (below) and rendered without the red
+    /// error styling — this is the EXPECTED outcome of a race two neighbors both lost/won,
+    /// not a failure. Cleared on the next claim attempt.
+    @State private var claimMessage: String? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             // FT-2 (AC-FT2.2, AC-FT2.12): own pins get a delete affordance instead of the
             // "Community Check" header / confirm badge / vote buttons — there is no more
             // "greyed out, nothing to do" dead end (docs/field-testing-log.md FT-3 note).
-            if isOwnPin {
-                deleteSection
-            } else {
-                voteSection
+            //
+            // Community 2.0 Phase 3 (build 20 S9): routes through the shared, pure
+            // `CommunityPin.reactionsRowKind(currentUserId:)` (`Views/PinMarkerAnnotation.swift`)
+            // rather than re-deriving this branching inline, so this view and
+            // `CrewFeedSection.PinFeedRow.actionRow` can never disagree about which row a pin
+            // gets. `.hidden` never reaches this view in practice (the parent
+            // `PinDetailSheet.body` only instantiates `ReactionsRow` when
+            // `pin.showsReactionsRow` is already true) — the `EmptyView()` fallback is
+            // defensive, not a real code path.
+            switch pin.reactionsRowKind(currentUserId: authService.currentUserId) {
+            case .delete: deleteSection
+            case .claim:  claimSection
+            case .vote:   voteSection
+            case .hidden: EmptyView()
             }
 
-            // Error display (non-blocking — user can retry).
+            // Error display (non-blocking — user can retry). Genuine failures only —
+            // `claimMessage` (the race-safe "someone beat you to it" outcome) is rendered
+            // separately inside `claimSection`, never here.
             if let error = errorMessage {
                 Text(error)
                     .font(.caption)
@@ -467,6 +492,55 @@ private struct ReactionsRow: View {
             .tint(.red)
             .disabled(isLoading)
             .accessibilityLabel("Delete this report — tap to remove your accidental pin")
+        }
+    }
+
+    // MARK: - leaving_soon claim section (Community 2.0 Phase 3, build 20 S9)
+
+    /// `leaving_soon`'s reactions row is claim-only — no "Still there? / Gone" pair (spec §3
+    /// Phase 3, `design/prototype.html:203-208`). Three states:
+    ///   1. `pin.claimedBy != nil` — already claimed (by anyone, including this viewer): show
+    ///      the informational tag, no button. `claimedBy` is decode-only and reflects real
+    ///      server state (never client-writable) — always trustworthy the instant it decodes.
+    ///      QA pass 1 Finding #3 (PR #97): the tag's COPY distinguishes the viewer's own
+    ///      successful claim from anyone else's via the shared
+    ///      `CommunityPin.claimStatusCopy(currentUserId:)`.
+    ///   2. Unclaimed, not loading: the "I'm heading there" button.
+    ///   3. Loading: spinner, matching every other in-flight state in this view.
+    @ViewBuilder
+    private var claimSection: some View {
+        if let statusCopy = pin.claimStatusCopy(currentUserId: authService.currentUserId) {
+            Label(statusCopy, systemImage: "car.fill")
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.blue)
+        } else if isLoading {
+            HStack {
+                ProgressView()
+                    .frame(width: 20, height: 20)
+                Spacer()
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    Task { await handleClaim() }
+                } label: {
+                    Label("I'm heading there", systemImage: "car.fill")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .disabled(isLoading)
+                .accessibilityLabel("I'm heading there — claim this spot")
+
+                // Race-safe "someone beat you to it" outcome (spec §2.10/§3 Phase 4) —
+                // deliberately NOT styled as an error (see `claimMessage`'s doc comment).
+                if let claimMessage {
+                    Text(claimMessage)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            }
         }
     }
 
@@ -600,6 +674,31 @@ private struct ReactionsRow: View {
             try await pinService.upsertVote(pinId: pin.id, vote: .dispute)
         } catch {
             errorMessage = "Couldn't report — please try again."
+        }
+        isLoading = false
+    }
+
+    /// "I'm heading there" tap (Community 2.0 Phase 3, build 20 S9): calls `claim_pin`. A
+    /// `false` return is the expected, race-safe "someone beat you to it" outcome (spec
+    /// §2.10/§3 Phase 4) — routed to `claimMessage`, NOT `errorMessage`. A thrown error
+    /// (network/auth failure) is a genuine failure and routes to `errorMessage` as usual. No
+    /// local optimistic patch of `pin.claimedBy` on success — that field is decode-only
+    /// (`CommunityPin.claimedBy`'s doc comment) and the RPC's own `UPDATE public.pins` already
+    /// flows through the existing Realtime pipeline, same precedent as `handleStillHere`/
+    /// `handleGone` never locally patching `confirmCount`/`disputeCount` either.
+    private func handleClaim() async {
+        isLoading = true
+        errorMessage = nil
+        claimMessage = nil
+        do {
+            let claimed = try await pinService.claimPin(pinId: pin.id)
+            if !claimed {
+                claimMessage = "Someone beat you to it — first come, first served."
+            }
+        } catch {
+            // QA pass 1 Finding #4 (PR #97): unified with CrewFeedSection.PinFeedRow's
+            // handleClaim wording — both claim call sites now show identical copy.
+            errorMessage = "Couldn't claim — try again."
         }
         isLoading = false
     }
