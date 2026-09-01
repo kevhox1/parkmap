@@ -68,7 +68,10 @@
 //      30. testLeaderboard_ignoresPinsWithNilAuthor
 //      31. testLeaderboard_noProfile_omitsYouRow
 //      32. testLeaderboard_hasProfile_alreadyInTopFive_noDuplicateRow
-//      33. testLeaderboard_hasProfile_belowTopFive_appendsRealRankAndCount
+//      33. testLeaderboard_hasProfile_belowTopFive_appendsRealRankAndCount (QA round 2 fix —
+//          the original fixture's 6-way count tie let the tie-break rule accidentally sort
+//          "Me" into the top 5; rewritten to give competitors a genuinely higher count, so
+//          the "below top 5" scenario no longer depends on tie-break behavior at all)
 //      34. testLeaderboard_hasProfile_zeroQualifyingReports_appendsNilRankZeroCount
 //      35. testLeaderboard_emptyPins_hasProfile_appendsZeroRankRow
 //
@@ -685,15 +688,40 @@ final class CommunityLeaderboardTests: XCTestCase {
         XCTAssertTrue(entries.first?.isCurrentUser ?? false)
     }
 
+    /// QA pass 1 Mac-gate failure (PR #97, round 2): the ORIGINAL fixture gave every one of
+    /// the 5 "Neighbor" authors exactly ONE pin — the same pin count as "Me" (1). With counts
+    /// tied 6-way, `build`'s tie-break (username ascending) sorted "Me" ahead of every
+    /// "Neighbor*" name ('M' < 'N'), landing "Me" at rank 1 — INSIDE the top 5 — so the
+    /// already-in-top-5 early-return fired and `entries.count` was 5, not 6. That was a test-
+    /// fixture bug, not an implementation bug: nothing in the spec (`docs/community-2.0-
+    /// reconciliation-spec.md` §3 Phase 3) or the prototype's demo data (`prototype.html:942-
+    /// 945`, which shows no ties at all — 412/380/298, all distinct) mandates a tie-break rule,
+    /// so `build`'s deterministic "count desc, then username asc" choice is a legitimate design
+    /// decision, not a spec violation — it was simply exercised by a fixture whose naming
+    /// ("Me" vs "Neighbor0-4") happened to collide with that exact tie-break in a way that
+    /// defeated the test's own intent ("below top 5"). Fixed here by giving each of the 5
+    /// competing authors a genuinely HIGHER pin count (2) than the current user's (1), so
+    /// "Me" ranks 6th by COUNT alone — unambiguous, and no longer dependent on tie-break
+    /// behavior at all. Rank 6 = 5 people rank above (`ownIndex` 5, 0-based) + 1.
     func testLeaderboard_hasProfile_belowTopFive_appendsRealRankAndCount() {
         let currentUser = UUID()
-        var pins = (0..<5).map { i in
-            phase3PinFixture(
-                id: "30000000-0000-0000-0000-00000000002\(i)",
-                authorId: UUID().uuidString,
+        var pins: [CommunityPin] = []
+        for i in 0..<5 {
+            let neighborId = UUID().uuidString
+            // Two pins per neighbor (count=2) — strictly greater than "Me"'s 1, so ranking
+            // here never depends on the tie-break rule.
+            pins.append(phase3PinFixture(
+                id: "30000000-0000-0000-0000-0000000002\(i)0",
+                authorId: neighborId,
                 authorUsername: "Neighbor\(i)",
-                confirmCount: 5
-            )
+                confirmCount: 1
+            ))
+            pins.append(phase3PinFixture(
+                id: "30000000-0000-0000-0000-0000000002\(i)1",
+                authorId: neighborId,
+                authorUsername: "Neighbor\(i)",
+                confirmCount: 1
+            ))
         }
         pins.append(phase3PinFixture(id: "30000000-0000-0000-0000-000000000030", authorId: currentUser.uuidString, authorUsername: "Me", confirmCount: 1))
 
