@@ -62,6 +62,16 @@ So cold-start is solved in two layers: the map carries the novice; open-data del
 
 **Deferred (not in scope):** spot-**handoff** / "I'm leaving this spot" — an *occupant* transferring the spot they're vacating. High legal + abuse risk (cf. MonkeyParking/Sweetch SF cease-and-desist over monetizing public spots; free coordination is safer but heavily gamed). Deliberate later bet, not core.
 
+> **⚠️ SUPERSEDED 2026-08-26 — Kevin reversed this deferral.** Spot handoff (rebranded
+> "leaving-soon") **is in v1**, shipped **informational and free**, with explicit "spots can't be
+> held — first come, first served" copy and a claim that only *dims* the pin (never reserves it) —
+> the exact free-coordination-not-monetization shape this paragraph itself called "safer" above,
+> which is what made the reversal possible without reopening the MonkeyParking/Sweetch legal
+> concern. See `docs/community-2.0-reconciliation-spec.md` §1's "Leaving-soon callout" and §3
+> Phase 4 for the full design and shipped behavior (Phase 4a: build 20 S10, the leaving-soon UI +
+> post path; Phase 4b: the APNs relevance-push pipeline, a later session). This paragraph is kept
+> for the historical record of the original reasoning, not as the current answer.
+
 > **`open_spot` is distinct from handoff and IS in scope** (Tier 3 experiment — see §5). A *passerby* reporting an empty spot is not an occupant transferring ownership, so it sidesteps the MonkeyParking problem entirely — cleaner legal footing **and** the bigger "WE" play (non-parkers — pedestrians, residents, cyclists — contribute without ever parking, expanding the supply side beyond drivers). It shares handoff's *brutal-staleness* challenge, which makes it the **highest-risk / highest-reward** crowd type.
 
 ### Structural pattern

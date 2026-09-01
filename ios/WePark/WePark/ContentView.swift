@@ -879,6 +879,23 @@ struct ContentView: View {
             }
             .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in routePendingDeepLink(carID) }
             .sheet(item: $activeSheet, onDismiss: {
+                // Community 2.0 Phase 4a QA round 1 fix (PR #98, Finding #2): resync this
+                // cache from UserDefaults on ANY sheet dismiss — closes a lost-update window
+                // where `ParkedCarDetailView`'s My Car offset chips (which read/write the
+                // SAME `ReminderOffsets` UserDefaults blob directly, bypassing this cache —
+                // see that file's header) could be silently overwritten by a later,
+                // unrelated `SettingsView` edit still holding this stale copy (`SettingsView`
+                // writes back its FULL bound struct on every toggle). Cheap (a 5-bool JSON
+                // decode) and unconditional — mirrors the existing `scenePhase == .active`
+                // resync's own precedent, just on one more trigger. No scheduling-semantics
+                // change: `NotificationScheduler.schedule`/`cancelAllThenSchedule` already
+                // re-read `ReminderOffsets.load(from: .standard)` fresh on every call, never
+                // this cached copy — this line only keeps `SettingsView`'s DISPLAY (and its
+                // own write-back) honest. Flag-off is unaffected: nothing writes this
+                // UserDefaults key while `AppConstants.communityEnabled == false` (My Car's
+                // chip row never mounts), so this is a pure no-op re-read of whatever was
+                // already there.
+                reminderOffsets = ReminderOffsets.load(from: .standard)
                 if selectedSegmentID != nil { selectedSegmentID = nil }
                 // FT-15/TF2-15 Stream B2: clears the block-select highlight overlay on
                 // ANY dismiss path (Submit success, Cancel button inside the sheet, OR a
