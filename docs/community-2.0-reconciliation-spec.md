@@ -332,6 +332,13 @@ on conflict (key) do nothing;
 
 ### §2.9 Device push tokens — schema + sender seam only (Phase 4 builds the pipeline)
 
+> **AMENDED 2026-09-02 (PR #100, S11 ceremony incident):** the original "tokens are never
+> read by any client role" posture proved structurally incompatible with PostgREST's default
+> `return=representation` write path (RETURNING requires SELECT rights → ALL writes failed, 42501).
+> Corrected posture: **owner may read own token rows** (`device_push_tokens_select_own`); cross-user
+> and anonymous reads remain fully denied. Applied via `supabase/05-device-push-tokens-rls-fix.sql`.
+> See `docs/qa/pr99-community-phase4b-push.md` + PR #100.
+
 ```sql
 create table if not exists public.device_push_tokens (
   id           uuid primary key default gen_random_uuid(),
