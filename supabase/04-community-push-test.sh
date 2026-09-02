@@ -18,9 +18,12 @@
 # Never hardcode credentials in this file — both env vars are required and read at runtime only.
 #
 # What this script CAN verify with anon-key-only access:
-#   - device_push_tokens RLS: anon cannot read ANY row (no select policy exists at all — not even the
-#     owning authenticated user can read their own token back via the anon-key REST API); anon cannot
-#     insert a token for someone else; an authenticated user CAN insert a token for themselves.
+#   - device_push_tokens RLS: an authenticated user CAN insert a token for themselves and CAN read it
+#     back afterward (device_push_tokens_select_own, added post-incident by
+#     supabase/05-device-push-tokens-rls-fix.sql — see that file's header for why a select policy
+#     turned out to be REQUIRED, not merely permissive, for insert/update/delete to work at all under
+#     PostgREST's default `return=representation` behavior); a different authenticated user and a
+#     truly anonymous caller both still see zero rows; anon cannot insert a token for anyone.
 #   - pins_with_author still returns every pre-Phase-4b column, plus the new author_avatar column, with
 #     the correct value once an avatar is set.
 #   - An ephemeral crowd pin insert succeeds (the pins_invoke_send_community_push trigger's WHEN
@@ -193,20 +196,39 @@ assert_status "$STATUS" 201 "authenticated own-token insert accepted" "$RBODY"
 echo
 
 # ------------------------------------------------------------------
-# Test 4 — NO ONE can read device_push_tokens back, not even the row's own owner
-# (deliberately no select policy at all, spec §2.9 — server-only surface).
+# Test 4 — an owner CAN read back their own device_push_tokens row; a different authenticated
+# user and a truly anonymous caller both still see zero.
+#
+# REVISED post-incident (supabase/05-device-push-tokens-rls-fix.sql, S12 deploy ceremony): the
+# original version of this test asserted "no one can read ANY row, not even its own owner" — that
+# was the ORIGINAL (and, it turned out, unworkable) design intent, not a correct description of
+# what's actually needed. A device_push_tokens_select_own policy (auth.uid() = user_id) was added
+# because PostgREST's default INSERT/UPDATE/DELETE behavior (`Prefer: return=representation`, sent
+# by every mainstream Supabase client SDK including the iOS one, and by this script's own rest()
+# helper) requires the written row to satisfy a SELECT policy to produce RETURNING output — with
+# zero SELECT policy, that requirement could never be met and the ENTIRE write was rejected with a
+# row-level-security error, which is exactly what broke Test 3 in production. See 05's file header
+# for the full incident writeup and root-cause repro. This test now verifies the CORRECTED,
+# intentional posture: own-row-readable, cross-user-and-anon-still-blocked.
 # ------------------------------------------------------------------
-echo "--- Test 4: device_push_tokens has no select policy for anyone (expect empty result, not the row just inserted) ---"
-RESP=$(rest GET "/rest/v1/device_push_tokens?user_id=eq.${DEVICE_A_ID}&select=id" "$DEVICE_A_TOKEN")
+echo "--- Test 4: owner can read own device_push_tokens row; a different user and anon cannot ---"
+RESP=$(rest GET "/rest/v1/device_push_tokens?user_id=eq.${DEVICE_A_ID}&select=id,apns_token" "$DEVICE_A_TOKEN")
+STATUS=$(echo "$RESP" | head -n1)
+RBODY=$(echo "$RESP" | tail -n +2)
+assert_status "$STATUS" 200 "owner can read back their own device_push_tokens row" "$RBODY"
+OWNER_COUNT=$(echo "$RBODY" | jq 'length' 2>/dev/null || echo -1)
+assert_eq "$OWNER_COUNT" "1" "owner sees exactly their own just-inserted row (not zero, not more than one)"
+
+RESP=$(rest GET "/rest/v1/device_push_tokens?user_id=eq.${DEVICE_A_ID}&select=id" "$DEVICE_B_TOKEN")
 STATUS=$(echo "$RESP" | head -n1)
 RBODY=$(echo "$RESP" | tail -n +2)
 if [ "$STATUS" = "200" ]; then
   COUNT=$(echo "$RBODY" | jq 'length')
-  assert_eq "$COUNT" "0" "owner cannot read back their own just-inserted device_push_tokens row (no select policy)"
+  assert_eq "$COUNT" "0" "a DIFFERENT authenticated user cannot see device A's row (cross-user still denied)"
 elif [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
-  pass "device_push_tokens read denied outright (HTTP $STATUS) — also consistent with 'no select policy'"
+  pass "cross-user device_push_tokens read denied outright (HTTP $STATUS)"
 else
-  fail "unexpected status reading device_push_tokens as owner (HTTP $STATUS — body: $RBODY)"
+  fail "unexpected status reading device A's row as device B (HTTP $STATUS — body: $RBODY)"
 fi
 
 RESP=$(curl -sS -X GET "${SUPABASE_URL}/rest/v1/device_push_tokens?select=id" \
