@@ -96,6 +96,12 @@ grant select on public.pins_with_author to anon, authenticated;
 -- run first, even though in practice it always has).
 create extension if not exists pg_net;
 
+-- QA pass 1 fix (Finding #3, docs/qa/pr99-community-phase4b-push.md): 02d-ingest-cron.sql creates the
+-- `internal` schema, and this file's function lives in it — restated here (idempotent) so this file's
+-- own "safe to re-run on a clean project" claim is actually true, not silently dependent on 02d having
+-- run first.
+create schema if not exists internal;
+
 -- ------------------------------------------------------------------------------------------
 -- Auth pattern: reused EXACTLY from internal.invoke_film_permit_ingest() (02d-ingest-cron.sql) —
 -- read the 'service_role_key' Vault secret at runtime (never hardcoded in this file), then
@@ -108,27 +114,42 @@ create extension if not exists pg_net;
 -- triggered it — a lost push notification is a degraded experience, not a data-integrity issue, the
 -- same posture every other best-effort side-effect in this codebase takes (e.g. the ingest_runs
 -- write-failure handling in supabase/functions/ingest-film-permits/index.ts, which logs and continues
--- rather than failing the whole invocation). Both failure branches below `raise log` (visible in
--- Postgres logs / Supabase Logs Explorer) and `return null` rather than `raise exception`.
+-- rather than failing the whole invocation).
+--
+-- QA pass 1 fix (BLOCKING Finding #1, docs/qa/pr99-community-phase4b-push.md): the original version
+-- of this function only wrapped `net.http_post` in `begin/exception` — the preceding Vault
+-- `select ... from vault.decrypted_secrets` and its null-check sat OUTSIDE that block. QA reproduced
+-- live (local Postgres 16, PR's SQL applied verbatim minus `create extension pg_net`) that a throw
+-- during the Vault read (relation missing, permissions, a Vault hiccup — HANDOFF itself calls Vault
+-- "BETA" — or a future schema change) propagates UNCAUGHT and aborts the whole triggering pins
+-- INSERT: exactly the failure mode this fail-open design exists to prevent, on the live,
+-- load-bearing crowd-reporting loop. Fixed below: ONE `begin/exception when others` block now encloses
+-- the Vault read, the null-check, AND the http_post — any failure at any of those three points
+-- degrades to a logged skip, never an aborted INSERT. `v_stage` is set immediately before each step so
+-- the single shared handler's log line still identifies which stage failed (Vault read vs. HTTP
+-- dispatch), even though there is only one `exception` clause, not one per stage.
 -- ------------------------------------------------------------------------------------------
 create or replace function internal.invoke_send_community_push()
 returns trigger language plpgsql security definer as $$
 declare
   v_service_role_key text;
   v_request_id       bigint;
+  v_stage            text := 'vault_read';
 begin
-  select decrypted_secret
-    into v_service_role_key
-    from vault.decrypted_secrets
-   where name = 'service_role_key'
-   limit 1;
-
-  if v_service_role_key is null then
-    raise log 'send-community-push: Vault secret "service_role_key" not found — skipping push for pin %', new.id;
-    return null;
-  end if;
-
   begin
+    v_stage := 'vault_read';
+    select decrypted_secret
+      into v_service_role_key
+      from vault.decrypted_secrets
+     where name = 'service_role_key'
+     limit 1;
+
+    if v_service_role_key is null then
+      raise log 'send-community-push: Vault secret "service_role_key" not found — skipping push for pin %', new.id;
+      return new;
+    end if;
+
+    v_stage := 'http_post';
     select net.http_post(
       url     := 'https://jiispshyqerscdoferaw.functions.supabase.co/send-community-push',
       headers := jsonb_build_object(
@@ -145,10 +166,10 @@ begin
 
     raise log 'send-community-push invoked for pin % (zone %), pg_net request_id=%', new.id, new.zone_id, v_request_id;
   exception when others then
-    raise log 'send-community-push: unexpected error invoking function for pin %: %', new.id, sqlerrm;
+    raise log 'send-community-push: % stage failed for pin % (sqlstate %): %', v_stage, new.id, sqlstate, sqlerrm;
   end;
 
-  return null;
+  return new;
 end;
 $$;
 
