@@ -383,6 +383,17 @@ final class PushRegistrationService {
     private let urlSession: URLSession
     private let environmentProvider: () -> String
 
+    /// PR #101 QA pass 1 fix: every instance method below gates on this rather than reading
+    /// `AppConstants.communityEnabled` directly. `AppConstants.communityEnabled` is a hardcoded
+    /// `static let` — with it `false` (its current, real value), there was previously NO way
+    /// for a test to exercise this service's "flag on" wire behavior at all, which is exactly
+    /// the class of gap that let Finding #1 (the missing `on_conflict` param) ship undetected
+    /// by the original 26 tests. Defaults to the real flag for every production call site
+    /// (mirrors `AppConstants.communityPhase1PinTypes(enabled: Bool = communityEnabled)`'s own
+    /// "parameterized pure function, defaults to the real flag" precedent in `Constants.swift`)
+    /// — tests inject `{ true }` explicitly instead of mutating the immutable global constant.
+    private let communityEnabledProvider: () -> Bool
+
     // MARK: - State
 
     /// The hex-encoded APNs device token, once `didReceiveDeviceToken(_:)` has fired at least
@@ -418,13 +429,15 @@ final class PushRegistrationService {
         supabaseAnonKey: String,
         authService: SupabaseAuthService,
         urlSession: URLSession = .shared,
-        environmentProvider: @escaping () -> String = { APNSEnvironment.detectCurrent() }
+        environmentProvider: @escaping () -> String = { APNSEnvironment.detectCurrent() },
+        communityEnabledProvider: @escaping () -> Bool = { AppConstants.communityEnabled }
     ) {
         self.supabaseURL = supabaseURL
         self.supabaseAnonKey = supabaseAnonKey
         self.authService = authService
         self.urlSession = urlSession
         self.environmentProvider = environmentProvider
+        self.communityEnabledProvider = communityEnabledProvider
     }
 
     /// Convenience initializer reading `SUPABASE_URL` / `SUPABASE_ANON_KEY` from `Bundle.main`
@@ -453,7 +466,7 @@ final class PushRegistrationService {
     /// `registerForRemoteNotifications()` itself is idempotent and safe to call repeatedly
     /// per Apple's own documentation — no internal guard needed here beyond the flag check.
     func requestRegistrationIfEnabled() {
-        guard AppConstants.communityEnabled else { return }
+        guard communityEnabledProvider() else { return }
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized
                 || settings.authorizationStatus == .provisional
@@ -471,7 +484,7 @@ final class PushRegistrationService {
     /// drain-via-onChange-in-ContentView pattern, W6.1's proven fix for the "subscriber not
     /// attached yet" race — see `WeParkApp.swift`).
     func didReceiveDeviceToken(_ deviceToken: Data) {
-        guard AppConstants.communityEnabled else { return }
+        guard communityEnabledProvider() else { return }
         deviceTokenHex = Self.hexString(from: deviceToken)
         attemptUpsert()
     }
@@ -491,7 +504,7 @@ final class PushRegistrationService {
     /// skipped (spec §2.9: "a token without a zone receives nothing by design — the server
     /// fans out per zone").
     func updateZone(_ zoneId: String?) {
-        guard AppConstants.communityEnabled else { return }
+        guard communityEnabledProvider() else { return }
         currentZoneId = zoneId
         attemptUpsert()
     }
@@ -501,7 +514,7 @@ final class PushRegistrationService {
     /// nothing has changed since the last successful upload (`attemptUpsert`'s own dedupe via
     /// `lastUploaded`).
     func handleAppForeground() {
-        guard AppConstants.communityEnabled else { return }
+        guard communityEnabledProvider() else { return }
         attemptUpsert()
     }
 
@@ -528,7 +541,7 @@ final class PushRegistrationService {
     }
 
     private func attemptUpsert() {
-        guard AppConstants.communityEnabled,
+        guard communityEnabledProvider(),
               let tokenHex = deviceTokenHex,
               let zoneId = currentZoneId
         else { return }
@@ -554,18 +567,41 @@ final class PushRegistrationService {
         )
         guard let body = try? JSONSerialization.data(withJSONObject: payload) else { return }
 
-        var request = URLRequest(url: supabaseURL.appendingPathComponent("rest/v1/device_push_tokens"))
+        // PR #101 QA pass 1 fix (Finding #1, BLOCKING): the request URL MUST carry
+        // `on_conflict=user_id,apns_token` — the table's real `unique (user_id, apns_token)`
+        // constraint (`supabase/03-community-2.0-schema.sql:535-542`). `device_push_tokens.id`
+        // is a server-generated `uuid primary key` never present in `tokenUpsertPayload`'s
+        // body; per PostgREST's documented default, an omitted `on_conflict` compiles to
+        // `ON CONFLICT (id)`, which never actually conflicts (id is fresh every INSERT
+        // attempt) — so the underlying INSERT instead hit the real `(user_id, apns_token)`
+        // constraint as an UNCAUGHT `23505` error on every upsert after a device's first-ever
+        // registration, silently defeating "re-upsert on zone change/foreground" (an explicit
+        // acceptance criterion). Corroborated by this repo's own
+        // `supabase/functions/ingest-film-permits/index.ts:507-518`, which documents the
+        // identical PostgREST conflict-target-must-be-explicit behavior for a different table.
+        // `user_id,apns_token` is a plain multi-column constraint (not a named/expression
+        // index), so PostgREST resolves the bare comma-separated column list directly — no
+        // index-name lookup needed, unlike ingest-film-permits' expression-index case.
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/device_push_tokens"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [URLQueryItem(name: "on_conflict", value: "user_id,apns_token")]
+        guard let url = components?.url else { return }
+
+        var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
         request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
-        // Upsert on the schema's `unique (user_id, apns_token)` constraint (spec §2.9). Same
-        // `return=minimal` shape `CommunityPinService.upsertVote`/`upsertProfile` already use —
-        // this avoids needing SELECT rights on the table at all. (The PR #100 incident this
-        // file's header cites was PostgREST-CLIENT-default `return=representation`, which DOES
-        // require SELECT — this codebase's own raw-URLSession write paths have always opted
-        // OUT of that default explicitly via this exact header; §2.9's amendment adding an
+        // Upsert on the schema's `unique (user_id, apns_token)` constraint (spec §2.9), now
+        // correctly targeted via the `on_conflict` query param above. Same `return=minimal`
+        // shape `CommunityPinService.upsertVote`/`upsertProfile` already use — this avoids
+        // needing SELECT rights on the table at all. (The PR #100 incident this file's header
+        // cites was PostgREST-CLIENT-default `return=representation`, which DOES require
+        // SELECT — this codebase's own raw-URLSession write paths have always opted OUT of
+        // that default explicitly via this exact header; §2.9's amendment adding an
         // owner-read-own SELECT policy is an independent, additional safety net, not something
         // this write path depends on.)
         request.setValue("resolution=merge-duplicates,return=minimal", forHTTPHeaderField: "Prefer")

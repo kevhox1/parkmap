@@ -2855,6 +2855,16 @@ struct ContentView: View {
     /// match as seen in `confirmPushDedupeStore` IMMEDIATELY (not after the user acts on it) —
     /// per spec, a pin that surfaces the card must never re-prompt again regardless of what
     /// the user does with it (confirm, dismiss, or the app being backgrounded mid-card).
+    ///
+    /// PR #101 QA pass 1 (Finding #5, minor) asked whether mark-seen should move to AFTER the
+    /// surface attempt succeeds, same as the background push path's fix (`WeParkApp.swift`).
+    /// Deliberately NOT changed here: unlike `UNUserNotificationCenter.add(request:)` (a real
+    /// async operation with a genuine failure mode), setting `confirmPromptPin = match` on the
+    /// line immediately below is a synchronous SwiftUI `@State` assignment that cannot fail —
+    /// there is no "surface attempt" with its own error path to defer past. Marking seen here,
+    /// at the same call site that unconditionally sets `confirmPromptPin` right after, is
+    /// already equivalent to "mark seen once the surface attempt succeeds" for this specific
+    /// (non-fallible) surface.
     private func updateConfirmPromptCandidate(from pins: [CommunityPin]) {
         guard confirmPromptPin == nil else { return }
         guard let match = CommunityPushRelevance.firstUnseenSweeperPassedMatch(
@@ -2902,7 +2912,9 @@ struct ContentView: View {
     /// deliberate, documented no-op — "a token without a zone receives nothing by design").
     ///
     /// Called from `performLaunchSetup()`, `.onChange(of: parkPinService.currentUpdatedAt)`,
-    /// and `handleLocationUpdate()` — every signal that could change either input.
+    /// `handleLocationUpdate()`, and `handleScenePhaseChange`'s `.active` branch (PR #101 QA
+    /// pass 1 fix, Finding #2 — this fourth call site was claimed in the original PR
+    /// description but not actually wired) — every signal that could change either input.
     private func updatePushZoneFromParkedCarOrLocation() {
         guard AppConstants.communityEnabled else { return }
         let zoneId: String?
@@ -3312,8 +3324,18 @@ struct ContentView: View {
         // token/environment/zone haven't changed since the last successful upload — spec
         // "re-upsert... on app foreground if changed"). Also a defensive re-registration check
         // in case permission was granted while backgrounded (e.g. via a system Settings toggle).
+        //
+        // PR #101 QA pass 1 fix (Finding #2): `updatePushZoneFromParkedCarOrLocation()` MUST
+        // run here too, and BEFORE `handleAppForeground()` — without it, foregrounding after
+        // being backgrounded across a zone boundary re-attempts the upload using the STALE
+        // `currentZoneId` still held from before backgrounding (`handleAppForeground()` only
+        // re-POSTs with whatever zone is already known; it does not recompute it). The other
+        // three call sites (launch, parked-car change, location update) don't cover this path:
+        // a foreground transition with no fresh GPS fix yet and no parked-car change relies on
+        // this explicit call, not a side effect of something else.
         if AppConstants.communityEnabled {
             pushRegistrationService.requestRegistrationIfEnabled()
+            updatePushZoneFromParkedCarOrLocation()
             pushRegistrationService.handleAppForeground()
         }
     }

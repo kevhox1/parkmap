@@ -6,7 +6,7 @@
 //  Spec: docs/community-2.0-reconciliation-spec.md §2.9 + §3 Phase 4 +
 //  docs/community-2.0-roadmap.md S12 row (incl. WP5 rider).
 //
-//  Test inventory (26 tests):
+//  Test inventory (28 tests; +2 in PR #101 QA pass 1 fix — the wire-level gap QA flagged):
 //    APNSEnvironmentTests (4):
 //      1. testParse_developmentProfile_returnsSandbox
 //      2. testParse_productionProfile_returnsProduction
@@ -39,6 +39,10 @@
 //      24. testMarkSeen_isIdempotent_noDuplicateEntries
 //      25. testMarkSeen_boundedTrim_dropsOldestBeyondMaxEntries
 //      26. testSeenIds_skipsMalformedEntries
+//    PushRegistrationServiceWireTests (2, PR #101 QA pass 1 fix — wire-level, not just the
+//    pure payload-dict test above; closes the exact gap that let Finding #1 ship):
+//      27. testUpsertToken_requestIncludesOnConflictAndMergeDuplicatesPreferHeader
+//      28. testAttemptUpsert_sameCandidateTwice_secondCallSkipsNetwork
 //
 //  No Calendar.current use. No hardcoded Mapbox/Supabase secrets.
 //
@@ -343,5 +347,204 @@ final class CommunityPushDedupeStoreTests: XCTestCase {
         ephemeralDefaults.set(["not-a-uuid", UUID().uuidString], forKey: "test.seen")
         let store = CommunityPushDedupeStore(defaults: ephemeralDefaults, key: "test.seen")
         XCTAssertEqual(store.seenIds().count, 1, "a malformed stored entry must be skipped, not crash")
+    }
+}
+
+// MARK: - 7. PushRegistrationService wire-level tests (PR #101 QA pass 1 fix)
+//
+// QA pass 1 (docs/qa/pr101-community-phase4b-ios.md, Finding #1) flagged that the original 26
+// tests only asserted on `tokenUpsertPayload`'s pure dictionary output — nothing exercised
+// `attemptUpsert`/`upsertToken`'s ACTUAL `URLRequest` (URL, query string, headers), which is
+// exactly the gap that let the missing `on_conflict` parameter ship undetected. These tests
+// close that gap using the same `PinMockURLProtocol`-style request-interception pattern this
+// repo already established (`WeParkTests/CommunityPinServiceTests.swift`,
+// `WeParkTests/Tier3AuthReactionsTests.swift`) — distinctly named per-file mocks to avoid
+// shared static-state races across test files in the same target.
+
+/// Thread-safe mock URLProtocol for `SupabaseAuthService`'s own network calls, scoped to this
+/// file only (distinct from `AuthMockURLProtocol` in `Tier3AuthReactionsTests.swift` and
+/// `SeamMockURLProtocol` in `SupabaseAuthServiceTests.swift`).
+final class PushAuthMockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = PushAuthMockURLProtocol.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+/// Mock URLProtocol for `PushRegistrationService`'s own `device_push_tokens` POST — distinct
+/// from `PushAuthMockURLProtocol` above (auth SDK traffic) and every other file's mock.
+final class PushTokenMockURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var requestHandler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        guard let handler = PushTokenMockURLProtocol.requestHandler else {
+            client?.urlProtocol(self, didFailWithError: URLError(.badServerResponse))
+            return
+        }
+        do {
+            let (response, data) = try handler(request)
+            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
+            client?.urlProtocol(self, didLoad: data)
+            client?.urlProtocolDidFinishLoading(self)
+        } catch {
+            client?.urlProtocol(self, didFailWithError: error)
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+private let kPushAuthURL = URL(string: "https://push-wire-test.supabase.co")!
+private let kPushAnonKey = "test-anon-key-push-wire"
+private let kPushUser = UUID(uuidString: "C0000001-0000-0000-0000-000000000001")!
+
+/// Valid Supabase Auth SDK `Session` JSON — same shape verified in
+/// `SupabaseAuthServiceTests.swift`/`Tier3AuthReactionsTests.swift` against the SDK's actual
+/// `Decodable` requirements.
+private func pushWireSessionJSON(userId: UUID = kPushUser) -> Data {
+    let expiresAt = Date().addingTimeInterval(3600).timeIntervalSince1970
+    return """
+    {
+      "access_token": "eyJ.push-wire-test.token",
+      "refresh_token": "refresh-push-wire-test",
+      "token_type": "bearer",
+      "expires_in": 3600,
+      "expires_at": \(expiresAt),
+      "user": {
+        "id": "\(userId.uuidString)",
+        "aud": "authenticated",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+        "is_anonymous": true
+      }
+    }
+    """.data(using: .utf8)!
+}
+
+private func pushTokenMockSession() -> URLSession {
+    let config = URLSessionConfiguration.ephemeral
+    config.protocolClasses = [PushTokenMockURLProtocol.self]
+    return URLSession(configuration: config)
+}
+
+@MainActor
+final class PushRegistrationServiceWireTests: XCTestCase {
+
+    /// Builds a `PushRegistrationService` wired to a pre-authenticated `SupabaseAuthService`
+    /// (mirrors `Tier3AuthReactionsTests.makeAuthenticatedPair`'s exact pattern) and a
+    /// `PushTokenMockURLProtocol`-backed `URLSession` for its own `device_push_tokens` traffic.
+    /// `environmentProvider` is injected as a fixed `"sandbox"` so these tests never depend on
+    /// `APNSEnvironment.detectCurrent()`'s real bundle read.
+    private func makeAuthenticatedService() async -> PushRegistrationService {
+        let authSession = URLSession(configuration: {
+            let config = URLSessionConfiguration.ephemeral
+            config.protocolClasses = [PushAuthMockURLProtocol.self]
+            return config
+        }())
+        let authService = SupabaseAuthService(
+            supabaseURL: kPushAuthURL,
+            supabaseAnonKey: kPushAnonKey,
+            testStorage: InMemoryAuthStorage(),
+            fetch: { try await authSession.data(for: $0) }
+        )
+        PushAuthMockURLProtocol.requestHandler = { _ in
+            (HTTPURLResponse(url: kPushAuthURL, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+             pushWireSessionJSON())
+        }
+        await authService.ensureSession()
+
+        return PushRegistrationService(
+            supabaseURL: kPushAuthURL,
+            supabaseAnonKey: kPushAnonKey,
+            authService: authService,
+            urlSession: pushTokenMockSession(),
+            environmentProvider: { "sandbox" },
+            // `AppConstants.communityEnabled` is hardcoded `false` on this branch — inject
+            // `{ true }` here rather than depending on the global flag, so these wire tests
+            // actually exercise the service's write path instead of no-oping on the flag
+            // guard. See `communityEnabledProvider`'s own doc comment in
+            // `PushRegistrationService.swift` for why this seam exists.
+            communityEnabledProvider: { true }
+        )
+    }
+
+    /// Finding #1's fix, verified at the wire: the actual outgoing `URLRequest` for a token
+    /// upsert must carry `on_conflict=user_id,apns_token` (the table's real unique constraint)
+    /// AND the `Prefer: resolution=merge-duplicates` header — asserting the pure
+    /// `tokenUpsertPayload` dictionary alone (the pre-fix test coverage) would not have caught
+    /// the missing query parameter, since that function never touches the URL.
+    func testUpsertToken_requestIncludesOnConflictAndMergeDuplicatesPreferHeader() async throws {
+        let service = await makeAuthenticatedService()
+
+        var capturedURL: URL? = nil
+        var capturedPreferHeader: String? = nil
+        PushTokenMockURLProtocol.requestHandler = { request in
+            capturedURL = request.url
+            capturedPreferHeader = request.value(forHTTPHeaderField: "Prefer")
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!,
+                    Data())
+        }
+
+        service.didReceiveDeviceToken(Data([0x01, 0x02, 0x03, 0x04]))
+        service.updateZone("nolita")
+        await service.inFlightUpload?.value
+
+        let components = capturedURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
+        let onConflictValue = components?.queryItems?.first(where: { $0.name == "on_conflict" })?.value
+        XCTAssertEqual(onConflictValue, "user_id,apns_token",
+            "upsertToken's request must carry on_conflict=user_id,apns_token (device_push_tokens' real unique constraint), got URL: \(capturedURL?.absoluteString ?? "nil")")
+        XCTAssertTrue(capturedPreferHeader?.contains("resolution=merge-duplicates") == true,
+            "upsertToken's request must include Prefer: resolution=merge-duplicates, got: \(capturedPreferHeader ?? "nil")")
+        XCTAssertTrue(components?.path.hasSuffix("/rest/v1/device_push_tokens") == true,
+            "request path must still target rest/v1/device_push_tokens, got: \(components?.path ?? "nil")")
+    }
+
+    /// `attemptUpsert`'s dedupe-by-`lastUploaded` logic: calling `updateZone` a second time
+    /// with the SAME zone (token/environment also unchanged) must not fire a second network
+    /// request — QA pass 1 flagged this as an untested gap alongside Finding #1's fix.
+    func testAttemptUpsert_sameCandidateTwice_secondCallSkipsNetwork() async throws {
+        let service = await makeAuthenticatedService()
+
+        var requestCount = 0
+        PushTokenMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!,
+                    Data())
+        }
+
+        service.didReceiveDeviceToken(Data([0x0A, 0x0B]))
+        service.updateZone("soho")
+        await service.inFlightUpload?.value
+        XCTAssertEqual(requestCount, 1, "the first upsert for a new (token, environment, zone) triple must hit the network")
+
+        // Same zone again — attemptUpsert's `candidate != lastUploaded` guard should skip.
+        service.updateZone("soho")
+        await service.inFlightUpload?.value
+        XCTAssertEqual(requestCount, 1, "re-deriving the SAME zone must not fire a second network request")
+
+        // A genuinely different zone must fire again.
+        service.updateZone("les")
+        await service.inFlightUpload?.value
+        XCTAssertEqual(requestCount, 2, "a real zone change must trigger a new upsert")
     }
 }

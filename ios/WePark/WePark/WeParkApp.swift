@@ -235,8 +235,6 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 return
             }
 
-            dedupe.markSeen(pinId)
-
             let content = UNMutableNotificationContent()
             content.title = copy.title
             content.body = copy.body
@@ -250,10 +248,20 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
                 content: content,
                 trigger: nil
             )
+            // PR #101 QA pass 1 fix (Finding #4, minor): mark-seen moves to AFTER a
+            // successful `add(request:)` — marking it seen unconditionally beforehand meant a
+            // rare `add` failure would permanently suppress this pin (no notification ever
+            // shown, no retry, and the WP5 foreground card would also never re-offer it via
+            // the shared dedupe store). Also (Finding #5, minor): `.newData` is now reported
+            // ONLY on a genuine successful enqueue — `.noData` on the (rare) error path is
+            // more accurate for `UIBackgroundFetchResult`'s informational purpose.
             UNUserNotificationCenter.current().add(request) { error in
                 if let error {
                     print("[AppDelegate] community push local notification failed: \(error)")
+                    completionHandler(.noData)
+                    return
                 }
+                dedupe.markSeen(pinId)
                 completionHandler(.newData)
             }
         }
