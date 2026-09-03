@@ -201,6 +201,24 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-09-03 — ✅ S11 COMPLETE: the push backend is LIVE IN PRODUCTION, verified 10/10.
+
+PRs #99 (`79e24ddf`) + #100 (`8b532b08`). Two production-grade bugs caught before they could bite:
+QA pass 1 **proved the trigger's fail-open guarantee false on a live local Postgres** (Vault read
+outside the exception block — a Vault hiccup would have 500'd the live crowd-reporting loop);
+Kevin's deploy ceremony then caught a second one — deny-all SELECT on `device_push_tokens` +
+PostgREST's default RETURNING meant **all token writes failed** (the "never read by any client"
+posture was structurally impossible; spec §2.9 amended to owner-read-own, cross-user/anon still
+denied). Ceremony evidence: 5 APNs secrets set (incl. a caught empty-key near-miss), function
+deployed, migrations 04+05 applied by hand, test script **10/10**, `net._http_response` 200,
+function log `no sandbox tokens … nothing to send` with matching pin id. Also: the VPS root disk
+hit 100% mid-session (61 accumulated agent worktrees + npm cache) — freed 6GB;
+`~/.openclaw_backup_20260308` (2.1G, March backup) flagged to Kevin as his call.
+
+**S12 dispatched** (iOS registration + internal TestFlight build). ⚠️ TestFlight uses the
+**production** APNs environment — client stamps `environment` per build type; `APNS_ENV` flips to
+`production` for the TestFlight phase, back to per-environment split thereafter.
+
 ### 2026-09-01 — ✅ PHASES 3 + 4a MERGED same day. Trust loop + leaving-soon handoff live (dark). Suite 1111→1154.
 
 **PR #97 (`c581d65f`, Phase 3 / S9):** reactions on the new pin types via one shared pure routing fn
