@@ -784,6 +784,30 @@ struct ContentView: View {
     /// precedent of existing dark-shipped since Tier 1.
     @State private var zoneMessageService: ZoneMessageService
 
+    // MARK: - Community 2.0 Phase 4b (S12): push registration + confirm-prompt card
+
+    /// APNs registration + `device_push_tokens` upload (spec §2.9, `Services/PushRegistrationService.swift`).
+    /// Mirrors `pinService`'s own "can't reference a sibling stored property in a default
+    /// expression" constraint — initialized in `init` below (needs `authService`).
+    /// Everything this service does is internally flag-gated on `AppConstants.communityEnabled`
+    /// — instantiated unconditionally here (cheap, no network call at init) same as
+    /// `zoneMessageService`'s own precedent.
+    @State private var pushRegistrationService: PushRegistrationService
+
+    /// The currently-showing WP5 in-app "did it pass?" confirm-prompt card's pin, or `nil` if
+    /// none is showing. Set by `updateConfirmPromptCandidate(from:)` (called from
+    /// `handleVisiblePinsChange`); cleared by either button on `ConfirmPromptCard`
+    /// (`handleConfirmPromptConfirm`/`handleConfirmPromptDismiss`). At most one card shows at
+    /// a time by construction (`updateConfirmPromptCandidate` early-returns while this is
+    /// non-nil).
+    @State private var confirmPromptPin: CommunityPin? = nil
+
+    /// Cross-path dedupe store shared with `AppDelegate`'s background silent-push handler
+    /// (`WeParkApp.swift`) via the SAME UserDefaults key — see
+    /// `CommunityPushDedupeStore`'s own doc comment. A plain `let` (not `@State`): this type
+    /// is a stateless wrapper over UserDefaults, not SwiftUI-observed state itself.
+    private let confirmPushDedupeStore = CommunityPushDedupeStore()
+
     /// Map-marker-only subset of visible community pins (filming + special_event).
     /// `asp_suspended_today` is NOT included here — it drives the ASP banner supplement (spec §4).
     ///
@@ -825,6 +849,12 @@ struct ContentView: View {
         // Community 2.0 Phase 1 (S4) — see `zoneMessageService`'s own doc comment.
         self._zoneMessageService = State(initialValue: ZoneMessageService(
             realtimeChannel: supabaseClients.makeRealtimeZoneMessageChannel()
+        ))
+        // Community 2.0 Phase 4b (S12) — see `pushRegistrationService`'s own doc comment.
+        // Reads SUPABASE_URL/SUPABASE_ANON_KEY from Bundle.main via its convenience init,
+        // same as pinService above.
+        self._pushRegistrationService = State(initialValue: PushRegistrationService(
+            authService: authService
         ))
     }
 
@@ -878,6 +908,23 @@ struct ContentView: View {
                 handleRemoteCarChanged(newCar: newCar, oldCarID: oldCarID)
             }
             .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in routePendingDeepLink(carID) }
+            // Community 2.0 Phase 4b (S12): forward a captured APNs device token to
+            // PushRegistrationService, then clear the buffer (idempotency — same shape as
+            // pendingDeepLinkCarID's own onChange handler, W6.1 precedent).
+            .onChange(of: appDelegate.pendingDeviceToken) { _, token in
+                guard let token else { return }
+                pushRegistrationService.didReceiveDeviceToken(token)
+                appDelegate.pendingDeviceToken = nil
+            }
+            // Community 2.0 Phase 4b (S12): the parked car's persisted state changed (parked,
+            // cleared, replaced, or a remote-synced edit) — recompute the push zone_id.
+            // currentUpdatedAt (Date?, Equatable) is used as the trigger rather than
+            // parkPinService.parkedCar itself (ParkedCar is not Equatable, same
+            // "observe an Equatable derived scalar" idiom this file already uses for
+            // pinService.visiblePinsGeneration).
+            .onChange(of: parkPinService.currentUpdatedAt) { _, _ in
+                updatePushZoneFromParkedCarOrLocation()
+            }
             .sheet(item: $activeSheet, onDismiss: {
                 // Community 2.0 Phase 4a QA round 1 fix (PR #98, Finding #2): resync this
                 // cache from UserDefaults on ANY sheet dismiss — closes a lost-update window
@@ -1200,6 +1247,14 @@ struct ContentView: View {
                     activeSheet = dismissTargetOutsideBrowseNav
                 },
                 onPermissionGranted: {
+                    // Community 2.0 Phase 4b (S12): reuse this EXISTING permission-granted
+                    // moment to trigger APNs registration — no new prompt is ever added by
+                    // this call. Fires regardless of whether a car is currently parked
+                    // (unlike the ASP-reminder scheduling below, which needs one) — see
+                    // `PushRegistrationService.requestRegistrationIfEnabled`'s doc comment.
+                    if AppConstants.communityEnabled {
+                        pushRegistrationService.requestRegistrationIfEnabled()
+                    }
                     // Schedule notifications for the current pin after permission is granted.
                     guard let car = parkPinService.parkedCar else { return }
                     Task { @MainActor in
@@ -1863,6 +1918,11 @@ struct ContentView: View {
             // `ToastHostView` just above, not a new positioning mechanism.
             spotPlacementHintOverlay
             spotPlacementConfirmOverlay
+            // Community 2.0 Phase 4b (S12) WP5 rider: the in-app "did it pass?" confirm-prompt
+            // card — same floating-overlay pattern as the two lines just above, not a new
+            // positioning mechanism. See `confirmPromptOverlay`'s own doc comment for why this
+            // is an overlay (not a modal `.sheet(item:)` through ActiveSheet).
+            confirmPromptOverlay
         }
     }
 
@@ -1900,6 +1960,37 @@ struct ContentView: View {
                     onPost: submitSpotPlacement,
                     onCancel: cancelSpotPlacementMode,
                     isSubmitting: spotPlacementSubmitting
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, browseSheetPeekHeight + 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// Community 2.0 Phase 4b (S12) WP5 rider: the in-app "🧹 Sweeper reported on your
+    /// block — did it pass?" confirm-prompt card (`Views/ConfirmPromptCard.swift`,
+    /// `design/prototype.html:104-113`).
+    ///
+    /// Presentation choice: a floating overlay (same "VStack + Spacer(), pinned above the
+    /// browse sheet's peek height" convention `spotPlacementConfirmOverlay`/
+    /// `parkingGuideBannerOverlay` already use), NOT a modal `.sheet(item:)` through the
+    /// `ActiveSheet` enum. The gap inventory's own framing describes this as reusing
+    /// "the same LAYER as ArrivalPromptSheet's presentation pattern" — read here as "one
+    /// state-machine-driven presentation slot, no stacked/competing chrome," not literally
+    /// ArrivalPromptSheet's modal-sheet mechanism: a proactive card the user might be
+    /// mid-task around (browsing the map, mid report flow) is closer to this file's existing
+    /// floating-card family than to a blocking modal. Flagged in the PR description as a
+    /// judgment call, not silently decided.
+    @ViewBuilder
+    private var confirmPromptOverlay: some View {
+        if AppConstants.communityEnabled, let pin = confirmPromptPin {
+            VStack(spacing: 0) {
+                Spacer()
+                ConfirmPromptCard(
+                    pin: pin,
+                    onConfirm: { handleConfirmPromptConfirm(pin) },
+                    onDismiss: { handleConfirmPromptDismiss() }
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, browseSheetPeekHeight + 12)
@@ -2743,6 +2834,86 @@ struct ContentView: View {
         // overrides the bundle state, otherwise returns bundle state unchanged.
         let bundleState = aspService.suspensionState(at: .nowET)
         bannerState = resolvedBannerState(bundleState: bundleState, aspPins: newPins)
+
+        // Community 2.0 Phase 4b (S12) WP5 rider — see `updateConfirmPromptCandidate`'s own
+        // doc comment. Every `visiblePins` change (fetch, poll, or realtime) is a candidate
+        // check, not just a live realtime INSERT — the dedupe store already prevents a
+        // re-prompt for a pin the user has already seen either way, so this also correctly
+        // catches a matching pin the user missed while the app was backgrounded and only
+        // learns about on the next foreground fetch. Flagged in the PR description.
+        if AppConstants.communityEnabled {
+            updateConfirmPromptCandidate(from: newPins)
+        }
+    }
+
+    /// Community 2.0 Phase 4b (S12) WP5 rider: sets `confirmPromptPin` to the first eligible
+    /// `sweeper_passed` match, if any, using the SAME shared pure predicate
+    /// (`CommunityPushRelevance.firstUnseenSweeperPassedMatch`,
+    /// `Services/PushRegistrationService.swift`) the background silent-push handler uses.
+    ///
+    /// One card at a time by construction: no-ops while a card is already showing. Marks the
+    /// match as seen in `confirmPushDedupeStore` IMMEDIATELY (not after the user acts on it) —
+    /// per spec, a pin that surfaces the card must never re-prompt again regardless of what
+    /// the user does with it (confirm, dismiss, or the app being backgrounded mid-card).
+    private func updateConfirmPromptCandidate(from pins: [CommunityPin]) {
+        guard confirmPromptPin == nil else { return }
+        guard let match = CommunityPushRelevance.firstUnseenSweeperPassedMatch(
+            pins: pins,
+            parkedCarSegmentId: parkPinService.parkedCar?.detectedSegmentID,
+            seenPinIds: confirmPushDedupeStore.seenIds()
+        ) else { return }
+        confirmPushDedupeStore.markSeen(match.id)
+        confirmPromptPin = match
+    }
+
+    /// "Confirm — it passed" tap: the same `upsertVote(.confirm)` + `callExtendPinExpiry` pair
+    /// `PinDetailSheet.ReactionsRow.handleStillHere` already uses for every other ephemeral
+    /// crowd pin's "Still there?" action — no new write path, just a new trigger surface.
+    /// Best-effort: a failed write still dismisses the card (the dedupe mark already happened
+    /// in `updateConfirmPromptCandidate`, so it would not re-prompt anyway).
+    private func handleConfirmPromptConfirm(_ pin: CommunityPin) {
+        Task {
+            do {
+                try await pinService.upsertVote(pinId: pin.id, vote: .confirm)
+                try await pinService.callExtendPinExpiry(pinId: pin.id)
+            } catch {
+                // Best-effort — see doc comment above.
+            }
+            confirmPromptPin = nil
+        }
+    }
+
+    /// "Didn't see it" tap: dismiss only, no vote, no re-prompt (dedupe already recorded when
+    /// the card was shown).
+    private func handleConfirmPromptDismiss() {
+        confirmPromptPin = nil
+    }
+
+    // MARK: - Community 2.0 Phase 4b (S12): push token zone derivation
+
+    /// Recomputes the `zone_id` this device's push-token upload uses, per spec §2.9's privacy
+    /// design — the ONLY location signal ever uploaded is a coarse zone id, never lat/lng or
+    /// segment_id.
+    ///
+    /// Priority: the parked car's zone (if a car is parked) beats the current-location zone —
+    /// a parked user's relevant zone is where the CAR is, not where the phone happens to be
+    /// right now (they may have walked away). No car parked → fall back to current location.
+    /// Neither resolves → `nil` (skip upload; `PushRegistrationService.updateZone(nil)` is a
+    /// deliberate, documented no-op — "a token without a zone receives nothing by design").
+    ///
+    /// Called from `performLaunchSetup()`, `.onChange(of: parkPinService.currentUpdatedAt)`,
+    /// and `handleLocationUpdate()` — every signal that could change either input.
+    private func updatePushZoneFromParkedCarOrLocation() {
+        guard AppConstants.communityEnabled else { return }
+        let zoneId: String?
+        if let car = parkPinService.parkedCar {
+            zoneId = CommunityZoneBounds.zoneId(forLat: car.latitude, lng: car.longitude)
+        } else if let loc = locationService.userLocation {
+            zoneId = CommunityZoneBounds.zoneId(forLat: loc.latitude, lng: loc.longitude)
+        } else {
+            zoneId = nil
+        }
+        pushRegistrationService.updateZone(zoneId)
     }
 
     /// Which `PinType`s become a map marker (`communityPins`, feeding
@@ -2984,6 +3155,11 @@ struct ContentView: View {
             let clLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
             updateDriveModeDistance(from: clLocation)
         }
+        // Community 2.0 Phase 4b (S12): a fresh location fix can change the current-location
+        // zone fallback (`updatePushZoneFromParkedCarOrLocation`'s own doc comment) — only
+        // matters when no car is parked (the parked car's zone always wins when one exists),
+        // but the function itself already encodes that priority, so this call is unconditional.
+        updatePushZoneFromParkedCarOrLocation()
     }
 
     // MARK: - Launch setup
@@ -3023,6 +3199,14 @@ struct ContentView: View {
         if AppConstants.communityEnabled {
             zoneMessageService.startRealtime()
         }
+
+        // Community 2.0 Phase 4b (S12): defensive re-registration in case notification
+        // permission was already granted in a PRIOR session (requestRegistrationIfEnabled
+        // only READS current authorization status — no new prompt), plus the initial zone_id
+        // derivation from whatever parked-car/location state load() above just established.
+        // Both internally no-op while AppConstants.communityEnabled == false.
+        pushRegistrationService.requestRegistrationIfEnabled()
+        updatePushZoneFromParkedCarOrLocation()
 
         tileLoader.loadTiles(forRegion: region)
         lastEvaluatedAt = .now
@@ -3124,6 +3308,14 @@ struct ContentView: View {
         // (not the build), so the first reminder that ever fired stamped a permanent "1" on
         // the icon that survived every subsequent launch/build.
         NotificationScheduler.shared.clearBadge()
+        // Community 2.0 Phase 4b (S12): re-attempt the token upload on foreground (a no-op if
+        // token/environment/zone haven't changed since the last successful upload — spec
+        // "re-upsert... on app foreground if changed"). Also a defensive re-registration check
+        // in case permission was granted while backgrounded (e.g. via a system Settings toggle).
+        if AppConstants.communityEnabled {
+            pushRegistrationService.requestRegistrationIfEnabled()
+            pushRegistrationService.handleAppForeground()
+        }
     }
 
     // MARK: - Dismiss helpers
