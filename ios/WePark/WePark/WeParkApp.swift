@@ -39,6 +39,24 @@
 //      it across your app." Neither factory method requires this file to `import Auth` or
 //      `import Realtime` itself — see `SupabaseClients.swift`'s header for why.
 //
+//  Community 2.0 Phase 4b additions (build 20, S12) — spec §2.9/§3 Phase 4,
+//  Services/PushRegistrationService.swift:
+//    - `pendingDeviceToken: Data?` — buffers the raw APNs device token from
+//      `didRegisterForRemoteNotificationsWithDeviceToken`, mirroring `pendingDeepLinkCarID`'s
+//      proven buffer-on-AppDelegate / drain-via-onChange-in-ContentView shape (same W6.1
+//      "subscriber not attached yet" race this pattern already solves once).
+//    - `didReceiveRemoteNotification(_:fetchCompletionHandler:)` — the SILENT push handler
+//      (content-available). Fully self-contained: reads the parked car's segment via
+//      `ParkedCarSegmentReader` (never location), runs it through the shared
+//      `CommunityPushRelevance.isRelevant` predicate (the SAME pure function
+//      `ContentView`'s foreground WP5 confirm-card path uses), dedupes via
+//      `CommunityPushDedupeStore`, and — only on an actual match — enqueues a LOCAL
+//      notification via the existing `UNUserNotificationCenter` machinery. Does not depend on
+//      `ContentView`'s live `ParkPinService` instance being mounted (see
+//      `ParkedCarSegmentReader`'s own doc comment for why that matters for a background wake).
+//      All flag-gated behind `AppConstants.communityEnabled` — a no-op end-to-end while the
+//      flag is off.
+//
 
 import SwiftUI
 import UserNotifications
@@ -60,6 +78,16 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     /// covering both the foreground case and the cold-kill case. After routing, the caller
     /// sets this back to nil so the sheet does not re-present on the next foreground event.
     @Published var pendingDeepLinkCarID: UUID? = nil
+
+    // MARK: - Community 2.0 Phase 4b (S12): APNs device-token buffer
+
+    /// Stores the raw APNs device token bytes from
+    /// `didRegisterForRemoteNotificationsWithDeviceToken`, same buffer-and-drain shape as
+    /// `pendingDeepLinkCarID` above. `ContentView` forwards this to
+    /// `PushRegistrationService.didReceiveDeviceToken(_:)` via `.onChange(of:)`, then clears
+    /// it back to `nil` for idempotency (a re-registration mid-session should re-forward, not
+    /// silently no-op because a stale non-nil value is still sitting here).
+    @Published var pendingDeviceToken: Data? = nil
 
     // MARK: - UIApplicationDelegate
 
@@ -107,6 +135,135 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // (cold-kill / background wake). The value persists until ContentView clears it.
         DispatchQueue.main.async { [weak self] in
             self?.pendingDeepLinkCarID = carID
+        }
+    }
+
+    // MARK: - Community 2.0 Phase 4b (S12): APNs registration callbacks
+
+    /// Called after a successful `UIApplication.registerForRemoteNotifications()` call.
+    /// Buffers the raw token; `ContentView` forwards it to `PushRegistrationService` (see
+    /// `pendingDeviceToken`'s own doc comment).
+    func application(
+        _ application: UIApplication,
+        didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data
+    ) {
+        DispatchQueue.main.async { [weak self] in
+            self?.pendingDeviceToken = deviceToken
+        }
+    }
+
+    /// Called when `registerForRemoteNotifications()` fails — expected on the Simulator (no
+    /// real APNs capability there) and, before permission has been granted, is simply never
+    /// reached (registration is only ever requested once permission is already authorized —
+    /// see `PushRegistrationService.requestRegistrationIfEnabled`). Logged only; never
+    /// surfaced to the user. Registration retries naturally on the next foreground/launch via
+    /// `PushRegistrationService.requestRegistrationIfEnabled()`.
+    func application(
+        _ application: UIApplication,
+        didFailToRegisterForRemoteNotificationsWithError error: Error
+    ) {
+        print("[AppDelegate] registerForRemoteNotifications failed: \(error)")
+    }
+
+    /// The SILENT push handler (`content-available`) — the background half of the
+    /// Community 2.0 Phase 4b relevance-gate pipeline (spec §2.9 / §3 Phase 4, roadmap S12).
+    ///
+    /// Payload shape (sender: `supabase/functions/send-community-push`, PR #99 — verified
+    /// against that Edge Function's body per `docs/qa/pr99-community-phase4b-push.md`'s
+    /// "Privacy invariant holds" section): `{ aps: { "content-available": 1 }, pin_type,
+    /// segment_id, pin_id, zone_id }`. No `author_id`, no lat/lng — the server never sends
+    /// anything more specific than `zone_id`; `segment_id` is compared ENTIRELY on-device
+    /// (`ParkedCarSegmentReader`).
+    ///
+    /// Self-contained by design — does NOT depend on `ContentView`'s live `ParkPinService`
+    /// instance or any other SwiftUI state being mounted yet for this launch (see
+    /// `ParkedCarSegmentReader`'s own doc comment for why a background app-refresh wake
+    /// cannot assume that timing).
+    ///
+    /// Completion-handler discipline: `.noData` for every early-exit branch (flag off,
+    /// malformed payload, not relevant, already seen, unrecognized type — no local
+    /// notification was ever enqueued in any of those); `.newData` only after a local
+    /// notification was actually added to `UNUserNotificationCenter`.
+    func application(
+        _ application: UIApplication,
+        didReceiveRemoteNotification userInfo: [AnyHashable: Any],
+        fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
+    ) {
+        DispatchQueue.main.async {
+            guard AppConstants.communityEnabled else {
+                completionHandler(.noData)
+                return
+            }
+
+            guard
+                let pinTypeRaw = userInfo["pin_type"] as? String,
+                let pinType = PinType(rawValue: pinTypeRaw),
+                let pinSegmentId = userInfo["segment_id"] as? String,
+                let pinIdRaw = userInfo["pin_id"] as? String,
+                let pinId = UUID(uuidString: pinIdRaw)
+            else {
+                completionHandler(.noData)
+                return
+            }
+
+            // PRIVACY (spec §2.9): the ONLY location signal this device ever uploads is a
+            // coarse zone_id. Relevance is decided ENTIRELY on-device by comparing this
+            // payload's segment_id against the parked car's own segment_id — never uploaded
+            // anywhere. See ParkedCarSegmentReader's doc comment.
+            let parkedCarSegmentId = ParkedCarSegmentReader.currentSegmentId()
+
+            guard CommunityPushRelevance.isRelevant(
+                pinType: pinType,
+                pinSegmentId: pinSegmentId,
+                parkedCarSegmentId: parkedCarSegmentId
+            ) else {
+                completionHandler(.noData)
+                return
+            }
+
+            // Cross-path dedupe (spec §3 Phase 4b item 3): a pin already surfaced via the
+            // foreground confirm-prompt card must not ALSO fire a push notification, and
+            // vice versa — see CommunityPushDedupeStore's own doc comment.
+            let dedupe = CommunityPushDedupeStore()
+            guard !dedupe.hasSeen(pinId) else {
+                completionHandler(.noData)
+                return
+            }
+
+            guard let copy = CommunityPushRelevance.notificationCopy(for: pinType) else {
+                completionHandler(.noData)
+                return
+            }
+
+            let content = UNMutableNotificationContent()
+            content.title = copy.title
+            content.body = copy.body
+            content.sound = .default
+            content.userInfo = [
+                "wepark_action": "community_push",
+                "wepark_pin_id": pinId.uuidString,
+            ]
+            let request = UNNotificationRequest(
+                identifier: "wepark.community.\(pinId.uuidString)",
+                content: content,
+                trigger: nil
+            )
+            // PR #101 QA pass 1 fix (Finding #4, minor): mark-seen moves to AFTER a
+            // successful `add(request:)` — marking it seen unconditionally beforehand meant a
+            // rare `add` failure would permanently suppress this pin (no notification ever
+            // shown, no retry, and the WP5 foreground card would also never re-offer it via
+            // the shared dedupe store). Also (Finding #5, minor): `.newData` is now reported
+            // ONLY on a genuine successful enqueue — `.noData` on the (rare) error path is
+            // more accurate for `UIBackgroundFetchResult`'s informational purpose.
+            UNUserNotificationCenter.current().add(request) { error in
+                if let error {
+                    print("[AppDelegate] community push local notification failed: \(error)")
+                    completionHandler(.noData)
+                    return
+                }
+                dedupe.markSeen(pinId)
+                completionHandler(.newData)
+            }
         }
     }
 }

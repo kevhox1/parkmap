@@ -17,23 +17,24 @@
 //  file; CommunityPinService.swift itself is untouched, and none of the assertions below
 //  changed.
 //
-//  Test inventory (10 tests remain in this file after the move):
+//  Test inventory (11 tests remain in this file after the move; +1 PR #101 QA pass 1 fix):
 //
 //  Write path — request shapes (AC-W1, AC-W2, AC-W3, AC-V1):
 //    1.  testInsertCrowdPin_requestIncludesAuthorizationHeader      (AC-W1)
 //    2.  testInsertCrowdPin_payloadShape                            (AC-W2)
 //    3.  testInsertCrowdPin_notAuthenticated_throws                 (AC-W3)
 //    4.  testUpsertVote_requestIncludesPreferHeader                 (AC-V1)
-//    5.  testUpsertVote_notAuthenticated_throws                     (AC-W3 mirror)
+//    5.  testUpsertVote_requestIncludesOnConflictQueryParam         (PR #101 QA fix)
+//    6.  testUpsertVote_notAuthenticated_throws                     (AC-W3 mirror)
 //
 //  Reactions UI — own-pin guard logic (AC-V4):
-//    6.  testOwnPinGuard_sameId_isOwnPin_true
-//    7.  testOwnPinGuard_differentId_isOwnPin_false
-//    8.  testOwnPinGuard_nilAuthorId_isOwnPin_false
+//    7.  testOwnPinGuard_sameId_isOwnPin_true
+//    8.  testOwnPinGuard_differentId_isOwnPin_false
+//    9.  testOwnPinGuard_nilAuthorId_isOwnPin_false
 //
 //  Reactions UI — "Still there?" + "Gone" call discipline (AC-V2, AC-V3):
-//    9.  testStillHere_callsBothUpsertAndExtend                    (AC-V2)
-//   10.  testGone_callsOnlyUpsertDispute                           (AC-V3)
+//   10.  testStillHere_callsBothUpsertAndExtend                    (AC-V2)
+//   11.  testGone_callsOnlyUpsertDispute                           (AC-V3)
 //
 //  All tests use MockURLProtocol (from RouteServiceTests) or AuthMockURLProtocol.
 //  No live network calls, no live DB needed for these unit tests.
@@ -337,6 +338,36 @@ final class CommunityPinWritePathTests: XCTestCase {
             "AC-V1: upsertVote request must include a Prefer header")
         XCTAssertTrue(capturedPreferHeader?.contains("resolution=merge-duplicates") == true,
             "AC-V1: Prefer header must contain 'resolution=merge-duplicates', got: \(capturedPreferHeader ?? "nil")")
+    }
+
+    // MARK: PR #101 QA pass 1 fix: upsertVote must target votes' actual unique constraint
+
+    /// Wire-level test for the fix described in `upsertVote`'s own doc comment
+    /// (`Services/CommunityPinService.swift`): the request URL must carry
+    /// `on_conflict=pin_id,user_id` — the table's real `unique (pin_id, user_id)` constraint —
+    /// not rely on PostgREST's default (which targets the primary key, `id`, that this
+    /// payload never supplies and that therefore never actually conflicts). Without this, a
+    /// SECOND vote for the same `(pin_id, user_id)` pair (changing "Still there?" to "Gone" on
+    /// the same pin) would 23505 in production instead of upserting — this test asserts on the
+    /// actual outgoing `URLRequest`, not just the pure payload dictionary, closing the exact
+    /// coverage gap QA flagged (the `Prefer` header alone was already covered above; the query
+    /// parameter was not).
+    func testUpsertVote_requestIncludesOnConflictQueryParam() async throws {
+        let (pinService, _) = await makeAuthenticatedPair()
+        var capturedURL: URL? = nil
+
+        WriteMockURLProtocol.requestHandler = { request in
+            capturedURL = request.url
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
+                    Data())
+        }
+
+        try await pinService.upsertVote(pinId: UUID(), vote: .confirm)
+
+        let components = capturedURL.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
+        let onConflictValue = components?.queryItems?.first(where: { $0.name == "on_conflict" })?.value
+        XCTAssertEqual(onConflictValue, "pin_id,user_id",
+            "upsertVote's request must carry on_conflict=pin_id,user_id (votes' real unique constraint), got URL: \(capturedURL?.absoluteString ?? "nil")")
     }
 
     // MARK: AC-W3 mirror: upsertVote without auth throws

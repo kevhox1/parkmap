@@ -1621,6 +1621,22 @@ final class CommunityPinService {
     /// Uses PostgREST upsert semantics: `Prefer: resolution=merge-duplicates` on the
     /// unique constraint (pin_id, user_id). Changing vote = upsert over the existing row.
     ///
+    /// **PR #101 QA pass 1 fix (2026-09-03) — latent shipped bug closed in the same commit as
+    /// the analogous `PushRegistrationService.upsertToken` fix:** this call was missing the
+    /// `on_conflict` query parameter. `public.votes`' primary key is `id bigserial` (never sent
+    /// in this method's payload); the real dedupe target is the SEPARATE `unique (pin_id,
+    /// user_id)` constraint (`supabase/02-pins-schema.sql:164-172`). Per PostgREST's documented
+    /// default — omitted `on_conflict` → `ON CONFLICT (<primary key>)` — every vote-CHANGE for
+    /// an existing `(pin_id, user_id)` pair (e.g. tap "Still there?" then later "Gone" on the
+    /// SAME pin) hit an uncaught `23505` unique-violation on the real constraint instead of
+    /// upserting, because `ON CONFLICT (id)` never actually conflicts (id is server-generated,
+    /// never client-supplied). The FIRST vote for any given `(pin_id, user_id)` pair always
+    /// worked (nothing to conflict with yet), which is exactly why this shipped unnoticed —
+    /// this is flag-off-reachable: `enforcement_active`/`sweeper_passed`'s confirm/dispute UI
+    /// (`PinDetailSheet.ReactionsRow`) predates `AppConstants.communityEnabled` entirely (Tier 3
+    /// sub-PR #1). Now fixed by passing `on_conflict=pin_id,user_id` below, mirroring the exact
+    /// same fix applied to `PushRegistrationService.upsertToken` in the same PR.
+    ///
     /// The `votes_refresh_pin_counts` trigger fires server-side and updates
     /// `pins.confirm_count` / `pins.dispute_count`. A Realtime UPDATE event then
     /// propagates the new counts to all subscribers via `mergeRealtimeChange`.
@@ -1652,7 +1668,13 @@ final class CommunityPinService {
             jwt: jwt,
             body: body,
             // PostgREST upsert: on conflict (pin_id, user_id), update the vote column.
-            extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"]
+            extraHeaders: ["Prefer": "resolution=merge-duplicates,return=minimal"],
+            // Required — see this method's own doc comment above for the bug this closes.
+            // `pin_id,user_id` matches `votes`' actual `unique (pin_id, user_id)` constraint
+            // (a plain multi-column constraint, not a named/expression index — PostgREST
+            // resolves a bare comma-separated column list directly, no index-name lookup
+            // needed, unlike `ingest-film-permits/index.ts`'s expression-index case).
+            queryItems: [URLQueryItem(name: "on_conflict", value: "pin_id,user_id")]
         )
 
         let (_, response) = try await urlSession.data(for: request)
@@ -2361,14 +2383,32 @@ final class CommunityPinService {
     ///
     /// Attaches both `apikey` (Supabase gateway auth) and `Authorization: Bearer <jwt>`
     /// (RLS auth.uid() satisfaction). Both headers are required for authenticated writes.
+    ///
+    /// - Parameter queryItems: PR #101 QA pass 1 fix (Finding — "shipped upsertVote may share
+    ///   the on_conflict defect"): additive, defaults to `[]`, so every EXISTING call site's
+    ///   URL is byte-identical to before this parameter existed (`appendingPathComponent(path)`
+    ///   alone, no `URLComponents` round-trip). Only `upsertVote` (below) passes a non-empty
+    ///   value today — an `on_conflict` query param is required whenever a POST's `Prefer:
+    ///   resolution=merge-duplicates` upsert needs to target a constraint OTHER than the
+    ///   table's primary key (PostgREST's documented default is `ON CONFLICT (<primary key>)`
+    ///   when `on_conflict` is omitted — see `upsertVote`'s own doc comment for the concrete
+    ///   bug this caused).
     private func buildAuthenticatedRequest(
         path: String,
         method: String,
         jwt: String,
         body: Data?,
-        extraHeaders: [String: String]
+        extraHeaders: [String: String],
+        queryItems: [URLQueryItem] = []
     ) -> URLRequest {
-        let url = supabaseURL.appendingPathComponent(path)
+        var url = supabaseURL.appendingPathComponent(path)
+        if !queryItems.isEmpty,
+           var components = URLComponents(url: url, resolvingAgainstBaseURL: false) {
+            components.queryItems = queryItems
+            if let composedURL = components.url {
+                url = composedURL
+            }
+        }
         var request = URLRequest(url: url)
         request.httpMethod = method
         request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
