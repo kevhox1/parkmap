@@ -137,6 +137,75 @@ final class DraftSpotPinAnnotation: MKPointAnnotation {
     // No extra state needed — identity is by type.
 }
 
+// MARK: - Community 2.0 S13a (WP2): zone-boundary overlay
+
+/// Dashed zone-boundary overlay — one per seeded Community 2.0 zone (nolita/soho/les).
+/// `MKPolygon` (not `MKPolyline`) so `mapView(_:rendererFor:)` can apply both the dashed
+/// blue stroke AND `design/prototype.html:746`'s subtle fill in a single renderer. All
+/// three zones render with the IDENTICAL style — the user's home zone is called out
+/// separately via `ZoneLabelAnnotation`'s text label, not by giving its polygon a
+/// different stroke (WP2 spec: "render for the three seeded zones").
+final class ZoneBoundaryPolygon: MKPolygon {
+    var zoneId: String = ""
+}
+
+/// The "YOUR SQUARE · {ZONE}" text label (`design/screenshots/03-your-square.png`,
+/// `design/prototype.html:747`) shown near the top-left corner of the user's home zone's
+/// boundary box. `MKPointAnnotation` subclass so `mapView(_:viewFor:)` can dequeue the
+/// custom label-only `ZoneLabelAnnotationView` below — same "identify by type" pattern as
+/// `CarPinAnnotation`/`DestinationPinAnnotation`/`DraftSpotPinAnnotation` above.
+final class ZoneLabelAnnotation: MKPointAnnotation {
+    var labelText: String = ""
+}
+
+/// Label-only `MKAnnotationView` for `ZoneLabelAnnotation`: a small rounded translucent
+/// pill, this codebase's own chrome idiom (closer to `recenterButtonStack`'s
+/// `.regularMaterial`-family treatment than a raw UIKit label) rather than the prototype's
+/// literal paint-order text-stroke — UIKit has no direct equivalent of CSS
+/// `paint-order: stroke`, and a translucent pill background is the native way to keep small
+/// map-overlay text legible over varying basemap content underneath it.
+final class ZoneLabelAnnotationView: MKAnnotationView {
+    private let label = UILabel()
+
+    override init(annotation: MKAnnotation?, reuseIdentifier: String?) {
+        super.init(annotation: annotation, reuseIdentifier: reuseIdentifier)
+        setupLabel()
+    }
+
+    required init?(coder: NSCoder) {
+        super.init(coder: coder)
+        setupLabel()
+    }
+
+    private func setupLabel() {
+        label.font = .systemFont(ofSize: 10.5, weight: .heavy)
+        // ~#6FB4FF — the prototype's own "YOUR SQUARE" label color (design/prototype.html:747),
+        // a lighter tint of the boundary's #0A84FF systemBlue stroke for legibility as text.
+        label.textColor = UIColor(red: 0.435, green: 0.706, blue: 1.0, alpha: 1.0)
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        label.layer.cornerRadius = 4
+        label.layer.masksToBounds = true
+        label.textAlignment = .center
+        addSubview(label)
+        canShowCallout = false
+        isAccessibilityElement = true
+        accessibilityTraits = .staticText
+    }
+
+    /// Sizes and positions the label so its LEADING edge sits at the annotation's
+    /// coordinate (`centerOffset.x` shifted right by half the label's own width) — reads as
+    /// a map label anchored to a corner, not centered on a point the way a pin marker is.
+    func configure(text: String) {
+        label.text = "  \(text)  "
+        label.sizeToFit()
+        bounds = CGRect(origin: .zero, size: label.bounds.size)
+        label.frame = bounds
+        frame = CGRect(origin: frame.origin, size: label.bounds.size)
+        centerOffset = CGPoint(x: bounds.width / 2, y: 0)
+        accessibilityLabel = text
+    }
+}
+
 // MARK: - MapViewRepresentable
 
 struct MapViewRepresentable: UIViewRepresentable {
@@ -191,6 +260,19 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// `ContentView`'s `@State spotPlacementDraft` — same "optional coordinate in, mechanical
     /// add/remove sync in `updateUIView`" contract as `destinationCoordinate` above.
     var draftSpotCoordinate: CLLocationCoordinate2D? = nil
+
+    // MARK: Community 2.0 S13a (WP2): Zone-boundary overlay
+
+    /// Whether to render the dashed zone-boundary overlay for the three seeded Community
+    /// 2.0 zones (`CommunityZoneBounds`). Flag-gated at the `ContentView` call site
+    /// (`AppConstants.communityEnabled`) — this property itself carries no independent flag
+    /// check, mirroring `communityPins`'s own "caller decides what to pass" contract.
+    var showZoneBoundaries: Bool = false
+
+    /// The zone id whose boundary gets the "YOUR SQUARE · {ZONE}" label — see
+    /// `ContentView.communityHomeZoneId`'s own doc comment for the derivation. `nil` → no
+    /// label (the three outlines still render when `showZoneBoundaries == true`).
+    var homeZoneId: String? = nil
 
     // MARK: Community 1.0 / Tier 1: Community pin annotations
 
@@ -692,6 +774,54 @@ struct MapViewRepresentable: UIViewRepresentable {
             .filter { $0.count >= 2 }
     }
 
+    // MARK: - Community 2.0 S13a (WP2): Zone-boundary pure helpers
+
+    /// The three seeded Community 2.0 zone ids rendered on the map — same set
+    /// `CommunityZoneBounds`/`CrewFeedSection`'s zone chips use. Fixed and ordered (not
+    /// derived from a `Set`) so `syncZoneBoundaries`'s one-time build loop is deterministic.
+    static let communityZoneIds = ["nolita", "soho", "les"]
+
+    /// Rectangle corners (NW → NE → SE → SW) for a zone's bounding box. `MKPolygon` closes
+    /// the loop automatically, so 4 points are sufficient for a rectangle outline — pure,
+    /// no `MKMapView` dependency, directly unit-testable (same shape as
+    /// `blockSelectHighlightCoordinateGroups` above).
+    static func zoneBoundaryCoordinates(
+        box: (latMin: Double, latMax: Double, lngMin: Double, lngMax: Double)
+    ) -> [CLLocationCoordinate2D] {
+        [
+            CLLocationCoordinate2D(latitude: box.latMax, longitude: box.lngMin),
+            CLLocationCoordinate2D(latitude: box.latMax, longitude: box.lngMax),
+            CLLocationCoordinate2D(latitude: box.latMin, longitude: box.lngMax),
+            CLLocationCoordinate2D(latitude: box.latMin, longitude: box.lngMin),
+        ]
+    }
+
+    /// Placement for the "YOUR SQUARE · {ZONE}" label — inset from the box's top-left
+    /// corner (`design/prototype.html:747`'s `sql` text node sits just inside the rect's
+    /// top-left, `x:128,y:238` against the rect's own `x:116,y:216` origin) rather than
+    /// dead-center, so it reads like a map label anchored to the boundary rather than
+    /// floating in the middle of the block.
+    static func zoneLabelCoordinate(
+        box: (latMin: Double, latMax: Double, lngMin: Double, lngMax: Double)
+    ) -> CLLocationCoordinate2D {
+        let latInset = (box.latMax - box.latMin) * 0.04
+        let lngInset = (box.lngMax - box.lngMin) * 0.04
+        return CLLocationCoordinate2D(latitude: box.latMax - latInset, longitude: box.lngMin + lngInset)
+    }
+
+    /// Uppercase display name for a Community 2.0 zone id (`"nolita"` → `"NOLITA"`, matching
+    /// `design/prototype.html:747`'s literal "NOLITA"). `default:` uppercases the raw id
+    /// rather than crashing/omitting — a future 4th seeded zone still gets a readable label
+    /// without this file needing an update first.
+    static func zoneDisplayName(_ zoneId: String) -> String {
+        switch zoneId {
+        case "nolita": return "NOLITA"
+        case "soho":   return "SOHO"
+        case "les":    return "LES"
+        default:       return zoneId.uppercased()
+        }
+    }
+
     // MARK: - UIViewRepresentable
 
     func makeCoordinator() -> Coordinator {
@@ -850,6 +980,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         mapView.register(
             PinMarkerAnnotation.self,
             forAnnotationViewWithReuseIdentifier: PinMarkerAnnotation.reuseIdentifier
+        )
+
+        // Community 2.0 S13a (WP2): Register the ZoneLabelAnnotation view class.
+        mapView.register(
+            ZoneLabelAnnotationView.self,
+            forAnnotationViewWithReuseIdentifier: Coordinator.zoneLabelReuseID
         )
 
         // Set initial camera region.
@@ -1177,6 +1313,17 @@ struct MapViewRepresentable: UIViewRepresentable {
         // architectural contract as syncCommunityPinAnnotations above.
         context.coordinator.syncBlockSelectHighlight(blockSelectKeys, segments: segments, on: mapView)
 
+        // Community 2.0 S13a (WP2): sync the dashed zone-boundary overlay + home-zone
+        // label. Same mechanical add/remove-only contract as syncCommunityPinAnnotations /
+        // syncBlockSelectHighlight above — no camera mutation. The three boundary polygons
+        // are static (fixed `CommunityZoneBounds` boxes), added once; only the home-zone
+        // label re-syncs when `homeZoneId` changes.
+        context.coordinator.syncZoneBoundaries(
+            enabled: showZoneBoundaries,
+            homeZoneId: homeZoneId,
+            on: mapView
+        )
+
         // W8.5c: Heading-up rotation (AC-W85c.10, AC-W85c.11).
         // Port of setDrivingMapRotation (index.html:6584–6601) with R-1 dead-band guard.
         // Only update when heading changes > 2 degrees to prevent tight regionDidChange feedback loop.
@@ -1243,6 +1390,20 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// natively Equatable) so `syncBlockSelectHighlight` only rebuilds when the
         /// selection actually changed.
         private var lastAppliedBlockSelectKeys: Set<String> = []
+
+        // Community 2.0 S13a (WP2): zone-boundary overlay state.
+        static let zoneLabelReuseID = "ZoneLabelAnnotation"
+        /// The three (fixed, static) zone-boundary polygons currently on the map — empty
+        /// until `syncZoneBoundaries` first runs with `enabled == true`. Rebuilt from
+        /// scratch (all removed, then re-added) whenever the flag transitions off→on, so a
+        /// stale reference is never left dangling.
+        private var zoneBoundaryOverlays: [ZoneBoundaryPolygon] = []
+        /// The currently-rendered "YOUR SQUARE · {ZONE}" label annotation, or nil if no
+        /// home zone is currently known.
+        private var zoneLabelAnnotation: ZoneLabelAnnotation? = nil
+        /// The last `homeZoneId` applied — cheap equality gate so `syncZoneBoundaries` only
+        /// rebuilds the label when the home zone actually changed.
+        private var lastAppliedHomeZoneId: String? = nil
 
         // W5: Car pin annotation state.
         static let carPinReuseID = "CarPinAnnotation"
@@ -1666,6 +1827,59 @@ struct MapViewRepresentable: UIViewRepresentable {
             mapView.addOverlay(multi, level: .aboveRoads)
         }
 
+        // MARK: - Community 2.0 S13a (WP2): Zone-boundary overlay
+
+        /// Syncs the dashed zone-boundary overlay (one polygon per seeded zone) and the
+        /// "YOUR SQUARE · {ZONE}" home-zone label to match `enabled`/`homeZoneId`.
+        ///
+        /// Mechanical sync only — same architectural contract as
+        /// `syncCommunityPinAnnotations`/`syncBlockSelectHighlight` above: called from
+        /// `updateUIView`, no camera mutation (invariant I-1). The three boundary polygons
+        /// are STATIC (fixed `CommunityZoneBounds` boxes, never change shape) — they're
+        /// added once on the first `enabled == true` call and never rebuilt after that
+        /// (only removed wholesale if `enabled` later flips back to `false`). Only the
+        /// home-zone label re-syncs per call, gated by `lastAppliedHomeZoneId`'s cheap
+        /// equality check, mirroring `syncBlockSelectHighlight`'s own `Set<String>` gate.
+        func syncZoneBoundaries(enabled: Bool, homeZoneId: String?, on mapView: MKMapView) {
+            guard enabled else {
+                if !zoneBoundaryOverlays.isEmpty {
+                    zoneBoundaryOverlays.forEach { mapView.removeOverlay($0) }
+                    zoneBoundaryOverlays = []
+                }
+                if let existing = zoneLabelAnnotation {
+                    mapView.removeAnnotation(existing)
+                    zoneLabelAnnotation = nil
+                }
+                lastAppliedHomeZoneId = nil
+                return
+            }
+
+            if zoneBoundaryOverlays.isEmpty {
+                for zoneId in MapViewRepresentable.communityZoneIds {
+                    guard let box = CommunityZoneBounds.box(for: zoneId) else { continue }
+                    var coords = MapViewRepresentable.zoneBoundaryCoordinates(box: box)
+                    let polygon = ZoneBoundaryPolygon(coordinates: &coords, count: coords.count)
+                    polygon.zoneId = zoneId
+                    zoneBoundaryOverlays.append(polygon)
+                    mapView.addOverlay(polygon, level: .aboveRoads)
+                }
+            }
+
+            guard lastAppliedHomeZoneId != homeZoneId else { return }
+            lastAppliedHomeZoneId = homeZoneId
+
+            if let existing = zoneLabelAnnotation {
+                mapView.removeAnnotation(existing)
+                zoneLabelAnnotation = nil
+            }
+            guard let homeZoneId, let box = CommunityZoneBounds.box(for: homeZoneId) else { return }
+            let label = ZoneLabelAnnotation()
+            label.labelText = "YOUR SQUARE · \(MapViewRepresentable.zoneDisplayName(homeZoneId))"
+            label.coordinate = MapViewRepresentable.zoneLabelCoordinate(box: box)
+            zoneLabelAnnotation = label
+            mapView.addAnnotation(label)
+        }
+
         // MARK: - W8.5c: Heading-up rotation
 
         /// Applies the stabilized Drive Mode heading to the map camera.
@@ -1943,6 +2157,22 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return view
             }
 
+            // Community 2.0 S13a (WP2): "YOUR SQUARE · {ZONE}" text label — a custom
+            // `MKAnnotationView` with a `UILabel` subview (`ZoneLabelAnnotationView`, defined
+            // above), not an SF Symbol pin — this annotation carries no glyph, only text, so
+            // none of the `MKMarkerAnnotationView` dequeue branches above apply.
+            if let zoneLabel = annotation as? ZoneLabelAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: Coordinator.zoneLabelReuseID,
+                    for: zoneLabel
+                ) as? ZoneLabelAnnotationView ?? ZoneLabelAnnotationView(
+                    annotation: zoneLabel,
+                    reuseIdentifier: Coordinator.zoneLabelReuseID
+                )
+                view.configure(text: zoneLabel.labelText)
+                return view
+            }
+
             // Community 1.0 / Tier 1: community pin marker (filming + special_event).
             // Spec §7.2 — PinMarkerAnnotation, circular SF Symbol marker.
             if let pinAnnotation = annotation as? CommunityPinAnnotation {
@@ -2082,6 +2312,19 @@ struct MapViewRepresentable: UIViewRepresentable {
                 renderer.lineWidth = 5
                 renderer.lineCap = .round
                 renderer.lineJoin = .round
+                return renderer
+            }
+
+            // Community 2.0 S13a (WP2): dashed zone-boundary rect — `design/prototype.html:746`'s
+            // `#0A84FF` dashed stroke + subtle `rgba(10,132,255,0.045)` fill, both in one
+            // `MKPolygonRenderer` pass (`MKPolygon`, not `MKPolyline`, is why this overlay can
+            // carry a fill at all).
+            if let zonePoly = overlay as? ZoneBoundaryPolygon {
+                let renderer = MKPolygonRenderer(polygon: zonePoly)
+                renderer.strokeColor = UIColor.systemBlue
+                renderer.fillColor = UIColor.systemBlue.withAlphaComponent(0.045)
+                renderer.lineWidth = 1.6
+                renderer.lineDashPattern = [7, 6]
                 return renderer
             }
 

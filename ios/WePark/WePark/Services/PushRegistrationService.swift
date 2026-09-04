@@ -422,6 +422,28 @@ final class PushRegistrationService {
     /// establishes for `realtimeConnectTask`/`realtimeDisconnectTask`.
     var inFlightUpload: Task<Void, Never>?
 
+    /// S13a fold-in (open item #13, "foreground double-POST"): the `(token, environment,
+    /// zone)` triple currently being uploaded by an in-flight `attemptUpsert()` Task, or
+    /// `nil` if none is running.
+    ///
+    /// `lastUploaded` alone only guards AFTER a successful upload completes — it's written
+    /// exclusively in `upsertToken`'s success branch. Two `attemptUpsert()` calls issued
+    /// back-to-back on the SAME synchronous main-actor turn both read the still-stale
+    /// `lastUploaded` (the first `Task {}` hasn't actually run yet — creating a `Task`
+    /// doesn't preempt the calling synchronous code), so both would queue their own POST
+    /// for the identical candidate. This was exactly `ContentView.handleScenePhaseChange`'s
+    /// `.active` branch: `updatePushZoneFromParkedCarOrLocation()` (→ `updateZone` →
+    /// `attemptUpsert()`) immediately followed by `pushRegistrationService.handleAppForeground()`
+    /// (→ `attemptUpsert()` again), same token/zone/environment, same turn.
+    ///
+    /// This field closes that window: a second call for the identical candidate while the
+    /// first is still in flight is a no-op. Cleared once the in-flight `Task` finishes
+    /// (success OR failure) so the NEXT genuine change can upload. Fixed here (the service
+    /// layer) rather than by deleting `ContentView`'s `handleAppForeground()` call — this
+    /// makes the guarantee ("never two concurrent requests for one candidate") hold
+    /// regardless of caller behavior, not just for this one known call-site ordering.
+    private var inFlightCandidate: UploadKey?
+
     // MARK: - Init
 
     init(
@@ -548,8 +570,13 @@ final class PushRegistrationService {
         let environment = environmentProvider()
         let candidate = UploadKey(tokenHex: tokenHex, environment: environment, zoneId: zoneId)
         guard candidate != lastUploaded else { return }
+        // S13a fold-in fix: see `inFlightCandidate`'s own doc comment — this closes the
+        // foreground double-POST window `lastUploaded` alone can't catch.
+        guard candidate != inFlightCandidate else { return }
+        inFlightCandidate = candidate
         inFlightUpload = Task { [weak self] in
             await self?.upsertToken(candidate)
+            self?.inFlightCandidate = nil
         }
     }
 
