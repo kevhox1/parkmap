@@ -10,7 +10,7 @@
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never
 //  compiled or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
-//  Test inventory (19 tests):
+//  Test inventory (24 tests):
 //    MapKeyLegendView content — curb colors VERBATIM, live pins match the shipped marker set:
 //      1. testCurbColorEntries_count
 //      2. testCurbColorEntries_red_matchesPrototypeVerbatim
