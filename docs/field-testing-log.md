@@ -1184,3 +1184,15 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   near-cap pin showing a disabled "Still there?" with no explanation isn't confusing in the wild.
 
 ---
+
+## 2026-09-04 — Production defect found & fixed off-cycle: vote-CHANGING was silently broken since Tier 3 shipped
+
+Any user tapping "Still there?" then later "Gone" (or vice versa) on the same pin — the normal use
+of the shipped reaction UI, flag-off-reachable — hit a swallowed unique-constraint violation
+(23505) on the second vote: `CommunityPinService.upsertVote` sent no `on_conflict` target, so
+PostgREST defaulted to the `bigserial` PK instead of `votes`' real `unique(pin_id, user_id)`.
+The second vote silently no-op'd. Found by PR #101 QA pass 1's out-of-scope flag (pattern-matched
+from the same defect in the new token upsert), confirmed and fixed same-commit `46b06da6`
+(`on_conflict=pin_id,user_id` + `resolution=merge-duplicates`, wire-shape test added). Recorded per
+this log's convention so "has voting ever been broken in prod" has a citable answer: yes — vote
+*changing* (first votes always worked), from Tier 3 sub-PR #1 until build 20 S12.
