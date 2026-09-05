@@ -201,6 +201,20 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-09-05 — 🔔 THE BUZZ: S12 COMPLETE, VERIFIED ON REAL HARDWARE. All build-20 infrastructure done.
+
+PR #101 (`4e78b8f1`) merged after QA caught the token-upsert `on_conflict` gap and — same defect
+pattern — a **shipped production bug: vote-changing had been silently broken since Tier 3**
+(field-testing-log entry 2026-09-04). TestFlight build 20 (Option B: archive from
+`main@93cf963a` + local flag flip, discarded post-archive; `APNS_ENV=production`, stays). Kevin's
+verification: token row `production`/`nolita` → app closed → SQL sweeper insert on the parked
+segment → **push received on the phone**; different-segment control → **silence**. AC-P4.3 ✓ and
+the S8-deferred two-device check ✓. The two-day registration mystery had NO code bug — the phone
+was running an older community binary (UA `WePark/19` in the API logs was the tell); the ceremony
+gains a standing rule: **verify the INSTALLED TestFlight build number, not the upload**.
+Suite at **1183**. Remaining: S13a (PR #102, QA-cleared MERGE-AFTER-MAC-GATE, gate pending) →
+S13b (block detail + chat) → S13c (parity audit) → drive test → flag flip.
+
 ### 2026-09-03 — ✅ S11 COMPLETE: the push backend is LIVE IN PRODUCTION, verified 10/10.
 
 PRs #99 (`79e24ddf`) + #100 (`8b532b08`). Two production-grade bugs caught before they could bite:
