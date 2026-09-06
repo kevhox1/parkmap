@@ -314,6 +314,13 @@ enum ActiveSheet: Identifiable {
     /// state depends on. While the gate is `false`, this case is defined but genuinely
     /// unreachable — every dismiss resolves to `nil`, same as before this case existed.
     case browseNav
+    /// Community 2.0 S13a (WP1, build 20): the "?" map-key button's legend
+    /// (`Views/MapKeyLegendView.swift`, `design/screenshots/02-map-key.png`). No payload —
+    /// the view's content is static data. Presented at `.medium` detent, no explicit dismiss
+    /// closure of its own (same shape as `.settings`) — relies on the `.sheet(item:)`
+    /// `onDismiss` catch-all to restore `.browseNav`. See `MapKeyLegendView.swift`'s header
+    /// for why a sheet (not a floating popover) is the correct native mapping here.
+    case mapKeyLegend
 
     var id: String {
         switch self {
@@ -332,6 +339,7 @@ enum ActiveSheet: Identifiable {
             return "blockRestrictionReport-" + segments.map(\.id).joined(separator: ",")
         case .identityPrompt:              return "identityPrompt"
         case .browseNav:                  return "browseNav"
+        case .mapKeyLegend:               return "mapKeyLegend"
         }
     }
 }
@@ -1320,6 +1328,18 @@ struct ContentView: View {
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
 
+        case .mapKeyLegend:
+            // Community 2.0 S13a (WP1): the "?" map-key button's legend content — see
+            // `Views/MapKeyLegendView.swift`'s own header for the CURB COLORS verbatim-copy
+            // rule and the LIVE PINS shipped-marker-treatment rule. No dismiss closure of
+            // its own (same shape as `.settings` above) — the `.sheet(item:)` `onDismiss`
+            // catch-all restores `.browseNav`.
+            MapKeyLegendView()
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(20)
+
         case .pinDetail(let pin):
             // Community 1.0 / Tier 1: read-only community pin detail sheet.
             // Extracted into pinDetailSheetContent(_:) to reduce type-checker expression
@@ -1923,6 +1943,9 @@ struct ContentView: View {
             // positioning mechanism. See `confirmPromptOverlay`'s own doc comment for why this
             // is an overlay (not a modal `.sheet(item:)` through ActiveSheet).
             confirmPromptOverlay
+            // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.
+            // See `communityMapChromeOverlay`'s own doc comment.
+            communityMapChromeOverlay
         }
     }
 
@@ -1997,6 +2020,145 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
+    }
+
+    /// Community 2.0 S13a (WP1): pure decision for whether `communityMapChromeOverlay` (the
+    /// persistent Report pill + "?" map-key button) should render — extracted as a
+    /// `nonisolated static` function so both the flag state and every mode-exclusion gate
+    /// are directly unit-testable without a live `ContentView` instance, same pattern as
+    /// `mapMarkerTypes(communityEnabled:)`/`recenterButtonStackVisible`.
+    nonisolated static func communityMapChromeVisible(
+        communityEnabled: Bool,
+        driveModeActive: Bool,
+        blockSelectModeActive: Bool,
+        spotPlacementActive: Bool
+    ) -> Bool {
+        communityEnabled && !driveModeActive && !blockSelectModeActive && !spotPlacementActive
+    }
+
+    /// Community 2.0 S13a (WP1, build 20): the persistent Report pill (bottom-left) + "?"
+    /// map-key button (bottom-right) — `design/screenshots/01-home-collapsed.png`,
+    /// `design/prototype.html:76-83`, gap-inventory work package WP1.
+    ///
+    /// Flag-gated behind `AppConstants.communityEnabled` (spec's own "flag-off = zero new
+    /// chrome, byte-identical map" requirement) — with the flag off this property renders
+    /// nothing, same posture as every other Community 2.0 UI surface in this file
+    /// (`confirmPromptOverlay`, `spotPlacementHintOverlay`, etc.).
+    ///
+    /// Also hidden during Drive Mode (which has its OWN Report button, `driveActionRow`,
+    /// gated `driveModeActive`), block-select mode, and spot-placement mode — all three
+    /// already force-hide `activeSheet` and own their own floating chrome for their
+    /// duration; layering a second, competing Report/legend affordance over a focused task
+    /// would clutter it, the same reasoning `parkingGuideBannerOverlay`'s gate documents.
+    ///
+    /// Positioned as its own floating row — same "VStack + Spacer(), padded to
+    /// `browseSheetPeekHeight + 12`" convention `spotPlacementConfirmOverlay`/
+    /// `confirmPromptOverlay`/`parkingGuideBannerOverlay` above already use — rather than a
+    /// `bottomSafeAreaContent` row: this is BROWSE mode's persistent chrome, not a
+    /// Drive-Mode Bottom-Dock row, and (like those three floating cards) must float ABOVE
+    /// the modally-presented `.browseNav` sheet, which a `.safeAreaInset` row cannot do
+    /// (see `parkingGuideBannerOverlay`'s own doc comment for why `.safeAreaInset` content
+    /// renders BEHIND the sheet).
+    @ViewBuilder
+    private var communityMapChromeOverlay: some View {
+        if Self.communityMapChromeVisible(
+            communityEnabled: AppConstants.communityEnabled,
+            driveModeActive: driveModeActive,
+            blockSelectModeActive: blockSelectModeActive,
+            spotPlacementActive: spotPlacementActive
+        ) {
+            VStack(spacing: 0) {
+                Spacer()
+                HStack {
+                    reportPillButton
+                    Spacer()
+                    mapKeyButton
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, browseSheetPeekHeight + 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// The persistent Report pill (`design/prototype.html:76-79`: flag icon + "Report",
+    /// orange text) — ported to this codebase's own chrome idiom (`.regularMaterial`
+    /// capsule, matching `driveActionRow`'s existing Report button treatment) rather than
+    /// the prototype's raw `rgba(33,36,44,0.96)` pill fill (gap inventory WP1: "following
+    /// the codebase's own chrome idioms... not raw rgba").
+    ///
+    /// Tap → `handleReportPillTap()`. LONG-PRESS BEHAVIOR IS UNCHANGED — this pill is
+    /// additive, a second discoverable entry point alongside the existing resting
+    /// long-press `.confirmationDialog`'s "Report enforcement or sweeper" action, not a
+    /// replacement for it (gap-inventory Judgment Call #3: a driver who doesn't already
+    /// know the long-press gesture exists has no other way to discover reporting at all).
+    private var reportPillButton: some View {
+        Button {
+            handleReportPillTap()
+        } label: {
+            Label("Report", systemImage: "flag.fill")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                .frame(minHeight: 48)
+                .background(.regularMaterial, in: Capsule())
+                .foregroundStyle(Color.orange)
+        }
+        .accessibilityLabel("Report enforcement, sweeper, or an open spot")
+        .accessibilityHint("Opens the report form at your current location.")
+    }
+
+    /// The "?" map-key button (`design/prototype.html:81-83`) — presents
+    /// `MapKeyLegendView` via `ActiveSheet.mapKeyLegend`. Sized/styled to match
+    /// `recenterButtonStack`'s existing 44×44pt `.regularMaterial` circle family, not the
+    /// prototype's 40×40pt raw-rgba circle (same "codebase idiom, not pixel port" bias as
+    /// `reportPillButton` above).
+    private var mapKeyButton: some View {
+        Button {
+            activeSheet = .mapKeyLegend
+        } label: {
+            Text("?")
+                .font(.system(size: 17, weight: .bold))
+                .frame(width: 44, height: 44)
+                .background(.regularMaterial, in: Circle())
+                .foregroundStyle(.secondary)
+        }
+        .accessibilityLabel("Map key")
+        .accessibilityHint("Shows what the map colors and pins mean.")
+    }
+
+    /// Community 2.0 S13a (WP1): the Report pill's tap handler.
+    ///
+    /// Coordinate source, in priority order — documented per this file's existing
+    /// `coordinateSource` diagnostic convention (`ActiveSheet.reportPin`'s own doc comment,
+    /// QA STOP-AND-INSTRUMENT PR #95):
+    ///   1. Current GPS (`locationService.userLocation`) — reuses the EXACT same "current
+    ///      GPS" semantics `driveActionRow`'s in-drive Report button already established
+    ///      (`coordinateSource: "current GPS (in-drive)"`), just from browse mode instead
+    ///      of Drive Mode.
+    ///   2. Map center (`region.center`) — fallback when no GPS fix exists yet, using the
+    ///      resting long-press dialog's own "best-effort coordinate, off-segment reports
+    ///      degrade gracefully" semantics (OD-1) — `ReportSheet` already handles a
+    ///      candidate search that comes up empty.
+    private func handleReportPillTap() {
+        let hasGPSFix = locationService.userLocation != nil
+        let coord = locationService.userLocation ?? region.center
+        let reportSegment = findCandidateSegments(
+            lat: coord.latitude,
+            lng: coord.longitude,
+            radius: pinDropRadiusMeters,
+            max: 1
+        ).first?.segment
+        let confirmCandidates = reportSegment.map {
+            CandidateSegmentSearch.confirmStreetCandidates(for: $0, in: tileLoader.segments)
+        } ?? []
+        activeSheet = .reportPin(
+            coord: coord,
+            streetName: nil,
+            segment: reportSegment,
+            confirmCandidates: confirmCandidates,
+            coordinateSource: hasGPSFix ? "current GPS (map chrome)" : "map center (map chrome, no GPS fix)"
+        )
     }
 
     /// FT-12's "New to parking?" first-launch prompt, floating ABOVE the browse sheet's
@@ -2081,6 +2243,57 @@ struct ContentView: View {
         activeSheet = .pinDetail(pin)
     }
 
+    // MARK: - Community 2.0 S13a (WP2): zone-boundary home-zone derivation
+
+    /// The zone id whose boundary box gets the "YOUR SQUARE · {ZONE}" label
+    /// (`design/screenshots/03-your-square.png`) — the zone containing the user's parked
+    /// car if one exists, else the zone containing the CURRENT MAP VIEWPORT (`region.center`,
+    /// not raw GPS). `nil` when neither resolves to one of the three seeded zones
+    /// (`CommunityZoneBounds`) — no label renders in that case; all three zone outlines
+    /// still do (gated separately by `showZoneBoundaries` at the `mapRepresentable` call
+    /// site).
+    ///
+    /// "Parked car beats current signal" mirrors the priority
+    /// `updatePushZoneFromParkedCarOrLocation` already uses for the push zone_id (spec
+    /// §2.9) — kept consistent rather than inventing a second priority rule for the same
+    /// underlying question ("what zone is relevant to this user right now").
+    ///
+    /// Judgment call (flagged, not silently decided): the "current zone" fallback reads
+    /// the map VIEWPORT center rather than live GPS. The label is drawn at a fixed
+    /// geographic position inside a specific zone's box — anchoring it to whatever's
+    /// actually on screen (what the user is BROWSING) makes more sense than a GPS-derived
+    /// zone that might be scrolled off-screen entirely, which would label a box the user
+    /// can't even see. `updatePushZoneFromParkedCarOrLocation`'s GPS fallback answers a
+    /// different question ("where should push notifications route to"), not "what should
+    /// this on-map label say" — the two fallbacks solving different problems is why they
+    /// diverge here.
+    private var communityHomeZoneId: String? {
+        guard AppConstants.communityEnabled else { return nil }
+        return Self.resolveHomeZoneId(
+            parkedCarLat: parkPinService.parkedCar?.latitude,
+            parkedCarLng: parkPinService.parkedCar?.longitude,
+            viewportCenterLat: region.center.latitude,
+            viewportCenterLng: region.center.longitude
+        )
+    }
+
+    /// Pure priority derivation extracted from `communityHomeZoneId` so the "parked car
+    /// beats viewport" rule is directly unit-testable without a live `ContentView`
+    /// instance (`parkPinService`/`region` are both hard to construct headlessly) — same
+    /// "extract the decision, not just the data lookup" pattern as
+    /// `communityMapChromeVisible` above.
+    nonisolated static func resolveHomeZoneId(
+        parkedCarLat: Double?,
+        parkedCarLng: Double?,
+        viewportCenterLat: Double,
+        viewportCenterLng: Double
+    ) -> String? {
+        if let lat = parkedCarLat, let lng = parkedCarLng {
+            return CommunityZoneBounds.zoneId(forLat: lat, lng: lng)
+        }
+        return CommunityZoneBounds.zoneId(forLat: viewportCenterLat, lng: viewportCenterLng)
+    }
+
     // MARK: - Map representable construction
 
     /// The MapViewRepresentable with all bindings wired.
@@ -2115,6 +2328,15 @@ struct ContentView: View {
             // NB: argument order must match the memberwise init (declaration order) —
             // draftSpotCoordinate is declared directly after destinationCoordinate.
             draftSpotCoordinate: spotPlacementDraft?.coordinate,
+            // Community 2.0 S13a (WP2): dashed zone-boundary overlay — flag-gated
+            // explicitly here (not just inside `communityHomeZoneId`) so a flag-off build
+            // never even asks `MapViewRepresentable` to build the three boundary polygons
+            // (spec's own "flag-off = zero new chrome, byte-identical map" requirement).
+            // NB: argument order must match the memberwise init (declaration order) — both
+            // are declared directly after `draftSpotCoordinate`, same convention as its own
+            // comment above.
+            showZoneBoundaries: AppConstants.communityEnabled,
+            homeZoneId: communityHomeZoneId,
             communityPins: communityPins,
             onCommunityPinTapped: handleCommunityPinTapped(_:),
             segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation

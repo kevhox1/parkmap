@@ -39,10 +39,12 @@
 //      24. testMarkSeen_isIdempotent_noDuplicateEntries
 //      25. testMarkSeen_boundedTrim_dropsOldestBeyondMaxEntries
 //      26. testSeenIds_skipsMalformedEntries
-//    PushRegistrationServiceWireTests (2, PR #101 QA pass 1 fix — wire-level, not just the
-//    pure payload-dict test above; closes the exact gap that let Finding #1 ship):
+//    PushRegistrationServiceWireTests (3, PR #101 QA pass 1 fix — wire-level, not just the
+//    pure payload-dict test above; closes the exact gap that let Finding #1 ship; +1 in
+//    S13a fold-in for the foreground double-POST fix):
 //      27. testUpsertToken_requestIncludesOnConflictAndMergeDuplicatesPreferHeader
 //      28. testAttemptUpsert_sameCandidateTwice_secondCallSkipsNetwork
+//      29. testAttemptUpsert_backToBackCallsBeforeFirstCompletes_onlyOneNetworkRequest
 //
 //  No Calendar.current use. No hardcoded Mapbox/Supabase secrets.
 //
@@ -546,5 +548,35 @@ final class PushRegistrationServiceWireTests: XCTestCase {
         service.updateZone("les")
         await service.inFlightUpload?.value
         XCTAssertEqual(requestCount, 2, "a real zone change must trigger a new upsert")
+    }
+
+    /// S13a fold-in (open item #13, "foreground double-POST"): calling `updateZone` and
+    /// `handleAppForeground` back-to-back on the SAME synchronous turn — WITHOUT awaiting
+    /// the first call's `inFlightUpload` in between — must fire only ONE network request,
+    /// not two. This reproduces `ContentView.handleScenePhaseChange`'s `.active` branch
+    /// exactly: `updatePushZoneFromParkedCarOrLocation()` (→ `updateZone`) immediately
+    /// followed by `pushRegistrationService.handleAppForeground()`, same candidate, same
+    /// turn. `testAttemptUpsert_sameCandidateTwice_secondCallSkipsNetwork` above does NOT
+    /// cover this — it awaits `inFlightUpload` between calls, so `lastUploaded` is already
+    /// written by the time the second call runs. This test deliberately does NOT await in
+    /// between, reproducing the race `lastUploaded` alone cannot catch.
+    func testAttemptUpsert_backToBackCallsBeforeFirstCompletes_onlyOneNetworkRequest() async throws {
+        let service = await makeAuthenticatedService()
+
+        var requestCount = 0
+        PushTokenMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!,
+                    Data())
+        }
+
+        service.didReceiveDeviceToken(Data([0x0C, 0x0D]))
+        service.updateZone("nolita")
+        // Deliberately NOT awaiting inFlightUpload here — this is the race window the fix closes.
+        service.handleAppForeground()
+        await service.inFlightUpload?.value
+
+        XCTAssertEqual(requestCount, 1,
+            "a redundant handleAppForeground() call issued before the first attemptUpsert's Task has run must not fire a second network request for the identical candidate")
     }
 }
