@@ -533,10 +533,27 @@ struct CrewFeedSection: View {
     /// anonymous auth, but this lets a later invocation retry rather than permanently give up).
     @State private var hasAttemptedProfileLoad = false
 
+    // MARK: - S13b (build 20, hero-gap-inventory WP3 rider): zone-level compose bar
+
+    /// "Say something to the square…" (`design/prototype.html:151-157`) — the zone-wide
+    /// counterpart to `BlockDetailView`'s segment-anchored "Message this block…" compose bar.
+    /// Both call the SAME `ZoneMessageService.sendMessage`; this one passes `segmentId: nil`.
+    @State private var crewDraft: String = ""
+    @State private var isSendingCrewMessage = false
+    @State private var crewSendError: String? = nil
+
+    /// Holds the "resume posting" closure while the local identity sheet is up — mirrors
+    /// `ParkedCarDetailView.pendingIdentityAction` / `ReportSheet.pendingIdentityAction`
+    /// exactly (local nested sheet-on-sheet, no `ContentView` wiring — this view is itself
+    /// mounted inside `BrowseNavigationSheet`'s already-presented sheet, the same "presented
+    /// context" shape those two files' own header comments document as the safe precedent).
+    @State private var pendingIdentityAction: (() -> Void)? = nil
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             zoneChipsRow
             zoneHeaderRow
+            crewComposeRow
 
             Divider()
 
@@ -561,6 +578,110 @@ struct CrewFeedSection: View {
             await loadProfileIfNeeded()
             await loadLeaderboard(zone: selectedZone)
         }
+        // S13b: local nested identity-sheet interception — see `pendingIdentityAction`'s doc
+        // comment for why this is the correct precedent to mirror here.
+        .sheet(isPresented: identitySheetPresented) {
+            IdentitySheet(
+                onSave: { username, avatar in
+                    let action = pendingIdentityAction
+                    pendingIdentityAction = nil
+                    Task {
+                        do {
+                            try await pinService.upsertProfile(username: username, avatar: avatar)
+                        } catch {
+                            #if DEBUG
+                            print("[CrewFeedSection] upsertProfile failed: \(error)")
+                            #endif
+                        }
+                    }
+                    action?()
+                },
+                onSkip: {
+                    let action = pendingIdentityAction
+                    pendingIdentityAction = nil
+                    action?()
+                }
+            )
+            .presentationDetents([.medium])
+        }
+    }
+
+    // MARK: - S13b: zone-level compose bar
+
+    private var crewComposeRow: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                TextField("Say something to the square…", text: $crewDraft)
+                    .textFieldStyle(.plain)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(Color(white: 0.46).opacity(0.16), in: Capsule())
+                    .accessibilityLabel("Say something to the square")
+
+                Button {
+                    submitCrewMessage()
+                } label: {
+                    if isSendingCrewMessage {
+                        ProgressView()
+                    } else {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 14, weight: .bold))
+                    }
+                }
+                .frame(width: 34, height: 34)
+                .background(Color.accentColor, in: Circle())
+                .foregroundStyle(.white)
+                .disabled(isSendingCrewMessage || !ZoneMessageComposeLogic.canSend(draft: crewDraft))
+                .accessibilityLabel("Send")
+            }
+
+            if let crewSendError {
+                Text(crewSendError)
+                    .font(.caption2)
+                    .foregroundStyle(.red)
+            }
+        }
+    }
+
+    private var identitySheetPresented: Binding<Bool> {
+        Binding(
+            get: { pendingIdentityAction != nil },
+            set: { isPresented in
+                if !isPresented { pendingIdentityAction = nil }
+            }
+        )
+    }
+
+    /// Entry point for the compose bar's send button — routes through the SAME identity gate
+    /// every other contribution path uses (`ReportSheet.submitReport()`,
+    /// `ParkedCarDetailView.submitLeavingSoon()`, `BlockDetailView.submitChat()`).
+    private func submitCrewMessage() {
+        let trimmed = ZoneMessageComposeLogic.trimmedBody(crewDraft)
+        guard !trimmed.isEmpty else { return }
+        if CommunityIdentityInterception.shouldShowIdentitySheet(
+            communityEnabled: AppConstants.communityEnabled,
+            identitySheetShouldShow: CommunityIdentityGate().shouldShow()
+        ) {
+            pendingIdentityAction = { Task { await performSendCrewMessage(trimmed) } }
+            return
+        }
+        Task { await performSendCrewMessage(trimmed) }
+    }
+
+    private func performSendCrewMessage(_ body: String) async {
+        isSendingCrewMessage = true
+        crewSendError = nil
+        do {
+            // segmentId: nil — zone-wide message, the crew feed's own scope (as opposed to
+            // BlockDetailView's segment-anchored send, which passes a real Segment.id).
+            try await zoneMessageService.sendMessage(zoneId: selectedZone.id, segmentId: nil, body: body)
+            crewDraft = ""
+        } catch {
+            // Same wording as every other contribution-path network-failure string in this
+            // codebase (`ReportSheet.submitError`, `ParkedCarDetailView.leavingSoonError`).
+            crewSendError = "Couldn't send. Check your connection and try again."
+        }
+        isSendingCrewMessage = false
     }
 
     // MARK: - Zone selection
@@ -911,7 +1032,14 @@ private struct ChatFeedRow: View {
 /// precedent this mirrors) — no new write path. This is a separate, compact view rather than
 /// reusing `ReactionsRow` directly because that type is `private` to `PinDetailSheet.swift`
 /// and shaped for a full detail-sheet layout, not a dense feed row.
-private struct PinFeedRow: View {
+///
+/// `internal` (not `private`) as of S13b (build 20,
+/// docs/design/community-2.0-hero-gap-inventory.md WP3): `Views/BlockDetailView.swift`'s "LIVE
+/// ON THIS BLOCK" section reuses this exact type for its own segment-filtered pin list, so the
+/// two surfaces' confirm/dispute/claim affordances can never drift apart — both route through
+/// the same `reactionsRowKind(currentUserId:)`-driven `actionRow` below. Nothing about this
+/// type's behavior changed; only its access level widened.
+struct PinFeedRow: View {
     let pin: CommunityPin
     let authService: SupabaseAuthService
     let pinService: CommunityPinService
