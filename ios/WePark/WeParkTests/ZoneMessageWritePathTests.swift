@@ -362,10 +362,42 @@ final class SendMessageValidationTests: XCTestCase {
         XCTAssertFalse(networkCalled)
     }
 
+    /// Mac-gate fix (PR #103, 1220/1221 flake): `setSelectedZone(_:)` fires its OWN independent,
+    /// unawaited background `Task { fetchMessages(zoneId:) }` — a GET that shares this test's
+    /// mocked `urlSession` with the POST calls under test here. The ORIGINAL version of this
+    /// test installed one catch-all handler answering every request (GET or POST alike) with
+    /// the same fixture row, so that background GET could — nondeterministically, depending on
+    /// Task scheduling — land on `messages` via `fetchMessages`'s own "messages = decoded" line
+    /// BEFORE the final assertion ran, independent of `sendMessage`'s append gate entirely
+    /// (`fetchMessages` trusts the server's own `zone_id=eq.<x>` query filter to have already
+    /// scoped its response; a mock that ignores the query and always returns the same row
+    /// defeats that trust). `sendMessage`'s append guard itself
+    /// (`if selectedZoneId == zoneId, ... { messages.append(message) }`) was and is correct —
+    /// hand-traced against every step of this test, it never appends when
+    /// `selectedZoneId != zoneId`, no `segmentId` is involved in this gate at all, and
+    /// `selectedZoneId` is deliberately re-read live at publish time (after the await), not
+    /// captured before it — so a zone switch mid-flight is honored, exactly the intended
+    /// "does this message belong to the zone I'm currently viewing" semantics. This was a
+    /// TEST bug: an overly-permissive mock plus a missing await on `setSelectedZone`'s own
+    /// side effect, not an implementation bug. Fixed by (1) discriminating GET (read path)
+    /// from POST (write path) in the mock, so `setSelectedZone`'s background fetch can never
+    /// leak a row into `messages` through a channel unrelated to the gate under test, and
+    /// (2) applying the SAME `Task.sleep` convention `ZoneMessageServiceTests
+    /// .testSetSelectedZone_nonNil_triggersFetch` already established for letting that
+    /// background fetch settle deterministically before proceeding — removing the race
+    /// outright rather than relying on scheduling luck. Also extends the test with the
+    /// previously-untested POSITIVE case (zone matches → append DOES happen), now safe to
+    /// assert because nothing schedules a further background fetch after it.
     func testSendMessage_optimisticAppend_onlyWhenZoneMatchesSelectedZone() async throws {
         let service = await makeAuthenticatedZoneMessageService { request in
-            (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
-             zwpInsertedRowJSON(id: 42, zoneId: "soho"))
+            if request.httpMethod == "GET" {
+                // setSelectedZone's own background read must never populate `messages` here —
+                // this test is about sendMessage's append gate, not fetchMessages's own.
+                return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                        "[]".data(using: .utf8)!)
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
+                    zwpInsertedRowJSON(id: 42, zoneId: "soho"))
         }
 
         // No zone selected — sendMessage still succeeds, but must not populate `messages`
@@ -375,8 +407,18 @@ final class SendMessageValidationTests: XCTestCase {
 
         // Selecting a DIFFERENT zone than the message's own zone must still not append.
         service.setSelectedZone("les")
+        try? await Task.sleep(for: .milliseconds(200))
         _ = try await service.sendMessage(zoneId: "soho", body: "hi again")
         XCTAssertTrue(service.messages.isEmpty)
+
+        // Selecting the SAME zone as the message being sent — the append gate now fires.
+        service.setSelectedZone("soho")
+        try? await Task.sleep(for: .milliseconds(200))
+        let sent = try await service.sendMessage(zoneId: "soho", body: "matching zone")
+        XCTAssertTrue(
+            service.messages.contains(where: { $0.id == sent.id }),
+            "sendMessage must optimistically append when its zoneId matches the currently-selected zone"
+        )
     }
 }
 
