@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>WePark — S14 Manhattan Zone Map Preview (DRAFT)</title>
+<style>
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 24px;
+    background: #f5f5f2;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 20px; margin-bottom: 4px; }
+  .sub { color: #555; font-size: 13px; margin-bottom: 16px; max-width: 760px; }
+  .draft-banner {
+    background: #fff3cd; border: 1px solid #e0c34c; color: #6b5200;
+    padding: 8px 12px; border-radius: 6px; font-size: 13px; margin-bottom: 16px; max-width: 760px;
+  }
+  .layout { display: flex; gap: 24px; align-items: flex-start; flex-wrap: wrap; }
+  canvas { background: #ffffff; border: 1px solid #ccc; border-radius: 4px; }
+  #tooltip {
+    position: fixed; pointer-events: none; background: rgba(20,20,20,0.92); color: #fff;
+    padding: 6px 10px; border-radius: 4px; font-size: 12px; max-width: 280px; display: none; z-index: 10;
+  }
+  .legend { display: flex; gap: 16px; margin: 8px 0 16px; font-size: 13px; flex-wrap: wrap; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .swatch { width: 14px; height: 14px; border-radius: 3px; display: inline-block; border: 1px solid rgba(0,0,0,0.25); }
+  table { border-collapse: collapse; font-size: 12.5px; margin-top: 16px; width: 100%; max-width: 1000px; }
+  th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; }
+  th { background: #eee; position: sticky; top: 0; }
+  tr:nth-child(even) { background: #fafafa; }
+  .status-new { color: #1b5fa8; }
+  .status-reworked { color: #b8631a; font-weight: 600; }
+  .status-kept { color: #2b7a3d; font-weight: 600; }
+  code { background: #eee; padding: 1px 4px; border-radius: 3px; }
+</style>
+</head>
+<body>
+
+<h1>S14 — Manhattan Zone Map Preview (DRAFT, not applied)</h1>
+<div class="sub">
+  Every box below is drawn to scale on a plain lat/lng canvas — no map tiles, just the boxes
+  themselves plus street-grid reference lines, so sizes and coverage can be eyeballed without any
+  external dependency. Hover a box for its id and boundary description. Full writeup:
+  <code>docs/community-2.0-manhattan-zones.md</code>. Draft migration:
+  <code>supabase/06-manhattan-zones.sql</code> (NOT applied).
+</div>
+<div class="draft-banner">
+  ⚠️ DRAFT — proposal only, nothing here is live. Coordinates are engineering approximations, not
+  surveyed boundaries (see the doc's "coordinate confidence" section, especially north of 96th St).
+</div>
+
+<div class="legend">
+  <span><span class="swatch" style="background:#bcd9f5;border-color:#1b5fa8;"></span> new zone (38)</span>
+  <span><span class="swatch" style="background:#f5d6b0;border-color:#b8631a;"></span> reworked box, id kept (soho, les)</span>
+  <span><span class="swatch" style="background:#c3e6c9;border-color:#2b7a3d;"></span> kept unchanged (nolita)</span>
+  <span><span class="swatch" style="background:#e0d3f0;border-color:#7a4fb8;"></span> low-confidence / optional (central park)</span>
+</div>
+
+<div class="layout">
+  <canvas id="map"></canvas>
+  <div id="sidebar" style="font-size:13px; max-width: 320px;">
+    <strong>Reading the map</strong>
+    <p>North is up. Dashed horizontal lines are the named cross streets used as zone boundaries.
+    Dashed vertical lines are a few approximate avenue/river reference longitudes for orientation
+    only — real avenues drift east/west by latitude far more than a single vertical line can show
+    (see the doc's Broadway-diagonal compromise write-up).</p>
+    <p>Box outline color = status (see legend). Numbers inside boxes are the row index in the table
+    below, for boxes too small to fit a label.</p>
+  </div>
+</div>
+
+<table id="zoneTable">
+  <thead>
+    <tr><th>#</th><th>id</th><th>name</th><th>status</th><th>lat range</th><th>lng range</th><th>boundary</th></tr>
+  </thead>
+  <tbody></tbody>
+</table>
+
+<div id="tooltip"></div>
+
+<script>
+// Data mirrors docs/community-2.0-manhattan-zones.md's table exactly — keep both in sync if either changes.
+const ZONES = [
+  { id: 'battery-park-city', name: 'Battery Park City', latMin: 40.7040, latMax: 40.7175, lngMin: -74.0195, lngMax: -74.0135, human: 'Battery Pl to Chambers St, the Hudson River to West St', status: 'new' },
+  { id: 'financial-district', name: 'Financial District', latMin: 40.7015, latMax: 40.7115, lngMin: -74.0135, lngMax: -74.0035, human: 'The Battery to Fulton St, West St to the FDR Drive', status: 'new' },
+  { id: 'seaport-civic-center', name: 'Seaport / Civic Center', latMin: 40.7110, latMax: 40.7155, lngMin: -74.0075, lngMax: -73.9995, human: 'Fulton St to Chambers St, Broadway to the FDR Drive', status: 'new' },
+  { id: 'tribeca', name: 'TriBeCa', latMin: 40.7150, latMax: 40.7205, lngMin: -74.0145, lngMax: -74.0035, human: 'Chambers St to Canal St, the Hudson River to Broadway', status: 'new' },
+  { id: 'two-bridges', name: 'Two Bridges', latMin: 40.7095, latMax: 40.7145, lngMin: -73.9970, lngMax: -73.9885, human: 'Division/Canal St to the East River, the Brooklyn Bridge to the Manhattan Bridge', status: 'new' },
+  { id: 'chinatown', name: 'Chinatown', latMin: 40.7145, latMax: 40.7185, lngMin: -74.0010, lngMax: -73.9930, human: 'Worth St to Canal St, Centre St to the Bowery (incl. Little Italy)', status: 'new' },
+  { id: 'soho', name: 'SoHo', latMin: 40.7185, latMax: 40.7237, lngMin: -74.0050, lngMax: -73.9970, human: 'Canal St to Houston St, 6th Ave/Sullivan St to Lafayette/Centre St', status: 'reworked' },
+  { id: 'nolita', name: 'NoLita', latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930, human: 'Spring/Kenmare St to Houston St, Lafayette/Centre St to the Bowery', status: 'kept' },
+  { id: 'les', name: 'Lower East Side', latMin: 40.7185, latMax: 40.7237, lngMin: -73.9930, lngMax: -73.9770, human: 'Grand/Delancey St to Houston St, the Bowery to the East River', status: 'reworked' },
+  { id: 'noho', name: 'NoHo', latMin: 40.7237, latMax: 40.7359, lngMin: -73.9975, lngMax: -73.9930, human: 'Houston St to 14th St, Broadway to the Bowery/3rd Ave', status: 'new' },
+  { id: 'greenwich-village', name: 'Greenwich Village', latMin: 40.7237, latMax: 40.7359, lngMin: -74.0050, lngMax: -73.9975, human: 'Houston St to 14th St, 6th Ave to Broadway', status: 'new' },
+  { id: 'west-village', name: 'West Village', latMin: 40.7275, latMax: 40.7395, lngMin: -74.0090, lngMax: -74.0050, human: 'Houston St to 14th St, the Hudson River to 6th/7th Ave', status: 'new' },
+  { id: 'east-village', name: 'East Village', latMin: 40.7237, latMax: 40.7359, lngMin: -73.9930, lngMax: -73.9808, human: 'Houston St to 14th St, the Bowery/3rd Ave to Avenue A', status: 'new' },
+  { id: 'alphabet-city', name: 'Alphabet City', latMin: 40.7237, latMax: 40.7359, lngMin: -73.9808, lngMax: -73.9700, human: 'Houston St to 14th St, Avenue A to the East River', status: 'new' },
+  { id: 'chelsea', name: 'Chelsea', latMin: 40.7359, latMax: 40.7420, lngMin: -74.0090, lngMax: -73.9945, human: '14th St to 23rd St, the Hudson River to 6th Ave', status: 'new' },
+  { id: 'union-square-flatiron', name: 'Union Square / Flatiron', latMin: 40.7359, latMax: 40.7420, lngMin: -73.9945, lngMax: -73.9870, human: '14th St to 23rd St, 6th Ave to Park Ave South', status: 'new' },
+  { id: 'gramercy', name: 'Gramercy', latMin: 40.7359, latMax: 40.7420, lngMin: -73.9870, lngMax: -73.9800, human: '14th St to 23rd St, Park Ave South to 1st Ave', status: 'new' },
+  { id: 'stuyvesant-town', name: 'Stuyvesant Town', latMin: 40.7359, latMax: 40.7420, lngMin: -73.9800, lngMax: -73.9740, human: '14th St to 23rd St, 1st Ave to the East River', status: 'new' },
+  { id: 'hudson-yards', name: 'Hudson Yards', latMin: 40.7420, latMax: 40.7484, lngMin: -74.0090, lngMax: -73.9945, human: '23rd St to 34th St, the Hudson River to 8th Ave', status: 'new' },
+  { id: 'garment-district', name: 'Garment District', latMin: 40.7420, latMax: 40.7484, lngMin: -73.9945, lngMax: -73.9860, human: '23rd St to 34th St, 8th Ave to 5th Ave', status: 'new' },
+  { id: 'murray-hill', name: 'Murray Hill / Kips Bay', latMin: 40.7420, latMax: 40.7562, lngMin: -73.9860, lngMax: -73.9740, human: '23rd St to 42nd St, 5th Ave to the East River', status: 'new' },
+  { id: 'hells-kitchen', name: "Hell's Kitchen", latMin: 40.7484, latMax: 40.7685, lngMin: -74.0090, lngMax: -73.9910, human: '34th St to 59th St, the Hudson River to 8th Ave', status: 'new' },
+  { id: 'midtown-core', name: 'Midtown (Herald Square)', latMin: 40.7484, latMax: 40.7562, lngMin: -73.9910, lngMax: -73.9860, human: '34th St to 42nd St, 8th Ave to 5th Ave', status: 'new' },
+  { id: 'times-square-theater-district', name: 'Times Square / Theater District', latMin: 40.7562, latMax: 40.7685, lngMin: -73.9910, lngMax: -73.9787, human: '42nd St to 59th St, 8th Ave to 5th Ave (Rockefeller Center)', status: 'new' },
+  { id: 'midtown-east', name: 'Midtown East', latMin: 40.7562, latMax: 40.7685, lngMin: -73.9787, lngMax: -73.9700, human: '42nd St to 59th St, 5th Ave to Park/Lexington Ave', status: 'new' },
+  { id: 'turtle-bay-sutton', name: 'Turtle Bay / Sutton Place', latMin: 40.7562, latMax: 40.7685, lngMin: -73.9700, lngMax: -73.9600, human: '42nd St to 59th St, Park/Lexington Ave to the East River', status: 'new' },
+  { id: 'lincoln-square', name: 'Lincoln Square', latMin: 40.7685, latMax: 40.7790, lngMin: -73.9990, lngMax: -73.9820, human: '59th St to 72nd St, the Hudson River to Central Park West', status: 'new' },
+  { id: 'upper-west-side', name: 'Upper West Side', latMin: 40.7790, latMax: 40.7936, lngMin: -73.9990, lngMax: -73.9730, human: '72nd St to 96th St, the Hudson River to Central Park West', status: 'new' },
+  { id: 'manhattan-valley', name: 'Manhattan Valley', latMin: 40.7936, latMax: 40.8028, lngMin: -73.9880, lngMax: -73.9650, human: '96th St to 110th St, Riverside Dr/Broadway to Central Park West', status: 'new' },
+  { id: 'central-park', name: 'Central Park', latMin: 40.7685, latMax: 40.8028, lngMin: -73.9819, lngMax: -73.9493, human: '59th St to 110th St, Central Park West to 5th Ave — low confidence / optional', status: 'lowconf' },
+  { id: 'lenox-hill', name: 'Lenox Hill', latMin: 40.7685, latMax: 40.7813, lngMin: -73.9700, lngMax: -73.9500, human: '59th St to 77th St, 5th Ave to the East River', status: 'new' },
+  { id: 'yorkville-carnegie-hill', name: 'Yorkville / Carnegie Hill', latMin: 40.7813, latMax: 40.7936, lngMin: -73.9650, lngMax: -73.9420, human: '77th St to 96th St, 5th Ave to the East River', status: 'new' },
+  { id: 'morningside-heights', name: 'Morningside Heights', latMin: 40.8028, latMax: 40.8115, lngMin: -73.9720, lngMax: -73.9560, human: '110th St to 125th St, the Hudson River/Riverside Dr to Morningside Ave', status: 'new' },
+  { id: 'central-harlem', name: 'Central Harlem', latMin: 40.8028, latMax: 40.8268, lngMin: -73.9530, lngMax: -73.9420, human: "110th St to 145th St, St Nicholas/Morningside Ave to 5th Ave/Mount Morris Park", status: 'new' },
+  { id: 'east-harlem', name: 'East Harlem', latMin: 40.7936, latMax: 40.8268, lngMin: -73.9420, lngMax: -73.9280, human: '96th St to 145th St, 5th Ave to the East/Harlem River', status: 'new' },
+  { id: 'manhattanville', name: 'Manhattanville', latMin: 40.8115, latMax: 40.8180, lngMin: -73.9670, lngMax: -73.9530, human: '125th St to 135th St, the Hudson River to St Nicholas/Amsterdam Ave', status: 'new' },
+  { id: 'hamilton-heights', name: 'Hamilton Heights', latMin: 40.8180, latMax: 40.8339, lngMin: -73.9670, lngMax: -73.9530, human: '135th St to 155th St, the Hudson River/Riverside Dr to St Nicholas/Amsterdam Ave', status: 'new' },
+  { id: 'sugar-hill', name: 'Sugar Hill', latMin: 40.8268, latMax: 40.8339, lngMin: -73.9530, lngMax: -73.9280, human: '145th St to 155th St, Amsterdam/St Nicholas Ave to the Harlem River', status: 'new' },
+  { id: 'washington-heights', name: 'Washington Heights', latMin: 40.8339, latMax: 40.8514, lngMin: -73.9600, lngMax: -73.9280, human: '155th St to 181st St, the Hudson River to the Harlem River (full island width)', status: 'new' },
+  { id: 'hudson-heights', name: 'Hudson Heights / Fort George', latMin: 40.8514, latMax: 40.8585, lngMin: -73.9450, lngMax: -73.9280, human: '181st St to 190th St, the Hudson River to the Harlem River (full island width)', status: 'new' },
+  { id: 'inwood', name: 'Inwood', latMin: 40.8585, latMax: 40.8785, lngMin: -73.9370, lngMax: -73.9130, human: "190th St to the island's northern tip, the Hudson River to the Harlem River", status: 'new' },
+];
+
+// A curated (not exhaustive) set of named cross-street reference lines, latitude approximate —
+// see the doc's coordinate-confidence caveat for the same caveat that applies to the zone boxes.
+const STREET_LINES = [
+  ['Battery', 40.7015], ['Fulton St', 40.7115], ['Chambers St', 40.7150], ['Canal St', 40.7185],
+  ['Houston St', 40.7237], ['14th St', 40.7359], ['23rd St', 40.7420], ['34th St', 40.7484],
+  ['42nd St', 40.7562], ['59th St', 40.7685], ['72nd St', 40.7790], ['96th St', 40.7936],
+  ['110th St', 40.8028], ['125th St', 40.8115], ['145th St', 40.8268], ['155th St', 40.8339],
+  ['181st St', 40.8514], ['190th St', 40.8585], ['Inwood tip', 40.8785],
+];
+
+// A few approximate avenue/river longitudes for orientation only — real avenues drift with
+// latitude far more than a single vertical line can show (see doc's Broadway compromise).
+const AVENUE_LINES = [
+  ['~Hudson River (downtown)', -74.014], ['~6th Ave', -74.000], ['~Broadway (midtown)', -73.986],
+  ['~5th Ave', -73.972], ['~East River (downtown)', -73.978], ['~East River (uptown)', -73.93],
+];
+
+const STATUS_COLORS = {
+  new:      { fill: 'rgba(70,130,200,0.28)',  stroke: '#1b5fa8' },
+  reworked: { fill: 'rgba(220,150,60,0.32)',  stroke: '#b8631a' },
+  kept:     { fill: 'rgba(60,160,90,0.30)',   stroke: '#2b7a3d' },
+  lowconf:  { fill: 'rgba(150,100,200,0.22)', stroke: '#7a4fb8' },
+};
+
+// --- projection setup ---
+const latAllMin = Math.min(...ZONES.map(z => z.latMin));
+const latAllMax = Math.max(...ZONES.map(z => z.latMax));
+const lngAllMin = Math.min(...ZONES.map(z => z.lngMin));
+const lngAllMax = Math.max(...ZONES.map(z => z.lngMax));
+const cosMid = Math.cos((latAllMin + latAllMax) / 2 * Math.PI / 180);
+
+const marginLeft = 110, marginRight = 20, marginTop = 30, marginBottom = 20;
+const plotWidth = 640;
+const latRange = latAllMax - latAllMin;
+const effectiveLngRange = (lngAllMax - lngAllMin) * cosMid;
+const scale = plotWidth / effectiveLngRange; // px per "lat-equivalent" degree
+const plotHeight = latRange * scale;
+
+const canvas = document.getElementById('map');
+canvas.width = marginLeft + plotWidth + marginRight;
+canvas.height = marginTop + plotHeight + marginBottom;
+const ctx = canvas.getContext('2d');
+
+function xFor(lng) { return marginLeft + (lng - lngAllMin) * cosMid * scale; }
+function yFor(lat) { return marginTop + (latAllMax - lat) * scale; }
+
+// --- draw ---
+ctx.fillStyle = '#ffffff';
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+// avenue (vertical) reference lines
+ctx.save();
+ctx.strokeStyle = '#e2b8b8';
+ctx.setLineDash([3, 4]);
+ctx.font = '10px sans-serif';
+ctx.fillStyle = '#a45050';
+AVENUE_LINES.forEach(([label, lng]) => {
+  const x = xFor(lng);
+  if (x < marginLeft || x > marginLeft + plotWidth) return;
+  ctx.beginPath();
+  ctx.moveTo(x, marginTop);
+  ctx.lineTo(x, marginTop + plotHeight);
+  ctx.stroke();
+  ctx.save();
+  ctx.translate(x + 2, marginTop + 10);
+  ctx.rotate(Math.PI / 2 * 0); // keep horizontal, short label
+  ctx.fillText(label, 0, 0);
+  ctx.restore();
+});
+ctx.restore();
+
+// street (horizontal) reference lines
+ctx.save();
+ctx.strokeStyle = '#c9c9c9';
+ctx.setLineDash([3, 4]);
+ctx.font = '10px sans-serif';
+ctx.fillStyle = '#666';
+STREET_LINES.forEach(([label, lat]) => {
+  const y = yFor(lat);
+  ctx.beginPath();
+  ctx.moveTo(marginLeft, y);
+  ctx.lineTo(marginLeft + plotWidth, y);
+  ctx.stroke();
+  ctx.fillText(label, 2, y + 3);
+});
+ctx.restore();
+
+// zone boxes
+const rects = []; // for hit-testing
+ZONES.forEach((z, i) => {
+  const x0 = xFor(z.lngMin), x1 = xFor(z.lngMax);
+  const y0 = yFor(z.latMax), y1 = yFor(z.latMin); // latMax is north = smaller y
+  const w = x1 - x0, h = y1 - y0;
+  const colors = STATUS_COLORS[z.status] || STATUS_COLORS.new;
+  ctx.fillStyle = colors.fill;
+  ctx.fillRect(x0, y0, w, h);
+  ctx.strokeStyle = colors.stroke;
+  ctx.lineWidth = 1.5;
+  ctx.strokeRect(x0, y0, w, h);
+  rects.push({ x0, y0, x1, y1, zone: z, index: i + 1 });
+
+  // label: full name if it fits, else just the index number
+  ctx.fillStyle = '#111';
+  const label = z.name;
+  ctx.font = '10px sans-serif';
+  const textWidth = ctx.measureText(label).width;
+  ctx.textBaseline = 'middle';
+  if (textWidth + 6 < w && h > 14) {
+    ctx.fillText(label, x0 + 3, y0 + h / 2);
+  } else if (w > 12 && h > 12) {
+    ctx.font = 'bold 10px sans-serif';
+    ctx.fillText(String(i + 1), x0 + w / 2 - 4, y0 + h / 2);
+  }
+});
+
+// --- tooltip / hover ---
+const tooltip = document.getElementById('tooltip');
+canvas.addEventListener('mousemove', (e) => {
+  const r = canvas.getBoundingClientRect();
+  const mx = e.clientX - r.left, my = e.clientY - r.top;
+  const hit = rects.find(rc => mx >= rc.x0 && mx <= rc.x1 && my >= rc.y0 && my <= rc.y1);
+  if (hit) {
+    tooltip.style.display = 'block';
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY + 12) + 'px';
+    tooltip.innerHTML = `<strong>#${hit.index} ${hit.zone.name}</strong> <code>${hit.zone.id}</code><br>${hit.zone.human}<br><em>${hit.zone.status}</em>`;
+  } else {
+    tooltip.style.display = 'none';
+  }
+});
+canvas.addEventListener('mouseleave', () => { tooltip.style.display = 'none'; });
+
+// --- table ---
+const tbody = document.querySelector('#zoneTable tbody');
+ZONES.forEach((z, i) => {
+  const tr = document.createElement('tr');
+  const statusClass = z.status === 'lowconf' ? 'status-new' : `status-${z.status}`;
+  tr.innerHTML = `<td>${i + 1}</td><td><code>${z.id}</code></td><td>${z.name}</td>` +
+    `<td class="${statusClass}">${z.status}</td>` +
+    `<td>${z.latMin.toFixed(4)}–${z.latMax.toFixed(4)}</td>` +
+    `<td>${z.lngMin.toFixed(4)}–${z.lngMax.toFixed(4)}</td>` +
+    `<td>${z.human}</td>`;
+  tbody.appendChild(tr);
+});
+</script>
+
+</body>
+</html>
