@@ -157,8 +157,9 @@ struct BlockDetailView: View {
                     safetyLabelView
 
                     // 3c. S13b: swept-status badge (same decision logic as ParkedCarDetailView).
+                    // S13c Fix #10: shared `SweptBadgeView` (was a per-file duplicate).
                     if AppConstants.communityEnabled, let sweptPin = liveSweeperPin {
-                        sweptBadgeView(for: sweptPin)
+                        SweptBadgeView(pin: sweptPin, now: pinService?.nowProvider() ?? now)
                     }
 
                     // 3b. FT-15/TF2-15 (§9.2): temporary restriction banner.
@@ -185,6 +186,15 @@ struct BlockDetailView: View {
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
             }
+        }
+        // S13c Fix #7 (`docs/design/community-2.0-final-parity-audit.md` §2 item 7 /
+        // open-items #14): live-append a neighbor's message to this open block's thread
+        // without requiring a close/reopen — reuses `ZoneMessageService`'s ALREADY-subscribed
+        // Realtime channel (`lastRealtimeInsertGeneration`, a counter proxy since
+        // `ZoneMessage` isn't `Equatable`), filtered locally to THIS segment. Zero new
+        // Realtime subscriptions, zero new SQL.
+        .onChange(of: zoneMessageService?.lastRealtimeInsertGeneration) { _, _ in
+            handleRealtimeMessageInsert()
         }
         // S13b: local nested identity-sheet interception — see `pendingIdentityAction`'s doc
         // comment for why this (not `ActiveSheet.identityPrompt`) is the correct precedent.
@@ -284,28 +294,6 @@ struct BlockDetailView: View {
                 RuleRow(rule: rule)
             }
         }
-    }
-
-    // MARK: - S13b: Swept badge
-
-    /// "🧹 Swept X ago · N confirms" — identical copy/decision-logic to
-    /// `ParkedCarDetailView.sweptBadgeView(for:)` (S10). Only the color literal + `Text`
-    /// composition are duplicated here (see this file's header note on why that duplication,
-    /// not a shared type, is this codebase's established convention).
-    private static let sweptBadgeColor = Color(red: 48.0 / 255, green: 209.0 / 255, blue: 88.0 / 255)
-
-    private func sweptBadgeView(for pin: CommunityPin) -> some View {
-        let age = PinMarkerAnnotation.ageString(since: pin.createdAt, now: pinService?.nowProvider() ?? now)
-        let confirms = ParkedCarDetailLogic.confirmCountLabel(pin.confirmCount)
-        return Text("🧹 Swept \(age) \u{00B7} \(confirms)")
-            .font(.caption.weight(.bold))
-            .foregroundStyle(Self.sweptBadgeColor)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 5)
-            .background(Self.sweptBadgeColor.opacity(0.13), in: Capsule())
-            .overlay(Capsule().strokeBorder(Self.sweptBadgeColor.opacity(0.35), lineWidth: 0.5))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Sweeper reported \(age), confirmed by \(pin.confirmCount) neighbors")
     }
 
     // MARK: - S13b: "LIVE ON THIS BLOCK"
@@ -418,6 +406,21 @@ struct BlockDetailView: View {
         isLoadingChat = false
     }
 
+    /// S13c Fix #7: appends a neighbor's live-arrived message to this open block's thread —
+    /// see `ZoneMessageService.lastRealtimeInsert`'s doc comment for the broadcast mechanism.
+    /// The actual append-or-not DECISION is the pure, testable
+    /// `BlockDetailLogic.shouldAppendRealtimeMessage`; this function only reads the service's
+    /// latest broadcast and applies it.
+    private func handleRealtimeMessageInsert() {
+        guard let message = zoneMessageService?.lastRealtimeInsert else { return }
+        guard BlockDetailLogic.shouldAppendRealtimeMessage(
+            message,
+            segmentId: segment.id,
+            existingIds: Set(chatMessages.map(\.id))
+        ) else { return }
+        chatMessages.append(message)
+    }
+
     private var identitySheetPresented: Binding<Bool> {
         Binding(
             get: { pendingIdentityAction != nil },
@@ -522,6 +525,39 @@ struct BlockDetailView: View {
         case "W": return "West side"
         default:  return "\(code) side"
         }
+    }
+}
+
+// MARK: - SweptBadgeView (S13c Fix #10)
+
+/// "🧹 Swept X ago · N confirms" — shared between `BlockDetailView` and
+/// `ParkedCarDetailView`. S10/S13b each independently declared a near-identical PRIVATE
+/// badge view (differing only in a `\u{00B7}` vs. `·` literal, same rendered output) —
+/// `docs/design/community-2.0-final-parity-audit.md` §2 item 10 extracts the single shared
+/// definition, mirroring this file's own `RuleRow`/`TemporaryRestrictionBanner` precedent for
+/// content shared across exactly these two views (internal, not private, so both view files
+/// in this module can use it).
+struct SweptBadgeView: View {
+    let pin: CommunityPin
+
+    /// Reference time for the age string — callers pass `pinService.nowProvider()` when
+    /// available, same injectable-time convention as `TemporaryRestrictionBanner.now`.
+    var now: Date = .nowET
+
+    private static let color = Color(red: 48.0 / 255, green: 209.0 / 255, blue: 88.0 / 255)
+
+    var body: some View {
+        let age = PinMarkerAnnotation.ageString(since: pin.createdAt, now: now)
+        let confirms = ParkedCarDetailLogic.confirmCountLabel(pin.confirmCount)
+        Text("🧹 Swept \(age) \u{00B7} \(confirms)")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(Self.color)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .background(Self.color.opacity(0.13), in: Capsule())
+            .overlay(Capsule().strokeBorder(Self.color.opacity(0.35), lineWidth: 0.5))
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Sweeper reported \(age), confirmed by \(pin.confirmCount) neighbors")
     }
 }
 
@@ -719,7 +755,7 @@ struct RuleRow: View {
     }
 }
 
-// MARK: - BlockChatRow (S13b)
+// MARK: - BlockChatRow (S13b, density fixed S13c)
 
 /// One "BLOCK CHATTER" row: author, relative age, and message text
 /// (`design/prototype.html:262-270`'s shape). A separate, compact view rather than reusing
@@ -728,6 +764,13 @@ struct RuleRow: View {
 /// column), not this section's simpler author/age/text row (matches
 /// `CrewFeedSection.PinFeedRow`'s own doc comment on why a shaped-differently row is a
 /// separate type, not a shared one, in this codebase).
+///
+/// S13c Fix #6 (`docs/design/community-2.0-final-parity-audit.md` §2 item 6 / open-items
+/// #14): row padding/spacing brought up to `ChatFeedRow`'s density (11pt vertical row
+/// padding, 2pt internal spacing — was 4pt/1pt) — two rows for the same underlying idea ("one
+/// chat message") had noticeably different densities for no stated reason, and Kevin's own
+/// S13b-gate finding was that the thread reads cramped (needing to scroll to see even two
+/// short messages). Doesn't need `ChatFeedRow`'s 36×36 icon badge, just the breathing room.
 private struct BlockChatRow: View {
     let message: ZoneMessage
 
@@ -738,7 +781,7 @@ private struct BlockChatRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 20, height: 20)
 
-            VStack(alignment: .leading, spacing: 1) {
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(message.authorUsername ?? "Neighbor")
                         .font(.caption.weight(.bold))
@@ -752,8 +795,10 @@ private struct BlockChatRow: View {
                     .foregroundStyle(.primary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+
+            Spacer(minLength: 0)
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 11)
         .accessibilityElement(children: .combine)
     }
 }
@@ -819,6 +864,19 @@ enum BlockDetailLogic {
     /// mid-load.
     nonisolated static func showsEmptyChatterState(messages: [ZoneMessage], isLoading: Bool) -> Bool {
         messages.isEmpty && !isLoading
+    }
+
+    /// S13c Fix #7: whether an inbound Realtime `zone_messages` INSERT
+    /// (`ZoneMessageService.lastRealtimeInsert`) should be appended to THIS block's open chat
+    /// thread — segment match + not-already-present (de-dupes against the optimistic
+    /// self-send append `BlockDetailView.performSendChat` already does, and against a
+    /// redundant re-delivery of the same event).
+    nonisolated static func shouldAppendRealtimeMessage(
+        _ message: ZoneMessage,
+        segmentId: String,
+        existingIds: Set<Int>
+    ) -> Bool {
+        message.segmentId == segmentId && !existingIds.contains(message.id)
     }
 }
 

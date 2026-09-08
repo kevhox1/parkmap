@@ -181,8 +181,22 @@ struct ReportSheet: View {
     /// FT-11: The chosen or auto-derived travel direction.
     ///
     /// Set by the `HeadingTowardPicker` (user tap) or auto-derived for one-way sweeper
-    /// segments. Nil when the picker is hidden (off-segment, OD-1) or not yet chosen.
+    /// segments. Nil when the picker is hidden (off-segment, OD-1), not yet chosen, OR the
+    /// user explicitly tapped "Not sure" (S13c Fix #3) — `headingNotSure` below
+    /// distinguishes the latter from "not yet chosen" so the "Not sure" chip only shows its
+    /// selected state after an explicit tap, not by default.
     @State private var selectedHeadingToward: HeadingToward? = nil
+
+    /// S13c Fix #3 (`docs/design/community-2.0-final-parity-audit.md` §2 item 3): true only
+    /// after the user explicitly taps the heading picker's "Not sure" chip. Both this and
+    /// `selectedHeadingToward` are nil by default (picker untouched); `selectedHeadingToward
+    /// == nil` alone can't distinguish "untouched" from "explicitly doesn't know," which
+    /// would otherwise make "Not sure" look pre-selected before the user has touched
+    /// anything — mirrors `subTagPickerRow`'s existing nil-tolerant "Not sure" pattern, with
+    /// this one extra bit because that picker's two OTHER options don't default-select
+    /// either (there's no untouched-vs-explicit ambiguity there since neither reads "selected"
+    /// until tapped, but "Not sure" reads as "== nil", which IS the untouched value here).
+    @State private var headingNotSure: Bool = false
 
     /// Community 2.0 Phase 2a (build 20 S6): the user's pick from the "confirm the street"
     /// candidate list. Seeded from `segment` at init (see the custom `init` below) so that
@@ -320,6 +334,11 @@ struct ReportSheet: View {
 
                 Divider()
 
+                // S13c Fix #8: `ScrollViewReader` wraps the existing `ScrollView` so
+                // `confirmStreetSection` can be scrolled into view the first time it mounts
+                // (see the `.onChange(of: selectedType)` handler below) — the section's own
+                // content/layout is otherwise completely unchanged.
+                ScrollViewReader { scrollProxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 8) {
 
@@ -373,6 +392,12 @@ struct ReportSheet: View {
                             }
                             if selectedType == .sweeper && shouldShowDirectionPicker {
                                 headingTowardPickerRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
+                            // S13c Fix #3 (second half): one-way auto-derivation, made visible.
+                            if selectedType == .sweeper && !shouldShowDirectionPicker {
+                                inferredHeadingRow
                                     .padding(.leading, 20)
                                     .padding(.bottom, 4)
                             }
@@ -474,10 +499,29 @@ struct ReportSheet: View {
                                     .padding(.leading, 20)
                                     .padding(.bottom, 4)
                             }
+                            // S13c Fix #3 (second half): one-way auto-derivation, made visible.
+                            if selectedType == .sweeper && !shouldShowDirectionPicker {
+                                inferredHeadingRow
+                                    .padding(.leading, 20)
+                                    .padding(.bottom, 4)
+                            }
                         }
 
                     }
                     .padding(.vertical, 12)
+                }
+                // S13c Fix #8: scroll `confirmStreetSection` into view the first time it
+                // mounts after a type selection makes `showsConfirmStreetStep` true. Watches
+                // `selectedType` (the section's own gate also depends on `confirmCandidates`,
+                // which is fixed at init and never changes mid-sheet) — a no-op whenever
+                // `showsConfirmStreetStep` is false (including always, flag-off — zero
+                // behavior change there).
+                .onChange(of: selectedType) { _, newType in
+                    guard newType != nil, showsConfirmStreetStep else { return }
+                    withAnimation {
+                        scrollProxy.scrollTo(Self.confirmStreetSectionID, anchor: .top)
+                    }
+                }
                 }
 
                 Divider()
@@ -611,6 +655,7 @@ struct ReportSheet: View {
                 if resolvedType != .sweeper { sweeperDirection = .passed }
                 // FT-11: Reset direction picker selection when the top-level type changes.
                 selectedHeadingToward = nil
+                headingNotSure = false
             case .streetClosureHandoff:
                 // Unreachable: this row always taps `.type(type)`, which `destination(forTapping:)`
                 // always resolves to `.selectType` (tested — `testDestination_typeTile_preservesTappedType_neverTheOtherOne`
@@ -655,8 +700,14 @@ struct ReportSheet: View {
 
     // MARK: - Sub-tag picker row (Enforcement sub-types, per AC-R14)
 
-    /// Horizontal pill row. Order: Cleaning truck first (per OQ-R2 / community-1.0-direction §6).
-    /// "Not sure" maps to nil (no sub_tag). Default is no selection (nil).
+    /// Horizontal pill row. S13c Fix #4
+    /// (`docs/design/community-2.0-final-parity-audit.md` §2 item 4 / open-items #12③):
+    /// "Cleaning truck" REMOVED from this UI now that "Sweeper passed" is its own
+    /// equally-discoverable top-level report-grid tile — a user who sees a literal street-
+    /// sweeper truck no longer has two plausible places to report it. `EnforcementActiveMeta
+    /// .SubTag.cleaningTruck` itself is UNCHANGED (kept decode-compatible for any
+    /// already-written `sub_tag: "cleaning_truck"` rows) — only this picker no longer offers
+    /// it. "Not sure" maps to nil (no sub_tag). Default is no selection (nil).
     @ViewBuilder
     private var subTagPickerRow: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -667,7 +718,6 @@ struct ReportSheet: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    subTagPill(label: "Cleaning truck",   tag: .cleaningTruck)
                     subTagPill(label: "Parking agent",    tag: .parkingAgent)
                     subTagPill(label: "Tow truck",        tag: .towTruck)
                     // "Not sure" maps to nil — explicitly tapping deselects
@@ -743,10 +793,11 @@ struct ReportSheet: View {
         }
     }
 
-    // MARK: - FT-11: Heading-toward direction picker row
+    // MARK: - FT-11 / S13c Fix #3+#9: Heading-toward direction picker row
 
-    /// Two-arrow picker letting the user specify which direction the agent/sweeper
-    /// is travelling. Each arrow button is:
+    /// Three-chip picker letting the user specify which direction the agent/sweeper is
+    /// travelling — two directional arrows plus an explicit "Not sure" escape hatch (S13c
+    /// Fix #3). Each arrow button is:
     ///   - Labeled with the cross-street name it points toward (fromStreet / to).
     ///   - Oriented to the actual block bearing using a rotated SF Symbol chevron.
     ///   - Visually selected (filled background) when tapped.
@@ -755,9 +806,17 @@ struct ReportSheet: View {
     ///   - `enforcement_active` when segment is non-nil (always).
     ///   - `sweeper_passed` when segment is non-nil and NOT one-way.
     ///
-    /// Hidden entirely when the segment is nil (OD-1).
+    /// Hidden entirely when the segment is nil (OD-1) — see `inferredHeadingRow` for the
+    /// one-way-sweeper case, where this picker is also hidden but the auto-derivation is now
+    /// shown as a read-only label rather than silently omitted (S13c Fix #3's second half).
     ///
-    /// Accessibility: each button has an accessibilityLabel equal to the cross-street name.
+    /// Accessibility: each button has an accessibilityLabel equal to the cross-street name
+    /// (or, for "Not sure," a description of what it means).
+    ///
+    /// S13c Fix #9: section label restyled to the uppercase treatment
+    /// (`design/prototype.html:403`'s "HEADING TOWARD"), matching the "CONFIRM THE STREET"
+    /// label immediately above it in the same sheet — was "Which way?" sentence-case, which
+    /// read as two different UI eras once both labels started appearing together (S6).
     ///
     /// Community 2.0 Phase 2a: reads `effectiveSegment` (may be a "confirm the street" pick)
     /// instead of the raw `segment` input — the picker's own rendering/bearing logic below is
@@ -770,9 +829,10 @@ struct ReportSheet: View {
             let bearingToTo   = SegmentBearing.bearing(segment: seg, toward: .toward_to)
 
             VStack(alignment: .leading, spacing: 6) {
-                Text("Which way?")
+                Text("Heading toward")
                     .font(.footnote.weight(.medium))
                     .foregroundStyle(.secondary)
+                    .textCase(.uppercase)
                     .padding(.leading, 4)
 
                 HStack(spacing: 8) {
@@ -788,6 +848,10 @@ struct ReportSheet: View {
                         toward: .toward_to,
                         bearing: bearingToTo
                     )
+                    // S13c Fix #3: explicit "Not sure" escape hatch — maps to
+                    // heading_toward: nil, mirroring subTagPickerRow's existing nil-tolerant
+                    // "Not sure" payload path.
+                    notSureHeadingButton
                 }
                 .padding(.horizontal, 4)
             }
@@ -805,6 +869,7 @@ struct ReportSheet: View {
 
         Button {
             selectedHeadingToward = toward
+            headingNotSure = false
         } label: {
             HStack(spacing: 6) {
                 // Chevron rotated to the real block bearing.
@@ -837,12 +902,81 @@ struct ReportSheet: View {
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
+    /// S13c Fix #3: the heading picker's third chip. Selected state is driven by
+    /// `headingNotSure` (NOT `selectedHeadingToward == nil`) — see that property's own doc
+    /// comment for why `selectedHeadingToward`'s default nil value would otherwise make this
+    /// chip look pre-selected before the user has touched anything.
+    @ViewBuilder
+    private var notSureHeadingButton: some View {
+        let tint: Color = selectedType == .enforcementActive ? .blue : .orange
+        Button {
+            selectedHeadingToward = nil
+            headingNotSure = true
+        } label: {
+            Text("Not sure")
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+                .foregroundStyle(headingNotSure ? tint : .secondary)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(headingNotSure ? tint.opacity(0.15) : Color(.systemGray6))
+                .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Not sure — heading direction unknown")
+        .accessibilityAddTraits(headingNotSure ? [.isSelected] : [])
+    }
+
+    // MARK: - S13c Fix #3 (second half): visible one-way auto-derivation
+
+    /// A read-only "Heading toward {street}, inferred" label shown for a one-way sweeper
+    /// report where `headingTowardPickerRow` is hidden (`shouldShowDirectionPicker == false`)
+    /// because the direction is auto-derived from the segment's own one-way data
+    /// (`autoHeadingToward`). Previously this case rendered NOTHING — correct FT-11
+    /// behavior, but invisible: a user had no way to tell "the app inferred a direction" from
+    /// "there's no direction info at all." Renders nothing when there's genuinely nothing to
+    /// infer (e.g. a one-way segment with unrecognized `onewayToward` data).
+    @ViewBuilder
+    private var inferredHeadingRow: some View {
+        if selectedType == .sweeper, !shouldShowDirectionPicker,
+           let seg = effectiveSegment, let heading = autoHeadingToward {
+            let label = ReportSheet.inferredHeadingLabel(segment: seg, heading: heading)
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.triangle.turn.up.right.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text(label)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, 4)
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel("\(label), from this one-way street")
+        }
+    }
+
+    /// Pure derivation of the "Heading toward {street}, inferred" label — extracted so the
+    /// street-selection logic (which cross-street each `HeadingToward` case maps to) is
+    /// directly unit-testable without a SwiftUI view instance, same "extract the decision"
+    /// house style as `ReportSheet.buildMeta`/`destination(forTapping:)`.
+    static func inferredHeadingLabel(segment: Segment, heading: HeadingToward) -> String {
+        let street = heading == .from ? segment.fromStreet : segment.to
+        return "Heading toward \(street), inferred"
+    }
+
     // MARK: - Community 2.0 Phase 2a (build 20 S6): Confirm the street
 
     /// "CONFIRM THE STREET" — up to 4 candidate rows (current segment + opposite curb + one
     /// neighbor each direction), matching design/screenshots/09-report-confirm-street.png.
     /// Tapping a row reassigns `confirmedSegment`, which flows into `effectiveSegment` and
     /// from there into the (unchanged) direction picker and the submit payload's `segmentId`.
+    ///
+    /// S13c Fix #8 (`docs/design/community-2.0-final-parity-audit.md` §2 item 8 / open-items
+    /// #12④): `.id(Self.confirmStreetSectionID)` here, paired with `body`'s
+    /// `ScrollViewReader`/`.onChange(of: selectedType)`, scrolls this section into view the
+    /// first time it mounts after a type is selected — the logic was always correct (PR #95
+    /// QA traced this to a genuine discoverability flaw, not a bug: the section mounted
+    /// below the sheet's visible fold before the user scrolled).
     @ViewBuilder
     private var confirmStreetSection: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -867,7 +1001,13 @@ struct ReportSheet: View {
                 }
             }
         }
+        .id(Self.confirmStreetSectionID)
     }
+
+    /// S13c Fix #8: stable scroll-target id for `ScrollViewReader.scrollTo` — one constant
+    /// shared by `confirmStreetSection`'s single definition (rendered at up to 4 call sites,
+    /// but only ever one at a time) and `body`'s `.onChange(of: selectedType)` handler.
+    private static let confirmStreetSectionID = "S13c-confirm-street-section"
 
     @ViewBuilder
     private func confirmStreetRow(_ candidate: Segment) -> some View {
@@ -1089,6 +1229,7 @@ struct ReportSheet: View {
             if resolvedType != .enforcementActive { selectedSubTag = nil }
             if resolvedType != .sweeper { sweeperDirection = .passed }
             selectedHeadingToward = nil
+            headingNotSure = false
         case .streetClosureHandoff:
             onRequestStreetClosure?()
         case .spotPlacementHandoff:

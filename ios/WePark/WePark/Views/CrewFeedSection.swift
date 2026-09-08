@@ -72,6 +72,22 @@
 //     no avatar glyph (`prototype.html:184`'s `{{ l.e }}` emoji is demo-fixture data with no
 //     live equivalent here), rather than fabricating one.
 //
+//  S13c (hero-parity pass, docs/design/community-2.0-final-parity-audit.md) additions:
+//   - Fix #2: `CrewFeedMerge.icon(for:)`'s enforcement/sweeper cases now match
+//     `MapKeyLegendView.livePinEntries`/`PinMarkerAnnotation.markerStyle(for:)` exactly
+//     (SF Symbols + teal/cyan), not the prototype's literal emoji/orange-green rings.
+//   - Fix #5: `ProfileRowFormatting.accuracyLabel` now returns "—" whenever `accurate == 0`
+//     (not just `total == 0`) — a poster with reports but zero CONFIRMS no longer sees a
+//     punitive false "0%".
+//   - Fix #12: `awayZoneNote` — "you're browsing this square" note, gated on the CORRECTED
+//     Fix #1 home-zone derivation (`homeZoneId`, passed down from
+//     `ContentView.communityHomeZoneId`). Copy deviates from the screenshot's literal
+//     "posting stays in your home square" claim — flagged in this session's PR body, since
+//     `crewComposeRow` actually posts to whichever zone is currently selected, not
+//     unconditionally to the user's home zone.
+//   - Garage-savings stat (`garageSavingsCard`): new build, not a fix — §3's Option A. See
+//     `Services/GarageSavingsService.swift`.
+//
 
 import SwiftUI
 
@@ -225,27 +241,33 @@ enum CrewFeedMerge {
         pin.confirmCount > 0 ? "✓ \(pin.confirmCount)" : nil
     }
 
-    /// Icon + ring color for a pin type, per spec §6 appendix (verbatim design values) —
-    /// DELIBERATELY separate from `PinMarkerAnnotation.markerStyle(for:)`'s SF-Symbol/system-
-    /// color map used for the actual map markers (that file's existing tier3-marker-icons.md
-    /// convention). The feed matches the prototype's own icon/color choices exactly, per this
-    /// session's explicit scope; the map marker's icon choice is a separate, already-shipped
-    /// design decision this PR does not touch (except for `.openSpot`/`.leavingSoon`, whose
-    /// map glyphs — "P" / 🚙 — happen to already match this table, per spec §6's own row for
-    /// those two types).
-    static func icon(for pinType: PinType) -> (glyph: String, color: Color) {
+    /// Icon + ring color for a pin type.
+    ///
+    /// S13c Fix #2 (`docs/design/community-2.0-final-parity-audit.md` §2 item 2):
+    /// `enforcementActive`/`sweeperPassed` now match `MapKeyLegendView.livePinEntries` and
+    /// `PinMarkerAnnotation.markerStyle(for:)` EXACTLY (`person.badge.clock.fill`/`.teal` and
+    /// `truck.box.fill`/`.cyan`) — previously this returned the prototype's literal
+    /// 🎫 orange / 🧹 green emoji rings, which disagreed with the "?" map-key legend a user
+    /// might open seconds before seeing this exact pin type rendered differently in the feed.
+    /// `symbolName` is non-nil for an SF Symbol treatment (rendered via `Image(systemName:)`);
+    /// `glyph` is non-nil for the emoji-glyph treatment `openSpot`/`leavingSoon`/`construction`/
+    /// `filming`/`blockNote` still use (those four aren't map-key-legend-covered map markers in
+    /// the same all-symbol way, or — for `openSpot`/`leavingSoon` — already match the map
+    /// marker's own glyph choice per spec §6, so they're unchanged here). Exactly one of the
+    /// two is non-nil for every case.
+    static func icon(for pinType: PinType) -> (symbolName: String?, glyph: String?, color: Color) {
         switch pinType {
-        case .enforcementActive: return ("🎫", Self.color(hex: 0xFF9F0A))
-        case .sweeperPassed:     return ("🧹", Self.color(hex: 0x30D158))
-        case .openSpot:          return ("P",  Self.color(hex: 0x0A84FF))
-        case .leavingSoon:       return ("🚙", Self.color(hex: 0x0A84FF))
-        case .construction:      return ("🚧", Self.color(hex: 0xE8730D))
-        case .filming:           return ("🎬", Self.color(hex: 0xE8730D))
-        case .blockNote:         return ("📌", Self.color(hex: 0x9BA1AF))
+        case .enforcementActive: return ("person.badge.clock.fill", nil, .teal)
+        case .sweeperPassed:     return ("truck.box.fill", nil, .cyan)
+        case .openSpot:          return (nil, "P",  Self.color(hex: 0x0A84FF))
+        case .leavingSoon:       return (nil, "🚙", Self.color(hex: 0x0A84FF))
+        case .construction:      return (nil, "🚧", Self.color(hex: 0xE8730D))
+        case .filming:           return (nil, "🎬", Self.color(hex: 0xE8730D))
+        case .blockNote:         return (nil, "📌", Self.color(hex: 0x9BA1AF))
         // Every other type is not expected to appear in the crew feed (not a crowd/ephemeral
         // or block-scoped closure type) — a neutral fallback keeps this switch exhaustive-safe
         // without ever failing to render a row.
-        default:                 return ("📍", Color(.systemGray))
+        default:                 return (nil, "📍", Color(.systemGray))
         }
     }
 
@@ -335,10 +357,14 @@ enum ProfileRowFormatting {
         return years == 1 ? "Member for 1 year" : "Member for \(years) years"
     }
 
-    /// Accuracy percentage — "—" on divide-by-zero (AC-P3.3: a brand-new poster with zero
-    /// reports must never show a false "0%"). Rounds to the nearest whole percent.
+    /// Accuracy percentage — "—" whenever `accurate == 0` (S13c Fix #5,
+    /// `docs/design/community-2.0-final-parity-audit.md` §2 item 5 / open-items #12⑤):
+    /// previously the em-dash guard only checked `total == 0`, so a brand-new poster with 1
+    /// report and 0 confirms got a literal "0%" — arithmetically honest but reads punitive,
+    /// since a percentage needs at least one CONFIRMED report before it means anything.
+    /// Rounds to the nearest whole percent once `accurate > 0`.
     nonisolated static func accuracyLabel(accurate: Int, total: Int) -> String {
-        guard total > 0 else { return "—" }
+        guard accurate > 0, total > 0 else { return "—" }
         let pct = Int((Double(accurate) / Double(total) * 100).rounded())
         return "\(pct)%"
     }
@@ -515,6 +541,20 @@ struct CrewFeedSection: View {
     var zoneMessageService: ZoneMessageService
     var authService: SupabaseAuthService
 
+    /// S13c Fix #12: the user's OWN zone id (`ContentView.communityHomeZoneId`'s corrected
+    /// Fix #1 derivation — parked car's zone, else device location's zone, else `nil`).
+    /// Drives `awayZoneNote`'s "you're browsing this square" note. `nil` when neither a
+    /// parked car nor a device-location fix resolves to a seeded zone (note simply doesn't
+    /// render — same "no signal, no claim" posture as the map's own zone-box gate).
+    var homeZoneId: String? = nil
+
+    /// S13c garage-savings stat (`docs/design/community-2.0-final-parity-audit.md` §3,
+    /// Option A): device-local running total, read fresh on every appearance rather than
+    /// held as long-lived `@State` — this card has no write path of its own (accrual happens
+    /// in `ContentView`'s "I left — clear pin" action), so there's nothing to keep in sync
+    /// beyond re-reading `UserDefaults` when the card becomes visible again.
+    @State private var garageSavingsTotal: Double = 0
+
     @State private var selectedZone: CommunityZone = .nolita
 
     /// Community 2.0 Phase 3 (build 20 S9): the current user's own `profiles` row, or `nil`
@@ -553,17 +593,22 @@ struct CrewFeedSection: View {
         VStack(alignment: .leading, spacing: 10) {
             zoneChipsRow
             zoneHeaderRow
+            awayZoneNote
             crewComposeRow
 
             Divider()
 
+            garageSavingsCard
             profileRow
             leaderboardSection
 
             feedContent
         }
         .padding(.top, 6)
-        .onAppear { selectZone(selectedZone) }
+        .onAppear {
+            selectZone(selectedZone)
+            garageSavingsTotal = GarageSavingsService().currentMonthTotal()
+        }
         .onChange(of: selectedZone) { _, newZone in selectZone(newZone) }
         // QA pass 1 fix (PR #97, Finding #1 — AC-P3.4): `.task(id: selectedZone)` replaces the
         // old manual `Task {}` fired from `onAppear`/`onChange`. SwiftUI automatically cancels
@@ -816,6 +861,65 @@ struct CrewFeedSection: View {
             pins: pinService.visiblePins
         )
         return count == 1 ? "1 neighbor posting" : "\(count) neighbors posting"
+    }
+
+    // MARK: - S13c Fix #12: away-zone note
+
+    /// `design/screenshots/06-away-zone.png`'s intent — lets a browsing user know the zone
+    /// chip they're currently viewing ISN'T their own. Gated on the CORRECTED Fix #1
+    /// home-zone derivation (`homeZoneId`, passed down from `ContentView.communityHomeZoneId`
+    /// — car > device location > nil), never the old, buggy viewport fallback (sequenced
+    /// after Fix #1 per this session's dispatch instruction).
+    ///
+    /// Copy note (flagged in this PR's body, not silently decided): the screenshot's literal
+    /// copy is "posting stays in your home square" — but `crewComposeRow`'s compose bar
+    /// actually posts to whichever zone chip is currently SELECTED
+    /// (`performSendCrewMessage`'s `zoneId: selectedZone.id`), not unconditionally to the
+    /// user's home zone. Asserting the screenshot's literal claim here would be false given
+    /// today's actual send behavior, so this note states only what's true (which square is
+    /// "home") rather than a claim about where a post will land.
+    @ViewBuilder
+    private var awayZoneNote: some View {
+        if let homeZoneId, homeZoneId != selectedZone.id,
+           let homeZone = CommunityZone(rawValue: homeZoneId) {
+            HStack(spacing: 6) {
+                Image(systemName: "location.slash")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                Text("You're browsing \(selectedZone.displayName) \u{2014} your home square is \(homeZone.displayName).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    // MARK: - S13c garage-savings stat
+
+    /// "$X back in your pocket this month — no garage needed" (audit copy option #3,
+    /// `docs/design/community-2.0-final-parity-audit.md` §3, Option A). Accrued on
+    /// "I left — clear pin" (`ContentView`'s `.parkedCarDetail` → `onClearPin`) via
+    /// `GarageSavingsService`; device-local, month-boundary reset. Renders nothing when the
+    /// running total is 0 — a fresh install, or a user who hasn't cleared a pin this month,
+    /// sees no card (never a "$0" placeholder).
+    @ViewBuilder
+    private var garageSavingsCard: some View {
+        if garageSavingsTotal > 0 {
+            HStack(spacing: 10) {
+                Image(systemName: "dollarsign.circle.fill")
+                    .font(.system(size: 20))
+                    .foregroundStyle(CrewFeedMerge.color(hex: 0x30D158))
+                Text(GarageSavingsCopy.summary(total: garageSavingsTotal))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 12)
+            .background(Color(white: 0.46).opacity(0.12), in: RoundedRectangle(cornerRadius: 16))
+            .accessibilityElement(children: .combine)
+        }
     }
 
     // MARK: - Profile row (Community 2.0 Phase 3, build 20 S9)
@@ -1091,18 +1195,28 @@ struct PinFeedRow: View {
         .padding(.vertical, 11)
     }
 
-    private var icon: (glyph: String, color: Color) {
+    private var icon: (symbolName: String?, glyph: String?, color: Color) {
         CrewFeedMerge.icon(for: pin.pinType)
     }
 
+    /// S13c Fix #2: renders the SF-Symbol treatment when `icon.symbolName` is set
+    /// (`enforcementActive`/`sweeperPassed`, matching the map marker + map-key legend
+    /// exactly), else falls back to the emoji-glyph `Text` this view always used.
+    @ViewBuilder
     private var iconBadge: some View {
         ZStack {
             Circle()
                 .strokeBorder(icon.color, lineWidth: 2)
                 .background(Circle().fill(Color(white: 0.14)))
-            Text(icon.glyph)
-                .font(.system(size: 15, weight: .heavy))
-                .foregroundStyle(icon.color)
+            if let symbolName = icon.symbolName {
+                Image(systemName: symbolName)
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundStyle(icon.color)
+            } else if let glyph = icon.glyph {
+                Text(glyph)
+                    .font(.system(size: 15, weight: .heavy))
+                    .foregroundStyle(icon.color)
+            }
         }
         .frame(width: 36, height: 36)
     }

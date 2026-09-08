@@ -44,6 +44,10 @@
 //  Baseline before FT-11: 446 tests.
 //  After FT-11: 446 + 20 = 466 tests.
 //
+//  S13c Fix #3 (docs/design/community-2.0-final-parity-audit.md §2 item 3) adds
+//  ReportSheetInferredHeadingLabelTests (3 tests) for `ReportSheet.inferredHeadingLabel`,
+//  the pure derivation backing the new "Heading toward {street}, inferred" one-way label.
+//
 
 import XCTest
 @testable import WePark
@@ -673,5 +677,46 @@ final class FT11ChevronBearingCorrectionTests: XCTestCase {
         let corrected = bearing - 90
         XCTAssertEqual(corrected, -90.0, accuracy: 2.0,
             "North-running segment corrected rotation should be ≈ -90°. Got \(corrected)°")
+    }
+}
+
+// MARK: - ReportSheet.inferredHeadingLabel (S13c Fix #3, second half)
+
+/// Pure derivation backing the visible one-way auto-derivation label — previously this case
+/// rendered nothing at all (correct FT-11 behavior, but silent). See `inferredHeadingRow`'s
+/// own doc comment (`Views/ReportSheet.swift`) for the full context.
+final class ReportSheetInferredHeadingLabelTests: XCTestCase {
+
+    private func makeSegment(fromStreet: String, to: String) -> Segment {
+        Segment(
+            id: "TEST_SEG",
+            street: "SPRING STREET",
+            fromStreet: fromStreet,
+            to: to,
+            side: "N",
+            line: [[40.7248, -74.0032], [40.7249, -74.0021]],
+            rules: [],
+            dominantCategory: nil,
+            oneway: true,
+            onewayToward: "from"
+        )
+    }
+
+    func testHeadingFrom_usesFromStreet() {
+        let segment = makeSegment(fromStreet: "WOOSTER STREET", to: "GREENE STREET")
+        let label = ReportSheet.inferredHeadingLabel(segment: segment, heading: .from)
+        XCTAssertEqual(label, "Heading toward WOOSTER STREET, inferred")
+    }
+
+    func testHeadingTowardTo_usesToStreet() {
+        let segment = makeSegment(fromStreet: "WOOSTER STREET", to: "GREENE STREET")
+        let label = ReportSheet.inferredHeadingLabel(segment: segment, heading: .toward_to)
+        XCTAssertEqual(label, "Heading toward GREENE STREET, inferred")
+    }
+
+    func testLabel_alwaysEndsWithInferredSuffix() {
+        let segment = makeSegment(fromStreet: "A ST", to: "B ST")
+        XCTAssertTrue(ReportSheet.inferredHeadingLabel(segment: segment, heading: .from).hasSuffix(", inferred"))
+        XCTAssertTrue(ReportSheet.inferredHeadingLabel(segment: segment, heading: .toward_to).hasSuffix(", inferred"))
     }
 }

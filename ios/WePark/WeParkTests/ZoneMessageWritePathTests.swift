@@ -43,6 +43,13 @@
 //   13. testFetchMessagesSegmentId_requestIncludesSegmentIdFilter_notZoneId
 //   14. testFetchMessagesSegmentId_success_reversesToOldestFirst_doesNotTouchPublishedMessages
 //
+//  sendMessage — S13c Fix #11 (docs/design/community-2.0-final-parity-audit.md §2 item 11 /
+//  open-items #14): the 1000-char boundary was untested (guard read as correct by
+//  inspection, never independently verified). 3 new tests exercise 999/1000/1001 exactly:
+//   15. testSendMessage_bodyExactly999Chars_succeeds
+//   16. testSendMessage_bodyExactly1000Chars_succeeds
+//   17. testSendMessage_bodyExactly1001Chars_throwsInvalidBody_noNetworkCall
+//
 //  No Calendar.current use.
 //  No hardcoded Mapbox tokens or Supabase keys.
 //
@@ -469,5 +476,71 @@ final class FetchMessagesSegmentIdTests: XCTestCase {
 
         XCTAssertEqual(fetched.map(\.id), [1, 2], "Must reverse server's created_at.desc to oldest-first")
         XCTAssertTrue(service.messages.isEmpty, "This one-shot fetch must NOT populate the zone-chip-driven `messages` array")
+    }
+}
+
+// MARK: - sendMessage: 1000-char boundary (S13c Fix #11)
+
+/// `zone_messages.body`'s CHECK constraint is `length(body) between 1 and 1000`
+/// (`01-mvp-schema.sql:77`), enforced client-side by `sendMessage`'s
+/// `trimmed.count <= Self.bodyMaxLength` guard BEFORE any network call. Never independently
+/// verified at the exact boundary until this session
+/// (`docs/design/community-2.0-final-parity-audit.md` §2 item 11 / open-items #14).
+@MainActor
+final class SendMessageBodyLengthBoundaryTests: XCTestCase {
+
+    override func tearDown() {
+        super.tearDown()
+        let keys = [
+            "wepark_auth_access_token", "wepark_auth_refresh_token",
+            "wepark_auth_user_id", "wepark_auth_expires_at",
+        ]
+        for key in keys { UserDefaults.standard.removeObject(forKey: key) }
+    }
+
+    func testSendMessage_bodyExactly999Chars_succeeds() async throws {
+        let body999 = String(repeating: "a", count: 999)
+        XCTAssertEqual(body999.count, 999)
+        var networkCalled = false
+        let service = await makeAuthenticatedZoneMessageService { request in
+            networkCalled = true
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
+                    zwpInsertedRowJSON())
+        }
+        _ = try await service.sendMessage(zoneId: "nolita", body: body999)
+        XCTAssertTrue(networkCalled, "999 chars is under the 1000-char cap and must reach the network")
+    }
+
+    func testSendMessage_bodyExactly1000Chars_succeeds() async throws {
+        let body1000 = String(repeating: "a", count: 1000)
+        XCTAssertEqual(body1000.count, 1000)
+        var networkCalled = false
+        let service = await makeAuthenticatedZoneMessageService { request in
+            networkCalled = true
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
+                    zwpInsertedRowJSON())
+        }
+        _ = try await service.sendMessage(zoneId: "nolita", body: body1000)
+        XCTAssertTrue(networkCalled, "Exactly 1000 chars is the inclusive upper bound and must reach the network")
+    }
+
+    func testSendMessage_bodyExactly1001Chars_throwsInvalidBody_noNetworkCall() async throws {
+        let body1001 = String(repeating: "a", count: 1001)
+        XCTAssertEqual(body1001.count, 1001)
+        var networkCalled = false
+        let service = await makeAuthenticatedZoneMessageService { request in
+            networkCalled = true
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!,
+                    zwpInsertedRowJSON())
+        }
+        do {
+            _ = try await service.sendMessage(zoneId: "nolita", body: body1001)
+            XCTFail("Expected invalidBody to be thrown for a 1001-char body")
+        } catch ZoneMessageWriteError.invalidBody {
+            // expected
+        } catch {
+            XCTFail("Expected ZoneMessageWriteError.invalidBody, got \(error)")
+        }
+        XCTAssertFalse(networkCalled, "1001 chars exceeds the cap and must fail client-side before any request is issued")
     }
 }

@@ -1235,6 +1235,13 @@ struct ContentView: View {
                     activeSheet = dismissTargetOutsideBrowseNav
                     // W6: Cancel notifications before clearing the pin.
                     NotificationScheduler.shared.cancelAll(for: car)
+                    // Community 2.0 S13c garage-savings stat (§3 Option A): accrue this
+                    // completed session's duration BEFORE the pin (and its `parkedAt`) is
+                    // gone — `car` here is the closure's captured value, unaffected by
+                    // `clearPin()` clearing `parkPinService.parkedCar` below.
+                    if AppConstants.communityEnabled {
+                        GarageSavingsService().recordSessionEnded(parkedAt: car.parkedAt)
+                    }
                     parkPinService.clearPin()
                     // W7.5: Clear Park Until filter — no orphan filter for a non-existent car.
                     parkUntilMode = false
@@ -1652,7 +1659,11 @@ struct ContentView: View {
                     CrewFeedSection(
                         pinService: pinService,
                         zoneMessageService: zoneMessageService,
-                        authService: authService
+                        authService: authService,
+                        // S13c Fix #12 (away-note): built on the CORRECTED home-zone logic
+                        // from Fix #1 (car > device location > nil) — never the old viewport
+                        // fallback. See `CrewFeedSection.awayZoneNote`'s doc comment.
+                        homeZoneId: communityHomeZoneId
                     )
                 }
             }
@@ -2256,55 +2267,56 @@ struct ContentView: View {
         activeSheet = .pinDetail(pin)
     }
 
-    // MARK: - Community 2.0 S13a (WP2): zone-boundary home-zone derivation
+    // MARK: - Community 2.0 S13c Fix #1: zone-boundary home-zone derivation
 
-    /// The zone id whose boundary box gets the "YOUR SQUARE · {ZONE}" label
-    /// (`design/screenshots/03-your-square.png`) — the zone containing the user's parked
-    /// car if one exists, else the zone containing the CURRENT MAP VIEWPORT (`region.center`,
-    /// not raw GPS). `nil` when neither resolves to one of the three seeded zones
-    /// (`CommunityZoneBounds`) — no label renders in that case; all three zone outlines
-    /// still do (gated separately by `showZoneBoundaries` at the `mapRepresentable` call
-    /// site).
+    /// The user's OWN zone — the zone id whose boundary box + "YOUR SQUARE · {ZONE}" label
+    /// render on the map (`design/screenshots/03-your-square.png`). Corrected per
+    /// `docs/design/community-2.0-final-parity-audit.md` §2 item 1 (Kevin's ruling): the
+    /// zone containing the user's PARKED CAR if one is parked, else the zone containing the
+    /// DEVICE'S CURRENT LOCATION. NEVER the map viewport center — that was the exact bug the
+    /// audit pinned in the prior version of this function (a user panning to SoHo while
+    /// their car sits in Nolita, or simply browsing with no car parked, got a false "this is
+    /// yours" label for whatever happened to be on screen). `nil` when neither resolves to
+    /// one of the three seeded zones (`CommunityZoneBounds`) — no box and no label render in
+    /// that case (both are gated off the same non-nil check, see
+    /// `MapViewRepresentable.syncZoneBoundaries`).
     ///
-    /// "Parked car beats current signal" mirrors the priority
+    /// "Parked car beats current-location" mirrors the priority
     /// `updatePushZoneFromParkedCarOrLocation` already uses for the push zone_id (spec
-    /// §2.9) — kept consistent rather than inventing a second priority rule for the same
-    /// underlying question ("what zone is relevant to this user right now").
-    ///
-    /// Judgment call (flagged, not silently decided): the "current zone" fallback reads
-    /// the map VIEWPORT center rather than live GPS. The label is drawn at a fixed
-    /// geographic position inside a specific zone's box — anchoring it to whatever's
-    /// actually on screen (what the user is BROWSING) makes more sense than a GPS-derived
-    /// zone that might be scrolled off-screen entirely, which would label a box the user
-    /// can't even see. `updatePushZoneFromParkedCarOrLocation`'s GPS fallback answers a
-    /// different question ("where should push notifications route to"), not "what should
-    /// this on-map label say" — the two fallbacks solving different problems is why they
-    /// diverge here.
+    /// §2.9) — the two derivations are now fully consistent (both read
+    /// `locationService.userLocation`, not the viewport) rather than diverging as before.
     private var communityHomeZoneId: String? {
         guard AppConstants.communityEnabled else { return nil }
         return Self.resolveHomeZoneId(
             parkedCarLat: parkPinService.parkedCar?.latitude,
             parkedCarLng: parkPinService.parkedCar?.longitude,
-            viewportCenterLat: region.center.latitude,
-            viewportCenterLng: region.center.longitude
+            deviceLocationLat: locationService.userLocation?.latitude,
+            deviceLocationLng: locationService.userLocation?.longitude
         )
     }
 
     /// Pure priority derivation extracted from `communityHomeZoneId` so the "parked car
-    /// beats viewport" rule is directly unit-testable without a live `ContentView`
-    /// instance (`parkPinService`/`region` are both hard to construct headlessly) — same
-    /// "extract the decision, not just the data lookup" pattern as
+    /// beats device location" rule is directly unit-testable without a live `ContentView`
+    /// instance (`parkPinService`/`locationService` are both hard to construct headlessly) —
+    /// same "extract the decision, not just the data lookup" pattern as
     /// `communityMapChromeVisible` above.
+    ///
+    /// S13c Fix #1: `viewportCenterLat/Lng` parameters are GONE — the map viewport must never
+    /// be a signal for "whose zone is this." Replaced with `deviceLocationLat/Lng` (the
+    /// device's actual current-location fix, e.g. `LocationService.userLocation`).
     nonisolated static func resolveHomeZoneId(
         parkedCarLat: Double?,
         parkedCarLng: Double?,
-        viewportCenterLat: Double,
-        viewportCenterLng: Double
+        deviceLocationLat: Double?,
+        deviceLocationLng: Double?
     ) -> String? {
         if let lat = parkedCarLat, let lng = parkedCarLng {
             return CommunityZoneBounds.zoneId(forLat: lat, lng: lng)
         }
-        return CommunityZoneBounds.zoneId(forLat: viewportCenterLat, lng: viewportCenterLng)
+        if let lat = deviceLocationLat, let lng = deviceLocationLng {
+            return CommunityZoneBounds.zoneId(forLat: lat, lng: lng)
+        }
+        return nil
     }
 
     // MARK: - Map representable construction
@@ -2341,14 +2353,18 @@ struct ContentView: View {
             // NB: argument order must match the memberwise init (declaration order) —
             // draftSpotCoordinate is declared directly after destinationCoordinate.
             draftSpotCoordinate: spotPlacementDraft?.coordinate,
-            // Community 2.0 S13a (WP2): dashed zone-boundary overlay — flag-gated
+            // Community 2.0 S13a/S13c: dashed zone-boundary overlay — flag-gated
             // explicitly here (not just inside `communityHomeZoneId`) so a flag-off build
-            // never even asks `MapViewRepresentable` to build the three boundary polygons
+            // never even asks `MapViewRepresentable` to build the boundary polygon
             // (spec's own "flag-off = zero new chrome, byte-identical map" requirement).
+            // S13c Fix #1: added `&& !driveModeActive` — this overlay must hide during
+            // Drive Mode (minimal chrome while driving), matching the sibling
+            // `communityMapChromeVisible` gate two properties above, which already excludes
+            // Drive Mode.
             // NB: argument order must match the memberwise init (declaration order) — both
             // are declared directly after `draftSpotCoordinate`, same convention as its own
             // comment above.
-            showZoneBoundaries: AppConstants.communityEnabled,
+            showZoneBoundaries: AppConstants.communityEnabled && !driveModeActive,
             homeZoneId: communityHomeZoneId,
             communityPins: communityPins,
             onCommunityPinTapped: handleCommunityPinTapped(_:),
