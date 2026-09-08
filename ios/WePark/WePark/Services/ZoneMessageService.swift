@@ -28,9 +28,38 @@
 //     `alter publication supabase_realtime add table public.zone_messages`) — not gated on
 //     Phase 0's Community 2.0 migration being applied.
 //
-//  Read-only in this session (S3) — S4 wires the crew feed UI (and any send-message path) per
-//  `docs/community-2.0-roadmap.md`'s own phase split ("Phase 1 — Read-only network (zones + crew
-//  feed + map markers)"). This file's job is fetch + Realtime + decode only.
+//  Read-only through S12 — S13b (build 20, WP3 of docs/design/community-2.0-hero-gap-inventory.md)
+//  adds the WRITE path this file's header used to say didn't exist yet: `sendMessage(zoneId:
+//  segmentId:body:)`. Consumers: `Views/BlockDetailView.swift`'s "BLOCK CHATTER" compose bar
+//  (segment-anchored) and `Views/CrewFeedSection.swift`'s zone-level "Say something to the
+//  square…" compose bar (segmentId: nil) — one write primitive, two call sites, matching this
+//  file's own `fetchMessages`/`CrewFeedMerge` precedent of one read primitive serving both
+//  surfaces. Also net-new: `fetchMessages(segmentId:)`, a SEPARATE one-shot read (does not
+//  touch `messages`/`isLoading`/`fetchError` above) for the block-detail chat thread, which is
+//  scoped to one specific block regardless of whichever zone (if any) the crew feed currently
+//  has selected — mirrors `CommunityPinService.fetchLeaderboardPins(zoneId:)`'s own "separate
+//  one-shot fetch, doesn't touch the zone-chip-driven published state" precedent.
+//
+//  RLS verdict (S13b, verified against `supabase/01-mvp-schema.sql`/`03-community-2.0-schema.sql`
+//  before writing `sendMessage`, per this session's dispatch instruction to check before
+//  shipping a write that could 42501):
+//   - `zone_messages_insert_user` (01-mvp-schema.sql:91-97) already permits an authenticated
+//     insert: `auth.uid() is not null and author_id = auth.uid() and message_type = 'user'`. No
+//     migration needed — this session ships ZERO new SQL.
+//   - `segment_id` (03-community-2.0-schema.sql §2.4) has NO column-level lockdown — that
+//     migration's own comment (line 154-155) confirms `zone_messages_insert_user` already lets
+//     an authenticated author set ANY column on their own insert, segment_id included.
+//   - Return-preference choice: `return=representation` (not `return=minimal`) — SAFE here,
+//     unlike the S11 RETURNING lesson this session was told to check for. That lesson's failure
+//     mode was requesting the row back on a table where the SELECT policy was narrower than the
+//     INSERT policy (e.g. author-only select). Here `zone_messages_select_all` is
+//     `using (true)` — the freshly-inserted row is selectable by literally anyone, including its
+//     own author, so PostgREST's post-insert SELECT (which `return=representation` triggers)
+//     cannot be blocked by RLS. Chosen deliberately, not by default, so the sender sees their
+//     own message immediately (mirrors `CommunityPinService.insertCrowdPin`'s own "Fix 1"
+//     precedent) rather than waiting for a Realtime echo.
+//   - `on_conflict` lesson does NOT apply — this is a plain `INSERT`, no upsert, no conflict
+//     target.
 //
 //  COMPILE-UNVERIFIED — written on a Linux VPS, no Xcode/Swift toolchain. Every SDK symbol used
 //  in `SupabaseZoneMessageRealtimeChannel` below is the exact same call shape already used (and
@@ -105,10 +134,58 @@ struct ZoneMessage: Identifiable, Codable {
 
 // MARK: - ZoneMessageFetchError
 
-/// Errors from `ZoneMessageService.fetchMessages(zoneId:)`.
+/// Errors from `ZoneMessageService.fetchMessages(zoneId:)` / `fetchMessages(segmentId:)`.
 enum ZoneMessageFetchError: Error {
     /// The server responded with a non-2xx status.
     case httpError(statusCode: Int)
+}
+
+// MARK: - ZoneMessageWriteError (S13b)
+
+/// Errors from `ZoneMessageService.sendMessage(zoneId:segmentId:body:)`. Mirrors
+/// `CommunityPinWriteError` (`Services/CommunityPinService.swift`) exactly — same case set,
+/// same meaning — kept as a separate type per this file's own established convention of not
+/// sharing types across service files (see this file's header note on `ZoneMessage`'s decoder
+/// being duplicated, not imported, from `CommunityPinService`'s).
+enum ZoneMessageWriteError: Error {
+    /// `authService` is `nil`, or has no valid session. Writes require `auth.uid() != null`.
+    case notAuthenticated
+    /// The server responded with a non-2xx status.
+    case httpError(statusCode: Int)
+    /// Request body encoding failed.
+    case encodingFailure
+    /// `body`, once trimmed, is empty or exceeds `zone_messages.body`'s
+    /// `check (length(body) between 1 and 1000)` constraint (`01-mvp-schema.sql:77`) — caught
+    /// client-side before spending a round trip on a guaranteed-400.
+    case invalidBody
+    /// The insert succeeded but the server's `return=representation` response body couldn't be
+    /// decoded back into a `ZoneMessage` — the write itself is NOT rolled back by this (same
+    /// "the write succeeded, only the decode of the echo failed" posture as
+    /// `CommunityPinService.insertCrowdPin`'s own decode-failure comment), but the caller has no
+    /// row to optimistically append, so this is surfaced rather than silently swallowed.
+    case decodingFailure
+}
+
+// MARK: - ZoneMessageComposeLogic (S13b)
+
+/// Pure, `nonisolated` draft-validation logic shared by every compose bar that calls
+/// `sendMessage` — `Views/CrewFeedSection.swift`'s zone-level "Say something to the square…"
+/// bar and `Views/BlockDetailView.swift`'s segment-anchored "Message this block…" bar. One
+/// small shared type rather than two independent trim/empty checks that could silently drift
+/// (e.g. one accepting whitespace-only text the other rejects).
+enum ZoneMessageComposeLogic {
+    /// Trims leading/trailing whitespace and newlines. Does NOT enforce the server's max-length
+    /// constraint here — `ZoneMessageService.sendMessage` is the single source of truth for
+    /// that (`.invalidBody`), so a compose bar's "can I tap send" check and the actual network
+    /// call's validation can't disagree about the boundary.
+    nonisolated static func trimmedBody(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Whether the send button should be enabled for the current draft text.
+    nonisolated static func canSend(draft: String) -> Bool {
+        !trimmedBody(draft).isEmpty
+    }
 }
 
 // MARK: - ZoneMessageService
@@ -148,6 +225,13 @@ final class ZoneMessageService {
     private let supabaseURL: URL
     private let supabaseAnonKey: String
 
+    /// S13b: auth session used by `sendMessage(zoneId:segmentId:body:)` — `nil` in
+    /// previews/read-only contexts (mirrors `CommunityPinService.authService`'s own optional
+    /// convention; the read path above has never needed one, `zone_messages_select_all` is
+    /// anonymous-readable). A write attempted with `authService == nil` throws
+    /// `.notAuthenticated` rather than crashing.
+    let authService: SupabaseAuthService?
+
     /// URLSession used for all network calls. Injectable for tests (MockURLProtocol pattern),
     /// mirrors `CommunityPinService.urlSession`.
     let urlSession: URLSession
@@ -180,6 +264,8 @@ final class ZoneMessageService {
     ///   - supabaseAnonKey: The anon/public API key. Read from `Info.plist` key
     ///     `SUPABASE_ANON_KEY` at runtime in production. NEVER hardcode this value in source.
     ///   - urlSession: Injectable URL session. Default `URLSession.shared`.
+    ///   - authService: S13b — auth session for `sendMessage`. Default `nil` (read-only use,
+    ///     matching every pre-S13b call site of this initializer).
     ///   - realtimeChannel: Injectable Realtime subscription. Default `nil`, in which case a
     ///     standalone `SupabaseZoneMessageRealtimeChannel` is constructed from
     ///     `supabaseURL`/`supabaseAnonKey` — mirrors `CommunityPinService`'s own designated init
@@ -188,11 +274,13 @@ final class ZoneMessageService {
         supabaseURL: URL,
         supabaseAnonKey: String,
         urlSession: URLSession = .shared,
+        authService: SupabaseAuthService? = nil,
         realtimeChannel: RealtimeZoneMessageSubscribing? = nil
     ) {
         self.supabaseURL = supabaseURL
         self.supabaseAnonKey = supabaseAnonKey
         self.urlSession = urlSession
+        self.authService = authService
         self.realtimeChannel = realtimeChannel
             ?? SupabaseZoneMessageRealtimeChannel(supabaseURL: supabaseURL, supabaseAnonKey: supabaseAnonKey)
     }
@@ -201,11 +289,11 @@ final class ZoneMessageService {
     /// `Bundle.main` (bridged from `Config.xcconfig` via `Info.plist`) — mirrors
     /// `CommunityPinService`'s own convenience init exactly (same placeholder-URL fallback for
     /// pre-config builds).
-    convenience init(realtimeChannel: RealtimeZoneMessageSubscribing? = nil) {
+    convenience init(authService: SupabaseAuthService? = nil, realtimeChannel: RealtimeZoneMessageSubscribing? = nil) {
         let urlString = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String ?? ""
         let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String ?? ""
         let resolvedURL = URL(string: urlString) ?? URL(string: "https://placeholder.supabase.co")!
-        self.init(supabaseURL: resolvedURL, supabaseAnonKey: key, realtimeChannel: realtimeChannel)
+        self.init(supabaseURL: resolvedURL, supabaseAnonKey: key, authService: authService, realtimeChannel: realtimeChannel)
     }
 
     // MARK: - Zone selection
@@ -325,6 +413,173 @@ final class ZoneMessageService {
             )
         }
         return try decoder.decode([ZoneMessage].self, from: data)
+    }
+
+    // MARK: - S13b: Block-scoped read (independent of zone selection)
+
+    /// Maximum most-recent messages fetched for one block's chatter thread. Smaller than
+    /// `messageFetchLimit` (a whole zone's history) — a single block's thread is expected to
+    /// be short; not measured, tune post-launch, same "not measured" posture as every other
+    /// named constant in this codebase.
+    static let blockChatterFetchLimit = 30
+
+    /// One-shot fetch of the most recent messages anchored to a specific block (`segment_id`),
+    /// independent of `messages`/`selectedZoneId`/`isLoading`/`fetchError` above — the block
+    /// detail sheet can be opened for any block regardless of which zone (if any) the crew
+    /// feed currently has selected, or whether the crew feed is even open. Mirrors
+    /// `CommunityPinService.fetchLeaderboardPins(zoneId:)`'s own "separate one-shot REST fetch
+    /// that doesn't touch the zone-chip-driven published state" precedent.
+    ///
+    /// Throws (rather than fail-soft into an empty array) so the caller (`BlockDetailView`)
+    /// can distinguish "no chatter yet" (empty array) from "the fetch failed" — the two need
+    /// different UI (an intentional empty state vs. simply leaving whatever was on screen).
+    ///
+    /// Anonymous read — same `zone_messages_select_all` policy as `fetchMessages(zoneId:)`, no
+    /// Authorization header needed.
+    func fetchMessages(segmentId: String) async throws -> [ZoneMessage] {
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/zone_messages_with_author"),
+            resolvingAgainstBaseURL: false
+        )
+        components?.queryItems = [
+            URLQueryItem(name: "segment_id", value: "eq.\(segmentId)"),
+            URLQueryItem(name: "order",      value: "created_at.desc"),
+            URLQueryItem(name: "limit",      value: "\(Self.blockChatterFetchLimit)"),
+            URLQueryItem(
+                name: "select",
+                value: "id,zone_id,author_id,message_type,body,related_report_id,created_at,author_username,author_reputation,segment_id"
+            ),
+        ]
+        guard let url = components?.url else { throw ZoneMessageFetchError.httpError(statusCode: 0) }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ZoneMessageFetchError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        // Same server ordering (created_at.desc) as fetchMessages(zoneId:) — reverse for
+        // chronological, oldest-first display.
+        return try decodeResponse(data: data).reversed()
+    }
+
+    // MARK: - S13b: Write path — send a message
+
+    /// `zone_messages.body`'s CHECK constraint, verbatim (`01-mvp-schema.sql:77`):
+    /// `length(body) between 1 and 1000`. Checked client-side so an over-length draft fails
+    /// fast with `.invalidBody` instead of spending a round trip on a guaranteed 400.
+    static let bodyMaxLength = 1000
+
+    /// Inserts a new `zone_messages` row — the write path `Views/BlockDetailView.swift`'s
+    /// "BLOCK CHATTER" compose bar and `Views/CrewFeedSection.swift`'s zone-level compose bar
+    /// both call. See this file's header for the full RLS/RETURNING verdict this method's
+    /// shape is built on.
+    ///
+    /// - Parameters:
+    ///   - zoneId: Required — `zone_messages.zone_id` is `not null` (`01-mvp-schema.sql:74`).
+    ///     Callers anchoring to a specific block (no explicit zone chip selected) must derive
+    ///     one first (`BlockDetailLogic.resolvedZoneId(forSegmentMidpoint:)` in
+    ///     `Views/BlockDetailView.swift`) and treat a `nil` result as "can't post here" rather
+    ///     than calling this with a placeholder.
+    ///   - segmentId: `nil` for a zone-wide message (the crew feed's "Say something to the
+    ///     square…" compose bar); non-nil for a block-anchored message
+    ///     (`Segment.id` — the SAME raw tile-segment id `ReportSheet`'s crowd-report write path
+    ///     already stamps on `pins.segment_id`, per `Views/CrewFeedSection.swift`'s own header
+    ///     note on that id shape — NOT the 4-part `blockfaceKey` format).
+    ///   - body: Raw draft text. Trimmed and length-checked against
+    ///     `zone_messages.body`'s CHECK constraint before the request is built.
+    /// - Returns: The inserted `ZoneMessage`, decoded from the server's `return=representation`
+    ///   echo — the caller can append it to its own local state immediately (this method does
+    ///   NOT append it to `messages` unconditionally; see below).
+    @discardableResult
+    func sendMessage(zoneId: String, segmentId: String? = nil, body: String) async throws -> ZoneMessage {
+        guard let authSvc = authService else {
+            throw ZoneMessageWriteError.notAuthenticated
+        }
+        guard let jwt = await authSvc.validAccessToken(),
+              let userId = authSvc.currentUserId else {
+            throw ZoneMessageWriteError.notAuthenticated
+        }
+
+        let trimmed = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed.count <= Self.bodyMaxLength else {
+            throw ZoneMessageWriteError.invalidBody
+        }
+
+        var payload: [String: Any] = [
+            "zone_id":       zoneId,
+            "author_id":     userId.uuidString,
+            "message_type":  ZoneMessage.MessageType.user.rawValue,
+            "body":          trimmed,
+        ]
+        if let segmentId { payload["segment_id"] = segmentId }
+
+        guard let requestBody = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw ZoneMessageWriteError.encodingFailure
+        }
+
+        // return=representation: deliberate, not the default — see this file's header for the
+        // RLS check that makes this safe (zone_messages_select_all is `using (true)`, so the
+        // author can always read back their own just-inserted row).
+        let request = buildAuthenticatedRequest(
+            path: "rest/v1/zone_messages",
+            method: "POST",
+            jwt: jwt,
+            body: requestBody,
+            extraHeaders: [
+                "Prefer": "return=representation",
+                "Accept": "application/json",
+            ]
+        )
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw ZoneMessageWriteError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+
+        guard let inserted = try? decodeResponse(data: data), let message = inserted.first else {
+            throw ZoneMessageWriteError.decodingFailure
+        }
+
+        // Optimistic add to the zone-chip-driven feed — ONLY when this message's zone matches
+        // whatever zone is currently selected there (the crew feed's own compose bar always
+        // satisfies this; a block-anchored send from BlockDetailView may or may not, depending
+        // on whether the crew feed even has a zone selected right now — either way this stays
+        // correct, since `handleRealtimeInsert`'s own de-dupe-by-id guard makes a redundant
+        // append here harmless if a Realtime echo also lands). `BlockDetailView` itself does
+        // NOT rely on this side effect — it appends the returned message to its own local
+        // block-scoped state directly.
+        if selectedZoneId == zoneId, !messages.contains(where: { $0.id == message.id }) {
+            messages.append(message)
+        }
+
+        return message
+    }
+
+    /// Builds an authenticated PostgREST request — mirrors
+    /// `CommunityPinService.buildAuthenticatedRequest` exactly (same header shape), duplicated
+    /// per this file's own established "no cross-service-file type/helper sharing" convention
+    /// (see this file's header note on `ZoneMessage`'s decoder being duplicated, not imported).
+    private func buildAuthenticatedRequest(
+        path: String,
+        method: String,
+        jwt: String,
+        body: Data?,
+        extraHeaders: [String: String]
+    ) -> URLRequest {
+        var request = URLRequest(url: supabaseURL.appendingPathComponent(path))
+        request.httpMethod = method
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        for (key, value) in extraHeaders {
+            request.setValue(value, forHTTPHeaderField: key)
+        }
+        request.httpBody = body
+        return request
     }
 
     // MARK: - Realtime subscription

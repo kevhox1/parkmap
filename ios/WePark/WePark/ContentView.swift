@@ -855,7 +855,11 @@ struct ContentView: View {
             realtimeChannel: supabaseClients.makeRealtimePinChannel()
         ))
         // Community 2.0 Phase 1 (S4) — see `zoneMessageService`'s own doc comment.
+        // S13b (build 20, hero-gap-inventory WP3): `authService` added — required by
+        // `ZoneMessageService.sendMessage`, the block-chatter/zone-compose write path this
+        // session adds. Every pre-S13b caller of this service was read-only and unaffected.
         self._zoneMessageService = State(initialValue: ZoneMessageService(
+            authService: authService,
             realtimeChannel: supabaseClients.makeRealtimeZoneMessageChannel()
         ))
         // Community 2.0 Phase 4b (S12) — see `pushRegistrationService`'s own doc comment.
@@ -1745,7 +1749,16 @@ struct ContentView: View {
                 initiatePathBPinDrop(from: segment)
             },
             pinService: pinService,
-            onOpenRestriction: { pin in activeSheet = .pinDetail(pin) }
+            onOpenRestriction: { pin in activeSheet = .pinDetail(pin) },
+            // S13b (build 20, hero-gap-inventory WP3): required for the "BLOCK CHATTER"
+            // section's read (fetchMessages(segmentId:)) and write (sendMessage) paths —
+            // a mechanical wiring addition, not a new identity-routing concern (this view is
+            // itself a `.sheet(item:)`-presented context, so its identity-gate interception is
+            // handled locally, same as ParkedCarDetailView — no ContentView change needed for
+            // that part). Declared after `onOpenRestriction` to match
+            // `BlockDetailView`'s own property declaration order (Swift's synthesized
+            // memberwise initializer requires call-site arguments in that same order).
+            zoneMessageService: zoneMessageService
         )
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
