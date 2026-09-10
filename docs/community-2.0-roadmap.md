@@ -46,10 +46,15 @@ explicitly below.
 **Total: ~15–18 sessions** (expanded 2026-08-28 from ~12–15: Kevin adopted the gap-inventory plan —
 `docs/design/community-2.0-hero-gap-inventory.md` — adding S13a/S13b and four near-free riders).
 
-**⚠️ Flag-flip prerequisite discovered 2026-08-28:** running the suite with `communityEnabled = true`
-fails 3 tests (found accidentally via a stale working-tree flag during PR #95's gate; suite is
-1021/1021 with the flag off). The eventual launch commit that flips the flag MUST identify and
-adjust those flag-value-dependent tests in the same PR — budget it into the flip, don't discover it
+**⚠️ Flag-flip prerequisite discovered 2026-08-28, count updated at the S13c gate (2026-09-10):**
+running the suite with `communityEnabled = true` now fails **4** tests — the original 3 plus
+`testDefaultParameter_usesRealFlag_currentlyFalse` (added by S10/PR #98, same guard class). All 4
+are deliberate ship-dark assertions, named at the PR #105 gate: `testCommunityEnabled_defaultsFalse`,
+`testCommunityPhase1PinTypes_defaultParameter_matchesShippedFlag`,
+`testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypesAndFlaggedTypes`,
+`testDefaultParameter_usesRealFlag_currentlyFalse`. Expect the count to keep growing as sessions add
+guard tests — reconcile by NAME at each gate, not by number. The eventual launch commit that flips
+the flag MUST adjust these flag-value-dependent tests in the same PR — budget it into the flip, don't discover it
 at launch.
 
 ## Calendar shape
