@@ -1017,6 +1017,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         // hold on a segment would simultaneously open BlockDetailView AND the
         // confirmationDialog. require(toFail:) delays the tap until the 0.4s window
         // passes without a long-press — if the long-press fires, the tap is cancelled.
+        //
+        // Open item #17 (2026-09-11): require(toFail:) is keyed off `longPress`'s own
+        // internal `.began` transition (still at 0.4s, unaffected by the next line's
+        // change) — NOT off whether `Coordinator.handleLongPress` decides to act on it.
+        // That handler now only acts on `.ended` (see its own doc comment) so the SwiftUI
+        // popup presents after the finger lifts, not while it's still down; `tap`'s
+        // require-to-fail relationship to `longPress` is a separate, UIKit-internal
+        // mechanism and needed no change.
         let longPress = UILongPressGestureRecognizer(
             target: context.coordinator,
             action: #selector(Coordinator.handleLongPress(_:))
@@ -2529,9 +2537,32 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         // MARK: - W5: Long-press handling
 
+        /// Open item #17 (2026-09-11): fires `onLongPress` on `.ended`, NOT `.began`.
+        ///
+        /// Root cause of the "first long-press always dismisses immediately, second stays
+        /// up" bug (open-items #12①, reopened as #17): firing on `.began` presents the
+        /// SwiftUI popup (confirmationDialog, or — post-#17 — the park-confirm card) WHILE
+        /// the finger that triggered the long-press is STILL DOWN — `.began` is the
+        /// "held long enough" transition, not the "finger lifted" one. The still-active
+        /// `UILongPressGestureRecognizer` keeps owning that touch until it reaches `.ended`
+        /// (on release) or `.cancelled` (on excess movement), so the SAME physical
+        /// touch-up that ends the gesture lands on/interacts with the popup that was JUST
+        /// presented underneath the still-down finger — reported by other apps hitting the
+        /// identical pattern as "the touch gets eaten" or, here, "immediately dismissed" —
+        /// see https://developer.apple.com/forums/thread/702530, whose accepted fix is
+        /// exactly this: check `.ended`, not `.began`. On retry, the user (having just seen
+        /// it vanish) reflexively delays lifting their finger a beat, so the popup's
+        /// presentation has settled by the time they release — explaining the deterministic
+        /// "always fails first, always works second" pattern rather than a race.
+        ///
+        /// This is UIKit gesture-recognizer state-machine behavior — `UIGestureRecognizer
+        /// .state` is a get-only property settable only via live touch injection, so it
+        /// cannot be driven from an `XCTest` unit test without a running app + real/synthetic
+        /// touches. No unit test is added for this fix; it is gesture plumbing, verified by
+        /// live-device/simulator repro instead (see PR description test plan).
         @objc func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
             guard let mapView = mapView,
-                  recognizer.state == .began else { return }
+                  recognizer.state == .ended else { return }
             let screenPoint = recognizer.location(in: mapView)
             let coordinate = mapView.convert(screenPoint, toCoordinateFrom: mapView)
             // Defer SwiftUI state mutation out of the UIKit gesture callback.

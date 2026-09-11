@@ -676,12 +676,25 @@ struct ContentView: View {
     // MARK: - Tier 3 sub-PR #2: Resting long-press action menu state
 
     /// Coordinate captured when the user long-presses the map while not driving.
-    /// Held while the confirmationDialog is visible; cleared on any action selection or cancel.
+    /// Held while the popup is visible; cleared on any action selection or cancel.
+    ///
+    /// Open item #17 (2026-09-11): now drives TWO mutually-exclusive presentations
+    /// depending on `AppConstants.communityEnabled` (see `longPressPresentationMode(
+    /// communityEnabled:)`):
+    ///   - flag OFF: the legacy three-button `showRestingActionMenu` confirmationDialog
+    ///     below — unchanged, byte-identical behavior (it remains the ONLY report entry
+    ///     point for flag-off users).
+    ///   - flag ON: `longPressParkConfirmOverlay`'s slimmed park-confirm card (reporting
+    ///     now has its own dedicated entry, the S13a Report pill + grid).
     @State private var pendingLongPressCoord: CLLocationCoordinate2D? = nil
 
     /// True while the resting long-press confirmationDialog is presented.
     /// The dialog has three actions: "Park my car here", "Report enforcement or
     /// sweeper", and (FT-15/TF2-15) "Report closure (film shoot / construction)."
+    ///
+    /// Open item #17: only ever set `true` when `AppConstants.communityEnabled == false`
+    /// (see `handleLongPress(at:)`) — flag-on long-presses drive `longPressParkConfirmOverlay`
+    /// via `pendingLongPressCoord` instead, never this dialog.
     @State private var showRestingActionMenu: Bool = false
 
     // MARK: - FT-15 / TF2-15 Stream B2: Block-scoped report tap-select mode state
@@ -1031,25 +1044,9 @@ struct ContentView: View {
                         return
                     }
                     pendingLongPressCoord = nil
-                    // Run W5 candidate-segment detection (Path A) — same logic as the old
-                    // handleLongPress implementation, moved here per spec §4.1.
-                    let candidates = findCandidateSegments(
-                        lat: coord.latitude,
-                        lng: coord.longitude,
-                        radius: pinDropRadiusMeters,
-                        max: 4
-                    )
-                    let detected = candidates.first?.segment
-                    let detectedDistance = candidates.first?.distanceMeters
-                    let alternatives = Array(candidates.dropFirst())
-                    let intent = PinDropIntent(
-                        pinLat: coord.latitude,
-                        pinLng: coord.longitude,
-                        detectedSegment: detected,
-                        detectedSegmentDistance: detectedDistance,
-                        alternativeCandidates: alternatives
-                    )
-                    activeSheet = .parkConfirm(intent)
+                    // Open item #17: shared with the flag-on park-confirm card's "Park
+                    // here" button — see `confirmLongPressPark(at:)`'s own doc comment.
+                    confirmLongPressPark(at: coord)
                 }
                 Button("Report enforcement or sweeper") {
                     guard let coord = pendingLongPressCoord else {
@@ -1975,6 +1972,10 @@ struct ContentView: View {
             // positioning mechanism. See `confirmPromptOverlay`'s own doc comment for why this
             // is an overlay (not a modal `.sheet(item:)` through ActiveSheet).
             confirmPromptOverlay
+            // Open item #17 (2026-09-11): flag-on resting long-press park confirmation.
+            // Same floating-overlay pattern as the cards just above — see
+            // `longPressParkConfirmOverlay`'s own doc comment.
+            longPressParkConfirmOverlay
             // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.
             // See `communityMapChromeOverlay`'s own doc comment.
             communityMapChromeOverlay
@@ -2046,6 +2047,40 @@ struct ContentView: View {
                     pin: pin,
                     onConfirm: { handleConfirmPromptConfirm(pin) },
                     onDismiss: { handleConfirmPromptDismiss() }
+                )
+                .padding(.horizontal, 16)
+                .padding(.bottom, browseSheetPeekHeight + 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// Open item #17 (2026-09-11): the slimmed, flag-on resting long-press park-confirm
+    /// card (`Views/LongPressParkConfirmCard.swift`) — replaces the legacy three-button
+    /// confirmationDialog for `communityEnabled == true` (reporting has its own dedicated
+    /// entry now, the S13a Report pill + grid; see `longPressPresentationMode(
+    /// communityEnabled:)`). Flag-off is entirely unaffected — this property renders nothing
+    /// and `showRestingActionMenu`'s confirmationDialog (in `body`) is the only popup that
+    /// can ever appear.
+    ///
+    /// Driven directly off `pendingLongPressCoord` (no separate presentation flag) — same
+    /// "one piece of state, not a redundant bool" shape `spotPlacementDraft`/`confirmPromptPin`
+    /// already use for their own overlays above. Same "VStack + Spacer(), floats above the
+    /// `.browseNav` sheet" positioning convention as `spotPlacementConfirmOverlay`/
+    /// `confirmPromptOverlay` — not a new mechanism.
+    @ViewBuilder
+    private var longPressParkConfirmOverlay: some View {
+        if AppConstants.communityEnabled, let coord = pendingLongPressCoord {
+            VStack(spacing: 0) {
+                Spacer()
+                LongPressParkConfirmCard(
+                    onConfirm: {
+                        pendingLongPressCoord = nil
+                        confirmLongPressPark(at: coord)
+                    },
+                    onCancel: {
+                        pendingLongPressCoord = nil
+                    }
                 )
                 .padding(.horizontal, 16)
                 .padding(.bottom, browseSheetPeekHeight + 12)
@@ -3944,17 +3979,40 @@ struct ContentView: View {
 
     // MARK: - W5 / Tier 3 sub-PR #2: Long-press handling
 
+    /// Open item #17 (2026-09-11): which UI a resting long-press should drive, purely as a
+    /// function of the community flag. Extracted as a `nonisolated static` pure decision —
+    /// same "extract the decision, not just the data lookup" pattern as
+    /// `communityMapChromeVisible`/`resolveHomeZoneId` above — so the flag fork is directly
+    /// unit-testable without a live `ContentView` instance.
+    ///
+    /// `.legacyThreeButtonDialog`: flag OFF. The confirmationDialog with all three actions
+    /// ("Park my car here" / "Report enforcement or sweeper" / "Report closure") — byte-
+    /// identical to pre-#17 behavior. This is still the ONLY report entry point for flag-off
+    /// users, so it is never slimmed or removed.
+    ///
+    /// `.parkConfirmCard`: flag ON. Reporting has its own dedicated entry (S13a Report pill
+    /// + grid), so the long-press popup slims to a single-purpose park confirmation —
+    /// `longPressParkConfirmOverlay`.
+    enum LongPressPresentation: Equatable {
+        case legacyThreeButtonDialog
+        case parkConfirmCard
+    }
+
+    nonisolated static func longPressPresentationMode(communityEnabled: Bool) -> LongPressPresentation {
+        communityEnabled ? .parkConfirmCard : .legacyThreeButtonDialog
+    }
+
     /// Handles a long-press gesture on the map.
     ///
     /// Behavior is context-dependent:
     ///   - `driveModeActive == true`: long-press is suppressed (no-op). The in-drive
     ///     Report button is the driving-safe entry path. Suppressing the gesture avoids
     ///     accidental park-pin drops while maneuvering (spec §4.1).
-    ///   - `driveModeActive == false`: captures the coordinate and shows the
-    ///     resting action menu (confirmationDialog). The menu offers two actions:
-    ///     "Park my car here" (W5 flow) or "Report enforcement or sweeper" (Tier 3).
-    ///     Candidate-segment detection is deferred until the user picks an action —
-    ///     no wasted work if they pick "Report" (spec §4.1 note).
+    ///   - `driveModeActive == false`: captures the coordinate and shows the resting
+    ///     popup — `longPressPresentationMode(communityEnabled:)` decides which one (see
+    ///     its own doc comment). Candidate-segment detection is deferred until the user
+    ///     picks "Park" — no wasted work if they cancel or (flag-off only) pick "Report"
+    ///     (spec §4.1 note).
     private func handleLongPress(at coordinate: CLLocationCoordinate2D) {
         // While driving, long-press is intentionally a no-op (spec §4.1).
         // FT-15/TF2-15: also a no-op while block-select mode is active — a long-press
@@ -3963,20 +4021,55 @@ struct ContentView: View {
         // the floating bar's Cancel/Continue before any other long-press action is available.
         guard !driveModeActive, !blockSelectModeActive else { return }
 
-        // Clear any current selection and dismiss any open sheet before showing the menu.
+        // Clear any current selection and dismiss any open sheet before showing the popup.
         // FT-20 Stream A: the guard above guarantees driveModeActive/blockSelectModeActive
         // are both false here, so dismissTargetOutsideBrowseNav always resolves to
         // `.browseNav` — using the shared helper (not a literal `nil`) so the browse sheet
-        // correctly reappears if the user cancels the confirmationDialog below, rather than
-        // leaving the map with no chrome at all (`.browseNav` is browse mode's persistent
-        // rest state now, not "nothing" — spec §4.1).
+        // correctly reappears once the popup is dismissed, rather than leaving the map with
+        // no chrome at all (`.browseNav` is browse mode's persistent rest state now, not
+        // "nothing" — spec §4.1).
         selectedSegmentID = nil
         activeSheet = dismissTargetOutsideBrowseNav
 
-        // Capture coordinate and show the confirmationDialog.
-        // The dialog's action handlers (in body) build the PinDropIntent or reportPin sheet.
+        // Capture the coordinate unconditionally — both presentations read it.
         pendingLongPressCoord = coordinate
-        showRestingActionMenu = true
+
+        // Open item #17: flag-off keeps the legacy confirmationDialog (below, in `body`),
+        // byte-identical to before this change. Flag-on shows nothing here —
+        // `longPressParkConfirmOverlay` renders directly off `pendingLongPressCoord` once
+        // `AppConstants.communityEnabled` is true, no separate presentation flag needed.
+        switch Self.longPressPresentationMode(communityEnabled: AppConstants.communityEnabled) {
+        case .legacyThreeButtonDialog:
+            showRestingActionMenu = true
+        case .parkConfirmCard:
+            break
+        }
+    }
+
+    /// Shared "Park my car here" / "Park here" logic — the W5 candidate-segment lookup +
+    /// `PinDropIntent` construction, used by BOTH the flag-off confirmationDialog's "Park my
+    /// car here" button (`body`) and the flag-on `longPressParkConfirmOverlay` card's "Park
+    /// here" button, so both presentations stay behaviorally identical for this action.
+    /// Extracted by open item #17; not a behavior change for the flag-off caller — same
+    /// statements, same order, just named and shared instead of duplicated inline.
+    private func confirmLongPressPark(at coord: CLLocationCoordinate2D) {
+        let candidates = findCandidateSegments(
+            lat: coord.latitude,
+            lng: coord.longitude,
+            radius: pinDropRadiusMeters,
+            max: 4
+        )
+        let detected = candidates.first?.segment
+        let detectedDistance = candidates.first?.distanceMeters
+        let alternatives = Array(candidates.dropFirst())
+        let intent = PinDropIntent(
+            pinLat: coord.latitude,
+            pinLng: coord.longitude,
+            detectedSegment: detected,
+            detectedSegmentDistance: detectedDistance,
+            alternativeCandidates: alternatives
+        )
+        activeSheet = .parkConfirm(intent)
     }
 
     // MARK: - W5: "Park here →" Path B (from BlockDetailView)
