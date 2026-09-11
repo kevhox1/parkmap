@@ -499,3 +499,43 @@ final class PinMarkerAnnotationAgeStringTests: XCTestCase {
         return f.string(from: date)
     }
 }
+
+// MARK: - CrewFeedMerge.awayZoneNote (PR #105 Mac-gate fix, S13c Fix #12's actual gating rule)
+
+/// Covers the pure decision `CrewFeedSection.awayZoneNote` now delegates to. This logic was
+/// already correct in isolation before this fix — the live bug was in the SwiftUI wiring
+/// that fed the view a stale `homeZoneId` (see `CrewFeedSection.swift`'s header comment for
+/// the root cause), which these tests can't reproduce since they call the pure function
+/// directly rather than hosting the view. They exist so a future regression in the DECISION
+/// itself (as opposed to the wiring) is still caught here, independent of any view-hosting
+/// test.
+final class CrewFeedMergeAwayZoneNoteTests: XCTestCase {
+
+    func testAwayZoneNote_homeIsNolita_selectedIsSoho_returnsNolita() {
+        XCTAssertEqual(
+            CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "soho"),
+            .nolita
+        )
+    }
+
+    func testAwayZoneNote_homeAndSelectedSameZone_returnsNil() {
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "nolita"))
+    }
+
+    func testAwayZoneNote_noHomeZone_returnsNil() {
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: nil, selectedZoneId: "soho"))
+    }
+
+    func testAwayZoneNote_homeZoneIdUnrecognized_returnsNil() {
+        // Defensive: an id outside the three seeded zones (shouldn't occur given
+        // `CommunityZoneBounds`'s fixed table, but the function must not force-unwrap).
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "soho-les", selectedZoneId: "soho"))
+    }
+
+    func testAwayZoneNote_homeIsLes_selectedIsNolita_returnsLes() {
+        XCTAssertEqual(
+            CrewFeedMerge.awayZoneNote(homeZoneId: "les", selectedZoneId: "nolita"),
+            .les
+        )
+    }
+}

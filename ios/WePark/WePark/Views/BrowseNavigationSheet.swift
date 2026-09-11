@@ -711,13 +711,16 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
             // THIS the VStack's second unbounded-flexible child, and SwiftUI has no way to
             // know search's `List` "deserves" more of the split than the crew feed —
             // `searchArea`'s list would likely lose roughly half its rendered height purely
-            // from this PR's addition, flag on. Capping the crew feed at
-            // `crewFeedMaxHeight` (an explicit, formula-based ceiling — same "compute from a
+            // from this PR's addition, flag on. Sizing the crew feed to exactly
+            // `crewFeedMaxHeight` (an explicit, formula-based value — same "compute from a
             // value we control, don't rely on being the sole greedy child" discipline as
             // `actionColumnHeight`/`maxAllowedMediumHeight` below) guarantees `searchArea`
             // keeps AT LEAST half of `.large`'s available height regardless of how tall the
             // crew feed's own content gets, while still giving the feed a generously large,
-            // independently-scrolling region of its own.
+            // independently-scrolling region of its own. (PR #105: this slot's height was
+            // originally just CAPPED at this value via `maxHeight`, not fixed to it — see the
+            // fix note at this slot's mount site below for why that let the slot's occupied
+            // height vary by content and caused a live overlap bug.)
             //
             // [COMPILE-UNVERIFIED / NEEDS ON-DEVICE CHECK] Same posture as
             // `maxAllowedMediumHeight` below — this machine has no simulator. Kevin/QA: with
@@ -726,9 +729,29 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
             // feed is also present, and (2) the crew feed itself isn't uncomfortably cramped
             // by the cap on a smaller device (SE-class). Flag-off: confirm this whole branch
             // renders nothing at all (byte-identical VStack child count to `origin/main`).
+            //
+            // PR #105 Mac-gate fix (Bug 2, Kevin's live smoke): `.frame(maxHeight:)` ALONE
+            // only caps this slot's height — it does NOT floor it. `CrewFeedSection`'s own
+            // natural height varies a lot by content: a non-empty feed's `ScrollView` is
+            // greedy and fills this slot up to `crewFeedMaxHeight`, but the empty-feed state
+            // (`CrewFeedMerge.showsEmptyState`'s fixed-size card, S13c's new garage-savings
+            // card, and this PR's own away-note all being conditionally-empty `EmptyView`
+            // siblings inside `CrewFeedSection`'s VStack) reports a much SMALLER natural
+            // height. That made this slot's OWN occupied height in the outer VStack swing
+            // between zone selections, which in turn moved this slot's siblings above it
+            // (`actionColumn`/"New to parking?") relative to the sheet's fixed `.large`
+            // presentation height. Changing `maxHeight` → an exact `height` (with explicit
+            // `alignment: .top`) makes this slot occupy the SAME fixed height regardless of
+            // `CrewFeedSection`'s own content — chips render at a stable top-anchored
+            // position and the slot's outer footprint can never shrink into `actionColumn`'s
+            // space, for any zone/feed-emptiness combination. No pure/testable logic change
+            // here (this is a layout-only `.frame` modifier, not a decision function) — see
+            // this PR's own live-simulator smoke for verification, matching this file's
+            // existing precedent of `.frame` fixes (e.g. `minimumPeekHeight`'s defensive
+            // floor above) being smoke-verified rather than unit-tested.
             if detentKind == .large, AppConstants.communityEnabled {
                 crewFeedBuilder()
-                    .frame(maxHeight: Self.crewFeedMaxHeight)
+                    .frame(height: Self.crewFeedMaxHeight, alignment: .top)
             }
         }
         // Re-report on every measured change (initial layout, Dynamic Type change, device

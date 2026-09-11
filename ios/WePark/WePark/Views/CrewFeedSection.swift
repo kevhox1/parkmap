@@ -80,16 +80,41 @@
 //     (not just `total == 0`) — a poster with reports but zero CONFIRMS no longer sees a
 //     punitive false "0%".
 //   - Fix #12: `awayZoneNote` — "you're browsing this square" note, gated on the CORRECTED
-//     Fix #1 home-zone derivation (`homeZoneId`, passed down from
-//     `ContentView.communityHomeZoneId`). Copy deviates from the screenshot's literal
+//     Fix #1 home-zone derivation. Copy deviates from the screenshot's literal
 //     "posting stays in your home square" claim — flagged in this session's PR body, since
 //     `crewComposeRow` actually posts to whichever zone is currently selected, not
 //     unconditionally to the user's home zone.
 //   - Garage-savings stat (`garageSavingsCard`): new build, not a fix — §3's Option A. See
 //     `Services/GarageSavingsService.swift`.
 //
+//  PR #105 Mac-gate fix (post-S13c, live-smoke found by Kevin): Fix #12's away-note NEVER
+//  rendered live despite the pure gating logic (`homeZoneId != selectedZone.id`) being
+//  correct in isolation and the static QA pass approving the wiring. Root cause: `homeZoneId`
+//  was threaded down as a PLAIN VALUE (`ContentView.communityHomeZoneId` → the `crewFeed:`
+//  closure → `CrewFeedSection`'s stored `var homeZoneId: String?`), captured at whatever
+//  moment `BrowseNavigationSheet.body` last happened to reconstruct `CrewFeedSection` (which
+//  only happens when `detentKind` changes or an Observable property READ during THAT specific
+//  render changes — a much rarer event than this view's own re-renders). Tapping a zone chip
+//  is `CrewFeedSection`'s OWN local `@State` (`selectedZone`) — it does NOT ask the parent to
+//  reconstruct the view, so `homeZoneId` never refreshed relative to the zone the user was
+//  actually looking at. Contrast `pinService.visiblePins`/`zoneMessageService.messages`, read
+//  DIRECTLY inside this view's OWN body (`feedContent`, `contributorCountLabel`) — those
+//  correctly self-update because the Observable read happens within THIS view's own render,
+//  not a distant ancestor's. Fix: `homeZoneId` is now a COMPUTED property that reads
+//  `parkPinService`/`locationService` DIRECTLY (both passed in as references, same pattern as
+//  `pinService`/`zoneMessageService`/`authService` above) and calls the exact same
+//  `ContentView.resolveHomeZoneId` priority rule Fix #1 already established (car > device
+//  location > nil) — so this view re-evaluates its own home zone on every one of its own body
+//  passes, the same way the feed/contributor-count already did. `ContentView` no longer
+//  passes `homeZoneId:` into this view's initializer at all.
+//
 
 import SwiftUI
+// PR #105 wiring fix: `homeZoneId` below reads `locationService.userLocation` directly
+// (`CLLocationCoordinate2D?.latitude`/`.longitude`) — SwiftUI does not re-export CoreLocation
+// (unlike MapKit, which `ContentView.swift` relies on for the same member access), so this
+// file needs its own explicit import for that member access to resolve.
+import CoreLocation
 
 // MARK: - CommunityZone
 
@@ -189,6 +214,19 @@ enum CrewFeedMerge {
             .filter { resolvedZoneId(for: $0) == zoneId }
             .map(CrewFeedItem.pin)
         return (chatItems + pinItems).sorted { $0.timestamp > $1.timestamp }
+    }
+
+    // MARK: Away-zone note (S13c Fix #12 / PR #105 wiring fix)
+
+    /// Pure decision for `CrewFeedSection.awayZoneNote`: `nil` when no note should render
+    /// (no resolvable home zone, or the currently-selected zone chip already IS home);
+    /// otherwise the `CommunityZone` to name as "home" in the note's copy. Extracted so the
+    /// exact gating rule that shipped broken in S13c (never observed the live home-zone
+    /// value — see this file's header comment) has a directly-testable pure form independent
+    /// of the SwiftUI view-update mechanics that caused the live failure.
+    static func awayZoneNote(homeZoneId: String?, selectedZoneId: String) -> CommunityZone? {
+        guard let homeZoneId, homeZoneId != selectedZoneId else { return nil }
+        return CommunityZone(rawValue: homeZoneId)
     }
 
     // MARK: Empty state
@@ -541,12 +579,15 @@ struct CrewFeedSection: View {
     var zoneMessageService: ZoneMessageService
     var authService: SupabaseAuthService
 
-    /// S13c Fix #12: the user's OWN zone id (`ContentView.communityHomeZoneId`'s corrected
-    /// Fix #1 derivation — parked car's zone, else device location's zone, else `nil`).
-    /// Drives `awayZoneNote`'s "you're browsing this square" note. `nil` when neither a
-    /// parked car nor a device-location fix resolves to a seeded zone (note simply doesn't
-    /// render — same "no signal, no claim" posture as the map's own zone-box gate).
-    var homeZoneId: String? = nil
+    /// PR #105 wiring fix (see this file's header comment): passed in as references, exactly
+    /// like `pinService`/`zoneMessageService`/`authService` above, so `homeZoneId` below can
+    /// read them DIRECTLY inside this view's own body/computed-property evaluation — the
+    /// same "Observable read happens in the consuming view's own render" pattern that already
+    /// made `feedContent`/`contributorCountLabel` correctly self-update, rather than relying
+    /// on a plain value threaded down through a distant ancestor that only reconstructs this
+    /// view on its own, much rarer, schedule.
+    var parkPinService: ParkPinService
+    var locationService: LocationService
 
     /// S13c garage-savings stat (`docs/design/community-2.0-final-parity-audit.md` §3,
     /// Option A): device-local running total, read fresh on every appearance rather than
@@ -865,11 +906,27 @@ struct CrewFeedSection: View {
 
     // MARK: - S13c Fix #12: away-zone note
 
+    /// The user's OWN zone id — car's zone if parked, else device location's zone, else
+    /// `nil`. Same priority rule Fix #1 already established for the map's zone box
+    /// (`ContentView.resolveHomeZoneId`), called here directly rather than threaded down as a
+    /// plain value (PR #105 wiring fix — see this file's header comment for the live bug this
+    /// replaced: a plain value only refreshed when this view's PARENT happened to reconstruct
+    /// it, which tapping a zone chip — this view's own local `@State` — never triggers).
+    /// Evaluated fresh on every one of THIS view's own body passes, so it stays correct across
+    /// zone-chip taps without depending on an ancestor's render schedule.
+    private var homeZoneId: String? {
+        guard AppConstants.communityEnabled else { return nil }
+        return ContentView.resolveHomeZoneId(
+            parkedCarLat: parkPinService.parkedCar?.latitude,
+            parkedCarLng: parkPinService.parkedCar?.longitude,
+            deviceLocationLat: locationService.userLocation?.latitude,
+            deviceLocationLng: locationService.userLocation?.longitude
+        )
+    }
+
     /// `design/screenshots/06-away-zone.png`'s intent — lets a browsing user know the zone
-    /// chip they're currently viewing ISN'T their own. Gated on the CORRECTED Fix #1
-    /// home-zone derivation (`homeZoneId`, passed down from `ContentView.communityHomeZoneId`
-    /// — car > device location > nil), never the old, buggy viewport fallback (sequenced
-    /// after Fix #1 per this session's dispatch instruction).
+    /// chip they're currently viewing ISN'T their own. Gated via `CrewFeedMerge.awayZoneNote`
+    /// (pure, directly testable), fed by the CORRECTED Fix #1 home-zone derivation above.
     ///
     /// Copy note (flagged in this PR's body, not silently decided): the screenshot's literal
     /// copy is "posting stays in your home square" — but `crewComposeRow`'s compose bar
@@ -880,8 +937,7 @@ struct CrewFeedSection: View {
     /// "home") rather than a claim about where a post will land.
     @ViewBuilder
     private var awayZoneNote: some View {
-        if let homeZoneId, homeZoneId != selectedZone.id,
-           let homeZone = CommunityZone(rawValue: homeZoneId) {
+        if let homeZone = CrewFeedMerge.awayZoneNote(homeZoneId: homeZoneId, selectedZoneId: selectedZone.id) {
             HStack(spacing: 6) {
                 Image(systemName: "location.slash")
                     .font(.caption2)

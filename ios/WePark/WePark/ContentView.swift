@@ -1660,10 +1660,18 @@ struct ContentView: View {
                         pinService: pinService,
                         zoneMessageService: zoneMessageService,
                         authService: authService,
-                        // S13c Fix #12 (away-note): built on the CORRECTED home-zone logic
-                        // from Fix #1 (car > device location > nil) — never the old viewport
-                        // fallback. See `CrewFeedSection.awayZoneNote`'s doc comment.
-                        homeZoneId: communityHomeZoneId
+                        // PR #105 Mac-gate fix: `parkPinService`/`locationService` are passed
+                        // as REFERENCES (not a derived `homeZoneId` value) so
+                        // `CrewFeedSection` can read them directly in its own body, the same
+                        // pattern `pinService`/`zoneMessageService` above already use. A
+                        // plain `homeZoneId: communityHomeZoneId` value here only refreshed
+                        // when THIS closure's enclosing `BrowseNavigationSheet` happened to
+                        // re-render — tapping a zone chip (CrewFeedSection's own local
+                        // `@State`) never triggered that, so the away-note never updated to
+                        // match the zone the user was actually viewing. See
+                        // `CrewFeedSection.swift`'s header comment for the full root cause.
+                        parkPinService: parkPinService,
+                        locationService: locationService
                     )
                 }
             }
