@@ -25,7 +25,16 @@
 //    1. testPresentationMode_flagOff_returnsLegacyThreeButtonDialog
 //    2. testPresentationMode_flagOn_returnsParkConfirmCard
 //
+//  Open item #17 residual (2026-09-11, core-parking-16 session): the tentative "car will go
+//  here" marker at the long-press point. `ContentView.pendingParkPinCoordinate(communityEnabled:
+//  pendingLongPressCoord:)` is the pure gate that keeps `MapViewRepresentable
+//  .pendingParkCoordinate` `nil` for flag-off builds even though `pendingLongPressCoord` is
+//  ALSO set (unconditionally) by the legacy three-button-dialog long-press flow — see that
+//  function's own doc comment. `ContentView.pendingParkPinCoordinateTests` below covers all 4
+//  flag × coordinate-presence combinations.
+//
 
+import CoreLocation
 import XCTest
 @testable import WePark
 
@@ -46,6 +55,40 @@ final class LongPressPresentationModeTests: XCTestCase {
         XCTAssertEqual(
             ContentView.longPressPresentationMode(communityEnabled: true),
             .parkConfirmCard
+        )
+    }
+}
+
+// MARK: - pendingParkPinCoordinate (open item #17 residual, 2026-09-11)
+
+final class PendingParkPinCoordinateTests: XCTestCase {
+
+    private let coord = CLLocationCoordinate2D(latitude: 40.7186, longitude: -73.9941)
+
+    /// Flag off + a coordinate present (the legacy dialog DOES set `pendingLongPressCoord`) —
+    /// must still return `nil`. This is the exact scenario the function exists to guard:
+    /// flag-off long-press must stay byte-identical, with no tentative marker ever drawn.
+    func testFlagOff_coordinatePresent_returnsNil() {
+        XCTAssertNil(
+            ContentView.pendingParkPinCoordinate(communityEnabled: false, pendingLongPressCoord: coord)
+        )
+    }
+
+    func testFlagOff_noCoordinate_returnsNil() {
+        XCTAssertNil(
+            ContentView.pendingParkPinCoordinate(communityEnabled: false, pendingLongPressCoord: nil)
+        )
+    }
+
+    func testFlagOn_coordinatePresent_passesThrough() {
+        let result = ContentView.pendingParkPinCoordinate(communityEnabled: true, pendingLongPressCoord: coord)
+        XCTAssertEqual(result?.latitude, coord.latitude)
+        XCTAssertEqual(result?.longitude, coord.longitude)
+    }
+
+    func testFlagOn_noCoordinate_returnsNil() {
+        XCTAssertNil(
+            ContentView.pendingParkPinCoordinate(communityEnabled: true, pendingLongPressCoord: nil)
         )
     }
 }
