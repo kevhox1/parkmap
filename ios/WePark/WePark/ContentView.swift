@@ -1221,6 +1221,16 @@ struct ContentView: View {
                 engine: engine,
                 loadedSegments: tileLoader.segments,
                 parkPinService: parkPinService,
+                // PR #106 QA Finding #2 fix: reuse the SAME `ASPSuspensionService` instance
+                // already held here (`@State private var aspService`, line ~488, built for
+                // the W7 top banner) rather than letting the sheet default-construct its own
+                // second copy — avoids a redundant `asp-2026.json` bundle parse on every My
+                // Car sheet presentation.
+                // NB: `ParkedCarDetailView.init` is hand-written (not memberwise), but Swift
+                // still requires labeled arguments in the init's DECLARED parameter order —
+                // aspService is declared directly after scheduler (which this call site
+                // omits, using its own `.shared` default).
+                aspService: aspService,
                 // FT-15/TF2-15 (§9.2): so the sheet can look up an active block-scoped
                 // restriction covering wherever this car is parked — "the highest-value
                 // consumption point in the whole spec."

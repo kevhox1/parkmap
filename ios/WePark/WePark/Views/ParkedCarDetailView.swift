@@ -143,10 +143,16 @@ struct ParkedCarDetailView: View {
     let scheduler: NotificationScheduler
 
     /// Open-items #16 item 3: source of the "today is ASP-suspended" fact for the parked
-    /// segment. Defaults to a real instance (same "inject a real default, override in tests"
-    /// convention as `scheduler: NotificationScheduler = .shared`) — `ContentView` never
-    /// needs to pass this explicitly since it doesn't otherwise hold an `ASPSuspensionService`
-    /// reference reachable from this sheet's call site.
+    /// segment. **PR #106 QA Finding #2 correction**: `ContentView` already holds
+    /// `@State private var aspService = ASPSuspensionService()` (`ContentView.swift:488`,
+    /// built for the W7 top banner) and passes THAT instance in at its call site — this
+    /// property's original doc comment claimed no such reachable instance existed, which was
+    /// simply wrong (it also missed that `ParkingRulesEngine`'s own default init hides a
+    /// THIRD copy). The default value below (a fresh instance) exists only so
+    /// previews/standalone use and every pre-existing test call site keep compiling without
+    /// threading one through — same "inject a real default, override at the real call site"
+    /// convention as `scheduler: NotificationScheduler = .shared`, NOT a claim that
+    /// `ContentView` needs it.
     let aspService: ASPSuspensionService
 
     // MARK: - FT-15 / TF2-15 (§9.2): Temporary restriction banner
@@ -539,10 +545,30 @@ struct ParkedCarDetailView: View {
     /// colored via the segment's existing Option B dynamic state color —
     /// `engine.currentStateColor`, no new color mapping invented) since Kevin called this out
     /// as the sheet's most valuable fact.
+    ///
+    /// PR #106 QA Finding #1 fix: `engine.nextRestriction` intentionally SKIPS `METERED`
+    /// rules (correct, pre-existing engine semantics — a meter isn't a move-your-car event).
+    /// For a segment whose only rule is `METERED`, that means `restriction.isUnrestricted`
+    /// is `true` even while the meter is actively charging, which used to make this line
+    /// falsely claim "Free — no restrictions here" directly under the sheet's existing
+    /// headline correctly saying "paid until 7pm" (the FT-9 bug class, reintroduced at this
+    /// new call site). Fix: when the segment carries a `METERED` rule, pass
+    /// `engine.meteredStatus(for:at:)`'s output through as `meteredStatusLabel` — the SAME
+    /// source of truth the headline's own FT-9 fix already uses — so
+    /// `freeUntilStatusText` can fall back to it instead of the unqualified "free" claim.
+    /// `nil` (not computed at all) when the segment has no metered rule, so non-metered
+    /// segments pay zero extra cost.
     private func statusLineView(for seg: Segment) -> some View {
         let restriction = engine.nextRestriction(for: seg, at: now)
         let timeLabel = engine.nextRestrictionTimeLabel(hours: restriction.hours, now: now)
-        let text = ParkedCarDetailLogic.freeUntilStatusText(restriction: restriction, timeLabel: timeLabel)
+        let meteredStatusLabel = ParkedCarDetailLogic.segmentHasMeteredRule(seg)
+            ? engine.meteredStatus(for: seg, at: now)
+            : nil
+        let text = ParkedCarDetailLogic.freeUntilStatusText(
+            restriction: restriction,
+            timeLabel: timeLabel,
+            meteredStatusLabel: meteredStatusLabel
+        )
         return Text(text)
             .font(.subheadline.weight(.bold))
             .foregroundStyle(engine.currentStateColor(for: seg, at: now))
@@ -893,19 +919,57 @@ enum ParkedCarDetailLogic {
     ///     parking active now", "ASP Mon/Thu active now" — the SAME strings
     ///     `ParkingRulesEngine.nextRestriction` already produces for this case) rather than
     ///     inventing new wording.
-    ///   - `restriction.isUnrestricted` (hours >= 168, the sentinel): no restriction exists on
-    ///     this block at all within the 14-day window.
+    ///   - `restriction.isUnrestricted` (hours >= 168, the sentinel): no NON-METERED
+    ///     restriction exists on this block within the 14-day window.
+    ///     **PR #106 QA Finding #1**: `nextRestriction` intentionally SKIPS `METERED` rules
+    ///     (correct, pre-existing engine semantics — a meter isn't a move-your-car event), so
+    ///     this sentinel is reached for a metered-only segment even while its meter is
+    ///     actively charging. `meteredStatusLabel` is the caller's own
+    ///     `engine.meteredStatus(for:at:)` output — the SAME source of truth the sheet's
+    ///     existing headline already uses for this exact case (its own FT-9 fix) — passed
+    ///     only when the segment carries a metered rule (`nil` otherwise). When present, this
+    ///     branch falls back to it (stripped of its "Metered (...)" wrapper via
+    ///     `stripMeteredWrapper` below) instead of the unqualified "free" claim.
     ///   - otherwise: "Free until <timeLabel>" — `timeLabel` is the caller's own
     ///     `engine.nextRestrictionTimeLabel(hours:now:)` output (e.g. "Thursday 9:30 AM"),
-    ///     passed in as a plain `String` so this function stays engine-free and pure.
-    nonisolated static func freeUntilStatusText(restriction: NextRestriction, timeLabel: String) -> String {
+    ///     passed in as a plain `String` so this function stays engine-free and pure. A
+    ///     segment with BOTH an ASP-family rule and a metered rule reaches this branch (the
+    ///     ASP rule is virtually always found within 14 days), so the ASP-derived line
+    ///     renders here unaffected by the metered-only fix above.
+    nonisolated static func freeUntilStatusText(
+        restriction: NextRestriction,
+        timeLabel: String,
+        meteredStatusLabel: String?
+    ) -> String {
         if restriction.isActiveNow {
             return restriction.label ?? "Restricted now"
         }
         if restriction.isUnrestricted {
+            if let meteredStatusLabel {
+                return stripMeteredWrapper(meteredStatusLabel)
+            }
             return "Free \u{2014} no restrictions here"
         }
         return "Free until \(timeLabel)"
+    }
+
+    /// **PR #106 QA Finding #1 fix**: strips the "Metered (" / ")" wrapper from
+    /// `ParkingRulesEngine.meteredStatus(for:at:)`'s output, e.g. "Metered (paid until 7pm)"
+    /// → "paid until 7pm" — byte-identical logic to the engine's own PRIVATE
+    /// `stripMeteredWrapper(_:)` (`Services/ParkingRulesEngine.swift`), intentionally
+    /// duplicated here rather than widening that method's access level. Same "duplicate
+    /// small view-layer formatting helpers rather than expose engine internals" convention
+    /// this codebase already documents at `RuleRow.formatMinutes`'s doc comment
+    /// (`Views/BlockDetailView.swift`) for the identical reasoning.
+    nonisolated static func stripMeteredWrapper(_ label: String) -> String {
+        var s = label
+        if s.hasPrefix("Metered (") {
+            s = String(s.dropFirst("Metered (".count))
+        }
+        if s.hasSuffix(")") {
+            s = String(s.dropLast(1))
+        }
+        return s
     }
 
     /// Item 2: whether the sign-details rules list should render collapsed-by-default behind
@@ -921,6 +985,13 @@ enum ParkedCarDetailLogic {
     /// all would be noise unrelated to this car).
     nonisolated static func segmentHasASPRule(_ segment: Segment) -> Bool {
         segment.rules.contains { $0.category.isASP }
+    }
+
+    /// **PR #106 QA Finding #1**: whether `segment` carries at least one `METERED` rule —
+    /// the scoping check for the metered-aware status-line fallback in
+    /// `freeUntilStatusText` above.
+    nonisolated static func segmentHasMeteredRule(_ segment: Segment) -> Bool {
+        segment.rules.contains { $0.category == .metered }
     }
 
     /// Item 3: the explicit "ASP Suspended — <reason>" note text, `nil` unless BOTH the
