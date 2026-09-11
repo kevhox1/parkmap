@@ -1,7 +1,7 @@
 # PR #106 QA — My Car status line + ASP suspension note + long-press tentative pin
 
 **Reviewed:** branch `ios/core-parking-16` at `d4d03408` (+ docs-only `90e777fc`), against `docs/open-items.md` #16 / #17-residual, `HANDOFF.md`'s 2026-09-11 entry.
-**Verdict:** 🔴 BLOCK — one concrete, high-frequency correctness bug in the flagship (non-flag-gated) feature. The long-press tentative-pin half (item #17 residual) is clean and should ship; the My Car status-line half (item #16) needs one fix before it can go out, because it ships to 100% of users, flag-off included.
+**Pass 1 verdict:** 🔴 BLOCK (see below). **Pass 2 verdict (fix commit `036f2131`): ✅ MERGE-READY** — jump to the "Pass 2" section at the bottom for the current status; the rest of this file is the original Pass 1 report, left intact for history.
 
 This is a static/code review pass — no Swift toolchain here. Everything below is traced through the actual engine code and a real scan of the bundled tile data, not just the diff.
 
@@ -91,7 +91,7 @@ Not verified — recommend the Mac gate covers all of these explicitly:
 - Live long-press tentative-pin cycle (appear/cancel/replace) and flag-off dialog untouched.
 - Rosh Hashanah suspension-day smoke if gating on 2026-09-12 (see Mac gate checklist below).
 
-## Mac gate checklist (for whoever runs this on hardware)
+## Mac gate checklist (Pass 1 — superseded by Pass 2's counts below; kept for history)
 
 1. **Build**: `xcodebuild -project ios/WePark.xcodeproj -scheme WePark -destination 'platform=iOS Simulator,name=iPhone 15' build` (resolve UDID dynamically per project convention, not hardcoded).
 2. **Test counts** — run `xcodebuild test` twice, once per flag state (`AppConstants.communityEnabled` in `ios/WePark/WePark/Services/Constants.swift:154`):
@@ -116,3 +116,60 @@ Not verified — recommend the Mac gate covers all of these explicitly:
 - Item #17 residual is a clean, minimal-diff port of an already-proven pattern (`DraftSpotPinAnnotation`'s add/remove sync). The flag-off byte-identical requirement is enforced by a genuinely pure, well-tested gate function, and the double-marker-on-confirm race is closed by ordering (`pendingLongPressCoord = nil` before the sheet even opens), not by a fragile timing assumption.
 - Test hygiene is solid: boundary tests at 0/3/4/9 for the collapse threshold, all 4 flag×coordinate combinations for the pin gate, and two tests against the REAL bundled `asp-2026.json` calendar (not just mocked reasons) for the suspension-note end-to-end path. The test-count math in the PR body is exactly right, which isn't always true of these self-reported deltas.
 - `docs/open-items.md` annotations are accurate and appropriately left open (not force-closed) pending the Mac gate — good board hygiene.
+
+---
+
+# Pass 2 — verification of fix commit `036f2131`
+
+**Reviewed:** `036f2131` (`036f2131~1..036f2131`) on `ios/core-parking-16`, addressing Pass 1's Finding #1 (🔴) and Finding #2 (🟡) above.
+**Verdict:** ✅ MERGE-READY (pending the standard Mac gate — build/test/live-smoke was never run on this VPS for either pass; nothing below substitutes for it).
+
+## Finding #1 fix — verified correct
+
+- **Metered branch actually fires for metered-only segments**: `ParkedCarDetailLogic.segmentHasMeteredRule(_:)` is `segment.rules.contains { $0.category == .metered }` — correct against the rule model (`Category.metered` exists, matches `ParkingRule.category`). `statusLineView(for:)` now computes `meteredStatusLabel` by calling `engine.meteredStatus(for: seg, at: now)` when-and-only-when `segmentHasMeteredRule` is true, `nil` otherwise, and threads it into `freeUntilStatusText`. Traced end to end — this is the real call site, not just the pure function.
+- **Mixed ASP+METERED still renders the ASP line**: confirmed by code trace, not just trusting the claim. `freeUntilStatusText`'s metered fallback is nested *inside* the `restriction.isUnrestricted` branch. For a segment carrying both an ASP-family rule and a metered rule, `nextRestriction` finds the ASP occurrence (ASP rules are never skipped, only METERED is) within the 14-day window in the overwhelming common case, so `isUnrestricted` is `false` and execution never reaches the metered fallback — the existing "Free until \<time\>" line renders unchanged. The new `testRealEngine_mixedASPAndMeteredSegment_stillRendersASPDerivedFreeUntilLine` test exercises this against the real engine (not a mock) and asserts `text.hasPrefix("Free until ")` — read the assertion myself, it's real.
+- **`stripMeteredWrapper` byte-consistency**: read both implementations side by side.
+  - Engine's private original (`ParkingRulesEngine.swift:633-642`): `hasPrefix("Metered (")` → drop prefix; `hasSuffix(")")` → drop last char.
+  - New duplicate (`ParkedCarDetailLogic.stripMeteredWrapper`, `ParkedCarDetailView.swift`): identical two-step logic, only the local variable name differs (`lbl` vs `label`).
+  - Verdict: functionally byte-identical today. **🟢 drift risk is real and worth naming**: these are two independently-maintained copies of the same string-transform with no shared test or compiler-enforced link between them. If the engine's private version is ever changed (e.g. a new `meteredStatus` output shape), this view-layer copy will silently diverge with no build-time signal — someone has to remember to update both. The `RuleRow.formatMinutes` precedent cited as justification has the same latent risk; this isn't a new pattern being invented, just a second instance of an existing one. Not blocking — logging as a nit for a future "shared internal formatting helpers" pass.
+- **Unqualified "free"/"no restrictions" copy reachable for a metered segment — tried to construct a counterexample**: the one class of metered state I checked hardest was the "meter free right now" case (off-peak hours, `meteredStatus` returns e.g. `"Metered (free until 9am)"` / `"Metered (free)"` rather than `"Metered (paid until X)"`). Traced through `freeUntilStatusText`: `meteredStatusLabel` is non-nil whenever the segment has a metered rule, regardless of whether the meter is currently paid or currently free — so the fallback always fires and always goes through `stripMeteredWrapper`, producing `"free until 9am"` / `"free"` (lowercase, unwrapped) rather than the old blanket `"Free — no restrictions here"`. This is **honest**: it says "free" only when the meter itself is actually free right now, and still names the meter's own upcoming resume time when there is one (`"free until 9am"`) rather than claiming "no restrictions" outright. I could not construct a case where the fixed code claims "free"/"no restrictions" for a metered segment that is currently charging. The four new pure-function tests (`paidNow`, `freeUntil`, `freeForDays`, `plainFree`) cover all four of `meteredStatus`'s own output shapes and each asserts the exact stripped string, not just "doesn't contain X" — solid coverage.
+
+## Finding #2 fix — verified correct
+
+- `ContentView.swift:1219` now passes `aspService: aspService` (the pre-existing `@State private var aspService = ASPSuspensionService()` at `ContentView.swift:488`, built for the W7 banner) into the one real production call site of `ParkedCarDetailView`.
+- Grepped every `ParkedCarDetailView(` call site on the branch tip: exactly two — the `ContentView.swift:1219` production call site (now fixed) and a `#Preview` block inside `ParkedCarDetailView.swift` itself (uses the default `ASPSuspensionService()` intentionally — previews have no `ContentView` instance to source one from, this is the correct/expected use of the default).
+- **No second construction remains on the sheet's real runtime path.** The pre-existing THIRD copy hidden inside `ParkingRulesEngine`'s own default init (`ParkingRulesEngine.swift:54`) is untouched, as the commit message itself acknowledges — correctly out of scope for this fix (it predates this PR and isn't part of either finding).
+- The corrected doc comment on `ParkedCarDetailView.aspService`'s declaration now accurately describes the default as existing for previews/tests only, not as a claim that no reachable instance exists — the factual error from Pass 1 is gone.
+
+## Test claims — re-verified independently
+
+- `git grep -h -E '^\s*func test' 036f2131~1 -- ios/WePark/WeParkTests | wc -l` → **1303** (matches Pass 1's PR-branch baseline exactly)
+- Same command against `origin/ios/core-parking-16` (tip, i.e. `036f2131`) → **1314**
+- Delta: **+11**, matches the commit message's breakdown exactly on inspection of the diff: 4 metered-only pure-function cases (`testUnrestricted_meteredOnly_paidNow_...`, `_freeUntil_...`, `_freeForDays_...`, `_plainFree_...`) + 5 `stripMeteredWrapper` unit tests + 2 real-`ParkingRulesEngine` integration tests (metered-only, mixed ASP+metered).
+- **Assertion strength, read directly**: the regression-pinning assertions are strong, not weak placeholders —
+  - `XCTAssertEqual(text, "paid until 7pm")` (exact string, not a substring/contains check) in both the pure-function test and the real-engine integration test.
+  - `XCTAssertFalse(text.localizedCaseInsensitiveContains("no restrictions"))` and `XCTAssertFalse(text.localizedCaseInsensitiveContains("free"))` on the paid-now case, explicitly pinning the ABSENCE of the old buggy copy, not just presence of new copy.
+  - These would fail against the pre-fix code: pre-fix, `freeUntilStatusText` had no `meteredStatusLabel` parameter at all (a compile-time break — the strongest possible "this test would have caught it" signal, since the old signature can't even be called this way), and semantically, the pre-fix logic for this exact input (`NextRestriction(hours: 168, ...)`, no metered awareness) produced literally `"Free — no restrictions here"`, which fails every one of the above assertions. Confirmed by reading, not assumed.
+
+## Standard sweeps on the fix diff — all clean
+
+- `Calendar.current`: zero occurrences (`git show 036f2131 | grep Calendar.current` — empty) ✓
+- Banned copy (avoid/ticket/fine/evasion/dodge): zero occurrences in the fix diff ✓
+- `AppConstants.communityEnabled` / the flag itself: zero references in the fix diff — `Services/Constants.swift` untouched, confirms item #16 stays non-flag-gated post-fix too ✓
+- **Labeled-arg order risk (new `meteredStatusLabel` parameter)**: `freeUntilStatusText` gained a third parameter. Grepped every call site on the branch tip (1 production, 8 test call sites, all inside the same commit's diff) — every single one was updated in this same commit to pass `meteredStatusLabel:` as the third labeled argument, matching the new declared order (`restriction, timeLabel, meteredStatusLabel`). No stale call site left on the old two-argument signature (which would be a compile error, not a silent behavior change — but confirmed there isn't one to worry about).
+- **`ContentView`'s new `aspService: aspService` argument position**: `ParkedCarDetailView.init` is hand-written (not memberwise) with declared order `parkedCar, engine, loadedSegments, parkPinService, scheduler, aspService, pinService, onDismiss, onClearPin, onOpenRestriction`. The call site omits the defaulted `scheduler:` and passes `aspService:` immediately after `parkPinService:`, preserving the relative declared order of the arguments it DOES pass explicitly (Swift requires this even with labels) — correct, would compile.
+
+## Updated Mac gate checklist (supersedes the Pass-1 checklist's counts; live-smoke items below are still required — nothing in Pass 2 ran on hardware)
+
+1. **Build**: `xcodebuild -project ios/WePark.xcodeproj -scheme WePark -destination 'platform=iOS Simulator,name=iPhone 15' build` (resolve UDID dynamically, per project convention).
+2. **Test counts** — run `xcodebuild test` twice, once per flag state (`AppConstants.communityEnabled`, `Services/Constants.swift:154`):
+   - **Flag-off** (`communityEnabled = false`): expect **1314/1314 passed**.
+   - **Flag-on** (`communityEnabled = true`): expect **1310 passed / 4 failed**, the SAME 4 named pre-existing dark-ship guard failures from the S13c gate (`docs/community-2.0-roadmap.md`'s S13c row: "flag-on 1278+4 named dark-ship guards"). None of this PR's 32 new tests (21 from the feature commit + 11 from the fix commit) read the flag implicitly, so the guard-failure set should be unchanged by name and count. If the guard count or names shift, stop and investigate before merge.
+3. **Live smoke — the one item Pass 2 could not verify (no toolchain here)**: park a test car on a real metered-only block (5th Avenue frontage is a good bet — QA's tile scan found several) during that meter's active/paid hours. Confirm the sheet now shows something like "paid until 7pm" for BOTH the existing headline AND the new bold status line (consistent, not contradictory) — this is the actual on-screen confirmation of Finding #1's fix; static review traced the logic correctly but a screenshot is the real proof.
+4. **Live smoke — everything from Pass 1's checklist items 3-5 still applies unchanged** (rules-list collapse boundary, ASP-suspension badge on a real or simulated suspension day — 2026-09-12 Rosh Hashanah if gating tomorrow, long-press tentative-pin appear/cancel/replace cycle, flag-off dialog byte-identical, mount-chain chrome glance). Nothing in the fix commit touches `MapViewRepresentable.swift` or the long-press flow at all — re-confirmed via `git show 036f2131 --stat` (only `ContentView.swift`, `ParkedCarDetailView.swift`, and the test file changed) — so item #17 residual's live-smoke scope is unchanged from Pass 1.
+
+## What's working (Pass 2 addendum)
+
+- Both fixes are scoped exactly to what QA asked for — no scope creep, no unrelated refactors riding along. The fix commit message accurately cites the QA report by commit hash and addresses each finding in the order QA raised them.
+- The four new metered-only pure-function tests don't just assert the new happy-path string — each one explicitly also asserts the ABSENCE of the old buggy copy ("no restrictions", "free" as a standalone claim), which is exactly the right regression-test shape: it fails loudly if someone reverts the fix later, not just if they change the new wording.
+- The real-`ParkingRulesEngine` integration test for the metered-only case uses a March 2026 weekday specifically chosen to be "regular (non-suspended, non-holiday)" — shows the same holiday/suspension-boundary care this codebase's test suite generally applies elsewhere (e.g. Memorial Day fixtures in the original feature commit).
