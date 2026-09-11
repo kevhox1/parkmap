@@ -2094,13 +2094,23 @@ struct ContentView: View {
     /// `nonisolated static` function so both the flag state and every mode-exclusion gate
     /// are directly unit-testable without a live `ContentView` instance, same pattern as
     /// `mapMarkerTypes(communityEnabled:)`/`recenterButtonStackVisible`.
+    ///
+    /// Open item #17 follow-up (2026-09-11, Kevin's live smoke of `b500c95a`): added
+    /// `longPressParkConfirmActive` — the pill/"?" button were drawing over the corners of
+    /// `longPressParkConfirmCard` ("Park here" partially covered by the Report pill, Cancel
+    /// by the "?" button). Same exclusion shape as `spotPlacementActive`: a focused task's
+    /// own floating chrome (the park-confirm card) shouldn't compete with this persistent
+    /// row, and it hides/returns exactly when the card does, since both read off the same
+    /// `pendingLongPressCoord != nil` condition at the call site below.
     nonisolated static func communityMapChromeVisible(
         communityEnabled: Bool,
         driveModeActive: Bool,
         blockSelectModeActive: Bool,
-        spotPlacementActive: Bool
+        spotPlacementActive: Bool,
+        longPressParkConfirmActive: Bool
     ) -> Bool {
         communityEnabled && !driveModeActive && !blockSelectModeActive && !spotPlacementActive
+            && !longPressParkConfirmActive
     }
 
     /// Community 2.0 S13a (WP1, build 20): the persistent Report pill (bottom-left) + "?"
@@ -2132,7 +2142,8 @@ struct ContentView: View {
             communityEnabled: AppConstants.communityEnabled,
             driveModeActive: driveModeActive,
             blockSelectModeActive: blockSelectModeActive,
-            spotPlacementActive: spotPlacementActive
+            spotPlacementActive: spotPlacementActive,
+            longPressParkConfirmActive: pendingLongPressCoord != nil
         ) {
             VStack(spacing: 0) {
                 Spacer()

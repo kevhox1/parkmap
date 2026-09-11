@@ -15,7 +15,14 @@
 //  named "viewport" were renamed/re-asserted accordingly, and 2 new tests added for the
 //  "neither car nor device location" / "car with no device-location fix at all" cases.
 //
-//  Test inventory (26 tests):
+//  Open item #17 follow-up (2026-09-11): Kevin's live smoke of `b500c95a` found the Report
+//  pill / "?" button drawing over the corners of the new long-press park-confirm card —
+//  `communityMapChromeVisible` gained a 5th parameter, `longPressParkConfirmActive`, same
+//  exclusion shape as `spotPlacementActive`. One test added (16a below); the 4 existing
+//  gating tests were updated to pass the new parameter explicitly (all `false`), not given
+//  a default, matching this function's existing "every case explicit" style.
+//
+//  Test inventory (27 tests):
 //    MapKeyLegendView content — curb colors VERBATIM, live pins match the shipped marker set:
 //      1. testCurbColorEntries_count
 //      2. testCurbColorEntries_red_matchesPrototypeVerbatim
@@ -36,6 +43,7 @@
 //      14. testChromeVisible_flagOn_driveModeActive_hidden
 //      15. testChromeVisible_flagOn_blockSelectModeActive_hidden
 //      16. testChromeVisible_flagOn_spotPlacementActive_hidden
+//      16a. testChromeVisible_flagOn_longPressParkConfirmActive_hidden
 //
 //    ContentView.resolveHomeZoneId (S13c Fix #1) — car > device location > nil, NEVER viewport:
 //      17. testResolveHomeZoneId_parkedCarWins_evenWhenDeviceLocationInDifferentZone
@@ -144,7 +152,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: false,
             driveModeActive: false,
             blockSelectModeActive: false,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -153,7 +162,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: false,
             blockSelectModeActive: false,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -162,7 +172,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: true,
             blockSelectModeActive: false,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -171,7 +182,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: false,
             blockSelectModeActive: true,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -180,7 +192,21 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: false,
             blockSelectModeActive: false,
-            spotPlacementActive: true
+            spotPlacementActive: true,
+            longPressParkConfirmActive: false
+        ))
+    }
+
+    /// Open item #17 follow-up (2026-09-11): the Report pill / "?" button must hide while
+    /// the long-press park-confirm card is up — Kevin's live-smoke finding (b500c95a) was
+    /// the pill/button drawing over the card's corners.
+    func testChromeVisible_flagOn_longPressParkConfirmActive_hidden() {
+        XCTAssertFalse(ContentView.communityMapChromeVisible(
+            communityEnabled: true,
+            driveModeActive: false,
+            blockSelectModeActive: false,
+            spotPlacementActive: false,
+            longPressParkConfirmActive: true
         ))
     }
 }
