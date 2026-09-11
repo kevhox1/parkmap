@@ -369,42 +369,54 @@ final class CrewFeedMergeRowFormattingTests: XCTestCase {
     }
 }
 
-// MARK: - CrewFeedMerge.icon — spec §6 appendix verbatim values
+// MARK: - CrewFeedMerge.icon — S13c Fix #2: enforcement/sweeper now match the map-key legend
 
 final class CrewFeedMergeIconTests: XCTestCase {
 
-    func testIcon_enforcementActive_matchesSpecAppendix() {
+    /// S13c Fix #2 (`docs/design/community-2.0-final-parity-audit.md` §2 item 2): must match
+    /// `MapKeyLegendView.livePinEntries`/`PinMarkerAnnotation.markerStyle(for:)` EXACTLY —
+    /// SF Symbol + `.teal`, not the prototype's literal 🎫 orange emoji ring.
+    func testIcon_enforcementActive_matchesMapKeyLegendAndMarker() {
         let icon = CrewFeedMerge.icon(for: .enforcementActive)
-        XCTAssertEqual(icon.glyph, "🎫")
-        XCTAssertEqual(icon.color, hexColor(0xFF9F0A))
+        XCTAssertEqual(icon.symbolName, "person.badge.clock.fill")
+        XCTAssertNil(icon.glyph, "enforcementActive must use the SF Symbol treatment, not an emoji glyph")
+        XCTAssertEqual(icon.color, Color.teal)
     }
 
-    func testIcon_sweeperPassed_matchesSpecAppendix() {
+    /// S13c Fix #2: must match `MapKeyLegendView.livePinEntries`/
+    /// `PinMarkerAnnotation.markerStyle(for:)` EXACTLY — SF Symbol + `.cyan`, not the
+    /// prototype's literal 🧹 green emoji ring.
+    func testIcon_sweeperPassed_matchesMapKeyLegendAndMarker() {
         let icon = CrewFeedMerge.icon(for: .sweeperPassed)
-        XCTAssertEqual(icon.glyph, "🧹")
-        XCTAssertEqual(icon.color, hexColor(0x30D158))
+        XCTAssertEqual(icon.symbolName, "truck.box.fill")
+        XCTAssertNil(icon.glyph, "sweeperPassed must use the SF Symbol treatment, not an emoji glyph")
+        XCTAssertEqual(icon.color, Color.cyan)
     }
 
     func testIcon_openSpot_matchesSpecAppendix() {
         let icon = CrewFeedMerge.icon(for: .openSpot)
+        XCTAssertNil(icon.symbolName)
         XCTAssertEqual(icon.glyph, "P")
         XCTAssertEqual(icon.color, hexColor(0x0A84FF))
     }
 
     func testIcon_leavingSoon_matchesSpecAppendix() {
         let icon = CrewFeedMerge.icon(for: .leavingSoon)
+        XCTAssertNil(icon.symbolName)
         XCTAssertEqual(icon.glyph, "🚙")
         XCTAssertEqual(icon.color, hexColor(0x0A84FF))
     }
 
     func testIcon_construction_matchesSpecAppendix() {
         let icon = CrewFeedMerge.icon(for: .construction)
+        XCTAssertNil(icon.symbolName)
         XCTAssertEqual(icon.glyph, "🚧")
         XCTAssertEqual(icon.color, hexColor(0xE8730D))
     }
 
     func testIcon_blockNote_matchesSpecAppendix() {
         let icon = CrewFeedMerge.icon(for: .blockNote)
+        XCTAssertNil(icon.symbolName)
         XCTAssertEqual(icon.glyph, "📌")
         XCTAssertEqual(icon.color, hexColor(0x9BA1AF))
     }
@@ -413,7 +425,7 @@ final class CrewFeedMergeIconTests: XCTestCase {
         // special_event is not expected in the crew feed, but the switch must stay
         // exhaustive-safe — never fail to render a row.
         let icon = CrewFeedMerge.icon(for: .specialEvent)
-        XCTAssertFalse(icon.glyph.isEmpty)
+        XCTAssertFalse((icon.symbolName ?? icon.glyph ?? "").isEmpty)
     }
 
     private func hexColor(_ hex: UInt32) -> Color {
@@ -485,5 +497,45 @@ final class PinMarkerAnnotationAgeStringTests: XCTestCase {
         let f = ISO8601DateFormatter()
         f.formatOptions = [.withInternetDateTime]
         return f.string(from: date)
+    }
+}
+
+// MARK: - CrewFeedMerge.awayZoneNote (PR #105 Mac-gate fix, S13c Fix #12's actual gating rule)
+
+/// Covers the pure decision `CrewFeedSection.awayZoneNote` now delegates to. This logic was
+/// already correct in isolation before this fix — the live bug was in the SwiftUI wiring
+/// that fed the view a stale `homeZoneId` (see `CrewFeedSection.swift`'s header comment for
+/// the root cause), which these tests can't reproduce since they call the pure function
+/// directly rather than hosting the view. They exist so a future regression in the DECISION
+/// itself (as opposed to the wiring) is still caught here, independent of any view-hosting
+/// test.
+final class CrewFeedMergeAwayZoneNoteTests: XCTestCase {
+
+    func testAwayZoneNote_homeIsNolita_selectedIsSoho_returnsNolita() {
+        XCTAssertEqual(
+            CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "soho"),
+            .nolita
+        )
+    }
+
+    func testAwayZoneNote_homeAndSelectedSameZone_returnsNil() {
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "nolita"))
+    }
+
+    func testAwayZoneNote_noHomeZone_returnsNil() {
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: nil, selectedZoneId: "soho"))
+    }
+
+    func testAwayZoneNote_homeZoneIdUnrecognized_returnsNil() {
+        // Defensive: an id outside the three seeded zones (shouldn't occur given
+        // `CommunityZoneBounds`'s fixed table, but the function must not force-unwrap).
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "soho-les", selectedZoneId: "soho"))
+    }
+
+    func testAwayZoneNote_homeIsLes_selectedIsNolita_returnsLes() {
+        XCTAssertEqual(
+            CrewFeedMerge.awayZoneNote(homeZoneId: "les", selectedZoneId: "nolita"),
+            .les
+        )
     }
 }

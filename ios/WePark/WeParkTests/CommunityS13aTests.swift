@@ -10,7 +10,19 @@
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never
 //  compiled or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
-//  Test inventory (24 tests):
+//  S13c Fix #1 (docs/design/community-2.0-final-parity-audit.md §2 item 1) updated
+//  `resolveHomeZoneId`'s signature (viewport → device location) — the 3 tests below that
+//  named "viewport" were renamed/re-asserted accordingly, and 2 new tests added for the
+//  "neither car nor device location" / "car with no device-location fix at all" cases.
+//
+//  Open item #17 follow-up (2026-09-11): Kevin's live smoke of `b500c95a` found the Report
+//  pill / "?" button drawing over the corners of the new long-press park-confirm card —
+//  `communityMapChromeVisible` gained a 5th parameter, `longPressParkConfirmActive`, same
+//  exclusion shape as `spotPlacementActive`. One test added (16a below); the 4 existing
+//  gating tests were updated to pass the new parameter explicitly (all `false`), not given
+//  a default, matching this function's existing "every case explicit" style.
+//
+//  Test inventory (27 tests):
 //    MapKeyLegendView content — curb colors VERBATIM, live pins match the shipped marker set:
 //      1. testCurbColorEntries_count
 //      2. testCurbColorEntries_red_matchesPrototypeVerbatim
@@ -31,11 +43,14 @@
 //      14. testChromeVisible_flagOn_driveModeActive_hidden
 //      15. testChromeVisible_flagOn_blockSelectModeActive_hidden
 //      16. testChromeVisible_flagOn_spotPlacementActive_hidden
+//      16a. testChromeVisible_flagOn_longPressParkConfirmActive_hidden
 //
-//    ContentView.resolveHomeZoneId — zone-overlay home-zone-label selection priority:
-//      17. testResolveHomeZoneId_parkedCarWins_evenWhenViewportInDifferentZone
-//      18. testResolveHomeZoneId_noParkedCar_fallsBackToViewportCenter
+//    ContentView.resolveHomeZoneId (S13c Fix #1) — car > device location > nil, NEVER viewport:
+//      17. testResolveHomeZoneId_parkedCarWins_evenWhenDeviceLocationInDifferentZone
+//      18. testResolveHomeZoneId_noParkedCar_fallsBackToDeviceLocation
 //      19. testResolveHomeZoneId_neitherResolves_returnsNil
+//      19a. testResolveHomeZoneId_noCarNoDeviceLocation_returnsNil
+//      19b. testResolveHomeZoneId_parkedCarResolves_withNoDeviceLocationAtAll
 //
 //    MapViewRepresentable zone-boundary pure helpers — boxes → overlay specs:
 //      20. testZoneBoundaryCoordinates_fourCornersInBoxOrder
@@ -137,7 +152,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: false,
             driveModeActive: false,
             blockSelectModeActive: false,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -146,7 +162,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: false,
             blockSelectModeActive: false,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -155,7 +172,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: true,
             blockSelectModeActive: false,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -164,7 +182,8 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: false,
             blockSelectModeActive: true,
-            spotPlacementActive: false
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false
         ))
     }
 
@@ -173,39 +192,79 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             communityEnabled: true,
             driveModeActive: false,
             blockSelectModeActive: false,
-            spotPlacementActive: true
+            spotPlacementActive: true,
+            longPressParkConfirmActive: false
+        ))
+    }
+
+    /// Open item #17 follow-up (2026-09-11): the Report pill / "?" button must hide while
+    /// the long-press park-confirm card is up — Kevin's live-smoke finding (b500c95a) was
+    /// the pill/button drawing over the card's corners.
+    func testChromeVisible_flagOn_longPressParkConfirmActive_hidden() {
+        XCTAssertFalse(ContentView.communityMapChromeVisible(
+            communityEnabled: true,
+            driveModeActive: false,
+            blockSelectModeActive: false,
+            spotPlacementActive: false,
+            longPressParkConfirmActive: true
         ))
     }
 }
 
-// MARK: - ContentView.resolveHomeZoneId
+// MARK: - ContentView.resolveHomeZoneId (S13c Fix #1: car > device location > nil, NEVER viewport)
 
 final class ResolveHomeZoneIdTests: XCTestCase {
 
-    /// A parked car inside the "les" box, with the viewport centered inside "nolita" — the
-    /// car must win, matching `updatePushZoneFromParkedCarOrLocation`'s own priority.
-    func testResolveHomeZoneId_parkedCarWins_evenWhenViewportInDifferentZone() {
+    /// A parked car inside the "les" box, with the device's current location inside
+    /// "nolita" — the car must win, matching `updatePushZoneFromParkedCarOrLocation`'s own
+    /// priority.
+    func testResolveHomeZoneId_parkedCarWins_evenWhenDeviceLocationInDifferentZone() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: 40.7200, parkedCarLng: -73.9850,   // inside "les"
-            viewportCenterLat: 40.7230, viewportCenterLng: -73.9950  // inside "nolita"
+            deviceLocationLat: 40.7230, deviceLocationLng: -73.9950  // inside "nolita"
         )
         XCTAssertEqual(result, "les")
     }
 
-    func testResolveHomeZoneId_noParkedCar_fallsBackToViewportCenter() {
+    /// No car parked — falls back to the device's current location (S13c: NOT the map
+    /// viewport, which was the exact bug the audit pinned).
+    func testResolveHomeZoneId_noParkedCar_fallsBackToDeviceLocation() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: nil, parkedCarLng: nil,
-            viewportCenterLat: 40.7225, viewportCenterLng: -74.0000  // inside "soho"
+            deviceLocationLat: 40.7225, deviceLocationLng: -74.0000  // inside "soho"
         )
         XCTAssertEqual(result, "soho")
     }
 
+    /// Neither a parked car nor a device-location fix resolves to a seeded zone — must
+    /// return nil (no box, no label), never a viewport-derived guess.
     func testResolveHomeZoneId_neitherResolves_returnsNil() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: nil, parkedCarLng: nil,
-            viewportCenterLat: 40.70, viewportCenterLng: -74.02  // outside all three boxes
+            deviceLocationLat: 40.70, deviceLocationLng: -74.02  // outside all three boxes
         )
         XCTAssertNil(result)
+    }
+
+    /// No parked car AND no device-location fix at all (both nil) — must return nil, not
+    /// crash or fall through to some other signal.
+    func testResolveHomeZoneId_noCarNoDeviceLocation_returnsNil() {
+        let result = ContentView.resolveHomeZoneId(
+            parkedCarLat: nil, parkedCarLng: nil,
+            deviceLocationLat: nil, deviceLocationLng: nil
+        )
+        XCTAssertNil(result)
+    }
+
+    /// Parked car resolves to a seeded zone even when there's no device-location fix at all
+    /// (nil lat/lng) — the car alone is sufficient, matching production's
+    /// `locationService.userLocation == nil` (permission not yet granted) case.
+    func testResolveHomeZoneId_parkedCarResolves_withNoDeviceLocationAtAll() {
+        let result = ContentView.resolveHomeZoneId(
+            parkedCarLat: 40.7230, parkedCarLng: -73.9950,   // inside "nolita"
+            deviceLocationLat: nil, deviceLocationLng: nil
+        )
+        XCTAssertEqual(result, "nolita")
     }
 }
 

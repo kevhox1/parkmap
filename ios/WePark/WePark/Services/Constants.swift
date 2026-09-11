@@ -236,6 +236,17 @@ enum MoneyMathConstants {
     /// High end of the annual-savings framing.
     /// Computed as 12 × `garageMonthlyManhattanHigh`, per spec §6.
     static var annualSavingsHigh: Double { garageMonthlyManhattanHigh * 12 }
+
+    // MARK: Community 2.0 S13c garage-savings stat (Option A)
+
+    /// Hourly-equivalent rate for the garage-savings running total
+    /// (`Services/GarageSavingsService.swift`), derived from the LOW end of
+    /// `garageMonthlyManhattanLow` ($500/mo) ÷ 720 hours/mo (30 days × 24h) ≈ $0.69/hr, per
+    /// `docs/design/community-2.0-final-parity-audit.md` §3 Option A. Deliberately the LOW
+    /// end of the garage range (not the high end, and not a fresh unsourced constant) so the
+    /// accrued total stays conservative — traceable to the exact figure Parking 101 already
+    /// shows the user, not an invented number.
+    static var garageSavingsHourlyRate: Double { garageMonthlyManhattanLow / 720.0 }
 }
 
 // MARK: - ParkingGuidePromptGate (FT-12 §7)

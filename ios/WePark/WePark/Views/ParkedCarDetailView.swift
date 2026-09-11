@@ -272,13 +272,6 @@ struct ParkedCarDetailView: View {
     /// one.
     private static let positionFractionSearchRadiusMeters: Double = 35.0
 
-    /// Community 2.0 Phase 4a / WP4 rider (S10): fill/stroke color for the swept-status
-    /// badge — matches `sweeper_passed`'s canonical `#30D158` (spec §6 appendix), same
-    /// literal `IdentitySheet.swift`'s avatar-selection ring already uses. Duplicated rather
-    /// than shared, per this codebase's established house style (see `ReportSheet.gridColor`'s
-    /// own doc comment for the same reasoning).
-    private static let sweptBadgeColor = Color(red: 48.0 / 255, green: 209.0 / 255, blue: 88.0 / 255)
-
     // MARK: - Body
 
     var body: some View {
@@ -309,8 +302,10 @@ struct ParkedCarDetailView: View {
                     parkedAtRow
 
                     // 4b. Community 2.0 WP4 rider (S10): swept-status badge.
+                    // S13c Fix #10: shared `SweptBadgeView` (`Views/BlockDetailView.swift`,
+                    // was a per-file duplicate).
                     if let sweptPin = sweptStatusPin {
-                        sweptBadgeView(for: sweptPin)
+                        SweptBadgeView(pin: sweptPin, now: pinService?.nowProvider() ?? now)
                     }
 
                     // 5. W7: Reminder toggle + (Community 2.0 WP4 rider) offset chips.
@@ -474,29 +469,10 @@ struct ParkedCarDetailView: View {
     }
 
     // MARK: - Community 2.0 WP4 rider (S10): swept-status badge
-
-    /// "🧹 Swept X ago · N confirms" — matches `design/prototype.html:872,894`'s `cSwept`
-    /// content, minus the demo mockup's hardcoded "— clear at 9:30" clause (that clause has
-    /// no real data source: it would require computing the segment's next legal end time and
-    /// wasn't in this session's spec'd copy).
-    ///
-    /// Age formatting reuses `PinMarkerAnnotation.ageString(since:now:)` — the SAME
-    /// formatter every other pin-age surface in the app uses (crew feed, map callouts),
-    /// per spec §0 OQ-2's "every surface that renders these pins MUST show relative age,
-    /// [with] the SAME age-display convention."
-    private func sweptBadgeView(for pin: CommunityPin) -> some View {
-        let age = PinMarkerAnnotation.ageString(since: pin.createdAt, now: pinService?.nowProvider() ?? now)
-        let confirms = ParkedCarDetailLogic.confirmCountLabel(pin.confirmCount)
-        return Text("🧹 Swept \(age) · \(confirms)")
-            .font(.caption.weight(.bold))
-            .foregroundStyle(Self.sweptBadgeColor)
-            .padding(.horizontal, 11)
-            .padding(.vertical, 5)
-            .background(Self.sweptBadgeColor.opacity(0.13), in: Capsule())
-            .overlay(Capsule().strokeBorder(Self.sweptBadgeColor.opacity(0.35), lineWidth: 0.5))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Sweeper reported \(age), confirmed by \(pin.confirmCount) neighbors")
-    }
+    //
+    // S13c Fix #10: the badge view itself moved to the shared `SweptBadgeView`
+    // (`Views/BlockDetailView.swift`) — this file now only computes WHICH pin to show
+    // (`sweptStatusPin` above) and passes it to that shared view at the `body` call site.
 
     // MARK: - W7: Reminder toggle
 

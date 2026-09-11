@@ -11,7 +11,10 @@
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never compiled
 //  or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
-//  Test inventory (24 tests):
+//  S13c Fix #7 adds BlockDetailShouldAppendRealtimeMessageTests (4 tests) — see that class's
+//  own header comment.
+//
+//  Test inventory (24 + 4 = 28 tests):
 //    BlockDetailLiveBlockPinsTests (6): matching segment / no match / flag-off-even-with-a-
 //      match / newest-first sort / a blockfaceKey-shaped segment_id never matches a raw
 //      segment.id (the two id shapes' non-collision this section's correctness depends on) /
@@ -240,6 +243,49 @@ final class ZoneMessageComposeLogicTests: XCTestCase {
 
     func testInternalSpacing_preserved() {
         XCTAssertEqual(ZoneMessageComposeLogic.trimmedBody("  two   words  "), "two   words")
+    }
+}
+
+// MARK: - BlockDetailLogic.shouldAppendRealtimeMessage (S13c Fix #7)
+
+/// `docs/design/community-2.0-final-parity-audit.md` §2 item 7 / open-items #14: block
+/// chatter previously needed a close/reopen to see a neighbor's message — this is the pure
+/// append-or-not decision backing the live-update fix (`ZoneMessageService
+/// .lastRealtimeInsert` → `BlockDetailView.handleRealtimeMessageInsert()`).
+final class BlockDetailShouldAppendRealtimeMessageTests: XCTestCase {
+
+    private func makeMessage(id: Int, segmentId: String?) -> ZoneMessage {
+        let json = """
+        {"id":\(id),"zone_id":"nolita","author_id":null,"message_type":"user","body":"hi",
+         "related_report_id":null,"created_at":"2026-09-05T09:00:00+00:00",
+         "author_username":null,"author_reputation":null,
+         "segment_id":\(segmentId.map { "\"\($0)\"" } ?? "null")}
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try! decoder.decode(ZoneMessage.self, from: json)
+    }
+
+    func testMatchingSegmentNotAlreadyPresent_returnsTrue() {
+        let message = makeMessage(id: 5, segmentId: "SEG_A")
+        XCTAssertTrue(BlockDetailLogic.shouldAppendRealtimeMessage(message, segmentId: "SEG_A", existingIds: []))
+    }
+
+    func testDifferentSegment_returnsFalse() {
+        let message = makeMessage(id: 5, segmentId: "SEG_B")
+        XCTAssertFalse(BlockDetailLogic.shouldAppendRealtimeMessage(message, segmentId: "SEG_A", existingIds: []))
+    }
+
+    func testNilSegmentId_returnsFalse() {
+        // A zone-wide message (segmentId: nil) must never land in a block-scoped thread.
+        let message = makeMessage(id: 5, segmentId: nil)
+        XCTAssertFalse(BlockDetailLogic.shouldAppendRealtimeMessage(message, segmentId: "SEG_A", existingIds: []))
+    }
+
+    func testMatchingSegmentAlreadyPresent_returnsFalse() {
+        // De-dupes against the optimistic self-send append `performSendChat` already does.
+        let message = makeMessage(id: 5, segmentId: "SEG_A")
+        XCTAssertFalse(BlockDetailLogic.shouldAppendRealtimeMessage(message, segmentId: "SEG_A", existingIds: [5]))
     }
 }
 

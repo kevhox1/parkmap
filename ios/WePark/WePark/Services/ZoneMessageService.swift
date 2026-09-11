@@ -220,6 +220,21 @@ final class ZoneMessageService {
     /// navigation), so `nil` degrades to an empty feed, not an unfiltered one.
     private(set) var selectedZoneId: String? = nil
 
+    /// S13c Fix #7 (`docs/design/community-2.0-final-parity-audit.md` §2 item 7 / open-items
+    /// #14): the most recent Realtime INSERT observed on `public.zone_messages`, regardless
+    /// of `selectedZoneId` filtering — a raw broadcast surface so a non-zone-scoped consumer
+    /// (`BlockDetailView`'s segment-anchored "BLOCK CHATTER" thread) can react to inserts that
+    /// `handleRealtimeInsert`'s own zone gate intentionally filters OUT of `messages` below.
+    /// Reuses the SAME already-subscribed channel this service starts at app launch — zero
+    /// new Realtime subscriptions, zero new SQL (this session's hard constraint).
+    private(set) var lastRealtimeInsert: ZoneMessage? = nil
+
+    /// Increments on every `lastRealtimeInsert` update. `ZoneMessage` isn't `Equatable`, so
+    /// SwiftUI's `.onChange(of:)` needs a comparable proxy — same "counter alongside a
+    /// non-Equatable payload" convention `ContentView.pinService.visiblePinsGeneration`
+    /// already uses for `[CommunityPin]`.
+    private(set) var lastRealtimeInsertGeneration: Int = 0
+
     // MARK: - Init parameters
 
     private let supabaseURL: URL
@@ -635,7 +650,16 @@ final class ZoneMessageService {
     /// concept). `nil` `selectedZoneId` (no zone chosen yet) drops every event, matching
     /// `setSelectedZone(nil)`'s own "no zone = empty feed" contract — an event can never appear
     /// for a zone the user hasn't picked.
+    ///
+    /// S13c Fix #7: publishes EVERY event to `lastRealtimeInsert`/`lastRealtimeInsertGeneration`
+    /// first, unconditionally — before the zone gate below, which only decides whether this
+    /// event belongs in the zone-chip-driven `messages` array. A non-zone-scoped consumer
+    /// (`BlockDetailView`) filters `lastRealtimeInsert` by `segmentId` itself; see that view's
+    /// `handleRealtimeMessageInsert()`.
     private func handleRealtimeInsert(_ message: ZoneMessage) {
+        lastRealtimeInsert = message
+        lastRealtimeInsertGeneration += 1
+
         guard let selectedZoneId, message.zoneId == selectedZoneId else { return }
         guard !messages.contains(where: { $0.id == message.id }) else { return }
         messages.append(message)

@@ -48,9 +48,13 @@
 //      16. testFetchLeaderboardPins_queryIncludesSourceConfirmCountAndWindow
 //      17. testFetchLeaderboardPins_unknownZone_returnsEmptyWithoutNetworkCall
 //
-//    ProfileRowFormatting.accuracyLabel (AC-P3.3 boundaries):
+//    ProfileRowFormatting.accuracyLabel (AC-P3.3 boundaries; widened S13c Fix #5 — the
+//    em-dash guard now fires on `accurate == 0` alone, not just `total == 0`):
 //      18. testAccuracyLabel_zeroOverZero_returnsEmDash
-//      19. testAccuracyLabel_zeroOverFive_returnsZeroPercent
+//      19. testAccuracyLabel_zeroAccurateNonZeroTotal_returnsEmDash (S13c: was
+//          "...returnsZeroPercent", asserting the exact bug this fix closes)
+//      19a. testAccuracyLabel_zeroAccurateLargeTotal_returnsEmDash (S13c, new)
+//      19b. testAccuracyLabel_oneAccurateOneTotal_returnsHundredPercent (S13c, new)
 //      20. testAccuracyLabel_fiveOverFive_returnsHundredPercent
 //      21. testAccuracyLabel_roundsToNearestPercent
 //
@@ -551,7 +555,7 @@ final class ProfileAndLeaderboardFetchTests: XCTestCase {
     }
 }
 
-// MARK: - ProfileRowFormatting.accuracyLabel (AC-P3.3 boundaries)
+// MARK: - ProfileRowFormatting.accuracyLabel (AC-P3.3 boundaries, widened S13c Fix #5)
 
 final class AccuracyLabelTests: XCTestCase {
 
@@ -559,8 +563,24 @@ final class AccuracyLabelTests: XCTestCase {
         XCTAssertEqual(ProfileRowFormatting.accuracyLabel(accurate: 0, total: 0), "—")
     }
 
-    func testAccuracyLabel_zeroOverFive_returnsZeroPercent() {
-        XCTAssertEqual(ProfileRowFormatting.accuracyLabel(accurate: 0, total: 5), "0%")
+    /// S13c Fix #5 (`docs/design/community-2.0-final-parity-audit.md` §2 item 5 / open-items
+    /// #12⑤): the em-dash guard now widens to ANY `accurate == 0`, not just `total == 0` —
+    /// a poster with 1 report and 0 confirms must see "—", not a punitive-reading literal
+    /// "0%". (This test previously asserted "0%" — that was exactly the bug this fix closes.)
+    func testAccuracyLabel_zeroAccurateNonZeroTotal_returnsEmDash() {
+        XCTAssertEqual(ProfileRowFormatting.accuracyLabel(accurate: 0, total: 5), "—")
+    }
+
+    /// The other half of the same boundary: a LARGE total with zero confirmed reports must
+    /// still read as "—", not "0%", no matter how many raw (unconfirmed) reports exist.
+    func testAccuracyLabel_zeroAccurateLargeTotal_returnsEmDash() {
+        XCTAssertEqual(ProfileRowFormatting.accuracyLabel(accurate: 0, total: 100), "—")
+    }
+
+    /// Boundary just above the fix's guard: exactly 1 accurate report out of 1 total must
+    /// still show a real percentage (the fix must not overshoot into hiding legitimate data).
+    func testAccuracyLabel_oneAccurateOneTotal_returnsHundredPercent() {
+        XCTAssertEqual(ProfileRowFormatting.accuracyLabel(accurate: 1, total: 1), "100%")
     }
 
     func testAccuracyLabel_fiveOverFive_returnsHundredPercent() {
