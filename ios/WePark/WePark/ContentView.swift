@@ -4212,10 +4212,32 @@ struct ContentView: View {
     ///   2. handleDriveCameraChange(true) — capture pre-drive pitch/zoom/style, apply pitch+zoom.
     ///   3. Initialize currentDriveAltitude — must come AFTER handleDriveCameraChange captures
     ///      the current distance (not needed for the camera call but for the follow default).
+    ///   4. rebuildOverlays(at:) — force the curb-line renderers to refresh at Drive-Mode
+    ///      width (open item #19 QA Finding #1, see below).
     ///
     /// EXIT order:
     ///   1. handleDriveCameraChange(false) — restore pre-drive pitch + zoom + style.
     ///   2. handleDriveModeChange(false) — stop location services, clear context, clear followPaused.
+    ///   3. rebuildOverlays(at:) — restore browse-width curb lines immediately.
+    ///
+    /// Open item #19 QA Finding #1 (PR #107 pass 1, `docs/qa/pr107-polish.md`): `mapView(_:
+    /// rendererFor:)` reads `parent.driveModeActive` to pick browse vs. Drive-Mode width, but
+    /// MapKit only invokes that delegate method once PER OVERLAY OBJECT and caches the
+    /// resulting renderer — so merely flipping `driveModeActive` does nothing to lines whose
+    /// `TaggedMultiPolyline` objects already exist. `applyOverlayPayload` (`MapViewRepresentable
+    /// .swift`) is the ONLY code path that actually forces a re-query: it unconditionally
+    /// `removeOverlay`s the old 5 groups and `addOverlay`s brand-NEW `TaggedMultiPolyline`
+    /// instances, which MapKit has never seen before and must call `rendererFor:` on fresh.
+    /// `rebuildOverlays(at:)` is what triggers that (via `overlayGeneration`/`overlayPayload`,
+    /// diffed in `updateUIView`) — the SAME path the 60s timer tick already uses, reused
+    /// here rather than duplicated. This mirrors the codebase's own established pattern for
+    /// this exact problem: `refreshUserLocationPuck` (called from `handleDriveCameraChange`
+    /// below) forces MapKit to re-query `mapView(_:viewFor:)` for the SAME reason — a
+    /// `driveModeActive`-dependent delegate branch needs an explicit invalidation to actually
+    /// re-fire, reading the flag alone isn't enough. No new pure logic to extract/test here —
+    /// this is UIKit delegate-caching plumbing (which method gets re-invoked when), not a
+    /// decision with inputs/outputs; `rebuildOverlays(at:)` itself is already exercised by
+    /// existing tests via its callers' effects (`overlayGeneration` incrementing).
     ///
     /// Architecture: all calls fire from `.onChange(of: driveModeActive)` — OUTSIDE `updateUIView`.
     /// No camera mutation or `userTrackingMode =` assignment inside `updateUIView`. #31 invariant maintained.
@@ -4295,6 +4317,16 @@ struct ContentView: View {
             handleDriveCameraChange(false)
             handleDriveModeChange(false)
         }
+
+        // Open item #19 QA Finding #1: force the curb-line overlays to rebuild on EVERY
+        // toggle direction, so `mapView(_:rendererFor:)` is re-invoked against fresh
+        // overlay objects and picks up the correct browse/Drive-Mode width immediately —
+        // see this function's own doc comment above for the full mechanism. Reuses
+        // `lastEvaluatedAt` rather than re-stamping `.now`, matching `handleSegmentsChanged`/
+        // `handleSelectionChanged`'s existing convention (only the 60s timer tick itself
+        // advances `lastEvaluatedAt`) — this rebuild is about the WIDTH, not about
+        // re-evaluating which segments are currently free/restricted.
+        rebuildOverlays(at: lastEvaluatedAt)
     }
 
     // MARK: - Option A: Drive pan / pinch handlers
