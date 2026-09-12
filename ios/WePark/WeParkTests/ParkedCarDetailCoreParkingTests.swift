@@ -29,7 +29,7 @@ import XCTest
 
 final class ParkedCarDetailFreeUntilStatusTextTests: XCTestCase {
 
-    private func makeRule(category: Category) -> ParkingRule {
+    private func makeRule(category: WePark.Category) -> ParkingRule {
         ParkingRule(
             category: category,
             description: "",
