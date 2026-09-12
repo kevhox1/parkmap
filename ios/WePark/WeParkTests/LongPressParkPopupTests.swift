@@ -33,6 +33,13 @@
 //  function's own doc comment. `ContentView.pendingParkPinCoordinateTests` below covers all 4
 //  flag × coordinate-presence combinations.
 //
+//  Open item #17b (2026-09-12, polish-19-17b-20 session): the legacy dialog's SECOND
+//  double-press cause, distinct from the `.began`-vs-`.ended` touch-timing bug (a) above
+//  (that fix is confirmed live for both paths — this bug persisted anyway). Root cause and
+//  fix live in `ContentView.handleLongPress(at:)`'s doc comment; the pure, testable surface
+//  is `ContentView.shouldReassignActiveSheet(current:target:)` — see
+//  `ShouldReassignActiveSheetTests` below.
+//
 
 import CoreLocation
 import XCTest
@@ -89,6 +96,57 @@ final class PendingParkPinCoordinateTests: XCTestCase {
     func testFlagOn_noCoordinate_returnsNil() {
         XCTAssertNil(
             ContentView.pendingParkPinCoordinate(communityEnabled: true, pendingLongPressCoord: nil)
+        )
+    }
+}
+
+// MARK: - shouldReassignActiveSheet (open item #17b, 2026-09-12)
+
+/// Root cause of the legacy `confirmationDialog`'s standing "needs a second long-press"
+/// bug — see `ContentView.handleLongPress(at:)`'s doc comment for the full mechanism.
+/// `handleLongPress` used to write `activeSheet` UNCONDITIONALLY on every long-press, even
+/// when the target value was already current (the common resting case: already
+/// `.browseNav`). `ActiveSheet` is `Identifiable`, not `Equatable`, so that unconditional
+/// write always invalidated the view the confirmationDialog is attached to, racing its own
+/// presentation in the same transaction. `shouldReassignActiveSheet(current:target:)` is the
+/// pure id-comparison the fix hinges on.
+final class ShouldReassignActiveSheetTests: XCTestCase {
+
+    func testBothNil_returnsFalse() {
+        XCTAssertFalse(ContentView.shouldReassignActiveSheet(current: nil, target: nil))
+    }
+
+    /// The exact resting-long-press scenario that reproduced the bug: `activeSheet` is
+    /// already `.browseNav` (browse mode's persistent rest state) and stays `.browseNav`.
+    func testSameCase_alreadyBrowseNav_returnsFalse() {
+        XCTAssertFalse(
+            ContentView.shouldReassignActiveSheet(current: .browseNav, target: .browseNav)
+        )
+    }
+
+    func testSamePayloadFreeCase_settings_returnsFalse() {
+        XCTAssertFalse(
+            ContentView.shouldReassignActiveSheet(current: .settings, target: .settings)
+        )
+    }
+
+    func testNilToBrowseNav_returnsTrue() {
+        XCTAssertTrue(
+            ContentView.shouldReassignActiveSheet(current: nil, target: .browseNav)
+        )
+    }
+
+    func testBrowseNavToNil_returnsTrue() {
+        XCTAssertTrue(
+            ContentView.shouldReassignActiveSheet(current: .browseNav, target: nil)
+        )
+    }
+
+    /// A genuine sheet-to-sheet transition (e.g. `.settings` still showing when a long-press
+    /// lands) must still be allowed to reassign — this guard only skips true no-ops.
+    func testDifferentCases_returnsTrue() {
+        XCTAssertTrue(
+            ContentView.shouldReassignActiveSheet(current: .settings, target: .browseNav)
         )
     }
 }

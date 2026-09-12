@@ -43,9 +43,14 @@
 //  Footer copy is adapted from `design/prototype.html:72` for the same "match reality" rule:
 //  this app has no pulse/fade expiry ANIMATION (an ephemeral pin is simply removed from
 //  `visiblePins` once its TTL passes — no visual fade-out), so the footer does not claim
-//  one. The car pin is `mappin.circle.fill` in white+blue (W5 §5.1), not the prototype's
-//  literal solid black pin. "dashed square = your zone" describes the NEW overlay this same
-//  PR adds (`MapViewRepresentable`'s `ZoneBoundaryPolygon`, WP2).
+//  one. "dashed square = your zone" describes the NEW overlay this same PR adds
+//  (`MapViewRepresentable`'s `ZoneBoundaryPolygon`, WP2).
+//
+//  Open item #20 (2026-09-12): the car pin description was updated from "`mappin.circle.fill`
+//  in white+blue" (W5 §5.1) to match the promoted marker — a systemBlue `MKMarkerAnnotationView`
+//  with a `car.fill` glyph (`Views/MapViewRepresentable.swift`'s `CarPinAnnotation` branch of
+//  `viewFor annotation`), replacing the old mappin-circle styling everywhere the parked car
+//  renders on the map.
 //
 
 import SwiftUI
@@ -145,9 +150,11 @@ struct MapKeyLegendView: View {
     ]
 
     /// Footer caption — adapted from `design/prototype.html:72`. See file header for why
-    /// this deliberately does not match the prototype's literal wording.
+    /// this deliberately does not match the prototype's literal wording. "Blue car icon"
+    /// (open item #20) describes the promoted `car.fill`-glyph marker, replacing the prior
+    /// "Blue circular pin" wording written for the old mappin.circle.fill styling.
     static let footerText =
-        "Pins disappear once they expire. Blue circular pin = your car · blue dot = you · dashed square = your zone."
+        "Pins disappear once they expire. Blue car icon = your car · blue dot = you · dashed square = your zone."
 
     var body: some View {
         ScrollView {
