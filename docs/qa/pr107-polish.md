@@ -237,3 +237,129 @@ else traced clean.)
 - Independent test-count verification matched the PR's claimed arithmetic exactly (1314→1338,
   +24) — the PR description is trustworthy on this specific claim, for what that's worth given the
   broader finding above.
+
+---
+
+# QA Pass 2 — 2026-09-12 (scoped re-verify: Finding #1 fix, commit `7a1a7d12`)
+
+**Reviewed:** commit `7a1a7d12` (diff `7a1a7d12~1..7a1a7d12`), on top of the pass-1 tip `2beaf3f0`,
+against pass-1 Finding #1 only. `ios/WePark/WePark/ContentView.swift`, +32/-0, no other files
+touched.
+**Verdict:** ✅ **MERGE-READY** (Finding #1 resolved; no new findings; all other pass-1 items were
+already clean and are untouched by this commit).
+
+## What changed
+
+One call — `rebuildOverlays(at: lastEvaluatedAt)` — added at the end of
+`handleDriveModeAndCamera(_:)`, after the entry/exit `if active { … } else { … }` block, so it runs
+unconditionally on **both** toggle directions. `handleDriveModeAndCamera` is bound to the single
+`.onChange(of: driveModeActive)` in `body` (`ContentView.swift:2300`), so this fires exactly once
+per toggle, immediately after the existing `handleDriveCameraChange`/`handleDriveModeChange` calls,
+in the same synchronous scope. `rebuildOverlays` bumps `overlayGeneration`; `updateUIView` diffs that
+against `lastAppliedGeneration` and calls `applyOverlayPayload`, which unconditionally
+`removeOverlay`s the 5 `TaggedMultiPolyline` groups and `addOverlay`s brand-new instances — objects
+MapKit has never seen, so it must call `mapView(_:rendererFor:)` fresh, which now reads the current
+`parent.driveModeActive` and returns the correct width immediately.
+
+## Verification against the coordinator's 5 checks
+
+**1. `handleDriveModeAndCamera` fires on every toggle, both directions, no bypass.** Confirmed.
+`driveModeActive` is a single `@State private var` on `ContentView`, mutated at exactly 3 sites in
+the whole file: `onRouteReady` (`:1648`, → `true`, Destination Mode entry), `enterCruiseMode`
+(`:2895`, → `true`, Cruise entry), `endDriveMode` (`:2908`, → `false`, the single exit path for
+both styles). All three are plain `@State` writes; SwiftUI's `.onChange(of:)` fires for every write
+that changes the watched value regardless of which function performed it — there is exactly one
+`.onChange(of: driveModeActive)` in the whole file (grepped), and the codebase's own pre-existing
+comments independently corroborate this is already treated as the single funnel elsewhere (e.g.
+the FT-15/TF2-15 QA-fix comment at `:4211`, predating this fix, calling it exactly that). No entry
+or exit path writes `driveModeActive` without going through this one `@State` var. Verified, not
+just asserted.
+
+**2. Not redundant-but-harmful — does this fire on camera moves unrelated to toggles?** No.
+`.onChange(of:)` only re-fires when the *watched value itself* changes (`false→true` or
+`true→false`), not on every render/camera-move/pinch. `driveModeActive` is written exactly once per
+Drive Mode session (on entry) and once on exit — nothing in the pinch-zoom handler
+(`handleDrivePinchZoomed`, only touches `currentDriveAltitude`), the per-tick follow camera
+(`handleLocationUpdate`), or the pan/pinch-detection path (`handleDrivePanDetected`, only touches
+`followPaused`) re-writes `driveModeActive` mid-session. So the new `rebuildOverlays` call fires
+**exactly twice per Drive Mode session** — on entry and on exit — not once per camera move, not
+once per GPS tick. This is materially cheaper than the existing 60s timer tick, which does the
+identical remove/re-add churn every 60 seconds during ordinary browsing with no documented flicker
+complaint — the same operation happening two extra times, once at the start and once at the end of
+a drive, is not a new performance class introduced by this fix.
+
+**3. `lastEvaluatedAt` is the correct timestamp.** Confirmed — this exactly matches the existing
+convention: `handleSegmentsChanged()` and `handleSelectionChanged()` (pre-existing, untouched by
+this PR) both call `rebuildOverlays(at: lastEvaluatedAt)`, and only `handleTimerTick()` re-stamps
+`lastEvaluatedAt = .now` before calling it. The new call follows the same non-restamping pattern.
+The bounded staleness this introduces (`lastEvaluatedAt` can be up to ~60s old at the moment of a
+Drive Mode toggle) is not a new risk — it's the same staleness window every segment-count/selection
+-driven rebuild already tolerates, and it only affects which color/state a segment resolves to, not
+this fix's actual target (the line *width*, which depends only on `driveModeActive` and
+`overlayTag`, both read fresh at render time regardless of the timestamp's age).
+
+**4. No re-entrancy/loop risk.** Traced `rebuildOverlays(at:)` → it only ever writes
+`overlayGeneration` (Int) and `overlayPayload` (a struct), plus, in the Park Until stale-target
+branch, `parkUntilMode`/`parkUntilTarget` — none of which is observed by any `.onChange` that
+writes back to `driveModeActive`. `applyOverlayPayload` (fired from `updateUIView` on the
+generation diff) is UIKit-side only — `mapView.removeOverlay`/`addOverlay` calls with no writes back
+into any SwiftUI `@State` — so there is no path back into `ContentView`'s state graph, and therefore
+no way for this call to re-trigger itself or any other `.onChange`. No loop.
+
+**5. Sweeps.** `git diff 7a1a7d12~1..7a1a7d12 --name-only`: only `ContentView.swift` touched, exactly
+as claimed — no incidental edits to `MapViewRepresentable.swift`, `MapKeyLegendView.swift`,
+`ParkedCarDetailView.swift`, or any test file. Test count re-verified independently by extracting
+`ios/WePark/WeParkTests` at `7a1a7d12` and re-counting `^\s*func test`: **1338** (unchanged from pass
+1's post-payload count, matching the commit's own claim). The no-new-test justification is
+consistent with this PR's own established precedent (`CurbLineWidthTests.swift`'s header comment
+already conceded the UIKit-wiring half of #19 is untestable at the unit level, only at the pure-
+function level) — this fix is exactly that untestable half (which UIKit delegate method gets
+re-invoked when), not a decision with inputs/outputs to extract. Acceptable, matches my own pass-1
+checklist's allowance for this class of change.
+
+## Shape (b) rejection — assessed
+
+The rejected alternative (retaining the vended `MKOverlayRenderer` instances and mutating
+`.lineWidth` on them directly via `mapView.renderer(for:)`, avoiding any remove/re-add) is a real
+option MapKit supports, but grepping the whole `MapViewRepresentable.swift` file for
+`MKOverlayRenderer`/`renderer(for:` finds **zero** existing precedent for retaining or looking up a
+renderer instance after it's vended — the Coordinator stores overlay *objects*
+(`multiPolylines: [OverlayTag: TaggedMultiPolyline]`) but never their renderers, and no call site in
+this file calls `mapView.renderer(for:)`. The one arguably-similar existing pattern
+(`refreshUserLocationPuck` mutating a retained *view* via `mapView.view(for: mapView.userLocation)`)
+is for an `MKAnnotationView`, a different API family from `MKOverlayRenderer` — annotation views are
+directly queryable/mutable that way; overlay renderers are not conventionally handled this way in
+this codebase. Shape (b) would have introduced a wholly new, never-before-compiled pattern on a
+COMPILE-UNVERIFIED branch; shape (a) reuses two already-shipped, already-exercised mechanisms
+(`rebuildOverlays`/`overlayGeneration` and `applyOverlayPayload`'s existing remove/re-add). Given no
+Swift toolchain is available to this project's agents to de-risk shape (b) before merge, shape (a)
+is the lower-risk choice for materially the same outcome (twice per drive session, negligible cost).
+The "lack of renderer-retention precedent" claim is accurate, and it's a reasonable basis for the
+choice.
+
+## Findings
+
+None. No new findings from this scoped review. Pass 1's Finding #2 (🟢, unit tests can't cover the
+UIKit-timing half of #19) and Finding #3 (🟢, `MKMarkerAnnotationView`'s built-in shadow replacing
+manual `CALayer` shadow properties, for #20) still stand as minor/nit — unaffected by this commit,
+still worth a glance during the Mac visual gate, not blocking.
+
+## Final Mac gate checklist (amended)
+
+1. `xcodebuild build` — first compile of this branch (now including `7a1a7d12`), must be clean.
+2. `xcodebuild test`, flag-off expected **1338/1338** (test count unchanged by the fix commit).
+3. Flag-on: 1334 + the 4 named guards resolve as documented.
+4. **Visual smoke — #19, now specifically re-testing the fix**: toggle Drive Mode ON and screenshot
+   **within the first ~10 seconds** (well inside the old ~60s lag window) — lines should already be
+   at Drive-Mode width, not thin. Then toggle OFF and screenshot again within ~10 seconds — lines
+   should already be back at browse width, not still thick. Both transitions should look instant,
+   not delayed to the next timer tick. Also check for any visible flash/flicker exactly at the
+   toggle moment (the remove/re-add is expected to be imperceptible, per the existing 60s-timer
+   precedent, but confirm on real hardware given this is the first time it fires synchronously with
+   the pitch/zoom camera animation rather than in isolation).
+5. Blue marker (#20) — parked (solid) vs. tentative (dimmed) distinction, legend copy (`?` button)
+   matches.
+6. Legacy long-press (#17b) — flag OFF, repeat 3+ times, confirm FIRST press reliably opens the
+   dialog.
+7. Dedupe — one metered-only block, one ASP-only block (single line each), one mixed ASP+METERED
+   block (both lines, divergent text).
