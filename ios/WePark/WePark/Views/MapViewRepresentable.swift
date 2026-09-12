@@ -137,6 +137,18 @@ final class DraftSpotPinAnnotation: MKPointAnnotation {
     // No extra state needed — identity is by type.
 }
 
+/// Open item #17 residual (2026-09-11, core-parking-16 session): MKPointAnnotation subclass
+/// for the tentative "car will go here" marker shown at the long-press point while the
+/// flag-on `LongPressParkConfirmCard` is up — the Apple Maps long-press pattern (today "Park
+/// here?" doesn't show WHERE until after confirming). Distinct from
+/// `CarPinAnnotation`/`DestinationPinAnnotation`/`DraftSpotPinAnnotation` by type, same
+/// "identify by type" convention as those three. Flag-off builds never see this annotation —
+/// `ContentView` passes `nil` for `pendingParkCoordinate` unconditionally when
+/// `!AppConstants.communityEnabled` (see `ContentView.pendingParkPinCoordinate`'s doc comment).
+final class PendingParkPinAnnotation: MKPointAnnotation {
+    // No extra state needed — identity is by type.
+}
+
 // MARK: - Community 2.0 S13a (WP2): zone-boundary overlay
 
 /// Dashed zone-boundary overlay — the user's OWN zone only (S13c Fix #1; previously all
@@ -259,6 +271,19 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// `ContentView`'s `@State spotPlacementDraft` — same "optional coordinate in, mechanical
     /// add/remove sync in `updateUIView`" contract as `destinationCoordinate` above.
     var draftSpotCoordinate: CLLocationCoordinate2D? = nil
+
+    // MARK: Open item #17 residual (2026-09-11): tentative "car will go here" pin
+
+    /// Non-nil while the flag-on `LongPressParkConfirmCard` is up — the exact coordinate the
+    /// user long-pressed. Renders a tentative "car will go here" marker until Cancel (removed)
+    /// or confirm (`pendingLongPressCoord` clears before the real `CarPinAnnotation` appears,
+    /// so the two never render simultaneously). `nil` for flag-off builds — `ContentView`
+    /// passes `nil` unconditionally when `!AppConstants.communityEnabled`
+    /// (`ContentView.pendingParkPinCoordinate`), so this property never activates for the
+    /// legacy three-button-dialog long-press flow (flag-off byte-identical requirement). Same
+    /// "optional coordinate in → mechanical add/remove sync in `updateUIView`" contract as
+    /// `draftSpotCoordinate` above.
+    var pendingParkCoordinate: CLLocationCoordinate2D? = nil
 
     // MARK: Community 2.0 S13a (WP2): Zone-boundary overlay
 
@@ -978,6 +1003,12 @@ struct MapViewRepresentable: UIViewRepresentable {
             forAnnotationViewWithReuseIdentifier: Coordinator.draftSpotPinReuseID
         )
 
+        // Open item #17 residual: Register the PendingParkPinAnnotation view class.
+        mapView.register(
+            MKMarkerAnnotationView.self,
+            forAnnotationViewWithReuseIdentifier: Coordinator.pendingParkPinReuseID
+        )
+
         // Community 1.0 / Tier 1: Register community pin annotation view class.
         mapView.register(
             PinMarkerAnnotation.self,
@@ -1304,6 +1335,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         // updateUIView, no camera mutation.
         context.coordinator.syncDraftSpotPin(draftSpotCoordinate, on: mapView)
 
+        // Open item #17 residual: sync the tentative "car will go here" park pin. Same
+        // mechanical add/remove-only contract as syncDraftSpotPin above — safe inside
+        // updateUIView, no camera mutation.
+        context.coordinator.syncPendingParkPin(pendingParkCoordinate, on: mapView)
+
         // Community 1.0 / Tier 1: sync community pin annotations.
         //
         // Architectural contract (spec §5.2, invariant I-1):
@@ -1441,6 +1477,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// The coordinate of the currently-rendered draft-spot pin (tuple for equality) —
         /// same shape as `renderedDestinationCoord` above.
         private var renderedDraftSpotCoord: (Double, Double)? = nil
+
+        // Open item #17 residual (2026-09-11): tentative "car will go here" park pin state.
+        static let pendingParkPinReuseID = "PendingParkPinAnnotation"
+        /// The currently-rendered pending-park-pin annotation.
+        private var pendingParkPinAnnotation: PendingParkPinAnnotation? = nil
+        /// The coordinate of the currently-rendered pending-park pin (tuple for equality) —
+        /// same shape as `renderedDraftSpotCoord`/`renderedDestinationCoord` above.
+        private var renderedPendingParkCoord: (Double, Double)? = nil
 
         // Community 1.0 / Tier 1: community pin annotation state.
         /// Map from pin UUID → CommunityPinAnnotation for currently-rendered community markers.
@@ -1707,6 +1751,38 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
 
             renderedDraftSpotCoord = newCoord
+        }
+
+        // MARK: - Open item #17 residual (2026-09-11): tentative park-pin management
+
+        /// Syncs the tentative "car will go here" pin annotation to match the current
+        /// `pendingParkCoordinate`. Byte-for-byte the same add/remove-diff shape as
+        /// `syncDraftSpotPin`/`syncDestinationPin` above — mechanical sync only (no camera
+        /// mutation), safe to call from `updateUIView`.
+        func syncPendingParkPin(_ coordinate: CLLocationCoordinate2D?, on mapView: MKMapView) {
+            let newCoord = coordinate.map { ($0.latitude, $0.longitude) }
+
+            // Fast path: same coordinate already rendered.
+            if let existing = renderedPendingParkCoord, let new = newCoord,
+               existing.0 == new.0, existing.1 == new.1 { return }
+            if renderedPendingParkCoord == nil && newCoord == nil { return }
+
+            // Remove old annotation.
+            if let old = pendingParkPinAnnotation {
+                mapView.removeAnnotation(old)
+                pendingParkPinAnnotation = nil
+            }
+
+            // Add new annotation if a pending coordinate is set.
+            if let coordinate = coordinate {
+                let annotation = PendingParkPinAnnotation()
+                annotation.coordinate = coordinate
+                annotation.accessibilityLabel = "Car will park here, not yet confirmed"
+                pendingParkPinAnnotation = annotation
+                mapView.addAnnotation(annotation)
+            }
+
+            renderedPendingParkCoord = newCoord
         }
 
         // MARK: - Community 1.0 / Tier 1: Community pin annotation sync
@@ -2167,6 +2243,30 @@ struct MapViewRepresentable: UIViewRepresentable {
                 view.canShowCallout = false
                 view.isAccessibilityElement = true
                 view.accessibilityLabel = "Draft spot-open position, not yet posted"
+                view.accessibilityTraits = .staticText
+                return view
+            }
+
+            // Handle PendingParkPinAnnotation (open item #17 residual, 2026-09-11) — the
+            // tentative "car will go here" marker at the long-press point while the flag-on
+            // LongPressParkConfirmCard is up. Reuses `car.fill` (visually related to the real
+            // `CarPinAnnotation`'s `mappin.circle.fill`, per spec: "a small, distinct marker
+            // visually related to the car pin") in systemBlue, dimmed alpha — same "not yet
+            // committed" treatment as `DraftSpotPinAnnotation` above.
+            if annotation is PendingParkPinAnnotation {
+                let view = mapView.dequeueReusableAnnotationView(
+                    withIdentifier: Coordinator.pendingParkPinReuseID,
+                    for: annotation
+                ) as? MKMarkerAnnotationView ?? MKMarkerAnnotationView(
+                    annotation: annotation,
+                    reuseIdentifier: Coordinator.pendingParkPinReuseID
+                )
+                view.markerTintColor = .systemBlue
+                view.glyphImage = UIImage(systemName: "car.fill")
+                view.alpha = 0.85
+                view.canShowCallout = false
+                view.isAccessibilityElement = true
+                view.accessibilityLabel = "Car will park here, not yet confirmed"
                 view.accessibilityTraits = .staticText
                 return view
             }

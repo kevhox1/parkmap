@@ -13,11 +13,28 @@
 //        already parked on an affected block. Requires a resolved segment (no segment ==
 //        no blockfaceKey to match against). Tap opens PinDetailSheet.
 //    4. Parked-at relative timestamp — "Parked 3h ago".
+//    4a. Open-items #16 (Kevin, on-device 2026-09-08; built this session, 2026-09-11):
+//        "when does this become not-free" status line for the parked blockface — the
+//        sheet's single most valuable fact per Kevin's own framing ("important piece of
+//        information to have, even if it's just the sign details for the side of the
+//        street we're on"). Derived purely via `ParkingRulesEngine.nextRestriction(for:at:)`
+//        + `.nextRestrictionTimeLabel(hours:now:)` — the SAME two engine APIs
+//        `NotificationScheduler.buildContent` already consumes for reminder copy — NOT a
+//        re-derivation of `engine.safetyLabel(for:at:)`'s text (that headline lives at 3.
+//        above and can legitimately say the same thing when currently free; this line's
+//        job is specifically "when do I need to move"). Omitted if no resolved segment.
+//    4a2. Open-items #16 item 3: explicit "ASP Suspended — <reason>" note, shown when today
+//        is an ASP-suspended date AND the parked segment actually carries an ASP rule.
+//        Reuses `ASPBanner`'s exact `.todaySuspended` wording and green tone
+//        (`Views/ASPBanner.swift`) — no new suspension calendar logic, no new color mapping.
 //    4b. Community 2.0 Phase 4a / WP4 rider (S10): "🧹 Swept X ago · N confirms" badge —
 //        live only when a `sweeper_passed` pin covers this car's resolved segment.
 //    5. [W7] Reminder toggle — "Remind me before parking changes" + (Community 2.0 WP4
 //       rider) inline 15m/30m/1h/2h/Night-before offset chips, shown while the toggle is on.
-//    6. Rules list — same RuleRow component as BlockDetailView.
+//    6. Rules list — same RuleRow component as BlockDetailView. Open-items #16 item 2:
+//       collapses behind a "Rules (N)" DisclosureGroup, collapsed by default, when there are
+//       more than 3 rules — keeps the sheet compact. 3 or fewer stay always-visible, matching
+//       `BlockDetailView.rulesSection`'s own uncollapsed convention for the common case.
 //    6b. Community 2.0 Phase 4a (S10): "Hand your spot to the crew" — leaving-soon handoff
 //        card (5/10/15/20-min chips + post button).
 //    7. "I left — clear pin" button (red tint) — UNCHANGED by this session.
@@ -92,6 +109,11 @@
 //  and `visiblePins` reflecting it (normally synchronous — `insertCrowdPin` merges the response
 //  before returning — but not guaranteed if response decoding fails).
 //
+//  Open-items #16 (core-parking-16 session, 2026-09-11): NOT community-flagged. The status
+//  line, ASP-suspension note, and rules-collapse behavior all render identically whether
+//  `AppConstants.communityEnabled` is `false` or `true` — this is core parking value, ships
+//  to everyone, unlike the WP4/Phase 4a rider sections elsewhere in this file.
+//
 //  No Calendar.current use. No import SwiftUI in Models/ or Services/.
 //
 
@@ -120,6 +142,19 @@ struct ParkedCarDetailView: View {
     /// W7: Scheduler reference — needed to cancel/reschedule when toggle is flipped.
     let scheduler: NotificationScheduler
 
+    /// Open-items #16 item 3: source of the "today is ASP-suspended" fact for the parked
+    /// segment. **PR #106 QA Finding #2 correction**: `ContentView` already holds
+    /// `@State private var aspService = ASPSuspensionService()` (`ContentView.swift:488`,
+    /// built for the W7 top banner) and passes THAT instance in at its call site — this
+    /// property's original doc comment claimed no such reachable instance existed, which was
+    /// simply wrong (it also missed that `ParkingRulesEngine`'s own default init hides a
+    /// THIRD copy). The default value below (a fresh instance) exists only so
+    /// previews/standalone use and every pre-existing test call site keep compiling without
+    /// threading one through — same "inject a real default, override at the real call site"
+    /// convention as `scheduler: NotificationScheduler = .shared`, NOT a claim that
+    /// `ContentView` needs it.
+    let aspService: ASPSuspensionService
+
     // MARK: - FT-15 / TF2-15 (§9.2): Temporary restriction banner
 
     /// Pin service used to look up an active/upcoming block-scoped restriction covering
@@ -138,6 +173,13 @@ struct ParkedCarDetailView: View {
     // MARK: - W7: Toggle state — initialized from the current car's persisted value.
 
     @State private var remindMe: Bool
+
+    // MARK: - Open-items #16 item 2: rules-list disclosure state.
+
+    /// Collapsed by default when the rules list is long (`ParkedCarDetailLogic
+    /// .shouldCollapseRules`) — only consulted when that function returns `true`; the
+    /// always-visible (≤3 rules) path never reads this.
+    @State private var rulesExpanded: Bool = false
 
     // MARK: - Community 2.0 WP4 rider (S10): per-car reminder-offset chip state.
 
@@ -175,6 +217,7 @@ struct ParkedCarDetailView: View {
         loadedSegments: [Segment],
         parkPinService: ParkPinService,
         scheduler: NotificationScheduler = .shared,
+        aspService: ASPSuspensionService = ASPSuspensionService(),
         pinService: CommunityPinService? = nil,
         onDismiss: @escaping () -> Void,
         onClearPin: @escaping () -> Void,
@@ -185,6 +228,7 @@ struct ParkedCarDetailView: View {
         self.loadedSegments = loadedSegments
         self.parkPinService = parkPinService
         self.scheduler = scheduler
+        self.aspService = aspService
         self.pinService = pinService
         self.onDismiss = onDismiss
         self.onClearPin = onClearPin
@@ -207,6 +251,17 @@ struct ParkedCarDetailView: View {
     private var blockScopedRestriction: CommunityPin? {
         guard let seg = resolvedSegment else { return nil }
         return pinService?.blockScopedRestriction(forBlockfaceKey: seg.blockfaceKey)
+    }
+
+    /// Open-items #16 item 3: explicit "ASP Suspended — <reason>" note text for the parked
+    /// segment, `nil` when today isn't suspended or the segment carries no ASP rule at all
+    /// (see `ParkedCarDetailLogic.aspSuspensionNote`'s doc comment for the scoping rationale).
+    private var aspSuspensionNoteText: String? {
+        guard let seg = resolvedSegment else { return nil }
+        return ParkedCarDetailLogic.aspSuspensionNote(
+            segmentHasASPRule: ParkedCarDetailLogic.segmentHasASPRule(seg),
+            suspensionReason: aspService.reasonForSuspension(now)
+        )
     }
 
     /// Community 2.0 Phase 4a / WP4 rider (S10): the live `sweeper_passed` pin covering this
@@ -300,6 +355,18 @@ struct ParkedCarDetailView: View {
 
                     // 4. Parked-at relative timestamp.
                     parkedAtRow
+
+                    // 4a. Open-items #16 item 1: "when does this become not-free" status
+                    // line — the sheet's most valuable fact. NOT community-flagged.
+                    if let seg = resolvedSegment {
+                        statusLineView(for: seg)
+                    }
+
+                    // 4a2. Open-items #16 item 3: explicit ASP-suspended-today note.
+                    // NOT community-flagged.
+                    if let note = aspSuspensionNoteText {
+                        aspSuspensionBadge(text: note)
+                    }
 
                     // 4b. Community 2.0 WP4 rider (S10): swept-status badge.
                     // S13c Fix #10: shared `SweptBadgeView` (`Views/BlockDetailView.swift`,
@@ -468,6 +535,63 @@ struct ParkedCarDetailView: View {
         }
     }
 
+    // MARK: - Open-items #16 item 1: "when does this become not-free" status line
+
+    /// Directly under "Parked Xh ago" — the sheet's single most valuable fact per Kevin's own
+    /// framing (open-items #16). Derived purely via `engine.nextRestriction(for:at:)` +
+    /// `engine.nextRestrictionTimeLabel(hours:now:)` — the SAME two engine APIs
+    /// `NotificationScheduler.buildContent` already consumes for reminder copy, not a
+    /// re-derivation of `engine.safetyLabel(for:at:)`'s text. Visually emphasized (bold,
+    /// colored via the segment's existing Option B dynamic state color —
+    /// `engine.currentStateColor`, no new color mapping invented) since Kevin called this out
+    /// as the sheet's most valuable fact.
+    ///
+    /// PR #106 QA Finding #1 fix: `engine.nextRestriction` intentionally SKIPS `METERED`
+    /// rules (correct, pre-existing engine semantics — a meter isn't a move-your-car event).
+    /// For a segment whose only rule is `METERED`, that means `restriction.isUnrestricted`
+    /// is `true` even while the meter is actively charging, which used to make this line
+    /// falsely claim "Free — no restrictions here" directly under the sheet's existing
+    /// headline correctly saying "paid until 7pm" (the FT-9 bug class, reintroduced at this
+    /// new call site). Fix: when the segment carries a `METERED` rule, pass
+    /// `engine.meteredStatus(for:at:)`'s output through as `meteredStatusLabel` — the SAME
+    /// source of truth the headline's own FT-9 fix already uses — so
+    /// `freeUntilStatusText` can fall back to it instead of the unqualified "free" claim.
+    /// `nil` (not computed at all) when the segment has no metered rule, so non-metered
+    /// segments pay zero extra cost.
+    private func statusLineView(for seg: Segment) -> some View {
+        let restriction = engine.nextRestriction(for: seg, at: now)
+        let timeLabel = engine.nextRestrictionTimeLabel(hours: restriction.hours, now: now)
+        let meteredStatusLabel = ParkedCarDetailLogic.segmentHasMeteredRule(seg)
+            ? engine.meteredStatus(for: seg, at: now)
+            : nil
+        let text = ParkedCarDetailLogic.freeUntilStatusText(
+            restriction: restriction,
+            timeLabel: timeLabel,
+            meteredStatusLabel: meteredStatusLabel
+        )
+        return Text(text)
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(engine.currentStateColor(for: seg, at: now))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(text)
+    }
+
+    // MARK: - Open-items #16 item 3: ASP-suspended-today note
+
+    /// "ASP Suspended — <reason>" badge — copy and green tone reused verbatim from
+    /// `ASPBanner`'s `.todaySuspended` case (`Views/ASPBanner.swift`), styled as a compact
+    /// capsule to match this sheet's existing badge idiom (`SweptBadgeView`) rather than the
+    /// top banner's full-width bar.
+    private func aspSuspensionBadge(text: String) -> some View {
+        Label(text, systemImage: "checkmark.seal.fill")
+            .font(.caption.weight(.bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
+            .background(Color.green, in: Capsule())
+            .accessibilityElement(children: .combine)
+    }
+
     // MARK: - Community 2.0 WP4 rider (S10): swept-status badge
     //
     // S13c Fix #10: the badge view itself moved to the shared `SweptBadgeView`
@@ -553,10 +677,29 @@ struct ParkedCarDetailView: View {
 
     // MARK: - Rules list
 
+    /// Open-items #16 item 2: collapses behind a "Rules (N)" `DisclosureGroup`, collapsed by
+    /// default, when there are more than 3 rules (`ParkedCarDetailLogic.shouldCollapseRules`)
+    /// — keeps the sheet compact. 3 or fewer stay always-visible, matching
+    /// `BlockDetailView.rulesSection`'s own uncollapsed convention for the common case (that
+    /// view has no collapse idiom to reuse — checked first, per spec).
+    @ViewBuilder
     private func rulesSection(for seg: Segment) -> some View {
         let sortedRules = seg.rules.sorted { $0.category.priority < $1.category.priority }
-        return VStack(alignment: .leading, spacing: 8) {
-            ForEach(Array(sortedRules.enumerated()), id: \.offset) { _, rule in
+        if ParkedCarDetailLogic.shouldCollapseRules(count: sortedRules.count) {
+            DisclosureGroup("Rules (\(sortedRules.count))", isExpanded: $rulesExpanded) {
+                rulesList(sortedRules)
+                    .padding(.top, 6)
+            }
+            .font(.subheadline.weight(.semibold))
+            .accessibilityLabel("Rules, \(sortedRules.count) total. \(rulesExpanded ? "Expanded." : "Collapsed.")")
+        } else {
+            rulesList(sortedRules)
+        }
+    }
+
+    private func rulesList(_ rules: [ParkingRule]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(rules.enumerated()), id: \.offset) { _, rule in
                 RuleRow(rule: rule)
             }
         }
@@ -759,6 +902,107 @@ struct ParkedCarDetailView: View {
 /// without SwiftUI/view-lifecycle machinery — same house style as
 /// `ReportSheet.destination(forTapping:...)`/`CandidateSegmentSearch`.
 enum ParkedCarDetailLogic {
+
+    // MARK: - Open-items #16: "when does this become not-free" status line
+    //
+    // NOT community-flagged — unlike everything else in this enum, these three functions back
+    // core parking value that ships in the flag-off binary too.
+
+    /// The status-line WORDING for `restriction` — item 1 of open-items #16. Pure wording
+    /// decision over `ParkingRulesEngine.nextRestriction(for:at:)`'s output; no calendar or
+    /// ASP-suspension logic is reimplemented here. The engine's own walker already skips
+    /// ASP-suspended days when computing `restriction.hours`
+    /// (`ParkingRulesEngine.nextRestriction`'s doc comment), so this function only chooses
+    /// which of three established phrasings fits the shape of that answer:
+    ///   - `restriction.isActiveNow` (hours == 0): a restriction is already in effect right
+    ///     now — "free until" doesn't apply. Reuses `restriction.label` verbatim (e.g. "No
+    ///     parking active now", "ASP Mon/Thu active now" — the SAME strings
+    ///     `ParkingRulesEngine.nextRestriction` already produces for this case) rather than
+    ///     inventing new wording.
+    ///   - `restriction.isUnrestricted` (hours >= 168, the sentinel): no NON-METERED
+    ///     restriction exists on this block within the 14-day window.
+    ///     **PR #106 QA Finding #1**: `nextRestriction` intentionally SKIPS `METERED` rules
+    ///     (correct, pre-existing engine semantics — a meter isn't a move-your-car event), so
+    ///     this sentinel is reached for a metered-only segment even while its meter is
+    ///     actively charging. `meteredStatusLabel` is the caller's own
+    ///     `engine.meteredStatus(for:at:)` output — the SAME source of truth the sheet's
+    ///     existing headline already uses for this exact case (its own FT-9 fix) — passed
+    ///     only when the segment carries a metered rule (`nil` otherwise). When present, this
+    ///     branch falls back to it (stripped of its "Metered (...)" wrapper via
+    ///     `stripMeteredWrapper` below) instead of the unqualified "free" claim.
+    ///   - otherwise: "Free until <timeLabel>" — `timeLabel` is the caller's own
+    ///     `engine.nextRestrictionTimeLabel(hours:now:)` output (e.g. "Thursday 9:30 AM"),
+    ///     passed in as a plain `String` so this function stays engine-free and pure. A
+    ///     segment with BOTH an ASP-family rule and a metered rule reaches this branch (the
+    ///     ASP rule is virtually always found within 14 days), so the ASP-derived line
+    ///     renders here unaffected by the metered-only fix above.
+    nonisolated static func freeUntilStatusText(
+        restriction: NextRestriction,
+        timeLabel: String,
+        meteredStatusLabel: String?
+    ) -> String {
+        if restriction.isActiveNow {
+            return restriction.label ?? "Restricted now"
+        }
+        if restriction.isUnrestricted {
+            if let meteredStatusLabel {
+                return stripMeteredWrapper(meteredStatusLabel)
+            }
+            return "Free \u{2014} no restrictions here"
+        }
+        return "Free until \(timeLabel)"
+    }
+
+    /// **PR #106 QA Finding #1 fix**: strips the "Metered (" / ")" wrapper from
+    /// `ParkingRulesEngine.meteredStatus(for:at:)`'s output, e.g. "Metered (paid until 7pm)"
+    /// → "paid until 7pm" — byte-identical logic to the engine's own PRIVATE
+    /// `stripMeteredWrapper(_:)` (`Services/ParkingRulesEngine.swift`), intentionally
+    /// duplicated here rather than widening that method's access level. Same "duplicate
+    /// small view-layer formatting helpers rather than expose engine internals" convention
+    /// this codebase already documents at `RuleRow.formatMinutes`'s doc comment
+    /// (`Views/BlockDetailView.swift`) for the identical reasoning.
+    nonisolated static func stripMeteredWrapper(_ label: String) -> String {
+        var s = label
+        if s.hasPrefix("Metered (") {
+            s = String(s.dropFirst("Metered (".count))
+        }
+        if s.hasSuffix(")") {
+            s = String(s.dropLast(1))
+        }
+        return s
+    }
+
+    /// Item 2: whether the sign-details rules list should render collapsed-by-default behind
+    /// a disclosure control. 3 or fewer rules stay always-visible (matches
+    /// `BlockDetailView.rulesSection`'s own uncollapsed convention for the common case); more
+    /// than 3 collapses to keep the sheet compact.
+    nonisolated static func shouldCollapseRules(count: Int) -> Bool {
+        count > 3
+    }
+
+    /// Whether `segment` carries at least one ASP-category rule — the scoping check for item
+    /// 3's suspension note (surfacing "ASP Suspended" on a block with no ASP restriction at
+    /// all would be noise unrelated to this car).
+    nonisolated static func segmentHasASPRule(_ segment: Segment) -> Bool {
+        segment.rules.contains { $0.category.isASP }
+    }
+
+    /// **PR #106 QA Finding #1**: whether `segment` carries at least one `METERED` rule —
+    /// the scoping check for the metered-aware status-line fallback in
+    /// `freeUntilStatusText` above.
+    nonisolated static func segmentHasMeteredRule(_ segment: Segment) -> Bool {
+        segment.rules.contains { $0.category == .metered }
+    }
+
+    /// Item 3: the explicit "ASP Suspended — <reason>" note text, `nil` unless BOTH the
+    /// segment carries an ASP rule AND today is a suspended date. `suspensionReason` is the
+    /// caller's own `ASPSuspensionService.reasonForSuspension(_:)` result — no suspension
+    /// calendar logic is reimplemented here. Copy reuses `ASPBanner`'s exact `.todaySuspended`
+    /// wording (`Views/ASPBanner.swift`) verbatim.
+    nonisolated static func aspSuspensionNote(segmentHasASPRule: Bool, suspensionReason: String?) -> String? {
+        guard segmentHasASPRule, let suspensionReason else { return nil }
+        return "ASP Suspended \u{2014} \(suspensionReason)"
+    }
 
     // MARK: - Swept-status badge
 

@@ -1221,6 +1221,16 @@ struct ContentView: View {
                 engine: engine,
                 loadedSegments: tileLoader.segments,
                 parkPinService: parkPinService,
+                // PR #106 QA Finding #2 fix: reuse the SAME `ASPSuspensionService` instance
+                // already held here (`@State private var aspService`, line ~488, built for
+                // the W7 top banner) rather than letting the sheet default-construct its own
+                // second copy — avoids a redundant `asp-2026.json` bundle parse on every My
+                // Car sheet presentation.
+                // NB: `ParkedCarDetailView.init` is hand-written (not memberwise), but Swift
+                // still requires labeled arguments in the init's DECLARED parameter order —
+                // aspService is declared directly after scheduler (which this call site
+                // omits, using its own `.shared` default).
+                aspService: aspService,
                 // FT-15/TF2-15 (§9.2): so the sheet can look up an active block-scoped
                 // restriction covering wherever this car is parked — "the highest-value
                 // consumption point in the whole spec."
@@ -2407,6 +2417,18 @@ struct ContentView: View {
             // NB: argument order must match the memberwise init (declaration order) —
             // draftSpotCoordinate is declared directly after destinationCoordinate.
             draftSpotCoordinate: spotPlacementDraft?.coordinate,
+            // Open item #17 residual (2026-09-11): tentative "car will go here" marker at
+            // the long-press point while the flag-on `LongPressParkConfirmCard` is up.
+            // `pendingParkPinCoordinate` is the pure gate that keeps this `nil` for flag-off
+            // builds even though `pendingLongPressCoord` is also set by the legacy
+            // three-button-dialog long-press flow those users still see — see that
+            // function's own doc comment.
+            // NB: argument order must match the memberwise init (declaration order) —
+            // pendingParkCoordinate is declared directly after draftSpotCoordinate.
+            pendingParkCoordinate: Self.pendingParkPinCoordinate(
+                communityEnabled: AppConstants.communityEnabled,
+                pendingLongPressCoord: pendingLongPressCoord
+            ),
             // Community 2.0 S13a/S13c: dashed zone-boundary overlay — flag-gated
             // explicitly here (not just inside `communityHomeZoneId`) so a flag-off build
             // never even asks `MapViewRepresentable` to build the boundary polygon
@@ -2416,7 +2438,7 @@ struct ContentView: View {
             // `communityMapChromeVisible` gate two properties above, which already excludes
             // Drive Mode.
             // NB: argument order must match the memberwise init (declaration order) — both
-            // are declared directly after `draftSpotCoordinate`, same convention as its own
+            // are declared directly after `pendingParkCoordinate`, same convention as its own
             // comment above.
             showZoneBoundaries: AppConstants.communityEnabled && !driveModeActive,
             homeZoneId: communityHomeZoneId,
@@ -4011,6 +4033,21 @@ struct ContentView: View {
 
     nonisolated static func longPressPresentationMode(communityEnabled: Bool) -> LongPressPresentation {
         communityEnabled ? .parkConfirmCard : .legacyThreeButtonDialog
+    }
+
+    /// Open item #17 residual (2026-09-11): pure gate for the coordinate handed to
+    /// `MapViewRepresentable.pendingParkCoordinate` — the tentative "car will go here" marker
+    /// must NEVER render for flag-off builds, regardless of `pendingLongPressCoord`'s state,
+    /// because `pendingLongPressCoord` is also set (unconditionally) by the legacy
+    /// three-button-dialog long-press flow that flag-off users still see
+    /// (`handleLongPress(at:)`). Extracted as a pure, unit-testable function — same
+    /// "extract the flag gate, test the decision" pattern as
+    /// `longPressPresentationMode(communityEnabled:)` above.
+    nonisolated static func pendingParkPinCoordinate(
+        communityEnabled: Bool,
+        pendingLongPressCoord: CLLocationCoordinate2D?
+    ) -> CLLocationCoordinate2D? {
+        communityEnabled ? pendingLongPressCoord : nil
     }
 
     /// Handles a long-press gesture on the map.
