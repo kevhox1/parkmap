@@ -139,31 +139,46 @@ final class BlockDetailLiveBlockPinsTests: XCTestCase {
 
 // MARK: - BlockDetailLogic.resolvedZoneId
 
+/// Community 2.0 S14: stands in for the retired compiled zone-bounds table — same lat/lng
+/// values every test below already assumed.
+private let blockDetailFixtureZones: [Zone] = [
+    Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930),
+    Zone(id: "soho",   name: "SoHo",   latMin: 40.7220, latMax: 40.7237, lngMin: -74.0050, lngMax: -73.9970),
+    Zone(id: "les",    name: "LES",    latMin: 40.7145, latMax: 40.7230, lngMin: -73.9920, lngMax: -73.9800),
+]
+
 final class BlockDetailResolvedZoneIdTests: XCTestCase {
 
     func testNolitaMidpoint_resolvesNolita() {
         let midpoint = CLLocationCoordinate2D(latitude: 40.7230, longitude: -73.9950)
-        XCTAssertEqual(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint), "nolita")
+        XCTAssertEqual(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint, zones: blockDetailFixtureZones), "nolita")
     }
 
     func testSohoMidpoint_resolvesSoho() {
         let midpoint = CLLocationCoordinate2D(latitude: 40.7225, longitude: -74.0010)
-        XCTAssertEqual(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint), "soho")
+        XCTAssertEqual(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint, zones: blockDetailFixtureZones), "soho")
     }
 
     func testLesMidpoint_resolvesLes() {
         let midpoint = CLLocationCoordinate2D(latitude: 40.7200, longitude: -73.9850)
-        XCTAssertEqual(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint), "les")
+        XCTAssertEqual(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint, zones: blockDetailFixtureZones), "les")
     }
 
     func testOutsideAllZones_resolvesNil() {
-        // Far uptown — well outside all three Community 2.0 zone boxes.
+        // Far uptown — well outside every fixture zone box.
         let midpoint = CLLocationCoordinate2D(latitude: 40.80, longitude: -73.95)
-        XCTAssertNil(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint))
+        XCTAssertNil(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint, zones: blockDetailFixtureZones))
     }
 
     func testNilMidpoint_resolvesNil() {
-        XCTAssertNil(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: nil))
+        XCTAssertNil(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: nil, zones: blockDetailFixtureZones))
+    }
+
+    /// Community 2.0 S14 AC: an empty `zones` array (e.g. `zoneStore == nil` in
+    /// previews/standalone use) must never crash — degrades to `nil`.
+    func testEmptyZonesArray_resolvesNil() {
+        let midpoint = CLLocationCoordinate2D(latitude: 40.7230, longitude: -73.9950)
+        XCTAssertNil(BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: midpoint, zones: []))
     }
 }
 

@@ -55,15 +55,27 @@
 //    MapViewRepresentable zone-boundary pure helpers — boxes → overlay specs:
 //      20. testZoneBoundaryCoordinates_fourCornersInBoxOrder
 //      21. testZoneLabelCoordinate_insetFromTopLeftCorner_staysInsideBox
-//      22. testZoneDisplayName_knownZones
-//      23. testZoneDisplayName_unknownZone_fallsBackToUppercasedId
-//      24. testCommunityZoneIds_matchesSeededZones
+//
+//    Community 2.0 S14 (`docs/community-2.0-s14-execution-spec.md`) additions/changes:
+//      - `resolveHomeZoneId` gained a `zones: [Zone]` parameter — tests 17-19b updated to pass
+//        an explicit fixture (same lat/lng values as before); one new test added
+//        (empty-`zones`-array tolerance).
+//      - `MapViewRepresentable.zoneDisplayName(_:)`/`.communityZoneIds` are RETIRED along with
+//        the compiled zone-bounds table — their tests are removed, replaced by
+//        `MapViewRepresentableZoneBoundaryTests` below, which exercises the live
+//        `syncZoneBoundaries(enabled:homeZone:on:)` render path against a `Coordinator` +
+//        plain `MKMapView()` (same pattern already established in `W85bTests.swift`/
+//        `FT10Tests.swift` — no `UIWindowScene` synthesis, no test-only production branching).
+//        20a. testSyncZoneBoundaries_nonOriginalZoneName_rendersRealNameNotRawId
+//        20b. testSyncZoneBoundaries_nilHomeZone_removesExistingOverlayAndLabel
 //
 //  No Calendar.current use. No hardcoded Mapbox/Supabase secrets.
 //
 
 import XCTest
 import CoreLocation
+import MapKit
+import SwiftUI
 @testable import WePark
 
 // MARK: - MapKeyLegendView content
@@ -213,6 +225,14 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
 
 // MARK: - ContentView.resolveHomeZoneId (S13c Fix #1: car > device location > nil, NEVER viewport)
 
+/// Community 2.0 S14: stands in for the retired compiled zone-bounds table — same lat/lng
+/// values every test below already assumed.
+private let resolveHomeZoneIdFixtureZones: [Zone] = [
+    Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930),
+    Zone(id: "soho",   name: "SoHo",   latMin: 40.7220, latMax: 40.7237, lngMin: -74.0050, lngMax: -73.9970),
+    Zone(id: "les",    name: "LES",    latMin: 40.7145, latMax: 40.7230, lngMin: -73.9920, lngMax: -73.9800),
+]
+
 final class ResolveHomeZoneIdTests: XCTestCase {
 
     /// A parked car inside the "les" box, with the device's current location inside
@@ -221,7 +241,8 @@ final class ResolveHomeZoneIdTests: XCTestCase {
     func testResolveHomeZoneId_parkedCarWins_evenWhenDeviceLocationInDifferentZone() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: 40.7200, parkedCarLng: -73.9850,   // inside "les"
-            deviceLocationLat: 40.7230, deviceLocationLng: -73.9950  // inside "nolita"
+            deviceLocationLat: 40.7230, deviceLocationLng: -73.9950,  // inside "nolita"
+            zones: resolveHomeZoneIdFixtureZones
         )
         XCTAssertEqual(result, "les")
     }
@@ -231,7 +252,8 @@ final class ResolveHomeZoneIdTests: XCTestCase {
     func testResolveHomeZoneId_noParkedCar_fallsBackToDeviceLocation() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: nil, parkedCarLng: nil,
-            deviceLocationLat: 40.7225, deviceLocationLng: -74.0000  // inside "soho"
+            deviceLocationLat: 40.7225, deviceLocationLng: -74.0000,  // inside "soho"
+            zones: resolveHomeZoneIdFixtureZones
         )
         XCTAssertEqual(result, "soho")
     }
@@ -241,7 +263,8 @@ final class ResolveHomeZoneIdTests: XCTestCase {
     func testResolveHomeZoneId_neitherResolves_returnsNil() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: nil, parkedCarLng: nil,
-            deviceLocationLat: 40.70, deviceLocationLng: -74.02  // outside all three boxes
+            deviceLocationLat: 40.70, deviceLocationLng: -74.02,  // outside every box
+            zones: resolveHomeZoneIdFixtureZones
         )
         XCTAssertNil(result)
     }
@@ -251,7 +274,8 @@ final class ResolveHomeZoneIdTests: XCTestCase {
     func testResolveHomeZoneId_noCarNoDeviceLocation_returnsNil() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: nil, parkedCarLng: nil,
-            deviceLocationLat: nil, deviceLocationLng: nil
+            deviceLocationLat: nil, deviceLocationLng: nil,
+            zones: resolveHomeZoneIdFixtureZones
         )
         XCTAssertNil(result)
     }
@@ -262,9 +286,21 @@ final class ResolveHomeZoneIdTests: XCTestCase {
     func testResolveHomeZoneId_parkedCarResolves_withNoDeviceLocationAtAll() {
         let result = ContentView.resolveHomeZoneId(
             parkedCarLat: 40.7230, parkedCarLng: -73.9950,   // inside "nolita"
-            deviceLocationLat: nil, deviceLocationLng: nil
+            deviceLocationLat: nil, deviceLocationLng: nil,
+            zones: resolveHomeZoneIdFixtureZones
         )
         XCTAssertEqual(result, "nolita")
+    }
+
+    /// Community 2.0 S14 AC: an empty `zones` array (first-launch-and-offline) must never
+    /// crash — it degrades to `nil`, same as any other unmatched coordinate.
+    func testResolveHomeZoneId_emptyZonesArray_returnsNil() {
+        let result = ContentView.resolveHomeZoneId(
+            parkedCarLat: 40.7230, parkedCarLng: -73.9950,
+            deviceLocationLat: nil, deviceLocationLng: nil,
+            zones: []
+        )
+        XCTAssertNil(result)
     }
 }
 
@@ -303,17 +339,76 @@ final class ZoneBoundaryHelperTests: XCTestCase {
         XCTAssertLessThan(coord.longitude - sampleBox.lngMin, (sampleBox.lngMax - sampleBox.lngMin) / 2)
     }
 
-    func testZoneDisplayName_knownZones() {
-        XCTAssertEqual(MapViewRepresentable.zoneDisplayName("nolita"), "NOLITA")
-        XCTAssertEqual(MapViewRepresentable.zoneDisplayName("soho"), "SOHO")
-        XCTAssertEqual(MapViewRepresentable.zoneDisplayName("les"), "LES")
+    // Community 2.0 S14: `MapViewRepresentable.zoneDisplayName(_:)` and `.communityZoneIds`
+    // are both retired — `syncZoneBoundaries` now reads `zone.name.uppercased()` directly off
+    // the fetched `Zone` object (see `MapViewRepresentableZoneBoundaryTests` below for live
+    // coverage of that rendering path with a non-original zone name).
+}
+
+// MARK: - MapViewRepresentable.Coordinator.syncZoneBoundaries (Community 2.0 S14)
+
+/// Live-render coverage for `syncZoneBoundaries(enabled:homeZone:on:)` against a real
+/// `Coordinator` + plain `MKMapView()` — same "minimal `MapViewRepresentable(...)` +
+/// `makeCoordinator()` + bare `MKMapView()`" pattern already established in
+/// `W85bTests.swift`/`FT10Tests.swift` for this file's other Coordinator sync methods. No
+/// `UIWindowScene` synthesis, no production code branching for test purposes.
+@MainActor
+final class MapViewRepresentableZoneBoundaryTests: XCTestCase {
+
+    private func makeCoordinator() -> MapViewRepresentable.Coordinator {
+        let region = MKCoordinateRegion(
+            center: CLLocationCoordinate2D(latitude: 40.750, longitude: -73.990),
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+        @State var regionState = region
+        @State var selectedID: String? = nil
+
+        let repr = MapViewRepresentable(
+            region: $regionState,
+            selectedSegmentID: $selectedID,
+            onTap: { _ in },
+            onLongPress: { _ in },
+            onRegionChanged: { _ in },
+            onCarPinTapped: {},
+            carPin: nil,
+            overlayPayload: MapViewRepresentable.OverlayPayload(generation: 0),
+            activeRoute: nil,
+            destinationCoordinate: nil,
+            coordinatorActions: MapViewRepresentable.CoordinatorActions()
+        )
+        return repr.makeCoordinator()
     }
 
-    func testZoneDisplayName_unknownZone_fallsBackToUppercasedId() {
-        XCTAssertEqual(MapViewRepresentable.zoneDisplayName("soho-les"), "SOHO-LES")
+    /// Spec AC: "renders any `Zone`'s box/label correctly, including a zone whose name isn't
+    /// one of the original three (e.g. 'Hell's Kitchen' renders as
+    /// 'YOUR SQUARE · HELL'S KITCHEN', not a raw id)."
+    func testSyncZoneBoundaries_nonOriginalZoneName_rendersRealNameNotRawId() {
+        let coordinator = makeCoordinator()
+        let mapView = MKMapView()
+        let hellsKitchen = Zone(
+            id: "hells-kitchen", name: "Hell's Kitchen",
+            latMin: 40.7484, latMax: 40.7685, lngMin: -74.0090, lngMax: -73.9910
+        )
+
+        coordinator.syncZoneBoundaries(enabled: true, homeZone: hellsKitchen, on: mapView)
+
+        XCTAssertTrue(mapView.overlays.contains { $0 is ZoneBoundaryPolygon })
+        let label = mapView.annotations.compactMap { $0 as? ZoneLabelAnnotation }.first
+        XCTAssertEqual(label?.labelText, "YOUR SQUARE · HELL'S KITCHEN")
     }
 
-    func testCommunityZoneIds_matchesSeededZones() {
-        XCTAssertEqual(MapViewRepresentable.communityZoneIds, ["nolita", "soho", "les"])
+    /// `enabled: false` (or a `nil` home zone) must remove whatever box/label was previously
+    /// shown — never leave a stale zone's box on screen once it's no longer the user's own.
+    func testSyncZoneBoundaries_nilHomeZone_removesExistingOverlayAndLabel() {
+        let coordinator = makeCoordinator()
+        let mapView = MKMapView()
+        let nolita = Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930)
+
+        coordinator.syncZoneBoundaries(enabled: true, homeZone: nolita, on: mapView)
+        XCTAssertTrue(mapView.overlays.contains { $0 is ZoneBoundaryPolygon })
+
+        coordinator.syncZoneBoundaries(enabled: true, homeZone: nil, on: mapView)
+        XCTAssertFalse(mapView.overlays.contains { $0 is ZoneBoundaryPolygon })
+        XCTAssertFalse(mapView.annotations.contains { $0 is ZoneLabelAnnotation })
     }
 }

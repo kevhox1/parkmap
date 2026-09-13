@@ -341,6 +341,14 @@ final class CommunityPinService {
     /// sharing the app-lifetime `RealtimeClientV2`.
     let realtimeChannel: RealtimePinSubscribing
 
+    /// Community 2.0 S14: the live-fetched zone list backing `resolveZoneId`'s write-time
+    /// stamping and `buildLeaderboardRequest`'s bounding-box lookup. Defaulted to a fresh,
+    /// network-untouched `ZoneStore()` (that type's own convenience init never fetches at
+    /// construction time) so the ~50 pre-existing test call sites of this class that don't
+    /// exercise zone behavior keep compiling — and running — unchanged. Production
+    /// (`ContentView`) and any zone-behavior test pass the shared/fixture instance explicitly.
+    let zoneStore: ZoneStore
+
     // MARK: - Internal state
 
     // MARK: - Periodic refresh interval constant
@@ -428,13 +436,23 @@ final class CommunityPinService {
     ///     passing `SupabaseClients.makeRealtimePinChannel()` instead, so the app shares one
     ///     `RealtimeClientV2` for its whole lifetime rather than each service standing up its
     ///     own socket.
+    ///   - zoneStore: Community 2.0 S14 — the live-fetched zone list. Default `nil`, in which
+    ///     case a standalone `ZoneStore()` is constructed (mirrors `realtimeChannel`'s own
+    ///     "default nil, construct the real value in the init body" pattern immediately above —
+    ///     sidesteps any question of whether a `@MainActor`-isolated type's initializer is a
+    ///     legal default-argument EXPRESSION, since the body already runs on `MainActor`).
+    ///     Defaulting this to a fresh instance is safe for every pre-S14 test call site of this
+    ///     class: `ZoneStore()`'s own convenience init never touches the network at construction
+    ///     time (see that type's doc comment) — only an explicit `loadZonesIfNeeded()`/
+    ///     `fetchZones()` call does, and nothing here calls either.
     init(
         supabaseURL: URL,
         supabaseAnonKey: String,
         nowProvider: @escaping () -> Date = { Date() },
         urlSession: URLSession = .shared,
         authService: SupabaseAuthService? = nil,
-        realtimeChannel: RealtimePinSubscribing? = nil
+        realtimeChannel: RealtimePinSubscribing? = nil,
+        zoneStore: ZoneStore? = nil
     ) {
         self.supabaseURL = supabaseURL
         self.supabaseAnonKey = supabaseAnonKey
@@ -443,6 +461,7 @@ final class CommunityPinService {
         self.authService = authService
         self.realtimeChannel = realtimeChannel
             ?? SupabasePinRealtimeChannel(supabaseURL: supabaseURL, supabaseAnonKey: supabaseAnonKey)
+        self.zoneStore = zoneStore ?? ZoneStore()
     }
 
     /// Convenience initializer that reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` from
@@ -464,7 +483,11 @@ final class CommunityPinService {
     ///   passes `SupabaseClients.makeRealtimePinChannel()` explicitly rather than relying on
     ///   this convenience init's `nil` default, so the app's one shared `RealtimeClientV2` is
     ///   reused (spec §3.4) instead of a second, standalone socket being opened.
-    convenience init(authService: SupabaseAuthService? = nil, realtimeChannel: RealtimePinSubscribing? = nil) {
+    convenience init(
+        authService: SupabaseAuthService? = nil,
+        realtimeChannel: RealtimePinSubscribing? = nil,
+        zoneStore: ZoneStore? = nil
+    ) {
         let urlString = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_URL") as? String ?? ""
         let key = Bundle.main.object(forInfoDictionaryKey: "SUPABASE_ANON_KEY") as? String ?? ""
         let resolvedURL = URL(string: urlString) ?? URL(string: "https://placeholder.supabase.co")!
@@ -472,7 +495,8 @@ final class CommunityPinService {
             supabaseURL: resolvedURL,
             supabaseAnonKey: key,
             authService: authService,
-            realtimeChannel: realtimeChannel
+            realtimeChannel: realtimeChannel,
+            zoneStore: zoneStore
         )
     }
 
@@ -1251,7 +1275,7 @@ final class CommunityPinService {
     /// literal "pins they authored with confirm_count > 0" wording (not narrowed to ephemeral
     /// types only).
     private func buildLeaderboardRequest(zoneId: String, sevenDaysAgoISO: String) -> URLRequest? {
-        guard let box = CommunityZoneBounds.box(for: zoneId) else { return nil }
+        guard let box = ZoneGeometry.box(for: zoneId, in: zoneStore.zones) else { return nil }
 
         var components = URLComponents(
             url: supabaseURL.appendingPathComponent("rest/v1/pins_with_author"),
@@ -1309,10 +1333,11 @@ final class CommunityPinService {
     /// (`Views/CrewFeedSection.swift`), kept view-adjacent per this codebase's existing
     /// "pure decision logic lives near its one consumer" convention (mirrors `CrewFeedMerge`).
     ///
-    /// Returns `[]` (rather than throwing) when `zoneId` doesn't match any known zone box —
-    /// defensive; every real caller passes a `CommunityZone.id`, which always resolves.
+    /// Returns `[]` (rather than throwing) when `zoneId` doesn't match any zone currently in
+    /// `zoneStore.zones` — defensive; every real caller passes a `Zone.id` from the
+    /// currently-selected zone chip, which always resolves.
     ///
-    /// - Parameter zoneId: One of `CommunityZone`'s raw values ("nolita"/"soho"/"les").
+    /// - Parameter zoneId: A `Zone.id` from the live-fetched `zoneStore.zones` list.
     func fetchLeaderboardPins(zoneId: String) async throws -> [CommunityPin] {
         let sevenDaysAgo = nowProvider().addingTimeInterval(-7 * 24 * 60 * 60)
         guard let request = buildLeaderboardRequest(
@@ -1466,12 +1491,14 @@ final class CommunityPinService {
     /// genuinely knows the zone — e.g. from the currently-selected crew-feed zone chip —
     /// isn't second-guessed). Only when `explicit` is `nil` (every call site as of this
     /// session, per `Views/ReportSheet.swift`'s `zoneId: nil`) does this fall back to a
-    /// `CommunityZoneBounds` box-match against the pin's own `lat`/`lng` — the same
-    /// bounding-box approximation OQ-1 already chose for the zones themselves, applied here
-    /// at WRITE time instead of only at crew-feed DISPLAY time
-    /// (`CrewFeedMerge.resolvedZoneId(for:)`). Returns `nil` (an honest, correctly-null
-    /// `zone_id` column) when the coordinate falls outside all three known zone boxes —
-    /// never a guessed/default zone.
+    /// `ZoneGeometry.zoneId(forLat:lng:in:)` box-match against the pin's own `lat`/`lng` — the
+    /// same bounding-box approximation OQ-1 already chose for the zones themselves, applied
+    /// here at WRITE time instead of only at crew-feed DISPLAY time
+    /// (`CrewFeedMerge.resolvedZoneId(for:zones:)`). Returns `nil` (an honest, correctly-null
+    /// `zone_id` column) when the coordinate falls outside every zone in `zones` — never a
+    /// guessed/default zone. Community 2.0 S14: `zones` is the live-fetched `ZoneStore.zones`
+    /// list (3 rows today, 41 post-migration) rather than a compiled table — this function's
+    /// own behavior/signature only gained the explicit parameter, not new logic.
     ///
     /// Pure, `nonisolated` — no network, no actor isolation, directly unit-testable.
     ///
@@ -1482,8 +1509,8 @@ final class CommunityPinService {
     /// `derive_pin_expiry()` derives `expires_at` — remains an option for a future migration
     /// if write-time accuracy ever needs to be authoritative rather than best-effort; not
     /// pursued in this session per the roadmap's S6 scope (client-side box-match only).
-    nonisolated static func resolveZoneId(explicit: String?, lat: Double, lng: Double) -> String? {
-        explicit ?? CommunityZoneBounds.zoneId(forLat: lat, lng: lng)
+    nonisolated static func resolveZoneId(explicit: String?, lat: Double, lng: Double, zones: [Zone]) -> String? {
+        explicit ?? ZoneGeometry.zoneId(forLat: lat, lng: lng, in: zones)
     }
 
     // MARK: - Write path: Insert crowd pin (sub-PR #1)
@@ -1556,10 +1583,13 @@ final class CommunityPinService {
         // Community 2.0 Phase 2a / build 20 S6 (PR #94 QA Finding #3 follow-up): every write
         // path today calls this with `zoneId: nil`, leaving `pins.zone_id` permanently null —
         // the crew feed only surfaces these pins via `CrewFeedMerge`'s DISPLAY-time
-        // `CommunityZoneBounds` fallback, which is "a display-only patch, not a cure" per
+        // bounding-box fallback, which is "a display-only patch, not a cure" per
         // `docs/community-2.0-roadmap.md` S6. `resolveZoneId` stamps the column at insert time
         // instead, so a future server-side/analytics query on `zone_id` isn't silently null.
-        let resolvedZoneId = Self.resolveZoneId(explicit: zoneId, lat: lat, lng: lng)
+        // Community 2.0 S14: `zoneStore.zones` is the live-fetched zone list (see this class's
+        // own `zoneStore` doc comment for why the fetch backing it runs unconditionally, flag
+        // on or off).
+        let resolvedZoneId = Self.resolveZoneId(explicit: zoneId, lat: lat, lng: lng, zones: zoneStore.zones)
 
         var payload: [String: Any] = [
             "pin_type":  type.rawValue,
