@@ -43,6 +43,17 @@ explicitly below.
 | S14 | ✅ **COMPLETE** — client merged `3a80d6c7` (PR #108) + **migration 06 APPLIED TO PROD by Kevin 2026-09-13** (42 rows verified via anon curl: 41 zones + retired soho-les; no dupes; sim cold-relaunch showed the 8-chip nearest-first picker + 41-zone More sheet — "looks good") | Fetch-at-launch `ZoneStore` (UNCONDITIONAL — write-time zone stamping is live flag-off; spec's critical catch), `CommunityZoneBounds` deleted (9 call sites → `ZoneGeometry`/`ZoneOrdering` pure helpers), nearest-first picker (home pinned, 8-chip cap + More search sheet; count-identical at 3 zones, ORDER changes — spec corrected per QA), stored zone_id wins over geometry (LES-shrink rule). Suite 1338→**1365**. Two Mac-gate rounds: failure-class #5 (ZoneStore cache statics needed `nonisolated`) + a REAL test-isolation find — the unconditional launch fetch means the TEST HOST APP populates the zones cache, breaking no-prior-cache tests → `UserDefaults` injection per GarageSavingsService precedent | ✅ Gate 2026-09-13: 1365/1365 flag-off · 1361+4 guards flag-on · 3 chips no-More ✓ (home-pinned chip w/ house icon) · zone stamping via fetched store ✓ · revert ✓. THEN: Kevin applies 06 → 42 rows (41 + retired soho-les) → cold-relaunch sim = 41-zone picker + More sheet |
 
 **Buffer:** +2 sessions for rework the QA passes surface (historical rate on this repo justifies it).
+
+## 🚀 LAUNCH
+
+**2026-09-13 — Kevin formally ruled the drive-test gate SATISFIED and chose full launch** ("I already
+drove around. I'm back in NYC" → selected "Flip it — full launch"). The gate was satisfied not by one
+scripted drive but by a week of field use on the flag-ON build 20 in NYC (2026-09-05→13): parked-car
+flows on real streets, the live push loop (THE BUZZ), reports from the road, a real ASP-suspension
+weekend against the calendar, night driving (produced open-item #18), and map legibility in motion
+(produced #19, shipped in #107). Flip PR #109 (one boolean + the 4 named guard tests transformed);
+launch vehicle is TestFlight build 22, internal + external, with the 41-zone map already live in prod.
+
 **Total: ~15–18 sessions** (expanded 2026-08-28 from ~12–15: Kevin adopted the gap-inventory plan —
 `docs/design/community-2.0-hero-gap-inventory.md` — adding S13a/S13b and four near-free riders).
 
