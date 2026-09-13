@@ -207,7 +207,7 @@ final class ZoneStore {
     /// `UserDefaults.standard` key for the on-disk cache — plain device-local storage, no
     /// iCloud sync (zones aren't per-user state, no cross-device concern). Not `private`: tests
     /// exercise the cache round-trip directly against this same key.
-    static let cacheKey = "wepark_zones_cache_v1"
+    nonisolated static let cacheKey = "wepark_zones_cache_v1"
 
     /// The pre-2026-08-26 legacy id (`03-community-2.0-schema.sql`'s archived row) — never
     /// shown in any picker UI, filtered both server-side (the fetch's own `id=not.eq.soho-les`
@@ -337,12 +337,15 @@ final class ZoneStore {
 
     /// Not `private`: `ZoneStoreTests` exercises the cache round-trip (`saveCache` then
     /// `loadCache` returns an equal array) directly against this same key.
-    static func loadCache() -> [Zone]? {
+    /// `nonisolated` (with `saveCache`/`cacheKey`): pure UserDefaults+Codable I/O, no actor
+    /// state — must stay synchronously callable from a plain `XCTestCase` (the build's
+    /// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` would otherwise isolate these implicitly).
+    nonisolated static func loadCache() -> [Zone]? {
         guard let data = UserDefaults.standard.data(forKey: cacheKey) else { return nil }
         return try? JSONDecoder().decode([Zone].self, from: data)
     }
 
-    static func saveCache(_ zones: [Zone]) {
+    nonisolated static func saveCache(_ zones: [Zone]) {
         guard let data = try? JSONEncoder().encode(zones) else { return }
         UserDefaults.standard.set(data, forKey: cacheKey)
     }
