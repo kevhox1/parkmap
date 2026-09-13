@@ -90,6 +90,14 @@ struct BlockDetailView: View {
     /// initializer.
     var zoneMessageService: ZoneMessageService? = nil
 
+    /// Community 2.0 S14: the fetch-at-launch zone list, needed by `BlockDetailLogic
+    /// .resolvedZoneId(forSegmentMidpoint:zones:)` (the "BLOCK CHATTER" compose bar's zone
+    /// derivation). `nil` in previews/standalone use — same optional-dependency pattern as
+    /// `pinService`/`zoneMessageService` above (a `nil` value degrades to "can't post here
+    /// yet," never a crash). `var` for the same synthesized-memberwise-initializer reason as
+    /// those two properties.
+    var zoneStore: ZoneStore? = nil
+
     // Evaluate once at sheet-open time (stable reference time for the whole sheet).
     private let now: Date = .nowET
 
@@ -449,10 +457,13 @@ struct BlockDetailView: View {
     private func performSendChat(_ body: String) async {
         guard let zoneMessageService else { return }
         chatSendError = nil
-        guard let zoneId = BlockDetailLogic.resolvedZoneId(forSegmentMidpoint: segment.midpoint) else {
-            // zone_messages.zone_id is NOT NULL (01-mvp-schema.sql:74) — a block outside all
-            // three known zone boxes genuinely cannot post a message today. Surfaced as an
-            // honest, block-specific error rather than attempting an insert that would 23502
+        guard let zoneId = BlockDetailLogic.resolvedZoneId(
+            forSegmentMidpoint: segment.midpoint,
+            zones: zoneStore?.zones ?? []
+        ) else {
+            // zone_messages.zone_id is NOT NULL (01-mvp-schema.sql:74) — a block outside every
+            // known zone box genuinely cannot post a message today. Surfaced as an honest,
+            // block-specific error rather than attempting an insert that would 23502
             // server-side.
             chatSendError = "Can't post here yet \u{2014} this block is outside a supported neighborhood."
             return
@@ -835,12 +846,14 @@ enum BlockDetailLogic {
 
     /// Resolves the `zone_id` a segment-anchored chat message must carry.
     /// `zone_messages.zone_id` is `not null` (`supabase/01-mvp-schema.sql:74`), so a block
-    /// outside all three known `CommunityZoneBounds` boxes genuinely cannot post a message —
-    /// the caller must show an error rather than attempt an insert that would 23502
-    /// (not-null violation) server-side.
-    nonisolated static func resolvedZoneId(forSegmentMidpoint midpoint: CLLocationCoordinate2D?) -> String? {
+    /// outside every zone in `zones` genuinely cannot post a message — the caller must show an
+    /// error rather than attempt an insert that would 23502 (not-null violation) server-side.
+    /// Community 2.0 S14: `zones` is the live-fetched `ZoneStore.zones` list (an empty array —
+    /// e.g. `zoneStore == nil` in previews, or a first-launch-and-offline cold start — safely
+    /// resolves to `nil` here, same as today's "outside all boxes" case).
+    nonisolated static func resolvedZoneId(forSegmentMidpoint midpoint: CLLocationCoordinate2D?, zones: [Zone]) -> String? {
         guard let midpoint else { return nil }
-        return CommunityZoneBounds.zoneId(forLat: midpoint.latitude, lng: midpoint.longitude)
+        return ZoneGeometry.zoneId(forLat: midpoint.latitude, lng: midpoint.longitude, in: zones)
     }
 
     /// Whether the identity sheet must be shown before the block-chat send proceeds — routes

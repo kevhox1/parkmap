@@ -104,7 +104,7 @@ struct GarageSavingsService {
     ///
     /// `nonisolated` explicit (build's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`) — a pure,
     /// stateless function like this must stay callable from a plain synchronous `XCTestCase`
-    /// without `await`, matching `CommunityZoneBounds.box(for:)`'s own precedent.
+    /// without `await`, matching `ZoneGeometry.box(for:in:)`'s own precedent.
     nonisolated static func etMonthKey(for date: Date) -> String {
         let comps = Calendar.easternTime.dateComponents([.year, .month], from: date)
         return String(format: "%04d-%02d", comps.year ?? 0, comps.month ?? 0)
