@@ -16,6 +16,11 @@
 //  ASP+METERED segment integration test against the REAL `ParkingRulesEngine` asserting the
 //  ASP-derived line still renders unaffected.
 //
+//  Open-items #4 (S13c/#106 gate follow-up, polish-19-17b-20 session, 2026-09-12):
+//  `ParkedCarDetailShouldSuppressStatusLineTests` below covers the headline/status-line
+//  dedupe guard — Kevin's gate observation that "Free until Monday 9:30 AM" (and similar)
+//  rendered twice, once as the headline and once as the status line.
+//
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never
 //  compiled or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
@@ -435,5 +440,163 @@ final class ParkedCarDetailASPSuspensionTests: XCTestCase {
         let reason = service.reasonForSuspension(regularDay)
         let note = ParkedCarDetailLogic.aspSuspensionNote(segmentHasASPRule: true, suspensionReason: reason)
         XCTAssertNil(note)
+    }
+}
+
+// MARK: - shouldSuppressStatusLine (open-items #4, 2026-09-12)
+
+final class ParkedCarDetailShouldSuppressStatusLineTests: XCTestCase {
+
+    func testIdenticalText_suppresses() {
+        XCTAssertTrue(
+            ParkedCarDetailLogic.shouldSuppressStatusLine(
+                headlineText: "Free until Monday 9:30 AM",
+                statusText: "Free until Monday 9:30 AM"
+            )
+        )
+    }
+
+    func testIdenticalMeteredText_suppresses() {
+        XCTAssertTrue(
+            ParkedCarDetailLogic.shouldSuppressStatusLine(
+                headlineText: "paid until 6pm",
+                statusText: "paid until 6pm"
+            )
+        )
+    }
+
+    func testDifferentText_doesNotSuppress() {
+        // The mixed ASP+METERED case: headline reflects the active meter, status line
+        // reflects the separate upcoming ASP window — must NOT collapse.
+        XCTAssertFalse(
+            ParkedCarDetailLogic.shouldSuppressStatusLine(
+                headlineText: "paid until 7pm",
+                statusText: "Free until Thursday 9:30 AM"
+            )
+        )
+    }
+
+    func testSimilarButNotIdenticalText_doesNotSuppress() {
+        // Case sensitivity / near-miss guard: this is a literal equality check, not a
+        // semantic one — a caller passing near-but-not-identical strings must still see
+        // both lines rather than accidentally suppressing on a false match.
+        XCTAssertFalse(
+            ParkedCarDetailLogic.shouldSuppressStatusLine(
+                headlineText: "Free",
+                statusText: "Free \u{2014} no restrictions here"
+            )
+        )
+    }
+
+    func testBothEmpty_suppresses() {
+        // Defensive/boundary case — not reachable via any real call site, but the equality
+        // guard itself has no special-case carve-out for empty strings.
+        XCTAssertTrue(ParkedCarDetailLogic.shouldSuppressStatusLine(headlineText: "", statusText: ""))
+    }
+
+    /// Real-engine integration test: an ASP-only segment, where the headline
+    /// (`engine.safetyLabel`) and the status line (`freeUntilStatusText` fed by
+    /// `nextRestriction`) both derive from the SAME upcoming-ASP branch and must produce
+    /// byte-identical text — the exact repro Kevin's gate saw duplicated on-screen.
+    func testRealEngine_aspOnlySegment_headlineAndStatusLineAreIdentical_mustSuppress() {
+        let aspRule = ParkingRule(
+            category: .aspMonThu,
+            description: "NO PARKING 8-9:30AM MON & THUR",
+            days: [1, 4],
+            timeRanges: [TimeRange(start: 480, end: 570)],
+            anytime: false,
+            arrow: "both"
+        )
+        let seg = Segment(
+            id: "SEG_ASP_ONLY",
+            street: "5TH AVENUE",
+            fromStreet: "42ND STREET",
+            to: "43RD STREET",
+            side: "E",
+            line: [[40.7541, -73.9840], [40.7548, -73.9836]],
+            rules: [aspRule],
+            dominantCategory: .aspMonThu
+        )
+        let engine = ParkingRulesEngine()
+        // Wednesday, 2026-03-11, 12:00 PM ET — a regular weekday well clear of any holiday;
+        // the next ASP Mon/Thu occurrence (Thu 2026-03-12, 8:00 AM) is within the 14-day
+        // window, so both derivations land on the same "Free until <timeLabel>" branch.
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 3
+        comps.day = 11
+        comps.hour = 12
+        comps.timeZone = .easternTime
+        let now = Calendar.easternTime.date(from: comps)!
+
+        let restriction = engine.nextRestriction(for: seg, at: now)
+        let timeLabel = engine.nextRestrictionTimeLabel(hours: restriction.hours, now: now)
+        let statusText = ParkedCarDetailLogic.freeUntilStatusText(
+            restriction: restriction, timeLabel: timeLabel, meteredStatusLabel: nil
+        )
+        let headlineText = engine.safetyLabel(for: seg, at: now).text
+
+        XCTAssertEqual(headlineText, statusText, "fixture sanity check — both must derive the identical string")
+        XCTAssertTrue(
+            ParkedCarDetailLogic.shouldSuppressStatusLine(headlineText: headlineText, statusText: statusText)
+        )
+    }
+
+    /// Real-engine integration test: the mixed ASP+METERED segment (same fixture shape as
+    /// `ParkedCarDetailFreeUntilStatusTextTests.testRealEngine_mixedASPAndMeteredSegment_stillRendersASPDerivedFreeUntilLine`)
+    /// during the actively-metered window — headline says "paid until 7pm", status line says
+    /// the separate upcoming-ASP "Free until <time>" line. Must NOT suppress.
+    func testRealEngine_mixedASPAndMeteredSegment_activelyMetered_mustNotSuppress() {
+        let aspRule = ParkingRule(
+            category: .aspMonThu,
+            description: "NO PARKING 8-9:30AM MON & THUR",
+            days: [1, 4],
+            timeRanges: [TimeRange(start: 480, end: 570)],
+            anytime: false,
+            arrow: "both"
+        )
+        let meterRule = ParkingRule(
+            category: .metered,
+            description: "",
+            days: [],
+            timeRanges: [TimeRange(start: 570, end: 1140)],  // 9:30am - 7pm
+            anytime: false,
+            arrow: "both"
+        )
+        let seg = Segment(
+            id: "SEG_ASP_AND_METERED_ACTIVE",
+            street: "5TH AVENUE",
+            fromStreet: "42ND STREET",
+            to: "43RD STREET",
+            side: "E",
+            line: [[40.7541, -73.9840], [40.7548, -73.9836]],
+            rules: [aspRule, meterRule],
+            dominantCategory: .aspMonThu
+        )
+        let engine = ParkingRulesEngine()
+        // Wednesday, 2026-03-11, 12:00 PM ET — inside the meter's 9:30am-7pm active window.
+        var comps = DateComponents()
+        comps.year = 2026
+        comps.month = 3
+        comps.day = 11
+        comps.hour = 12
+        comps.timeZone = .easternTime
+        let now = Calendar.easternTime.date(from: comps)!
+
+        let restriction = engine.nextRestriction(for: seg, at: now)
+        let timeLabel = engine.nextRestrictionTimeLabel(hours: restriction.hours, now: now)
+        let hasMeteredRule = ParkedCarDetailLogic.segmentHasMeteredRule(seg)
+        let meteredStatusLabel = hasMeteredRule ? engine.meteredStatus(for: seg, at: now) : nil
+        let statusText = ParkedCarDetailLogic.freeUntilStatusText(
+            restriction: restriction, timeLabel: timeLabel, meteredStatusLabel: meteredStatusLabel
+        )
+        let headlineText = engine.safetyLabel(for: seg, at: now).text
+
+        XCTAssertEqual(headlineText, "paid until 7pm", "fixture sanity check — meter must be actively charging")
+        XCTAssertTrue(statusText.hasPrefix("Free until "), "fixture sanity check — status line must be the ASP-derived line")
+        XCTAssertNotEqual(headlineText, statusText)
+        XCTAssertFalse(
+            ParkedCarDetailLogic.shouldSuppressStatusLine(headlineText: headlineText, statusText: statusText)
+        )
     }
 }

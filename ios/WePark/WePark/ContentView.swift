@@ -4035,6 +4035,17 @@ struct ContentView: View {
         communityEnabled ? .parkConfirmCard : .legacyThreeButtonDialog
     }
 
+    /// Open item #17b (2026-09-12) root-cause fix: pure id-comparison deciding whether
+    /// `handleLongPress(at:)` should actually write `activeSheet`, rather than
+    /// unconditionally reassigning it (even to its own current value) on every long-press.
+    /// `ActiveSheet` is `Identifiable` but not `Equatable` — comparing by `.id` is the only
+    /// cheap way to detect "this would be a no-op write" without giving every case a
+    /// `Segment`/`PinDropIntent`-driven `Equatable` conformance just for this one check.
+    /// See `handleLongPress(at:)`'s doc comment for the full mechanism this guards against.
+    nonisolated static func shouldReassignActiveSheet(current: ActiveSheet?, target: ActiveSheet?) -> Bool {
+        current?.id != target?.id
+    }
+
     /// Open item #17 residual (2026-09-11): pure gate for the coordinate handed to
     /// `MapViewRepresentable.pendingParkCoordinate` — the tentative "car will go here" marker
     /// must NEVER render for flag-off builds, regardless of `pendingLongPressCoord`'s state,
@@ -4061,6 +4072,37 @@ struct ContentView: View {
     ///     its own doc comment). Candidate-segment detection is deferred until the user
     ///     picks "Park" — no wasted work if they cancel or (flag-off only) pick "Report"
     ///     (spec §4.1 note).
+    ///
+    /// Open item #17b (2026-09-12) root cause: the legacy flag-off path drives
+    /// `.confirmationDialog(isPresented: $showRestingActionMenu)` — a SEPARATE presentation
+    /// `Bool` from `pendingLongPressCoord`. This function used to write
+    /// `selectedSegmentID`/`activeSheet` UNCONDITIONALLY on every call, even on the (by far
+    /// most common) resting long-press where both were already at their target value
+    /// (`nil` / `.browseNav`). `ActiveSheet` is `Identifiable` but NOT `Equatable`, so
+    /// SwiftUI cannot short-circuit a same-value reassignment — every write, no-op or not,
+    /// invalidates `mapLayerWithEvents`, the SAME view both `.sheet(item: $activeSheet)`
+    /// AND `.confirmationDialog(isPresented: $showRestingActionMenu)` are attached to.
+    /// Landing that invalidation in the SAME transaction as `showRestingActionMenu = true`
+    /// races the dialog's own UIKit `present(_:animated:)` call against the sheet
+    /// modifier's re-evaluation — the alert controller's presentation request silently
+    /// drops, reproducing the exact "presents then instantly vanishes" symptom the S13c
+    /// `.ended`-vs-`.began` fix already solved for TOUCH timing, but from a completely
+    /// different mechanism (concurrent `@State` writes, not the finger still being down).
+    /// The SECOND long-press works because `selectedSegmentID`/`activeSheet` are already at
+    /// their target values from the first attempt, so that retry's only actual state change
+    /// is `showRestingActionMenu = true` — no competing sibling write, dialog presents
+    /// cleanly. The flag-on card path never hits this: `pendingLongPressCoord != nil` drives
+    /// a plain `if` in the view body (`longPressParkConfirmOverlay`), a conditional render,
+    /// not a UIKit presentation-controller transition — nothing to race.
+    ///
+    /// Fix: only write `selectedSegmentID`/`activeSheet` when they would actually change,
+    /// mirroring the guard idiom the `.sheet(item:)` `onDismiss` closure above already uses
+    /// for `selectedSegmentID` (`if selectedSegmentID != nil { selectedSegmentID = nil }`)
+    /// for this identical reason. `shouldReassignActiveSheet(current:target:)` is the pure,
+    /// unit-testable id-comparison this reuses (`ActiveSheet.id` exists precisely because
+    /// the type isn't `Equatable`). Applies to BOTH presentation paths — the card path was
+    /// never broken by this, but the guard is unconditional plumbing, not flag-gated, so it
+    /// stays correct after the flag flip too.
     private func handleLongPress(at coordinate: CLLocationCoordinate2D) {
         // While driving, long-press is intentionally a no-op (spec §4.1).
         // FT-15/TF2-15: also a no-op while block-select mode is active — a long-press
@@ -4069,15 +4111,23 @@ struct ContentView: View {
         // the floating bar's Cancel/Continue before any other long-press action is available.
         guard !driveModeActive, !blockSelectModeActive else { return }
 
-        // Clear any current selection and dismiss any open sheet before showing the popup.
+        // Clear any current selection and dismiss any open sheet before showing the popup —
+        // but ONLY if either is not already at its target value (open item #17b — see this
+        // function's doc comment above for why an unconditional write here raced the
+        // confirmationDialog's own presentation).
         // FT-20 Stream A: the guard above guarantees driveModeActive/blockSelectModeActive
         // are both false here, so dismissTargetOutsideBrowseNav always resolves to
         // `.browseNav` — using the shared helper (not a literal `nil`) so the browse sheet
         // correctly reappears once the popup is dismissed, rather than leaving the map with
         // no chrome at all (`.browseNav` is browse mode's persistent rest state now, not
         // "nothing" — spec §4.1).
-        selectedSegmentID = nil
-        activeSheet = dismissTargetOutsideBrowseNav
+        if selectedSegmentID != nil {
+            selectedSegmentID = nil
+        }
+        let targetSheet = dismissTargetOutsideBrowseNav
+        if Self.shouldReassignActiveSheet(current: activeSheet, target: targetSheet) {
+            activeSheet = targetSheet
+        }
 
         // Capture the coordinate unconditionally — both presentations read it.
         pendingLongPressCoord = coordinate
@@ -4162,10 +4212,32 @@ struct ContentView: View {
     ///   2. handleDriveCameraChange(true) — capture pre-drive pitch/zoom/style, apply pitch+zoom.
     ///   3. Initialize currentDriveAltitude — must come AFTER handleDriveCameraChange captures
     ///      the current distance (not needed for the camera call but for the follow default).
+    ///   4. rebuildOverlays(at:) — force the curb-line renderers to refresh at Drive-Mode
+    ///      width (open item #19 QA Finding #1, see below).
     ///
     /// EXIT order:
     ///   1. handleDriveCameraChange(false) — restore pre-drive pitch + zoom + style.
     ///   2. handleDriveModeChange(false) — stop location services, clear context, clear followPaused.
+    ///   3. rebuildOverlays(at:) — restore browse-width curb lines immediately.
+    ///
+    /// Open item #19 QA Finding #1 (PR #107 pass 1, `docs/qa/pr107-polish.md`): `mapView(_:
+    /// rendererFor:)` reads `parent.driveModeActive` to pick browse vs. Drive-Mode width, but
+    /// MapKit only invokes that delegate method once PER OVERLAY OBJECT and caches the
+    /// resulting renderer — so merely flipping `driveModeActive` does nothing to lines whose
+    /// `TaggedMultiPolyline` objects already exist. `applyOverlayPayload` (`MapViewRepresentable
+    /// .swift`) is the ONLY code path that actually forces a re-query: it unconditionally
+    /// `removeOverlay`s the old 5 groups and `addOverlay`s brand-NEW `TaggedMultiPolyline`
+    /// instances, which MapKit has never seen before and must call `rendererFor:` on fresh.
+    /// `rebuildOverlays(at:)` is what triggers that (via `overlayGeneration`/`overlayPayload`,
+    /// diffed in `updateUIView`) — the SAME path the 60s timer tick already uses, reused
+    /// here rather than duplicated. This mirrors the codebase's own established pattern for
+    /// this exact problem: `refreshUserLocationPuck` (called from `handleDriveCameraChange`
+    /// below) forces MapKit to re-query `mapView(_:viewFor:)` for the SAME reason — a
+    /// `driveModeActive`-dependent delegate branch needs an explicit invalidation to actually
+    /// re-fire, reading the flag alone isn't enough. No new pure logic to extract/test here —
+    /// this is UIKit delegate-caching plumbing (which method gets re-invoked when), not a
+    /// decision with inputs/outputs; `rebuildOverlays(at:)` itself is already exercised by
+    /// existing tests via its callers' effects (`overlayGeneration` incrementing).
     ///
     /// Architecture: all calls fire from `.onChange(of: driveModeActive)` — OUTSIDE `updateUIView`.
     /// No camera mutation or `userTrackingMode =` assignment inside `updateUIView`. #31 invariant maintained.
@@ -4245,6 +4317,16 @@ struct ContentView: View {
             handleDriveCameraChange(false)
             handleDriveModeChange(false)
         }
+
+        // Open item #19 QA Finding #1: force the curb-line overlays to rebuild on EVERY
+        // toggle direction, so `mapView(_:rendererFor:)` is re-invoked against fresh
+        // overlay objects and picks up the correct browse/Drive-Mode width immediately —
+        // see this function's own doc comment above for the full mechanism. Reuses
+        // `lastEvaluatedAt` rather than re-stamping `.now`, matching `handleSegmentsChanged`/
+        // `handleSelectionChanged`'s existing convention (only the 60s timer tick itself
+        // advances `lastEvaluatedAt`) — this rebuild is about the WIDTH, not about
+        // re-evaluating which segments are currently free/restricted.
+        rebuildOverlays(at: lastEvaluatedAt)
     }
 
     // MARK: - Option A: Drive pan / pinch handlers

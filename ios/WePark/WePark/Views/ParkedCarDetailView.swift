@@ -23,6 +23,10 @@
 //        re-derivation of `engine.safetyLabel(for:at:)`'s text (that headline lives at 3.
 //        above and can legitimately say the same thing when currently free; this line's
 //        job is specifically "when do I need to move"). Omitted if no resolved segment.
+//        Open-items #4 (S13c/#106 gate follow-up, 2026-09-12): also suppressed whenever its
+//        text is EXACTLY the headline's text (a one-line equality guard — mixed ASP+METERED
+//        blocks still show both, since those two derivations diverge there). See
+//        `ParkedCarDetailLogic.shouldSuppressStatusLine`.
 //    4a2. Open-items #16 item 3: explicit "ASP Suspended — <reason>" note, shown when today
 //        is an ASP-suspended date AND the parked segment actually carries an ASP rule.
 //        Reuses `ASPBanner`'s exact `.todaySuspended` wording and green tone
@@ -358,8 +362,22 @@ struct ParkedCarDetailView: View {
 
                     // 4a. Open-items #16 item 1: "when does this become not-free" status
                     // line — the sheet's most valuable fact. NOT community-flagged.
+                    //
+                    // Open-items #4 (S13c/#106 gate follow-up, 2026-09-12): suppressed when
+                    // it says EXACTLY what the headline (3. above) already said — e.g. both
+                    // "Free until Monday 9:30 AM", or both "paid until 6pm". One-line
+                    // equality guard at the render site — mixed ASP+METERED blocks
+                    // legitimately keep BOTH lines (the two derivations diverge there; see
+                    // `ParkedCarDetailLogic.shouldSuppressStatusLine`'s doc comment).
                     if let seg = resolvedSegment {
-                        statusLineView(for: seg)
+                        let statusText = statusLineText(for: seg)
+                        let headlineText = engine.safetyLabel(for: seg, at: now).text
+                        if !ParkedCarDetailLogic.shouldSuppressStatusLine(
+                            headlineText: headlineText,
+                            statusText: statusText
+                        ) {
+                            statusLineView(for: seg, text: statusText)
+                        }
                     }
 
                     // 4a2. Open-items #16 item 3: explicit ASP-suspended-today note.
@@ -558,22 +576,35 @@ struct ParkedCarDetailView: View {
     /// `freeUntilStatusText` can fall back to it instead of the unqualified "free" claim.
     /// `nil` (not computed at all) when the segment has no metered rule, so non-metered
     /// segments pay zero extra cost.
-    private func statusLineView(for seg: Segment) -> some View {
+    ///
+    /// Open-items #4 (S13c/#106 gate follow-up, 2026-09-12): `text` is now precomputed by
+    /// the call site (`body`, section 4a) rather than inside this function, so the caller
+    /// can compare it against the headline's own text BEFORE deciding whether to render
+    /// this view at all — see `statusLineText(for:)` and
+    /// `ParkedCarDetailLogic.shouldSuppressStatusLine(headlineText:statusText:)`.
+    private func statusLineView(for seg: Segment, text: String) -> some View {
+        Text(text)
+            .font(.subheadline.weight(.bold))
+            .foregroundStyle(engine.currentStateColor(for: seg, at: now))
+            .fixedSize(horizontal: false, vertical: true)
+            .accessibilityLabel(text)
+    }
+
+    /// Pure-ish wording computation (still reads `engine`/`now`, so not a `static` — same
+    /// shape as `safetyLabelView`) extracted from the old `statusLineView(for:)` body so
+    /// `body` can compute this ONCE and both render it (if not suppressed) and compare it
+    /// against the headline text for the open-items #4 dedupe guard.
+    private func statusLineText(for seg: Segment) -> String {
         let restriction = engine.nextRestriction(for: seg, at: now)
         let timeLabel = engine.nextRestrictionTimeLabel(hours: restriction.hours, now: now)
         let meteredStatusLabel = ParkedCarDetailLogic.segmentHasMeteredRule(seg)
             ? engine.meteredStatus(for: seg, at: now)
             : nil
-        let text = ParkedCarDetailLogic.freeUntilStatusText(
+        return ParkedCarDetailLogic.freeUntilStatusText(
             restriction: restriction,
             timeLabel: timeLabel,
             meteredStatusLabel: meteredStatusLabel
         )
-        return Text(text)
-            .font(.subheadline.weight(.bold))
-            .foregroundStyle(engine.currentStateColor(for: seg, at: now))
-            .fixedSize(horizontal: false, vertical: true)
-            .accessibilityLabel(text)
     }
 
     // MARK: - Open-items #16 item 3: ASP-suspended-today note
@@ -951,6 +982,28 @@ enum ParkedCarDetailLogic {
             return "Free \u{2014} no restrictions here"
         }
         return "Free until \(timeLabel)"
+    }
+
+    // MARK: - Open-items #4 (S13c/#106 gate follow-up, 2026-09-12): headline/status-line dedupe
+
+    /// Whether the status line (`freeUntilStatusText`'s output) should be SUPPRESSED because
+    /// it says exactly what the headline (`engine.safetyLabel(for:at:).text`, rendered by
+    /// `safetyLabelView`) already said — e.g. an ASP-only segment where both lines read
+    /// "Free until Monday 9:30 AM", or an actively-metered segment where both read "paid
+    /// until 6pm" (both derivations bottom out in the SAME `nextRestrictionTimeLabel`/
+    /// `meteredStatus` engine calls for those shapes, so the strings are byte-identical, not
+    /// just similar).
+    ///
+    /// A ONE-LINE EQUALITY guard, not a semantic comparison — deliberately. A mixed
+    /// ASP+METERED block's two derivations legitimately DIVERGE: the headline's metered
+    /// branch can say "paid until 7pm" (the meter is actively running right now) while the
+    /// status line's `nextRestriction` walker — which intentionally skips METERED entirely
+    /// (PR #106 QA Finding #1) — reports the separate upcoming ASP window, e.g. "Free until
+    /// Thursday 9:30 AM". Those two strings are never equal for a mixed block, so this guard
+    /// correctly keeps BOTH lines visible there — exactly the case this function must NOT
+    /// collapse.
+    nonisolated static func shouldSuppressStatusLine(headlineText: String, statusText: String) -> Bool {
+        headlineText == statusText
     }
 
     /// **PR #106 QA Finding #1 fix**: strips the "Metered (" / ")" wrapper from

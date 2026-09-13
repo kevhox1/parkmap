@@ -12,12 +12,23 @@
 //  6 overlays = 6 Metal resource groups. Under the 50,000 limit by a factor of 8,000.
 //
 //  Overlay groups:
-//    1. freeComfortably          — green,   lineWidth: 3
-//    2. freeButRestrictionSoon   — orange,  lineWidth: 3
-//    3. meteredActive            — amber,   lineWidth: 4
-//    4. restrictedNow            — red,     lineWidth: 3
-//    5. unknown                  — gray/35%,lineWidth: 3
-//    6. selectedBlock            — state color, lineWidth: 6 (single MKPolyline)
+//    1. freeComfortably          — green,   lineWidth: CurbLineWidth.standardBrowse/Drive
+//    2. freeButRestrictionSoon   — orange,  lineWidth: CurbLineWidth.standardBrowse/Drive
+//    3. meteredActive            — amber,   lineWidth: CurbLineWidth.meteredBrowse/Drive
+//    4. restrictedNow            — red,     lineWidth: CurbLineWidth.standardBrowse/Drive
+//    5. unknown                  — gray/35%,lineWidth: CurbLineWidth.standardBrowse/Drive
+//    6. selectedBlock            — state color, lineWidth: 6 (single MKPolyline, unchanged)
+//
+//  Open item #19 (2026-09-12, external-tester feedback via Kevin: "the lines are not thick
+//  enough… especially in the drive mode"): curb line widths (groups 1-5 above, the 5-color
+//  legality palette) are centralized in `CurbLineWidth` below — named constants, no
+//  zoom-dependent scaling to preserve (confirmed by reading this file's renderer: widths
+//  were always static regardless of `region.span`, contrary to the open-item's guess). A
+//  Drive-Mode-specific multiplier steps widths up further for windshield viewing distance,
+//  wired via `parent.driveModeActive` — the SAME Coordinator→parent flow `viewFor
+//  annotation`'s user-location-puck branch and `syncDriveHeading` already use, not a new
+//  plumbing path. Groups 6 (selected-block highlight) and the route/zone overlays are
+//  unchanged — out of scope (not part of the passive curb-color palette).
 //
 //  On the 60-second timer tick, `updateOverlays(segments:engine:now:)` is called from
 //  ContentView. It partitions segments by current state via a single O(n) pass, instantiates
@@ -89,6 +100,48 @@ enum OverlayTag: Int {
     /// `selectedBlock` (single-segment BlockDetailView highlight); this is a distinct
     /// overlay that can show N segments at once. See `Coordinator.syncBlockSelectHighlight`.
     case blockSelectHighlight    = 7
+}
+
+// MARK: - Curb line width (open item #19, 2026-09-12)
+
+/// Named, centralized curb-polyline line widths — the ONE place to re-tune thickness for
+/// Kevin's visual gate. Covers only the 5-color legality palette (`OverlayTag.freeComfortably`
+/// / `.freeButRestrictionSoon` / `.meteredActive` / `.restrictedNow` / `.unknown`); the
+/// selected-block highlight, Drive Mode route line, block-select highlight, and zone-boundary
+/// overlay each carry their own fixed width, unaffected by this enum (see `mapView(_:rendererFor:)`).
+///
+/// External-tester feedback via Kevin, 2026-09-12 (open-items #19): "the lines are not thick
+/// enough… especially in the drive mode." Two independent bumps:
+///   - Browse-mode widths (`standardBrowse`/`meteredBrowse`) are ~1.5x the pre-#19 values
+///     (3pt/4pt) — noticeably thicker without reading as cartoonish. The ratio between
+///     metered and the other four (previously the sole +1pt outlier, for paid-parking
+///     legibility) is preserved by scaling both by the same factor.
+///   - Drive-mode widths (`standardDrive`/`meteredDrive`) step up FURTHER — windshield
+///     viewing distance is a different legibility problem than in-hand browsing (ties to the
+///     standing S6 sunlight-legibility concern, which no simulator can gate) — ~1.75x the
+///     already-bumped browse widths, within the open item's requested 1.5–2x range.
+enum CurbLineWidth {
+    /// Non-metered severity overlay width outside Drive Mode. Pre-#19: 3.
+    static let standardBrowse: CGFloat = 4.5
+    /// `.meteredActive` (amber) overlay width outside Drive Mode. Pre-#19: 4.
+    static let meteredBrowse: CGFloat = 6.0
+    /// Non-metered severity overlay width while `driveModeActive`. ~1.75x `standardBrowse`.
+    static let standardDrive: CGFloat = 8.0
+    /// `.meteredActive` (amber) overlay width while `driveModeActive`. ~1.75x `meteredBrowse`.
+    static let meteredDrive: CGFloat = 10.5
+
+    /// The line width for a given curb-color overlay tag, honoring Drive Mode. Only
+    /// meaningful for the 5 severity tags listed in this enum's doc comment — callers pass
+    /// any other `OverlayTag` at their own risk (falls through to `standardBrowse`/
+    /// `standardDrive`, but `mapView(_:rendererFor:)` never actually calls this for those).
+    static func width(for tag: OverlayTag, driveModeActive: Bool) -> CGFloat {
+        switch tag {
+        case .meteredActive:
+            return driveModeActive ? meteredDrive : meteredBrowse
+        default:
+            return driveModeActive ? standardDrive : standardBrowse
+        }
+    }
 }
 
 // MARK: - Tagged MKMultiPolyline
@@ -985,9 +1038,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         mapView.showsCompass = false
         mapView.showsScale = true
 
-        // Register the CarPinAnnotation view class.
+        // Register the CarPinAnnotation view class. Open item #20 (2026-09-12): now
+        // `MKMarkerAnnotationView` (was plain `MKAnnotationView` + a manually-drawn
+        // mappin.circle.fill image) — see `viewFor annotation`'s `CarPinAnnotation` branch
+        // for the styling itself.
         mapView.register(
-            MKAnnotationView.self,
+            MKMarkerAnnotationView.self,
             forAnnotationViewWithReuseIdentifier: Coordinator.carPinReuseID
         )
 
@@ -2249,10 +2305,12 @@ struct MapViewRepresentable: UIViewRepresentable {
 
             // Handle PendingParkPinAnnotation (open item #17 residual, 2026-09-11) — the
             // tentative "car will go here" marker at the long-press point while the flag-on
-            // LongPressParkConfirmCard is up. Reuses `car.fill` (visually related to the real
-            // `CarPinAnnotation`'s `mappin.circle.fill`, per spec: "a small, distinct marker
-            // visually related to the car pin") in systemBlue, dimmed alpha — same "not yet
-            // committed" treatment as `DraftSpotPinAnnotation` above.
+            // LongPressParkConfirmCard is up. Reuses the exact same `car.fill`/systemBlue
+            // `MKMarkerAnnotationView` styling `CarPinAnnotation` itself now uses (open item
+            // #20 promoted this styling to the REAL parked-car marker, so "visually related
+            // to the car pin" is now "identical styling, distinguished only by alpha") —
+            // dimmed to `0.85` here vs. `1.0` on the real pin, the one deliberate difference
+            // that keeps "car will park here" from reading as "car IS parked here."
             if annotation is PendingParkPinAnnotation {
                 let view = mapView.dequeueReusableAnnotationView(
                     withIdentifier: Coordinator.pendingParkPinReuseID,
@@ -2307,26 +2365,24 @@ struct MapViewRepresentable: UIViewRepresentable {
             // Only handle CarPinAnnotation — let the map handle user location etc.
             guard annotation is CarPinAnnotation else { return nil }
 
+            // Open item #20 (2026-09-12, Kevin, PR #106 gate: "use this little blue car
+            // icon as the actual [parked] car icon… it's more fitting and it looks
+            // better") — promoted from the W5 mappin.circle.fill marker to PR #106's
+            // `PendingParkPinAnnotation` styling: `MKMarkerAnnotationView`, systemBlue,
+            // `car.fill` glyph. Parked = solid (`alpha = 1.0`, explicit — this is the
+            // "committed" state); tentative (`PendingParkPinAnnotation` above) stays dimmed
+            // at `alpha = 0.85` — that's the whole visual distinction between "car will
+            // park here" and "car IS parked here," no dashed ring needed on top of it.
             let view = mapView.dequeueReusableAnnotationView(
                 withIdentifier: Coordinator.carPinReuseID,
                 for: annotation
+            ) as? MKMarkerAnnotationView ?? MKMarkerAnnotationView(
+                annotation: annotation,
+                reuseIdentifier: Coordinator.carPinReuseID
             )
-
-            // W5 spec §5.1: mappin.circle.fill, 36pt, palette mode, white + systemBlue.
-            let config = UIImage.SymbolConfiguration(pointSize: 36, weight: .medium)
-                .applying(UIImage.SymbolConfiguration(paletteColors: [.white, .systemBlue]))
-            let image = UIImage(systemName: "mappin.circle.fill", withConfiguration: config)
-            view.image = image
-
-            // Shift the annotation view so its bottom tip sits at the coordinate.
-            // The symbol is 36pt tall; center is at 18pt from top → offset up by 18pt.
-            view.centerOffset = CGPoint(x: 0, y: -18)
-
-            // Drop shadow for visual separation from polylines.
-            view.layer.shadowColor = UIColor.black.cgColor
-            view.layer.shadowOpacity = 0.3
-            view.layer.shadowOffset = CGSize(width: 0, height: 2)
-            view.layer.shadowRadius = 3
+            view.markerTintColor = .systemBlue
+            view.glyphImage = UIImage(systemName: "car.fill")
+            view.alpha = 1.0
 
             // Accessibility: read as a distinct tap target.
             view.isAccessibilityElement = true
@@ -2371,22 +2427,26 @@ struct MapViewRepresentable: UIViewRepresentable {
                 // bends within a block (mid-block curves on Manhattan avenues).
                 renderer.lineCap = .butt
                 renderer.lineJoin = .round
+                // Open item #19: widths come from the centralized `CurbLineWidth` enum,
+                // wired to Drive Mode via `parent.driveModeActive` — the same
+                // Coordinator→parent flow already used elsewhere in this file (e.g. the
+                // user-location-puck branch in `viewFor annotation`, `syncDriveHeading`).
                 switch multi.overlayTag {
                 case .freeComfortably:
                     renderer.strokeColor = UIColor(ParkingColors.freeComfortably)
-                    renderer.lineWidth = 3
+                    renderer.lineWidth = CurbLineWidth.width(for: .freeComfortably, driveModeActive: parent.driveModeActive)
                 case .freeButRestrictionSoon:
                     renderer.strokeColor = UIColor(ParkingColors.restrictionComingSoon)
-                    renderer.lineWidth = 3
+                    renderer.lineWidth = CurbLineWidth.width(for: .freeButRestrictionSoon, driveModeActive: parent.driveModeActive)
                 case .meteredActive:
                     renderer.strokeColor = UIColor(ParkingColors.meteredActive)
-                    renderer.lineWidth = 4
+                    renderer.lineWidth = CurbLineWidth.width(for: .meteredActive, driveModeActive: parent.driveModeActive)
                 case .restrictedNow:
                     renderer.strokeColor = UIColor(ParkingColors.restricted)
-                    renderer.lineWidth = 3
+                    renderer.lineWidth = CurbLineWidth.width(for: .restrictedNow, driveModeActive: parent.driveModeActive)
                 case .unknown:
                     renderer.strokeColor = UIColor(ParkingColors.unknown)
-                    renderer.lineWidth = 3
+                    renderer.lineWidth = CurbLineWidth.width(for: .unknown, driveModeActive: parent.driveModeActive)
                 case .selectedBlock:
                     // Should not be reached (selected overlay uses SelectedPolyline, not TaggedMultiPolyline).
                     renderer.strokeColor = UIColor.systemBlue
