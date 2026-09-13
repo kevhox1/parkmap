@@ -805,6 +805,16 @@ struct ContentView: View {
     /// precedent of existing dark-shipped since Tier 1.
     @State private var zoneMessageService: ZoneMessageService
 
+    /// Community 2.0 S14: the fetch-at-launch zone list — see `Services/ZoneStore.swift`'s own
+    /// header for why `performLaunchSetup()`'s call to `loadZonesIfNeeded()` must run
+    /// UNCONDITIONALLY (not gated on `AppConstants.communityEnabled`, unlike
+    /// `zoneMessageService.startRealtime()` immediately below it). Constructed in `init` below
+    /// (not an inline default) so the SAME instance can be threaded into `pinService`'s
+    /// `zoneStore:` parameter — `resolveHomeZoneId`/`updatePushZoneFromParkedCarOrLocation`/
+    /// `mapRepresentable`/`CrewFeedSection`/`BlockDetailView` all read this one shared instance
+    /// directly, never a copy.
+    @State private var zoneStore: ZoneStore
+
     // MARK: - Community 2.0 Phase 4b (S12): push registration + confirm-prompt card
 
     /// APNs registration + `device_push_tokens` upload (spec §2.9, `Services/PushRegistrationService.swift`).
@@ -852,6 +862,10 @@ struct ContentView: View {
     /// `authService` and `supabaseClients`, and Swift stored properties cannot reference
     /// sibling stored properties in their default expressions. Wrapping `State` manually lets
     /// us pass both into `CommunityPinService.init(authService:realtimeChannel:)` at init time.
+    /// `zoneStore` is ALSO constructed explicitly here (Community 2.0 S14) — not because it has
+    /// any injected-value dependency of its own, but because `pinService` above needs the SAME
+    /// instance passed into its own `zoneStore:` parameter, and a plain inline default on
+    /// `zoneStore`'s own declaration would construct a second, independent instance instead.
     ///
     /// All other `@State` properties retain their inline default-expression initializers;
     /// those do not depend on injected values.
@@ -859,13 +873,19 @@ struct ContentView: View {
         self.appDelegate = appDelegate
         self.authService = authService
         self.supabaseClients = supabaseClients
+        // Community 2.0 S14: constructed BEFORE pinService below so the same instance can be
+        // threaded into pinService's own zoneStore: parameter — see this property's own doc
+        // comment for why one shared instance (not each service defaulting its own) matters.
+        let zoneStore = ZoneStore()
+        self._zoneStore = State(initialValue: zoneStore)
         // CommunityPinService reads SUPABASE_URL + SUPABASE_ANON_KEY from Bundle.main,
         // attaches the shared authService for authenticated writes, and shares the app's one
         // RealtimeClientV2 via supabaseClients.makeRealtimePinChannel() (supabase-swift
         // Stream B, spec §3.4) instead of standing up a second, standalone socket.
         self._pinService = State(initialValue: CommunityPinService(
             authService: authService,
-            realtimeChannel: supabaseClients.makeRealtimePinChannel()
+            realtimeChannel: supabaseClients.makeRealtimePinChannel(),
+            zoneStore: zoneStore
         ))
         // Community 2.0 Phase 1 (S4) — see `zoneMessageService`'s own doc comment.
         // S13b (build 20, hero-gap-inventory WP3): `authService` added — required by
@@ -1678,7 +1698,8 @@ struct ContentView: View {
                         // match the zone the user was actually viewing. See
                         // `CrewFeedSection.swift`'s header comment for the full root cause.
                         parkPinService: parkPinService,
-                        locationService: locationService
+                        locationService: locationService,
+                        zoneStore: zoneStore
                     )
                 }
             }
@@ -1784,7 +1805,12 @@ struct ContentView: View {
             // that part). Declared after `onOpenRestriction` to match
             // `BlockDetailView`'s own property declaration order (Swift's synthesized
             // memberwise initializer requires call-site arguments in that same order).
-            zoneMessageService: zoneMessageService
+            zoneMessageService: zoneMessageService,
+            // Community 2.0 S14: required by `BlockDetailLogic.resolvedZoneId(forSegmentMidpoint:zones:)`
+            // (the "BLOCK CHATTER" compose bar's zone derivation). Declared last to match
+            // `BlockDetailView`'s own property declaration order, same convention as
+            // `zoneMessageService` immediately above.
+            zoneStore: zoneStore
         )
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -2340,9 +2366,9 @@ struct ContentView: View {
     /// DEVICE'S CURRENT LOCATION. NEVER the map viewport center — that was the exact bug the
     /// audit pinned in the prior version of this function (a user panning to SoHo while
     /// their car sits in Nolita, or simply browsing with no car parked, got a false "this is
-    /// yours" label for whatever happened to be on screen). `nil` when neither resolves to
-    /// one of the three seeded zones (`CommunityZoneBounds`) — no box and no label render in
-    /// that case (both are gated off the same non-nil check, see
+    /// yours" label for whatever happened to be on screen). `nil` when neither resolves to a
+    /// zone in the fetched `zoneStore.zones` list — no box and no label render in that case
+    /// (both are gated off the same non-nil check, see
     /// `MapViewRepresentable.syncZoneBoundaries`).
     ///
     /// "Parked car beats current-location" mirrors the priority
@@ -2355,7 +2381,8 @@ struct ContentView: View {
             parkedCarLat: parkPinService.parkedCar?.latitude,
             parkedCarLng: parkPinService.parkedCar?.longitude,
             deviceLocationLat: locationService.userLocation?.latitude,
-            deviceLocationLng: locationService.userLocation?.longitude
+            deviceLocationLng: locationService.userLocation?.longitude,
+            zones: zoneStore.zones
         )
     }
 
@@ -2368,17 +2395,22 @@ struct ContentView: View {
     /// S13c Fix #1: `viewportCenterLat/Lng` parameters are GONE — the map viewport must never
     /// be a signal for "whose zone is this." Replaced with `deviceLocationLat/Lng` (the
     /// device's actual current-location fix, e.g. `LocationService.userLocation`).
+    ///
+    /// Community 2.0 S14: gained an explicit `zones: [Zone]` parameter — the live-fetched
+    /// `ZoneStore.zones` list — replacing the compiled zone-bounds table this function used to
+    /// read implicitly.
     nonisolated static func resolveHomeZoneId(
         parkedCarLat: Double?,
         parkedCarLng: Double?,
         deviceLocationLat: Double?,
-        deviceLocationLng: Double?
+        deviceLocationLng: Double?,
+        zones: [Zone]
     ) -> String? {
         if let lat = parkedCarLat, let lng = parkedCarLng {
-            return CommunityZoneBounds.zoneId(forLat: lat, lng: lng)
+            return ZoneGeometry.zoneId(forLat: lat, lng: lng, in: zones)
         }
         if let lat = deviceLocationLat, let lng = deviceLocationLng {
-            return CommunityZoneBounds.zoneId(forLat: lat, lng: lng)
+            return ZoneGeometry.zoneId(forLat: lat, lng: lng, in: zones)
         }
         return nil
     }
@@ -2441,7 +2473,10 @@ struct ContentView: View {
             // are declared directly after `pendingParkCoordinate`, same convention as its own
             // comment above.
             showZoneBoundaries: AppConstants.communityEnabled && !driveModeActive,
-            homeZoneId: communityHomeZoneId,
+            // Community 2.0 S14: resolves the whole `Zone` object once here (was a plain
+            // `homeZoneId: String?`) — `MapViewRepresentable` no longer has any
+            // `ZoneStore`/`ZoneGeometry` dependency of its own.
+            homeZone: communityHomeZoneId.flatMap { id in zoneStore.zones.first { $0.id == id } },
             communityPins: communityPins,
             onCommunityPinTapped: handleCommunityPinTapped(_:),
             segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
@@ -3246,9 +3281,9 @@ struct ContentView: View {
         guard AppConstants.communityEnabled else { return }
         let zoneId: String?
         if let car = parkPinService.parkedCar {
-            zoneId = CommunityZoneBounds.zoneId(forLat: car.latitude, lng: car.longitude)
+            zoneId = ZoneGeometry.zoneId(forLat: car.latitude, lng: car.longitude, in: zoneStore.zones)
         } else if let loc = locationService.userLocation {
-            zoneId = CommunityZoneBounds.zoneId(forLat: loc.latitude, lng: loc.longitude)
+            zoneId = ZoneGeometry.zoneId(forLat: loc.latitude, lng: loc.longitude, in: zoneStore.zones)
         } else {
             zoneId = nil
         }
@@ -3527,6 +3562,19 @@ struct ContentView: View {
 
         // FT-12: Show the Parking 101 first-launch prompt banner at most once per install.
         showParkingGuideBanner = ParkingGuidePromptGate().shouldShow()
+
+        // Community 2.0 S14: fetches (or refreshes from cache) the zones table.
+        // ⚠️ UNCONDITIONAL — deliberately NOT gated behind `AppConstants.communityEnabled`,
+        // unlike `zoneMessageService.startRealtime()` two lines below. See `ZoneStore.swift`'s
+        // header for why: `CommunityPinService.insertCrowdPin`'s write-time zone stamping
+        // (`resolveZoneId`) runs today, in production, for every crowd report any external
+        // user submits, flag on or off — gating this fetch would silently regress that
+        // already-shipping write path back to zero zone coverage for flag-off users.
+        // Fire-and-forget (not awaited): a slow/offline network must never delay the rest of
+        // launch setup below (tile loading, camera centering) — mirrors this function's
+        // existing fire-and-forget precedent for `tileLoader.loadTiles(forRegion:)`/
+        // `locationService.requestAndFetchLocation()` further down.
+        Task { await zoneStore.loadZonesIfNeeded() }
 
         // supabase-swift Stream B: establishes the real WebSocket Realtime subscription on
         // public.pins (spec §5.1). Stays connected through Drive Mode (spec §7).

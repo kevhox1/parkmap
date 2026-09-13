@@ -347,11 +347,14 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// check, mirroring `communityPins`'s own "caller decides what to pass" contract.
     var showZoneBoundaries: Bool = false
 
-    /// The user's OWN zone id (S13c Fix #1: parked car's zone, else the device's current
+    /// The user's OWN zone (S13c Fix #1: parked car's zone, else the device's current
     /// location's zone, else `nil` — see `ContentView.communityHomeZoneId`'s own doc comment
     /// for the derivation; NEVER the map viewport). `nil` → no box, no label at all —
-    /// `syncZoneBoundaries` renders 0 or exactly 1 polygon, never all three.
-    var homeZoneId: String? = nil
+    /// `syncZoneBoundaries` renders 0 or exactly 1 polygon, never all three. Community 2.0 S14:
+    /// the whole fetched `Zone` object (not just its id) — `ContentView` resolves it once
+    /// (`zoneStore.zones.first { $0.id == communityHomeZoneId }`) so this file never needs its
+    /// own `zoneStore`/`ZoneGeometry` dependency.
+    var homeZone: Zone? = nil
 
     // MARK: Community 1.0 / Tier 1: Community pin annotations
 
@@ -855,12 +858,6 @@ struct MapViewRepresentable: UIViewRepresentable {
 
     // MARK: - Community 2.0 S13a (WP2): Zone-boundary pure helpers
 
-    /// The three seeded Community 2.0 zone ids — same set `CommunityZoneBounds`/
-    /// `CrewFeedSection`'s zone chips use. S13c Fix #1: `syncZoneBoundaries` no longer loops
-    /// this (it renders only the single `homeZoneId` box) — retained as a documented
-    /// reference of the known zone set for tests/other call sites.
-    static let communityZoneIds = ["nolita", "soho", "les"]
-
     /// Rectangle corners (NW → NE → SE → SW) for a zone's bounding box. `MKPolygon` closes
     /// the loop automatically, so 4 points are sufficient for a rectangle outline — pure,
     /// no `MKMapView` dependency, directly unit-testable (same shape as
@@ -887,19 +884,6 @@ struct MapViewRepresentable: UIViewRepresentable {
         let latInset = (box.latMax - box.latMin) * 0.04
         let lngInset = (box.lngMax - box.lngMin) * 0.04
         return CLLocationCoordinate2D(latitude: box.latMax - latInset, longitude: box.lngMin + lngInset)
-    }
-
-    /// Uppercase display name for a Community 2.0 zone id (`"nolita"` → `"NOLITA"`, matching
-    /// `design/prototype.html:747`'s literal "NOLITA"). `default:` uppercases the raw id
-    /// rather than crashing/omitting — a future 4th seeded zone still gets a readable label
-    /// without this file needing an update first.
-    static func zoneDisplayName(_ zoneId: String) -> String {
-        switch zoneId {
-        case "nolita": return "NOLITA"
-        case "soho":   return "SOHO"
-        case "les":    return "LES"
-        default:       return zoneId.uppercased()
-        }
     }
 
     // MARK: - UIViewRepresentable
@@ -1418,11 +1402,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Community 2.0 S13a/S13c: sync the dashed zone-boundary overlay + home-zone
         // label. Same mechanical add/remove-only contract as syncCommunityPinAnnotations /
         // syncBlockSelectHighlight above — no camera mutation. S13c Fix #1: renders 0 or 1
-        // polygon (the user's OWN zone only) and rebuilds whenever `homeZoneId` changes —
+        // polygon (the user's OWN zone only) and rebuilds whenever `homeZone` changes —
         // previously all three boxes were added once and treated as immutable.
         context.coordinator.syncZoneBoundaries(
             enabled: showZoneBoundaries,
-            homeZoneId: homeZoneId,
+            homeZone: homeZone,
             on: mapView
         )
 
@@ -1497,15 +1481,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         static let zoneLabelReuseID = "ZoneLabelAnnotation"
         /// The currently-rendered zone-boundary polygon (0 or 1 — S13c Fix #1: the user's OWN
         /// zone only, never all three seeded zones). Empty until `syncZoneBoundaries` first
-        /// resolves a non-nil `homeZoneId`. Rebuilt from scratch (removed, then re-added)
-        /// whenever `homeZoneId` changes — including to/from `nil` — so a stale box is never
+        /// resolves a non-nil `homeZone`. Rebuilt from scratch (removed, then re-added)
+        /// whenever `homeZone` changes — including to/from `nil` — so a stale box is never
         /// left showing the wrong (or a no-longer-relevant) zone.
         private var zoneBoundaryOverlays: [ZoneBoundaryPolygon] = []
         /// The currently-rendered "YOUR SQUARE · {ZONE}" label annotation, or nil if no
         /// home zone is currently known.
         private var zoneLabelAnnotation: ZoneLabelAnnotation? = nil
-        /// The last `homeZoneId` applied — cheap equality gate so `syncZoneBoundaries` only
-        /// rebuilds the label when the home zone actually changed.
+        /// The last `homeZone.id` applied — cheap equality gate so `syncZoneBoundaries` only
+        /// rebuilds the label when the home zone actually changed. Community 2.0 S14: compares
+        /// on id (not the whole `Zone`) since a zone's BOX can move under an unchanged id
+        /// (`soho`/`les`'s post-migration rework) without that counting as "the home zone
+        /// changed" for this gate's purposes — `homeZone`'s new box is still picked up because
+        /// `ContentView` reconstructs the `Zone` fresh from `zoneStore.zones` on every access.
         private var lastAppliedHomeZoneId: String? = nil
 
         // W5: Car pin annotation state.
@@ -1973,22 +1961,29 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MARK: - Community 2.0 S13a/S13c: Zone-boundary overlay
 
         /// Syncs the dashed zone-boundary overlay + "YOUR SQUARE · {ZONE}" label to match
-        /// `enabled`/`homeZoneId`.
+        /// `enabled`/`homeZone`.
         ///
         /// **S13c Fix #1** (`docs/design/community-2.0-final-parity-audit.md` §2 item 1):
         /// previously this rendered ALL THREE seeded zone boxes unconditionally on the first
-        /// `enabled == true` call, and only the LABEL was gated on `homeZoneId`. That told
+        /// `enabled == true` call, and only the LABEL was gated on the home zone. That told
         /// every user a lie about which neighborhood is "theirs" (all three boxes always
         /// visible) and cluttered the map. Now: renders 0 or exactly 1 polygon — the box for
-        /// `homeZoneId` ONLY — and rebuilds (remove old, add new) whenever `homeZoneId`
-        /// changes, including transitions to/from `nil`. The label shows if and only if a box
-        /// is shown (both keyed off the same non-nil `homeZoneId`).
+        /// `homeZone` ONLY — and rebuilds (remove old, add new) whenever `homeZone.id` changes,
+        /// including transitions to/from `nil`. The label shows if and only if a box is shown
+        /// (both keyed off the same non-nil `homeZone`).
+        ///
+        /// Community 2.0 S14: takes the whole fetched `Zone` (was `homeZoneId: String?` +
+        /// a compiled zone-bounds table lookup) — `ContentView` resolves the `Zone` object
+        /// once so this file has no `ZoneStore`/`ZoneGeometry` dependency of its own. The label now
+        /// reads `zone.name.uppercased()` directly instead of the retired
+        /// `zoneDisplayName(_:)` static switch — a strict improvement: any fetched zone's real
+        /// name renders correctly (e.g. "HELL'S KITCHEN"), not just the original three ids.
         ///
         /// Mechanical sync only — same architectural contract as
         /// `syncCommunityPinAnnotations`/`syncBlockSelectHighlight` above: called from
         /// `updateUIView`, no camera mutation (invariant I-1).
-        func syncZoneBoundaries(enabled: Bool, homeZoneId: String?, on mapView: MKMapView) {
-            guard enabled, let homeZoneId, let box = CommunityZoneBounds.box(for: homeZoneId) else {
+        func syncZoneBoundaries(enabled: Bool, homeZone: Zone?, on mapView: MKMapView) {
+            guard enabled, let homeZone else {
                 if !zoneBoundaryOverlays.isEmpty {
                     zoneBoundaryOverlays.forEach { mapView.removeOverlay($0) }
                     zoneBoundaryOverlays = []
@@ -2001,8 +1996,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return
             }
 
-            guard lastAppliedHomeZoneId != homeZoneId else { return }
-            lastAppliedHomeZoneId = homeZoneId
+            guard lastAppliedHomeZoneId != homeZone.id else { return }
+            lastAppliedHomeZoneId = homeZone.id
 
             // Remove whatever was previously shown (a different zone's box/label, if any)
             // before adding the new one — never more than one box on screen at a time.
@@ -2013,14 +2008,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                 zoneLabelAnnotation = nil
             }
 
+            let box = (latMin: homeZone.latMin, latMax: homeZone.latMax, lngMin: homeZone.lngMin, lngMax: homeZone.lngMax)
             var coords = MapViewRepresentable.zoneBoundaryCoordinates(box: box)
             let polygon = ZoneBoundaryPolygon(coordinates: &coords, count: coords.count)
-            polygon.zoneId = homeZoneId
+            polygon.zoneId = homeZone.id
             zoneBoundaryOverlays.append(polygon)
             mapView.addOverlay(polygon, level: .aboveRoads)
 
             let label = ZoneLabelAnnotation()
-            label.labelText = "YOUR SQUARE · \(MapViewRepresentable.zoneDisplayName(homeZoneId))"
+            label.labelText = "YOUR SQUARE · \(homeZone.name.uppercased())"
             label.coordinate = MapViewRepresentable.zoneLabelCoordinate(box: box)
             zoneLabelAnnotation = label
             mapView.addAnnotation(label)

@@ -435,6 +435,17 @@ final class ProfileAndLeaderboardFetchTests: XCTestCase {
     private let kAnonKey = "test-anon-key-phase3-fetch"
     private let kNow = Date(timeIntervalSince1970: 1_800_000_000)
 
+    /// Community 2.0 S14: the retired compiled zone-bounds table's original three boxes,
+    /// injected explicitly via `zoneStore: ZoneStore(preloadedZones:)` — `buildLeaderboardRequest`
+    /// now resolves a zone's box through `zoneStore.zones`, so a `CommunityPinService` built
+    /// with the plain default (empty) `ZoneStore()` would never fire a network request for
+    /// any of these tests' zone ids.
+    private let phase3FixtureZones: [Zone] = [
+        Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930),
+        Zone(id: "soho",   name: "SoHo",   latMin: 40.7220, latMax: 40.7237, lngMin: -74.0050, lngMax: -73.9970),
+        Zone(id: "les",    name: "LES",    latMin: 40.7145, latMax: 40.7230, lngMin: -73.9920, lngMax: -73.9800),
+    ]
+
     private func makeService(handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) -> CommunityPinService {
         PinMockURLProtocol.requestHandler = handler
         let config = URLSessionConfiguration.ephemeral
@@ -444,7 +455,8 @@ final class ProfileAndLeaderboardFetchTests: XCTestCase {
             supabaseURL: kURL,
             supabaseAnonKey: kAnonKey,
             nowProvider: { self.kNow },
-            urlSession: session
+            urlSession: session,
+            zoneStore: ZoneStore(preloadedZones: phase3FixtureZones)
         )
     }
 
@@ -552,6 +564,38 @@ final class ProfileAndLeaderboardFetchTests: XCTestCase {
         let url = capturedURL ?? ""
         XCTAssertTrue(url.contains("order=confirm_count.desc"), "Got: \(url)")
         XCTAssertTrue(url.contains("limit=200"), "Got: \(url)")
+    }
+
+    /// Community 2.0 S14 AC: `buildLeaderboardRequest` still queries the correct bounding box
+    /// when given a `Zone` fetched from a non-original zone id — proves the leaderboard query
+    /// is generic over any fetched zone, not hardcoded to the original three.
+    func testFetchLeaderboardPins_nonOriginalZone_stillQueriesCorrectBoundingBox() async throws {
+        let chelsea = Zone(id: "chelsea", name: "Chelsea", latMin: 40.7359, latMax: 40.7420, lngMin: -74.0090, lngMax: -73.9945)
+        let config = URLSessionConfiguration.ephemeral
+        config.protocolClasses = [PinMockURLProtocol.self]
+        let session = URLSession(configuration: config)
+        let service = CommunityPinService(
+            supabaseURL: kURL,
+            supabaseAnonKey: kAnonKey,
+            nowProvider: { self.kNow },
+            urlSession: session,
+            zoneStore: ZoneStore(preloadedZones: [chelsea])
+        )
+
+        var capturedURL: String?
+        PinMockURLProtocol.requestHandler = { request in
+            capturedURL = request.url?.absoluteString
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!,
+                    "[]".data(using: .utf8)!)
+        }
+
+        _ = try await service.fetchLeaderboardPins(zoneId: "chelsea")
+
+        let url = capturedURL ?? ""
+        XCTAssertTrue(url.contains("lat=gte.40.7359"), "Got: \(url)")
+        XCTAssertTrue(url.contains("lat=lte.40.742"), "Got: \(url)")
+        XCTAssertTrue(url.contains("lng=gte.-74.009"), "Got: \(url)")
+        XCTAssertTrue(url.contains("lng=lte.-73.9945"), "Got: \(url)")
     }
 }
 
@@ -788,11 +832,18 @@ final class CommunityLeaderboardTests: XCTestCase {
 /// Pure decision-logic tests for the race-safety guard backing
 /// `CrewFeedSection.loadLeaderboard(zone:)` — no `Task`/async machinery needed, since
 /// `shouldPublish` is a plain, `nonisolated`, stateless function.
+/// Community 2.0 S14: `LeaderboardPublishGuard.shouldPublish` now takes `Zone` (fetched)
+/// rather than the retired fixed `CommunityZone` enum — same gating rule, works identically
+/// for any zone name.
+private let lpgNolita = Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930)
+private let lpgSoho   = Zone(id: "soho",   name: "SoHo",   latMin: 40.7220, latMax: 40.7237, lngMin: -74.0050, lngMax: -73.9970)
+private let lpgLes    = Zone(id: "les",    name: "LES",    latMin: 40.7145, latMax: 40.7230, lngMin: -73.9920, lngMax: -73.9800)
+
 final class LeaderboardPublishGuardTests: XCTestCase {
 
     func testShouldPublish_sameZoneNotCancelled_returnsTrue() {
         XCTAssertTrue(LeaderboardPublishGuard.shouldPublish(
-            fetchedZone: .nolita, currentZone: .nolita, isCancelled: false
+            fetchedZone: lpgNolita, currentZone: lpgNolita, isCancelled: false
         ))
     }
 
@@ -800,7 +851,7 @@ final class LeaderboardPublishGuardTests: XCTestCase {
     /// resolving after the user has already switched to soho must not publish.
     func testShouldPublish_zoneChangedSinceFetchStarted_returnsFalse() {
         XCTAssertFalse(LeaderboardPublishGuard.shouldPublish(
-            fetchedZone: .nolita, currentZone: .soho, isCancelled: false
+            fetchedZone: lpgNolita, currentZone: lpgSoho, isCancelled: false
         ))
     }
 
@@ -808,13 +859,21 @@ final class LeaderboardPublishGuardTests: XCTestCase {
     /// matched, a cancelled task's result must never publish.
     func testShouldPublish_cancelled_returnsFalse() {
         XCTAssertFalse(LeaderboardPublishGuard.shouldPublish(
-            fetchedZone: .nolita, currentZone: .nolita, isCancelled: true
+            fetchedZone: lpgNolita, currentZone: lpgNolita, isCancelled: true
         ))
     }
 
     func testShouldPublish_cancelledAndZoneChanged_returnsFalse() {
         XCTAssertFalse(LeaderboardPublishGuard.shouldPublish(
-            fetchedZone: .nolita, currentZone: .les, isCancelled: true
+            fetchedZone: lpgNolita, currentZone: lpgLes, isCancelled: true
+        ))
+    }
+
+    /// `currentZone: nil` (nothing selected yet, e.g. an empty `zoneStore.zones`) must never
+    /// publish — there is no "current zone" to match against.
+    func testShouldPublish_currentZoneNil_returnsFalse() {
+        XCTAssertFalse(LeaderboardPublishGuard.shouldPublish(
+            fetchedZone: lpgNolita, currentZone: nil, isCancelled: false
         ))
     }
 }

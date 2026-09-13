@@ -70,7 +70,7 @@ import UserNotifications
 /// spec §2.9's `check (environment in ('sandbox', 'production'))`).
 enum APNSEnvironment {
     // `nonisolated` throughout this enum: this project's `SWIFT_DEFAULT_ACTOR_ISOLATION =
-    // MainActor` build setting (see `CommunityZoneBounds.box(for:)`'s doc comment for the
+    // MainActor` build setting (see `ZoneGeometry.box(for:in:)`'s doc comment for the
     // established precedent/rationale) would otherwise implicitly isolate these pure, static,
     // no-instance-state functions to the main actor — breaking both the synchronous plain
     // `XCTestCase` call sites in `PushRegistrationServiceTests.swift` and the call from
@@ -212,7 +212,7 @@ enum ParkedCarSegmentReader {
 ///
 /// Every function below is explicitly `nonisolated` — same `SWIFT_DEFAULT_ACTOR_ISOLATION =
 /// MainActor` reasoning as `APNSEnvironment` above (established precedent:
-/// `CommunityZoneBounds.box(for:)`). Call sites span a `@MainActor` context
+/// `ZoneGeometry.box(for:in:)`). Call sites span a `@MainActor` context
 /// (`ContentView.swift`), a GCD `DispatchQueue.main.async` closure
 /// (`AppDelegate`, `WeParkApp.swift`), and plain synchronous `XCTestCase` methods
 /// (`PushRegistrationServiceTests.swift`) — none of the latter two are recognized as

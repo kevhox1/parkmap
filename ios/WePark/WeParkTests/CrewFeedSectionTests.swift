@@ -3,10 +3,16 @@
 //  WeParkTests
 //
 //  Community 2.0 Phase 1 — crew feed UI layer (build 20, session S4).
+//  Community 2.0 S14 (`docs/community-2.0-s14-execution-spec.md`) update: the fixed 3-case
+//  `CommunityZone` enum this file used to test is retired, along with the compiled zone-bounds
+//  table it wrapped — the two test classes that directly exercised those types are removed
+//  (the standalone lookup's coverage moved to `ZoneGeometryTests` in
+//  `CommunityZoneStampingTests.swift`, the new canonical home for that lookup's tests). Every
+//  remaining `CrewFeedMerge` call site here gained an explicit `zones: [Zone]` parameter.
 //  Spec: docs/community-2.0-reconciliation-spec.md §1 delta table ("Crew feed"), §3 Phase 1,
 //  §6 (verbatim design values). Covers `Views/CrewFeedSection.swift`'s pure, view-free
-//  `CrewFeedMerge` logic + `CommunityZone` — everything testable without hosting a SwiftUI
-//  view, per this session's dispatch instructions.
+//  `CrewFeedMerge` logic — everything testable without hosting a SwiftUI view, per this
+//  session's dispatch instructions.
 //
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never compiled
 //  or run. A Mac `xcodebuild test` pass is a required gate before merge, matching every other
@@ -119,27 +125,13 @@ private func crewFeedMessageFixture(
 
 private let kCrewFeedEpoch = Date(timeIntervalSince1970: 1_756_281_600) // 2025-08-27T00:00:00Z-ish; exact value irrelevant, just fixed.
 
-// MARK: - CommunityZone
-
-final class CommunityZoneTests: XCTestCase {
-
-    func testRawValues_matchZoneTableIds() {
-        // Spec §2.3: exact `public.zones.id` values — never translated client-side.
-        XCTAssertEqual(CommunityZone.nolita.rawValue, "nolita")
-        XCTAssertEqual(CommunityZone.soho.rawValue, "soho")
-        XCTAssertEqual(CommunityZone.les.rawValue, "les")
-    }
-
-    func testDisplayNames_matchPrototypeChipLabels() {
-        XCTAssertEqual(CommunityZone.nolita.displayName, "Nolita")
-        XCTAssertEqual(CommunityZone.soho.displayName, "SoHo")
-        XCTAssertEqual(CommunityZone.les.displayName, "LES")
-    }
-
-    func testAllCases_exactlyThreeZones() {
-        XCTAssertEqual(CommunityZone.allCases.count, 3)
-    }
-}
+/// Community 2.0 S14: local fixture standing in for the retired compiled zone-bounds table —
+/// same lat/lng values every fixture below already assumed.
+private let crewFeedFixtureZones: [Zone] = [
+    Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930),
+    Zone(id: "soho",   name: "SoHo",   latMin: 40.7220, latMax: 40.7237, lngMin: -74.0050, lngMax: -73.9970),
+    Zone(id: "les",    name: "LES",    latMin: 40.7145, latMax: 40.7230, lngMin: -73.9920, lngMax: -73.9800),
+]
 
 // MARK: - CrewFeedMerge.merge — ordering + zone filtering
 
@@ -152,7 +144,7 @@ final class CrewFeedMergeOrderingTests: XCTestCase {
         let newPin = crewFeedPinFixture(id: "10000000-0000-0000-0000-000000000002",
                                          createdAt: "2026-08-27T09:10:00+00:00")
 
-        let feed = CrewFeedMerge.merge(messages: [midMessage], pins: [oldPin, newPin], zoneId: "nolita")
+        let feed = CrewFeedMerge.merge(messages: [midMessage], pins: [oldPin, newPin], zoneId: "nolita", zones: crewFeedFixtureZones)
 
         XCTAssertEqual(feed.map(\.id), [
             "pin-\(newPin.id.uuidString)",
@@ -165,7 +157,7 @@ final class CrewFeedMergeOrderingTests: XCTestCase {
         let inZone = crewFeedMessageFixture(id: 1, zoneId: "nolita")
         let outOfZone = crewFeedMessageFixture(id: 2, zoneId: "soho")
 
-        let feed = CrewFeedMerge.merge(messages: [inZone, outOfZone], pins: [], zoneId: "nolita")
+        let feed = CrewFeedMerge.merge(messages: [inZone, outOfZone], pins: [], zoneId: "nolita", zones: crewFeedFixtureZones)
 
         XCTAssertEqual(feed.count, 1)
         XCTAssertEqual(feed.first?.id, "chat-1")
@@ -175,14 +167,14 @@ final class CrewFeedMergeOrderingTests: XCTestCase {
         let inZone = crewFeedPinFixture(id: "10000000-0000-0000-0000-000000000001", zoneId: "nolita")
         let outOfZone = crewFeedPinFixture(id: "10000000-0000-0000-0000-000000000002", zoneId: "les")
 
-        let feed = CrewFeedMerge.merge(messages: [], pins: [inZone, outOfZone], zoneId: "nolita")
+        let feed = CrewFeedMerge.merge(messages: [], pins: [inZone, outOfZone], zoneId: "nolita", zones: crewFeedFixtureZones)
 
         XCTAssertEqual(feed.count, 1)
         XCTAssertEqual(feed.first?.id, "pin-10000000-0000-0000-0000-000000000001")
     }
 
     /// S4 QA pass 1, PR #94 Finding #3 fix: a `nil`-`zone_id` pin is NO LONGER unconditionally
-    /// excluded — `CrewFeedMerge.resolvedZoneId(for:)` falls back to a `CommunityZoneBounds`
+    /// excluded — `CrewFeedMerge.resolvedZoneId(for:zones:)` falls back to a `ZoneGeometry`
     /// lookup by `(lat, lng)`. The fixture's default coordinate (40.7230, -73.9950) falls
     /// inside nolita's bounding box, so a `nil`-zone pin there now correctly surfaces in the
     /// nolita feed — this is the whole point of the fix (pre-existing enforcement/sweeper
@@ -190,54 +182,65 @@ final class CrewFeedMergeOrderingTests: XCTestCase {
     func testMerge_pinWithNilZone_includedViaBoundingBoxFallback() {
         let noZonePin = crewFeedPinFixture(zoneId: nil) // default lat/lng is inside nolita's box
 
-        let feed = CrewFeedMerge.merge(messages: [], pins: [noZonePin], zoneId: "nolita")
+        let feed = CrewFeedMerge.merge(messages: [], pins: [noZonePin], zoneId: "nolita", zones: crewFeedFixtureZones)
 
         XCTAssertEqual(feed.count, 1)
     }
 
-    /// A `nil`-`zone_id` pin whose coordinate falls OUTSIDE all three known bounding boxes
-    /// is still excluded — the fallback only ever ADMITS a pin into a zone it can actually
-    /// place, it never admits one into every zone indiscriminately.
+    /// A `nil`-`zone_id` pin whose coordinate falls OUTSIDE every known bounding box is still
+    /// excluded — the fallback only ever ADMITS a pin into a zone it can actually place, it
+    /// never admits one into every zone indiscriminately.
     func testMerge_pinWithNilZone_outsideAllBoxes_stillExcluded() {
         let farAwayPin = crewFeedPinFixture(zoneId: nil, lat: 40.70, lng: -74.02)
 
-        let feed = CrewFeedMerge.merge(messages: [], pins: [farAwayPin], zoneId: "nolita")
+        let feed = CrewFeedMerge.merge(messages: [], pins: [farAwayPin], zoneId: "nolita", zones: crewFeedFixtureZones)
 
         XCTAssertTrue(feed.isEmpty)
     }
 
     func testMerge_emptyInputs_returnsEmptyArray() {
-        XCTAssertTrue(CrewFeedMerge.merge(messages: [], pins: [], zoneId: "nolita").isEmpty)
+        XCTAssertTrue(CrewFeedMerge.merge(messages: [], pins: [], zoneId: "nolita", zones: crewFeedFixtureZones).isEmpty)
     }
 }
 
-// MARK: - CommunityZoneBounds / CrewFeedMerge.resolvedZoneId (S4 QA pass 1 Finding #3 fix)
+// MARK: - CrewFeedMerge.resolvedZoneId — stored-id-wins-over-geometry (Community 2.0 S14)
 
-final class CommunityZoneBoundsTests: XCTestCase {
+/// New coverage per `docs/community-2.0-s14-execution-spec.md` §6 test plan
+/// (`CrewFeedMergeZoneTests`): the LES-shrink scenario (a stored id that's still present in
+/// `zones` always wins over a fresh geometry lookup, even when the two disagree), an
+/// unrecognized-id fallback, and the existing nil-id regression guard.
+final class CrewFeedMergeZoneTests: XCTestCase {
 
-    func testZoneId_pointInsideNolita_returnsNolita() {
-        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7230, lng: -73.9950), "nolita")
+    /// A pin stamped `zone_id = "les"` before a hypothetical box-shrink migration stays
+    /// attributed to "les" forever, even though its own lat/lng now falls inside a DIFFERENT
+    /// zone's (smaller, post-shrink) box — the stored id must never be "corrected" by geometry.
+    func testResolvedZoneId_storedIdStillPresent_winsOverGeometry_evenWhenGeometryDisagrees() {
+        // Coordinate is inside "nolita"'s box, but the pin's own stored zone_id is "les" —
+        // the stored id must win.
+        let pin = crewFeedPinFixture(zoneId: "les", lat: 40.7230, lng: -73.9950)
+        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin, zones: crewFeedFixtureZones), "les")
     }
 
-    func testZoneId_pointInsideSoho_returnsSoho() {
-        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7225, lng: -74.0000), "soho")
+    /// A stored id that's since dropped out of the fetched `zones` list degrades exactly like
+    /// a `nil` id — falls back to the lat/lng lookup.
+    func testResolvedZoneId_unrecognizedStoredId_fallsBackToGeometry() {
+        let pin = crewFeedPinFixture(zoneId: "soho-les", lat: 40.7230, lng: -73.9950) // inside nolita
+        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin, zones: crewFeedFixtureZones), "nolita")
     }
 
-    func testZoneId_pointInsideLes_returnsLes() {
-        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7200, lng: -73.9850), "les")
-    }
-
-    func testZoneId_pointOutsideAllBoxes_returnsNil() {
-        XCTAssertNil(CommunityZoneBounds.zoneId(forLat: 40.70, lng: -74.02))
-    }
-
-    /// Boundary inclusivity — the applied migration's ranges are closed intervals
-    /// (`gte`/`lte`-equivalent), matching `RealtimeMergeGate.isWithinRegion`'s own
-    /// inclusive-bounds convention.
-    func testZoneId_exactBoundaryCoordinate_included() {
-        XCTAssertEqual(CommunityZoneBounds.zoneId(forLat: 40.7217, lng: -73.9967), "nolita")
+    /// Regression guard on the existing nil-id case (S4 QA pass 1 Finding #3) — unchanged
+    /// behavior under the new `zones:` parameter.
+    func testResolvedZoneId_nilStoredId_fallsBackToGeometry() {
+        let pin = crewFeedPinFixture(zoneId: nil, lat: 40.7200, lng: -73.9850) // inside les
+        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin, zones: crewFeedFixtureZones), "les")
     }
 }
+
+// MARK: - CrewFeedMerge.resolvedZoneId (S4 QA pass 1 Finding #3 fix)
+//
+// Community 2.0 S14: the standalone compiled zone-bounds lookup this section used to test
+// directly is retired — that coverage now lives as `ZoneGeometryTests` in
+// `CommunityZoneStampingTests.swift`, the new canonical home for `ZoneGeometry`'s own tests.
 
 final class CrewFeedMergeResolvedZoneIdTests: XCTestCase {
 
@@ -245,17 +248,17 @@ final class CrewFeedMergeResolvedZoneIdTests: XCTestCase {
         // zoneId "les" explicit, but the coordinate is inside nolita's box — the explicit
         // value must win; the bounding-box fallback is nil-zone-only.
         let pin = crewFeedPinFixture(zoneId: "les", lat: 40.7230, lng: -73.9950)
-        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin), "les")
+        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin, zones: crewFeedFixtureZones), "les")
     }
 
     func testResolvedZoneId_nilZoneId_fallsBackToBoundingBox() {
         let pin = crewFeedPinFixture(zoneId: nil, lat: 40.7200, lng: -73.9850) // inside les
-        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin), "les")
+        XCTAssertEqual(CrewFeedMerge.resolvedZoneId(for: pin, zones: crewFeedFixtureZones), "les")
     }
 
     func testResolvedZoneId_nilZoneId_outsideAllBoxes_returnsNil() {
         let pin = crewFeedPinFixture(zoneId: nil, lat: 40.70, lng: -74.02)
-        XCTAssertNil(CrewFeedMerge.resolvedZoneId(for: pin))
+        XCTAssertNil(CrewFeedMerge.resolvedZoneId(for: pin, zones: crewFeedFixtureZones))
     }
 }
 
@@ -513,29 +516,29 @@ final class CrewFeedMergeAwayZoneNoteTests: XCTestCase {
 
     func testAwayZoneNote_homeIsNolita_selectedIsSoho_returnsNolita() {
         XCTAssertEqual(
-            CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "soho"),
-            .nolita
+            CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "soho", zones: crewFeedFixtureZones)?.id,
+            "nolita"
         )
     }
 
     func testAwayZoneNote_homeAndSelectedSameZone_returnsNil() {
-        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "nolita"))
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "nolita", selectedZoneId: "nolita", zones: crewFeedFixtureZones))
     }
 
     func testAwayZoneNote_noHomeZone_returnsNil() {
-        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: nil, selectedZoneId: "soho"))
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: nil, selectedZoneId: "soho", zones: crewFeedFixtureZones))
     }
 
+    /// Community 2.0 S14: an id outside the currently-fetched `zones` list (e.g. the retired
+    /// `soho-les` archive id, or a genuinely unrecognized one) must not force-unwrap.
     func testAwayZoneNote_homeZoneIdUnrecognized_returnsNil() {
-        // Defensive: an id outside the three seeded zones (shouldn't occur given
-        // `CommunityZoneBounds`'s fixed table, but the function must not force-unwrap).
-        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "soho-les", selectedZoneId: "soho"))
+        XCTAssertNil(CrewFeedMerge.awayZoneNote(homeZoneId: "soho-les", selectedZoneId: "soho", zones: crewFeedFixtureZones))
     }
 
     func testAwayZoneNote_homeIsLes_selectedIsNolita_returnsLes() {
         XCTAssertEqual(
-            CrewFeedMerge.awayZoneNote(homeZoneId: "les", selectedZoneId: "nolita"),
-            .les
+            CrewFeedMerge.awayZoneNote(homeZoneId: "les", selectedZoneId: "nolita", zones: crewFeedFixtureZones)?.id,
+            "les"
         )
     }
 }

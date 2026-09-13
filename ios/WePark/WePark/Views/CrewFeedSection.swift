@@ -22,10 +22,13 @@
 //  flag-gated for free — none of it can render with `communityEnabled == false` (verified,
 //  not assumed: there is no separate mount path for any of this file's content).
 //
+//  Community 2.0 S14 (`docs/community-2.0-s14-execution-spec.md`) additions: the fixed 3-case
+//  `CommunityZone` enum is GONE, replaced by the fetched `Models/Zone.swift` list
+//  (`Services/ZoneStore.swift`) — the zone chip row is now data-driven (nearest-first, home
+//  zone pinned first, max 8 chips + a "More" search sheet for overflow), and every zone lookup
+//  here takes an explicit `zones: [Zone]` parameter instead of switching over a compiled enum.
+//
 //  What lives here:
-//   - `CommunityZone` — the three Community 2.0 zones (spec §2.3's seeded rows), a thin
-//     Swift-side mirror of `public.zones` ids/names. NOT a general zone model — Phase 1 has
-//     exactly three zones and no "all zones" view (spec §1 delta table).
 //   - `CrewFeedItem` — a chat message or a pin, unified into one `Identifiable`, timestamped
 //     type so the two can be sorted into a single newest-first list.
 //   - `CrewFeedMerge` — pure, view-free merge/format/empty-state logic (mirrors this
@@ -116,35 +119,6 @@ import SwiftUI
 // file needs its own explicit import for that member access to resolve.
 import CoreLocation
 
-// MARK: - CommunityZone
-
-/// Community 2.0's three seeded zones (spec §2.3). Raw values are the exact
-/// `public.zones.id` strings — passed straight through to `CommunityPinService.setSelectedZone`
-/// / `ZoneMessageService.setSelectedZone` / `RealtimeMergeGate.isInZone` without any further
-/// translation.
-///
-/// Deliberately NOT `CaseIterable`-driven from a server fetch — Phase 1 has exactly three
-/// fixed zones (spec §1 delta table: "one row exists today... insert three new rows"), and
-/// there is no "all zones" view to enumerate beyond these three.
-enum CommunityZone: String, CaseIterable, Identifiable {
-    case nolita
-    case soho
-    case les
-
-    var id: String { rawValue }
-
-    /// Display name for the zone chip and the crew-feed header. Matches
-    /// `prototype.html:931`'s chip labels and `01-mvp-schema.sql`/§2.3's seeded `name` column
-    /// verbatim.
-    var displayName: String {
-        switch self {
-        case .nolita: return "Nolita"
-        case .soho:   return "SoHo"
-        case .les:    return "LES"
-        }
-    }
-}
-
 // MARK: - CrewFeedItem
 
 /// One row in the merged crew feed — either a zone-chat message or a crowd-reported pin.
@@ -169,14 +143,6 @@ enum CrewFeedItem: Identifiable {
     }
 }
 
-// MARK: - CommunityZoneBounds
-
-// MOVED to `Services/CommunityZoneBounds.swift` (Phase 2a / build 20 S6) — a Services-layer
-// consumer (`CommunityPinService.insertCrowdPin`'s write-time zone stamping) needed this
-// lookup too, and a Views file isn't a service dependency. Same type/values/API; see that
-// file's header for the full rationale. `CrewFeedMerge.resolvedZoneId(for:)` below is
-// unaffected by the move.
-
 // MARK: - CrewFeedMerge (pure, view-free logic)
 
 /// Pure decision/formatting helpers for the crew feed — no SwiftUI, no networking, no
@@ -186,11 +152,17 @@ enum CrewFeedMerge {
 
     // MARK: Merge + zone filter
 
-    /// The zone a pin counts toward for feed filtering: its own `zoneId` if set, else a
-    /// `CommunityZoneBounds` lookup by `(lat, lng)` (S4 QA pass 1 Finding #3 fix). `nil` if
-    /// neither resolves (a pin with no `zoneId` outside all three known boxes).
-    static func resolvedZoneId(for pin: CommunityPin) -> String? {
-        pin.zoneId ?? CommunityZoneBounds.zoneId(forLat: pin.lat, lng: pin.lng)
+    /// The zone a pin counts toward for feed filtering: its own `zoneId` if set (and still
+    /// present in `zones`), else a `ZoneGeometry.zoneId(forLat:lng:in:)` lookup by `(lat, lng)`
+    /// (S4 QA pass 1 Finding #3 fix; Community 2.0 S14: also the "stored id wins over geometry"
+    /// rule — a stored id that's since dropped out of `zones` degrades exactly like a `nil`
+    /// one). `nil` if neither resolves (a pin with no recognized `zoneId` outside every known
+    /// box).
+    static func resolvedZoneId(for pin: CommunityPin, zones: [Zone]) -> String? {
+        if let zoneId = pin.zoneId, zones.contains(where: { $0.id == zoneId }) {
+            return zoneId
+        }
+        return ZoneGeometry.zoneId(forLat: pin.lat, lng: pin.lng, in: zones)
     }
 
     /// Combines `messages` and `pins` into one newest-first `[CrewFeedItem]`, filtering both
@@ -202,16 +174,16 @@ enum CrewFeedMerge {
     /// the caller passes in, and so it stays independently testable with mixed-zone fixtures.
     /// `pins` (`CommunityPinService.visiblePins`) is NEVER zone-scoped on the read path
     /// (viewport-scoped only — spec §1 delta table) — filtering it by `zoneId` here is load-
-    /// bearing, not defensive. Pins filter through `resolvedZoneId(for:)` (bounding-box
-    /// fallback for a `nil` `zone_id`), not raw `pin.zoneId`, so pre-existing
+    /// bearing, not defensive. Pins filter through `resolvedZoneId(for:zones:)` (bounding-box
+    /// fallback for a `nil`/unrecognized `zone_id`), not raw `pin.zoneId`, so pre-existing
     /// enforcement/sweeper reports (which no write path stamps with a zone yet) still
     /// surface in the correct zone's feed.
-    static func merge(messages: [ZoneMessage], pins: [CommunityPin], zoneId: String) -> [CrewFeedItem] {
+    static func merge(messages: [ZoneMessage], pins: [CommunityPin], zoneId: String, zones: [Zone]) -> [CrewFeedItem] {
         let chatItems = messages
             .filter { $0.zoneId == zoneId }
             .map(CrewFeedItem.chat)
         let pinItems = pins
-            .filter { resolvedZoneId(for: $0) == zoneId }
+            .filter { resolvedZoneId(for: $0, zones: zones) == zoneId }
             .map(CrewFeedItem.pin)
         return (chatItems + pinItems).sorted { $0.timestamp > $1.timestamp }
     }
@@ -220,13 +192,15 @@ enum CrewFeedMerge {
 
     /// Pure decision for `CrewFeedSection.awayZoneNote`: `nil` when no note should render
     /// (no resolvable home zone, or the currently-selected zone chip already IS home);
-    /// otherwise the `CommunityZone` to name as "home" in the note's copy. Extracted so the
-    /// exact gating rule that shipped broken in S13c (never observed the live home-zone
-    /// value — see this file's header comment) has a directly-testable pure form independent
-    /// of the SwiftUI view-update mechanics that caused the live failure.
-    static func awayZoneNote(homeZoneId: String?, selectedZoneId: String) -> CommunityZone? {
+    /// otherwise the `Zone` to name as "home" in the note's copy. Extracted so the exact
+    /// gating rule that shipped broken in S13c (never observed the live home-zone value — see
+    /// this file's header comment) has a directly-testable pure form independent of the
+    /// SwiftUI view-update mechanics that caused the live failure. Community 2.0 S14: `Zone`
+    /// (fetched) replaces the old fixed `CommunityZone` enum — works identically for any zone
+    /// name, no gating-rule change.
+    static func awayZoneNote(homeZoneId: String?, selectedZoneId: String, zones: [Zone]) -> Zone? {
         guard let homeZoneId, homeZoneId != selectedZoneId else { return nil }
-        return CommunityZone(rawValue: homeZoneId)
+        return zones.first { $0.id == homeZoneId }
     }
 
     // MARK: Empty state
@@ -541,30 +515,34 @@ enum CommunityLeaderboard {
 /// unit-testable without spinning up a real, cancellable `Task` — mirrors this file's
 /// `CrewFeedMerge`/`CommunityLeaderboard` convention of pure, view-adjacent logic.
 ///
-/// `loadLeaderboard(zone:)` is driven by `.task(id: selectedZone)` (not a manual `Task {}` in
-/// `onChange`), which auto-cancels an in-flight fetch for the OLD zone the instant
-/// `selectedZone` changes. This guard is defense-in-depth on top of that cancellation, not a
+/// `loadLeaderboard(zoneId:)` is driven by `.task(id: selectedZoneId)` (not a manual `Task {}`
+/// in `onChange`), which auto-cancels an in-flight fetch for the OLD zone the instant
+/// `selectedZoneId` changes. This guard is defense-in-depth on top of that cancellation, not a
 /// replacement for it: `Task.isCancelled` alone can lag by the tiny window between
 /// cancellation firing and an already-in-flight `await` actually observing it, and checking
 /// the fetched zone against the CURRENTLY selected zone catches that window directly rather
 /// than relying on cancellation propagation timing.
+///
+/// Community 2.0 S14: takes `Zone` (fetched) rather than the old fixed `CommunityZone` enum —
+/// no gating-rule change, works identically for any zone name.
 ///
 /// `nonisolated` (build's `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`) — pure, no actor state.
 enum LeaderboardPublishGuard {
 
     /// - Parameters:
     ///   - fetchedZone: The zone this now-resolved fetch was FOR.
-    ///   - currentZone: `selectedZone`'s value AT THE MOMENT the fetch resolved (read fresh,
-    ///     not captured at fetch-start — a zone switch mid-flight must change this).
+    ///   - currentZone: The currently-selected zone AT THE MOMENT the fetch resolved (read
+    ///     fresh, not captured at fetch-start — a zone switch mid-flight must change this).
+    ///     `nil` when nothing is currently selected (e.g. the zone list is still empty).
     ///   - isCancelled: `Task.isCancelled`, checked at the same moment.
     /// - Returns: `true` only when the fetch's own zone still matches what's currently
     ///   selected AND the task wasn't cancelled — i.e. this result is still relevant.
     nonisolated static func shouldPublish(
-        fetchedZone: CommunityZone,
-        currentZone: CommunityZone,
+        fetchedZone: Zone,
+        currentZone: Zone?,
         isCancelled: Bool
     ) -> Bool {
-        !isCancelled && fetchedZone == currentZone
+        !isCancelled && currentZone == fetchedZone
     }
 }
 
@@ -589,6 +567,11 @@ struct CrewFeedSection: View {
     var parkPinService: ParkPinService
     var locationService: LocationService
 
+    /// Community 2.0 S14: the fetch-at-launch zone list backing the nearest-first picker.
+    /// Passed in as a reference, same "read directly in this view's own body" pattern as
+    /// `pinService`/`zoneMessageService`/`parkPinService`/`locationService` above.
+    var zoneStore: ZoneStore
+
     /// S13c garage-savings stat (`docs/design/community-2.0-final-parity-audit.md` §3,
     /// Option A): device-local running total, read fresh on every appearance rather than
     /// held as long-lived `@State` — this card has no write path of its own (accrual happens
@@ -596,7 +579,22 @@ struct CrewFeedSection: View {
     /// beyond re-reading `UserDefaults` when the card becomes visible again.
     @State private var garageSavingsTotal: Double = 0
 
-    @State private var selectedZone: CommunityZone = .nolita
+    /// Community 2.0 S14: the currently-selected zone chip's id. `nil` only when `zoneStore`
+    /// hasn't resolved any zone yet (first-launch-and-offline cold start with no cache — see
+    /// `ZoneStore`'s own doc comment) — every view below tolerates `nil` gracefully (no zone
+    /// selected, not a crash), matching every other consumer's "empty `zones` is a real,
+    /// supported state" contract.
+    @State private var selectedZoneId: String? = nil
+
+    /// Community 2.0 S14: whether the "More" overflow sheet (all zones, searchable) is
+    /// presented. Only ever reachable when `zoneStore.zones.count > 8` (`zoneChipsRow`'s own
+    /// gate) — at today's 3-zone table this stays permanently unreachable, byte-identical UX.
+    @State private var isMoreZonesSheetPresented = false
+
+    /// Search text for the "More" overflow sheet's zone list. Reset is not needed on dismiss —
+    /// a user reopening the sheet mid-search resuming their last query is reasonable, matches
+    /// standard `.searchable(text:)` conventions elsewhere in iOS.
+    @State private var moreZonesSearchText = ""
 
     /// Community 2.0 Phase 3 (build 20 S9): the current user's own `profiles` row, or `nil`
     /// when none exists yet (an anonymous device that's never authored/voted/chatted — see
@@ -609,7 +607,7 @@ struct CrewFeedSection: View {
 
     /// Guards `loadProfileIfNeeded()` against refetching on every zone switch — the profile
     /// isn't zone-scoped, so once an attempt has been made (successful or not), subsequent
-    /// `.task(id: selectedZone)` invocations skip straight to the leaderboard load. Stays
+    /// `.task(id: selectedZoneId)` invocations skip straight to the leaderboard load. Stays
     /// `false` if `authService.currentUserId` was nil at attempt time (shouldn't happen given
     /// anonymous auth, but this lets a later invocation retry rather than permanently give up).
     @State private var hasAttemptedProfileLoad = false
@@ -647,22 +645,49 @@ struct CrewFeedSection: View {
         }
         .padding(.top, 6)
         .onAppear {
-            selectZone(selectedZone)
+            // Community 2.0 S14: (re)derive the selection from whatever `zoneStore.zones`
+            // already holds at mount time — the fetch itself ran unconditionally at cold
+            // launch (`ContentView.performLaunchSetup()`), so this is very often already
+            // populated by the time a user opens the crew feed. `.onChange(of:
+            // selectedZoneId)` below (not a direct `selectZone(...)` call here) is what
+            // actually pushes the resolved id into `pinService`/`zoneMessageService` — see
+            // that modifier's own comment for why a single path is correct.
+            selectedZoneId = ZoneSelectionDefaulting.defaultSelection(
+                currentSelection: selectedZoneId,
+                orderedZones: orderedZones
+            )
             garageSavingsTotal = GarageSavingsService().currentMonthTotal()
         }
-        .onChange(of: selectedZone) { _, newZone in selectZone(newZone) }
-        // QA pass 1 fix (PR #97, Finding #1 — AC-P3.4): `.task(id: selectedZone)` replaces the
-        // old manual `Task {}` fired from `onAppear`/`onChange`. SwiftUI automatically cancels
-        // the in-flight task for the PREVIOUS zone the instant `selectedZone` changes, closing
-        // the out-of-order-completion race where a slower earlier zone's response could
-        // overwrite a faster later zone's already-rendered result. Also folds in the one-time
-        // profile load (`loadProfileIfNeeded()` no-ops after its first successful attempt), so
-        // the "profile known before the leaderboard's hasProfile decision" sequencing the old
-        // onAppear/onChange split needed is now just "await it first, every time" — cheap and
-        // race-free rather than a bespoke double-load.
-        .task(id: selectedZone) {
+        .onChange(of: selectedZoneId) { _, newZoneId in selectZone(newZoneId) }
+        // Community 2.0 S14: re-defaults the selection if `zoneStore.zones` changes after this
+        // view has already mounted (the fetch resolving WHILE the crew feed is open — rare,
+        // since the fetch fires once at cold launch, but possible if the sheet is opened
+        // before it settles). Keeps a still-valid selection untouched (ids are stable across
+        // the fetch completing — `docs/community-2.0-manhattan-zones.md`'s id-stability
+        // decision) and only re-defaults when the current selection genuinely vanished.
+        .onChange(of: zoneStore.zones) { _, _ in
+            let defaulted = ZoneSelectionDefaulting.defaultSelection(
+                currentSelection: selectedZoneId,
+                orderedZones: orderedZones
+            )
+            if defaulted != selectedZoneId { selectedZoneId = defaulted }
+        }
+        // QA pass 1 fix (PR #97, Finding #1 — AC-P3.4): `.task(id: selectedZoneId)` replaces
+        // the old manual `Task {}` fired from `onAppear`/`onChange`. SwiftUI automatically
+        // cancels the in-flight task for the PREVIOUS zone the instant `selectedZoneId`
+        // changes, closing the out-of-order-completion race where a slower earlier zone's
+        // response could overwrite a faster later zone's already-rendered result. Also folds
+        // in the one-time profile load (`loadProfileIfNeeded()` no-ops after its first
+        // successful attempt), so the "profile known before the leaderboard's hasProfile
+        // decision" sequencing the old onAppear/onChange split needed is now just "await it
+        // first, every time" — cheap and race-free rather than a bespoke double-load.
+        .task(id: selectedZoneId) {
             await loadProfileIfNeeded()
-            await loadLeaderboard(zone: selectedZone)
+            if let selectedZoneId {
+                await loadLeaderboard(zoneId: selectedZoneId)
+            } else {
+                leaderboardEntries = []
+            }
         }
         // S13b: local nested identity-sheet interception — see `pendingIdentityAction`'s doc
         // comment for why this is the correct precedent to mirror here.
@@ -689,6 +714,12 @@ struct CrewFeedSection: View {
                 }
             )
             .presentationDetents([.medium])
+        }
+        // Community 2.0 S14: the "More" overflow sheet — only ever reachable via `moreChip`,
+        // which itself only renders when `zoneStore.zones.count > 8` (§3.4's byte-identical-
+        // at-3-zones requirement).
+        .sheet(isPresented: $isMoreZonesSheetPresented) {
+            moreZonesSheet
         }
     }
 
@@ -717,7 +748,7 @@ struct CrewFeedSection: View {
                 .frame(width: 34, height: 34)
                 .background(Color.accentColor, in: Circle())
                 .foregroundStyle(.white)
-                .disabled(isSendingCrewMessage || !ZoneMessageComposeLogic.canSend(draft: crewDraft))
+                .disabled(isSendingCrewMessage || selectedZoneId == nil || !ZoneMessageComposeLogic.canSend(draft: crewDraft))
                 .accessibilityLabel("Send")
             }
 
@@ -742,6 +773,7 @@ struct CrewFeedSection: View {
     /// every other contribution path uses (`ReportSheet.submitReport()`,
     /// `ParkedCarDetailView.submitLeavingSoon()`, `BlockDetailView.submitChat()`).
     private func submitCrewMessage() {
+        guard selectedZoneId != nil else { return }
         let trimmed = ZoneMessageComposeLogic.trimmedBody(crewDraft)
         guard !trimmed.isEmpty else { return }
         if CommunityIdentityInterception.shouldShowIdentitySheet(
@@ -755,12 +787,13 @@ struct CrewFeedSection: View {
     }
 
     private func performSendCrewMessage(_ body: String) async {
+        guard let selectedZoneId else { return }
         isSendingCrewMessage = true
         crewSendError = nil
         do {
             // segmentId: nil — zone-wide message, the crew feed's own scope (as opposed to
             // BlockDetailView's segment-anchored send, which passes a real Segment.id).
-            try await zoneMessageService.sendMessage(zoneId: selectedZone.id, segmentId: nil, body: body)
+            try await zoneMessageService.sendMessage(zoneId: selectedZoneId, segmentId: nil, body: body)
             crewDraft = ""
         } catch {
             // Same wording as every other contribution-path network-failure string in this
@@ -786,20 +819,23 @@ struct CrewFeedSection: View {
     /// `ZoneMessageService`'s zone param" — no map-region change is in that list).
     ///
     /// Community 2.0 Phase 3 (build 20 S9): does NOT itself trigger the leaderboard reload —
-    /// that's `body`'s separate `.task(id: selectedZone)` modifier, since the leaderboard is a
-    /// one-shot, independently-cancellable network fetch, not part of the two services' own
+    /// that's `body`'s separate `.task(id: selectedZoneId)` modifier, since the leaderboard is
+    /// a one-shot, independently-cancellable network fetch, not part of the two services' own
     /// zone-filter state (QA pass 1, PR #97: `.task(id:)` replaced the original manual
     /// `Task {}` this comment used to describe here — see `loadLeaderboard`'s own doc comment).
-    private func selectZone(_ zone: CommunityZone) {
-        pinService.setSelectedZone(zone.id)
-        zoneMessageService.setSelectedZone(zone.id)
+    ///
+    /// `nil` clears both services' selection (empty feed, no chat fetch) — the same "no zone
+    /// selected" degrade `ZoneMessageService.setSelectedZone(nil)` already documents.
+    private func selectZone(_ zoneId: String?) {
+        pinService.setSelectedZone(zoneId)
+        zoneMessageService.setSelectedZone(zoneId)
     }
 
     // MARK: - Profile + leaderboard loading (Community 2.0 Phase 3, build 20 S9)
 
     /// Loads the current user's own profile once — `hasAttemptedProfileLoad` makes every
     /// invocation after the first a no-op, so calling this unconditionally from
-    /// `.task(id: selectedZone)` on every zone switch doesn't refetch a profile that isn't
+    /// `.task(id: selectedZoneId)` on every zone switch doesn't refetch a profile that isn't
     /// zone-scoped in the first place. A fetch failure (network hiccup) leaves `currentProfile`
     /// at its previous value (`nil` on first load) rather than crashing or showing an error —
     /// the profile row simply doesn't render, same degrade as "no profile exists yet." Does
@@ -825,60 +861,182 @@ struct CrewFeedSection: View {
     /// race did.
     ///
     /// `LeaderboardPublishGuard.shouldPublish` is checked immediately before the final publish
-    /// as defense-in-depth alongside `.task(id: selectedZone)`'s own cancellation (see that
+    /// as defense-in-depth alongside `.task(id: selectedZoneId)`'s own cancellation (see that
     /// type's doc comment for why both checks matter) — belt-and-braces, not a replacement for
-    /// `.task(id:)` doing the actual cancellation.
-    private func loadLeaderboard(zone: CommunityZone) async {
+    /// `.task(id:)` doing the actual cancellation. `nil` for either the fetched or current zone
+    /// (e.g. `zoneId` dropped out of `zoneStore.zones` between the call and the fetch
+    /// resolving) safely no-ops rather than publishing.
+    private func loadLeaderboard(zoneId: String) async {
         leaderboardEntries = []
-        guard let pins = try? await pinService.fetchLeaderboardPins(zoneId: zone.id) else { return }
+        guard let pins = try? await pinService.fetchLeaderboardPins(zoneId: zoneId) else { return }
         let built = CommunityLeaderboard.build(
             pins: pins,
             currentUserId: authService.currentUserId,
             hasProfile: currentProfile != nil
         )
+        guard let fetchedZone = zoneStore.zones.first(where: { $0.id == zoneId }) else { return }
+        let currentZone = selectedZoneId.flatMap { id in zoneStore.zones.first { $0.id == id } }
         guard LeaderboardPublishGuard.shouldPublish(
-            fetchedZone: zone,
-            currentZone: selectedZone,
+            fetchedZone: fetchedZone,
+            currentZone: currentZone,
             isCancelled: Task.isCancelled
         ) else { return }
         leaderboardEntries = built
     }
 
-    // MARK: - Zone chips
+    // MARK: - Zone chips (Community 2.0 S14: data-driven, nearest-first)
 
-    private var zoneChipsRow: some View {
-        HStack(spacing: 7) {
-            ForEach(CommunityZone.allCases) { zone in
-                zoneChip(zone)
-            }
-        }
-        .padding(.horizontal, 2)
+    /// Origin for both the chip ordering and home-zone pinning — parked car, else device
+    /// location, else neither. Mirrors `ContentView.resolveHomeZoneId`'s own priority so the
+    /// home zone and the "nearest" top-of-list zone are almost always the same thing by
+    /// construction (spec §3.4).
+    private var originLat: Double? {
+        parkPinService.parkedCar?.latitude ?? locationService.userLocation?.latitude
+    }
+    private var originLng: Double? {
+        parkPinService.parkedCar?.longitude ?? locationService.userLocation?.longitude
     }
 
-    private func zoneChip(_ zone: CommunityZone) -> some View {
-        let isSelected = zone == selectedZone
+    private var orderedZones: [Zone] {
+        ZoneOrdering.orderedZones(
+            zones: zoneStore.zones,
+            homeZoneId: homeZoneId,
+            originLat: originLat,
+            originLng: originLng
+        )
+    }
+
+    /// The zone object for `selectedZoneId`, or `nil` if unresolved (empty `zones`, or a
+    /// selection that hasn't been defaulted yet).
+    private var selectedZone: Zone? {
+        guard let selectedZoneId else { return nil }
+        return zoneStore.zones.first { $0.id == selectedZoneId }
+    }
+
+    /// Nearest-first chip row (spec §3.4): the `limit` nearest zones plus the currently-selected
+    /// one if it fell outside that window, plus a trailing "More" chip when there are more than
+    /// 8 zones total. At today's 3-zone table `zoneStore.zones.count > 8` is always false, so
+    /// the "More" chip never renders and every zone shows as a chip — byte-identical UX to the
+    /// pre-refactor fixed 3-chip row. An empty `zoneStore.zones` (first-launch-and-offline, no
+    /// cache) shows an explicit "Couldn't load squares" note rather than a blank row.
+    @ViewBuilder
+    private var zoneChipsRow: some View {
+        if zoneStore.zones.isEmpty {
+            Text("Couldn't load squares")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 2)
+        } else {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    let visible = ZoneOrdering.visibleChipZones(
+                        ordered: orderedZones,
+                        selectedZoneId: selectedZoneId,
+                        limit: 8
+                    )
+                    ForEach(visible) { zone in
+                        zoneChip(zone)
+                    }
+                    if zoneStore.zones.count > 8 {
+                        moreChip
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+        }
+    }
+
+    private func zoneChip(_ zone: Zone) -> some View {
+        let isSelected = zone.id == selectedZoneId
+        let isHome = zone.id == homeZoneId
         return Button {
-            selectedZone = zone
+            selectedZoneId = zone.id
         } label: {
-            Text(zone.displayName)
-                .font(.caption.weight(.bold))
-                .padding(.horizontal, 13)
-                .padding(.vertical, 6)
+            HStack(spacing: 4) {
+                if isHome {
+                    Image(systemName: "house.fill")
+                        .font(.system(size: 9))
+                }
+                Text(zone.name)
+                    .font(.caption.weight(.bold))
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 6)
         }
         .buttonStyle(.plain)
         .background(
             Capsule().fill(isSelected ? Color.blue : Color(white: 0.46).opacity(0.16))
         )
         .foregroundStyle(isSelected ? Color.white : Color.secondary)
-        .accessibilityLabel("\(zone.displayName) zone")
+        .accessibilityLabel(isHome ? "\(zone.name) zone, home" : "\(zone.name) zone")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    /// Only rendered when `zoneStore.zones.count > 8` (`zoneChipsRow`'s own gate) — opens
+    /// `moreZonesSheet`, a flat nearest-first + search list of every zone (spec §3.4:
+    /// grouped-by-area browsing is a deferred designer-facing enhancement, not this session).
+    private var moreChip: some View {
+        Button {
+            isMoreZonesSheetPresented = true
+        } label: {
+            Text("More")
+                .font(.caption.weight(.bold))
+                .padding(.horizontal, 13)
+                .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+        .background(Capsule().fill(Color(white: 0.46).opacity(0.16)))
+        .foregroundStyle(Color.secondary)
+        .accessibilityLabel("More squares")
+    }
+
+    /// Zones matching `moreZonesSearchText` (substring, case-insensitive), nearest-first when
+    /// the search field is empty — flat, not grouped-by-area (spec §3.4's explicit v1 default).
+    private var moreZonesSearchResults: [Zone] {
+        let trimmed = moreZonesSearchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return orderedZones }
+        return orderedZones.filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
+    }
+
+    private var moreZonesSheet: some View {
+        NavigationStack {
+            List(moreZonesSearchResults) { zone in
+                Button {
+                    selectedZoneId = zone.id
+                    isMoreZonesSheetPresented = false
+                } label: {
+                    HStack {
+                        if zone.id == homeZoneId {
+                            Image(systemName: "house.fill")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Text(zone.name)
+                            .foregroundStyle(.primary)
+                        Spacer()
+                        if zone.id == selectedZoneId {
+                            Image(systemName: "checkmark")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+            }
+            .searchable(text: $moreZonesSearchText, prompt: "Search squares")
+            .navigationTitle("All Squares")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Close") { isMoreZonesSheetPresented = false }
+                }
+            }
+        }
     }
 
     // MARK: - Zone header
 
     private var zoneHeaderRow: some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(selectedZone.displayName.uppercased())
+            Text((selectedZone?.name ?? "").uppercased())
                 .font(.caption.weight(.bold))
                 .tracking(1.2)
                 .foregroundStyle(.secondary)
@@ -913,14 +1071,16 @@ struct CrewFeedSection: View {
     /// replaced: a plain value only refreshed when this view's PARENT happened to reconstruct
     /// it, which tapping a zone chip — this view's own local `@State` — never triggers).
     /// Evaluated fresh on every one of THIS view's own body passes, so it stays correct across
-    /// zone-chip taps without depending on an ancestor's render schedule.
+    /// zone-chip taps without depending on an ancestor's render schedule. Community 2.0 S14:
+    /// reads `zoneStore.zones` directly (the same list `orderedZones`/`zoneChip` above use).
     private var homeZoneId: String? {
         guard AppConstants.communityEnabled else { return nil }
         return ContentView.resolveHomeZoneId(
             parkedCarLat: parkPinService.parkedCar?.latitude,
             parkedCarLng: parkPinService.parkedCar?.longitude,
             deviceLocationLat: locationService.userLocation?.latitude,
-            deviceLocationLng: locationService.userLocation?.longitude
+            deviceLocationLng: locationService.userLocation?.longitude,
+            zones: zoneStore.zones
         )
     }
 
@@ -931,18 +1091,19 @@ struct CrewFeedSection: View {
     /// Copy note (flagged in this PR's body, not silently decided): the screenshot's literal
     /// copy is "posting stays in your home square" — but `crewComposeRow`'s compose bar
     /// actually posts to whichever zone chip is currently SELECTED
-    /// (`performSendCrewMessage`'s `zoneId: selectedZone.id`), not unconditionally to the
+    /// (`performSendCrewMessage`'s `zoneId: selectedZoneId`), not unconditionally to the
     /// user's home zone. Asserting the screenshot's literal claim here would be false given
     /// today's actual send behavior, so this note states only what's true (which square is
     /// "home") rather than a claim about where a post will land.
     @ViewBuilder
     private var awayZoneNote: some View {
-        if let homeZone = CrewFeedMerge.awayZoneNote(homeZoneId: homeZoneId, selectedZoneId: selectedZone.id) {
+        if let selectedZoneId,
+           let homeZone = CrewFeedMerge.awayZoneNote(homeZoneId: homeZoneId, selectedZoneId: selectedZoneId, zones: zoneStore.zones) {
             HStack(spacing: 6) {
                 Image(systemName: "location.slash")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
-                Text("You're browsing \(selectedZone.displayName) \u{2014} your home square is \(homeZone.displayName).")
+                Text("You're browsing \(selectedZone?.name ?? "") \u{2014} your home square is \(homeZone.name).")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -1089,11 +1250,14 @@ struct CrewFeedSection: View {
 
     @ViewBuilder
     private var feedContent: some View {
-        let feed = CrewFeedMerge.merge(
-            messages: zoneMessageService.messages,
-            pins: pinService.visiblePins,
-            zoneId: selectedZone.id
-        )
+        let feed = selectedZoneId.map {
+            CrewFeedMerge.merge(
+                messages: zoneMessageService.messages,
+                pins: pinService.visiblePins,
+                zoneId: $0,
+                zones: zoneStore.zones
+            )
+        } ?? []
 
         if zoneMessageService.isLoading && feed.isEmpty {
             ProgressView()

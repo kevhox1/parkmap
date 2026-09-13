@@ -105,9 +105,10 @@ enum CandidateSegmentSearch {
     /// Intentionally a small, independent copy of the same predicate as
     /// `ContentView.oppositeSideSegment(of:in:)` (FT-15/TF2-15, AC-R2) rather than a call
     /// through to that ContentView static — a Services-layer file reaching into
-    /// `ContentView` for logic would create the exact Service→View dependency direction this
-    /// session's `CommunityZoneBounds` relocation was explicitly trying to avoid the other
-    /// way around. Both copies are independently unit-tested; if they ever need to diverge,
+    /// `ContentView` for logic would create the exact Service→View dependency direction the
+    /// zone-lookup relocations into `Services/ZoneStore.swift` (S6, then S14) were explicitly
+    /// trying to avoid the other way around. Both copies are independently unit-tested; if
+    /// they ever need to diverge,
     /// that's a sign that one of the two use cases actually needs different matching rules.
     nonisolated static func oppositeSideCandidate(of segment: Segment, in segments: [Segment]) -> Segment? {
         let crossPair: Set<String> = [segment.fromStreet, segment.to]
