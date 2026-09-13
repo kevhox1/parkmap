@@ -278,9 +278,13 @@ rare divergence (browsing a zone chip far from home).
   `List` of ALL zones (search field at top, filtering by name substring; no query = flat
   nearest-first, not grouped). Tap a row → sets the selection and dismisses.
 - **At today's data volume (3 zones, pre-migration), `zones.count > 8` is false — the "More" chip
-  never renders, and the visible-chip window shows all 3.** The refactor is byte-for-byte the same
-  UX as today until Kevin applies the migration; this is the mechanism behind "zero client changes"
-  in the pre/post matrix below.
+  never renders, and the visible-chip window shows all 3.** The refactor is chip-COUNT-identical to
+  today until Kevin applies the migration; this is the mechanism behind "zero client changes"
+  in the pre/post matrix below. **CORRECTED per PR #108 QA (2026-09-13): chip ORDER is NOT
+  identical** — the shipped fixed order (Nolita, SoHo, LES) becomes nearest-first when an origin
+  resolves, and alphabetical (LES, Nolita, SoHo) when none does (proven by
+  `testOrderedZones_noOrigin_alphabeticalFallback`). Zero live impact (flag-off), deliberate and
+  spec-sanctioned — noted so the Mac gate doesn't read the reorder as a bug.
 - Selection state: `@State private var selectedZoneId: String? = nil`, defaulted via a pure
   `ZoneSelectionDefaulting.defaultSelection(currentSelection:orderedZones:)` helper (keeps the
   current selection if it's still valid, else picks `orderedZones.first`) called from `.onAppear` and
