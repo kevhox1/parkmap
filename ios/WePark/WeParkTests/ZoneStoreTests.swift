@@ -11,6 +11,20 @@
 //  target) rather than declaring a second URLProtocol mock class — same precedent
 //  `ZoneMessageServiceTests.swift` already follows.
 //
+//  Mac-gate fix (post-PR-#108 review): the unit test target runs INSIDE the WePark host app,
+//  and `ZoneStore.loadZonesIfNeeded()` runs UNCONDITIONALLY at that host app's own launch
+//  (`ContentView.performLaunchSetup()`, this session's own spec-correct requirement) — so the
+//  host app's real fetch writes into `UserDefaults.standard` under `ZoneStore.cacheKey`
+//  before/during any test run, independent of and racing whatever this file does.
+//  `tearDown`-only cleanup can't fix a "no prior cache" assertion (pollution PRECEDES the
+//  first test), and `setUp` cleanup would still be flaky (the host's async fetch can complete
+//  mid-suite). Every class below that touches the cache now injects an ephemeral `UserDefaults`
+//  suite (mirrors `GarageSavingsServiceTests`' own identical-shaped fix for
+//  `GarageSavingsService.init(defaults:)`) so this file is fully independent of the host app's
+//  real cache — including the fetch-success-path classes (`ZoneStoreFetchRequestShapeTests`/
+//  `ZoneStoreDecodeTests`), whose successful `fetchZones()` calls also write to the cache and
+//  would otherwise silently pollute `UserDefaults.standard` with test fixture data.
+//
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never
 //  compiled or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
@@ -52,12 +66,27 @@ private func zoneStoreArrayJSON(_ rows: [String]) -> Data {
 @MainActor
 final class ZoneStoreFetchRequestShapeTests: XCTestCase {
 
+    private let suiteName = "com.wepark.test.zonestore.fetchrequestshape"
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        super.tearDown()
+    }
+
     private func makeStore(handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) -> ZoneStore {
         PinMockURLProtocol.requestHandler = handler
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PinMockURLProtocol.self]
         let session = URLSession(configuration: config)
-        return ZoneStore(supabaseURL: kZoneStoreTestURL, supabaseAnonKey: kZoneStoreAnonKey, urlSession: session)
+        return ZoneStore(supabaseURL: kZoneStoreTestURL, supabaseAnonKey: kZoneStoreAnonKey, urlSession: session, defaults: defaults)
     }
 
     func testFetchZones_requestIncludesSelectOrderAndSohoLesExclusion() async {
@@ -94,12 +123,27 @@ final class ZoneStoreFetchRequestShapeTests: XCTestCase {
 @MainActor
 final class ZoneStoreDecodeTests: XCTestCase {
 
+    private let suiteName = "com.wepark.test.zonestore.decode"
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        super.tearDown()
+    }
+
     private func makeStore(handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) -> ZoneStore {
         PinMockURLProtocol.requestHandler = handler
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PinMockURLProtocol.self]
         let session = URLSession(configuration: config)
-        return ZoneStore(supabaseURL: kZoneStoreTestURL, supabaseAnonKey: kZoneStoreAnonKey, urlSession: session)
+        return ZoneStore(supabaseURL: kZoneStoreTestURL, supabaseAnonKey: kZoneStoreAnonKey, urlSession: session, defaults: defaults)
     }
 
     func testFetchZones_threeRowFixture_decodesCorrectly() async {
@@ -162,9 +206,19 @@ final class ZoneStoreDecodeTests: XCTestCase {
 
 final class ZoneStoreCacheTests: XCTestCase {
 
+    private let suiteName = "com.wepark.test.zonestore.cache"
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
         super.tearDown()
-        UserDefaults.standard.removeObject(forKey: ZoneStore.cacheKey)
     }
 
     func testCache_saveThenLoad_returnsEqualArray() {
@@ -172,21 +226,34 @@ final class ZoneStoreCacheTests: XCTestCase {
             Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930),
             Zone(id: "soho", name: "SoHo", latMin: 40.7220, latMax: 40.7237, lngMin: -74.0050, lngMax: -73.9970),
         ]
-        ZoneStore.saveCache(zones)
-        XCTAssertEqual(ZoneStore.loadCache(), zones)
+        ZoneStore.saveCache(zones, defaults: defaults)
+        XCTAssertEqual(ZoneStore.loadCache(defaults: defaults), zones)
     }
 
+    /// Isolated suite, cleared in `setUp` — genuinely no prior save, unlike asserting directly
+    /// against `UserDefaults.standard` (which the host app's own unconditional launch-time
+    /// fetch may have already written into).
     func testCache_loadWithNoPriorSave_returnsNil() {
-        XCTAssertNil(ZoneStore.loadCache())
+        XCTAssertNil(ZoneStore.loadCache(defaults: defaults))
     }
 }
 
 @MainActor
 final class ZoneStoreLoadZonesIfNeededTests: XCTestCase {
 
+    private let suiteName = "com.wepark.test.zonestore.loadzonesifneeded"
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
     override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
         super.tearDown()
-        UserDefaults.standard.removeObject(forKey: ZoneStore.cacheKey)
     }
 
     private func makeStore(handler: @escaping (URLRequest) throws -> (HTTPURLResponse, Data)) -> ZoneStore {
@@ -194,13 +261,13 @@ final class ZoneStoreLoadZonesIfNeededTests: XCTestCase {
         let config = URLSessionConfiguration.ephemeral
         config.protocolClasses = [PinMockURLProtocol.self]
         let session = URLSession(configuration: config)
-        return ZoneStore(supabaseURL: kZoneStoreTestURL, supabaseAnonKey: kZoneStoreAnonKey, urlSession: session)
+        return ZoneStore(supabaseURL: kZoneStoreTestURL, supabaseAnonKey: kZoneStoreAnonKey, urlSession: session, defaults: defaults)
     }
 
     /// First-launch-and-offline edge case (AC): no prior cache, fetch fails → `zones == []`,
     /// nothing crashes.
     func testLoadZonesIfNeeded_failedFetch_noPriorCache_leavesZonesEmpty() async {
-        XCTAssertNil(ZoneStore.loadCache(), "precondition: no prior cache")
+        XCTAssertNil(ZoneStore.loadCache(defaults: defaults), "precondition: no prior cache")
         let store = makeStore { request in
             (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
         }
@@ -213,7 +280,7 @@ final class ZoneStoreLoadZonesIfNeededTests: XCTestCase {
     /// empty one.
     func testLoadZonesIfNeeded_failedFetch_withPriorCache_fallsBackToCachedList() async {
         let cached = [Zone(id: "nolita", name: "Nolita", latMin: 40.7217, latMax: 40.7256, lngMin: -73.9967, lngMax: -73.9930)]
-        ZoneStore.saveCache(cached)
+        ZoneStore.saveCache(cached, defaults: defaults)
 
         let store = makeStore { request in
             (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())

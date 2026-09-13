@@ -223,6 +223,18 @@ final class ZoneStore {
     /// URLSession used for all network calls. Injectable for tests (MockURLProtocol pattern).
     let urlSession: URLSession
 
+    /// `UserDefaults` instance used for the on-disk cache. Injectable so tests can pass an
+    /// ephemeral suite instead of polluting `UserDefaults.standard` — mirrors
+    /// `GarageSavingsService.init(defaults:)`'s own test-injection convention. Production
+    /// default: `.standard` (unchanged behavior — same key, same round-trip semantics).
+    ///
+    /// Load-bearing for test isolation specifically because `ZoneStore.loadZonesIfNeeded()`
+    /// runs UNCONDITIONALLY from `ContentView.performLaunchSetup()` (this file's own header):
+    /// the unit test target runs inside the WePark host app, so without this injection point
+    /// the host app's own real launch-time fetch writes into `UserDefaults.standard` under
+    /// `cacheKey` concurrently with — or before — any test that asserts "no prior cache."
+    private let defaults: UserDefaults
+
     // MARK: - Init
 
     /// Designated initializer.
@@ -233,10 +245,12 @@ final class ZoneStore {
     ///   - supabaseAnonKey: The anon/public API key. Read from `Info.plist` key
     ///     `SUPABASE_ANON_KEY` at runtime in production. NEVER hardcode this value in source.
     ///   - urlSession: Injectable URL session. Default `URLSession.shared`.
-    init(supabaseURL: URL, supabaseAnonKey: String, urlSession: URLSession = .shared) {
+    ///   - defaults: Injectable `UserDefaults` for the on-disk cache. Default `.standard`.
+    init(supabaseURL: URL, supabaseAnonKey: String, urlSession: URLSession = .shared, defaults: UserDefaults = .standard) {
         self.supabaseURL = supabaseURL
         self.supabaseAnonKey = supabaseAnonKey
         self.urlSession = urlSession
+        self.defaults = defaults
     }
 
     /// Convenience initializer that reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` from
@@ -272,7 +286,7 @@ final class ZoneStore {
     /// refreshes once per process lifetime, per `docs/community-2.0-manhattan-zones.md`'s
     /// explicit "fetched once at cold launch, not realtime" contract.
     func loadZonesIfNeeded() async {
-        zones = Self.loadCache() ?? []
+        zones = Self.loadCache(defaults: defaults) ?? []
         await fetchZones()
     }
 
@@ -301,7 +315,7 @@ final class ZoneStore {
             // that's already supposed to be scoped by the query).
             let filtered = decoded.filter { $0.id != Self.retiredZoneId }
             zones = filtered
-            Self.saveCache(filtered)
+            Self.saveCache(filtered, defaults: defaults)
         } catch {
             fetchError = error
         }
@@ -340,13 +354,23 @@ final class ZoneStore {
     /// `nonisolated` (with `saveCache`/`cacheKey`): pure UserDefaults+Codable I/O, no actor
     /// state — must stay synchronously callable from a plain `XCTestCase` (the build's
     /// `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` would otherwise isolate these implicitly).
-    nonisolated static func loadCache() -> [Zone]? {
-        guard let data = UserDefaults.standard.data(forKey: cacheKey) else { return nil }
+    ///
+    /// `defaults` parameter defaults to `.standard` (unchanged production behavior/call
+    /// shape) but lets tests pass an ephemeral suite instead — required because the unit test
+    /// target runs inside the WePark host app, and this type's own unconditional launch-time
+    /// fetch (this file's header) means the HOST APP writes real zones into
+    /// `UserDefaults.standard` under `cacheKey` independently of, and possibly concurrently
+    /// with, any test run. A "no prior cache" test asserting against `.standard` directly is
+    /// therefore inherently flaky — isolating the storage, not just cleaning up after the
+    /// fact, is the only deterministic fix (mirrors `GarageSavingsService.init(defaults:)`'s
+    /// own test-injection convention for the identical class of problem).
+    nonisolated static func loadCache(defaults: UserDefaults = .standard) -> [Zone]? {
+        guard let data = defaults.data(forKey: cacheKey) else { return nil }
         return try? JSONDecoder().decode([Zone].self, from: data)
     }
 
-    nonisolated static func saveCache(_ zones: [Zone]) {
+    nonisolated static func saveCache(_ zones: [Zone], defaults: UserDefaults = .standard) {
         guard let data = try? JSONEncoder().encode(zones) else { return }
-        UserDefaults.standard.set(data, forKey: cacheKey)
+        defaults.set(data, forKey: cacheKey)
     }
 }
