@@ -136,22 +136,20 @@ enum AppConstants {
 
     // MARK: - Community 2.0 (build 20)
 
-    /// Dark-ship flag for the entire Community 2.0 layer (crew feed, zone chips, new report
-    /// types, identity sheet, reactions extensions, push). `false` for the whole build-out —
-    /// every phase merges to `main` behind this flag per
-    /// `docs/community-2.0-roadmap.md` ("Drive-test gate applies to the flag-flip, not the
-    /// merge"): the model/service layer (this session) and every subsequent UI phase are safe
-    /// to ship dark, since nothing reads this flag to change behavior until a consumer wires
-    /// it up. Flips to `true` only once the build-18 drive test proves Realtime solid on a
-    /// moving car (roadmap "What is genuinely NYC/second-phone blocked" section) — Kevin's
-    /// call, not an engineering session's.
+    /// LAUNCHED (build 22, 2026-09-13). Community 2.0 (crew feed, zone chips, new report
+    /// types, identity sheet, reactions extensions, push) shipped dark (`false`) through
+    /// builds 18–21 behind this flag per `docs/community-2.0-roadmap.md` ("Drive-test gate
+    /// applies to the flag-flip, not the merge"). Kevin ruled the drive-test gate satisfied
+    /// on 2026-09-13 — a week of field use on the flag-ON build 20 in NYC — and flipped this
+    /// to `true` for build 22, launching the full Community 2.0 layer. Flag-OFF is no longer
+    /// a shipped state; every consumer wired to this flag is now live for all users.
     ///
     /// `internal` (not `private`), matching this file's other feature flags/constants that
     /// downstream consumers (`Views/`) read — mirrors `ContentView.ft20BrowseSheetEnabled`'s
     /// role for FT-20's sheet, but declared here (not inline in `ContentView.swift`) because
     /// this session is scoped to model/service-layer files only; a Views-layer consumer wires
     /// this in a later session (S4+).
-    static let communityEnabled = false
+    static let communityEnabled = true
 
     /// Community 2.0 Phase 1 (S4 QA pass 1, PR #94 Finding #1 — BLOCKING): the two net-new
     /// ephemeral crowd pin types (`open_spot`/`leaving_soon`), gated on `enabled`. `[]` while
