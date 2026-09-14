@@ -1190,29 +1190,26 @@ final class RealtimeMergeGateTests: XCTestCase {
     /// personal-only type (`parked_car`) or a durable/non-community type must never be
     /// Realtime-mergeable.
     ///
-    /// S4 QA pass 1, PR #94 Finding #1 (BLOCKING) — REVISED from S3's version: `.openSpot`/
-    /// `.leavingSoon` are now gated behind `AppConstants.communityEnabled` (shipped `false`),
-    /// so the production `mergeablePinTypes` property — which reads the REAL flag — must NOT
-    /// include them today. S3's version of this test asserted the opposite (unconditional
-    /// inclusion), which is exactly the bug QA found: any `open_spot`/`leaving_soon` row
-    /// already live in production `pins` would have been Realtime-mergeable regardless of
-    /// the flag. See `testComputeMergeablePinTypes_flagTrue_includesCommunityPhase1Types`
-    /// below for the flag-on assertion.
-    func testMergeablePinTypes_containsExpectedTypes_excludesIneligibleTypesAndFlaggedTypes() {
+    /// LAUNCHED (build 22, 2026-09-13) — REVISED from S4 QA pass 1's version: `.openSpot`/
+    /// `.leavingSoon` are gated behind `AppConstants.communityEnabled`, which now ships
+    /// `true`, so the production `mergeablePinTypes` property — which reads the REAL flag —
+    /// MUST include them today. See `testComputeMergeablePinTypes_flagTrue_includesCommunityPhase1Types`
+    /// below for the pure, parameterized flag-on assertion this mirrors.
+    func testMergeablePinTypes_containsExpectedAndLaunchedTypes_excludesIneligibleTypes() {
         let expectedIncluded: [PinType] = [
             .filming, .specialEvent, .aspSuspendedToday,
             .enforcementActive, .sweeperPassed, .brokenMeter,
             .construction,
+            .openSpot, .leavingSoon, // launched — communityEnabled ships true as of build 22
         ]
         for type in expectedIncluded {
             XCTAssertTrue(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must be mergeable")
         }
         let expectedExcluded: [PinType] = [
             .parkedCar, .signCorrection, .blockNote,
-            .openSpot, .leavingSoon, // gated off — communityEnabled ships false today
         ]
         for type in expectedExcluded {
-            XCTAssertFalse(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must NOT be mergeable while communityEnabled is false")
+            XCTAssertFalse(RealtimeMergeGate.mergeablePinTypes.contains(type), "\(type) must NOT be mergeable")
         }
     }
 

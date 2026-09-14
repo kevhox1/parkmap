@@ -339,11 +339,12 @@ final class ParkedCarDetailShouldGateLeavingSoonPostTests: XCTestCase {
         ))
     }
 
-    func testDefaultParameter_usesRealFlag_currentlyFalse() {
-        // AppConstants.communityEnabled is false in this build — this call omits the
-        // `communityEnabled:` argument entirely, so a regression that flips the default
-        // (without anyone updating this test) would surface here.
-        XCTAssertFalse(ParkedCarDetailLogic.shouldGateLeavingSoonPost(identityGateShouldShow: true))
+    func testDefaultParameter_usesRealFlag_currentlyTrue() {
+        // AppConstants.communityEnabled is true in this build (launched build 22,
+        // 2026-09-13) — this call omits the `communityEnabled:` argument entirely, so a
+        // regression that flips the default (without anyone updating this test) would
+        // surface here.
+        XCTAssertTrue(ParkedCarDetailLogic.shouldGateLeavingSoonPost(identityGateShouldShow: true))
     }
 }
 

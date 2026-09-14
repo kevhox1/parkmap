@@ -53,8 +53,8 @@
 //   20.  testEphemeralTTL_leavingSoon_stated20Minutes_is23Minutes
 //   21.  testEphemeralTTL_leavingSoon_stated10Minutes_is13Minutes
 //
-//  Dark-ship flag (2 tests):
-//   22.  testCommunityEnabled_defaultsFalse
+//  Launch flag (2 tests):
+//   22.  testCommunityEnabled_launchedTrue
 //   23.  testCommunityEnabled_isBoolConstant_notComputedPerCall
 //
 //  No Calendar.current use in this file or in the code paths it tests.
@@ -431,9 +431,9 @@ final class Community2Phase1TTLTests: XCTestCase {
 /// isolation build setting.
 final class CommunityEnabledFlagTests: XCTestCase {
 
-    func testCommunityEnabled_defaultsFalse() {
-        XCTAssertFalse(AppConstants.communityEnabled,
-            "Community 2.0 must ship dark (false) until Kevin flips it post-drive-test")
+    func testCommunityEnabled_launchedTrue() {
+        XCTAssertTrue(AppConstants.communityEnabled,
+            "Community 2.0 launched (build 22, 2026-09-13) — Kevin flipped the flag after the drive-test gate was satisfied")
     }
 
     /// A `static let` (not `static var`/computed) — guards against a future refactor
@@ -466,9 +466,10 @@ final class CommunityPhase1PinTypesGateTests: XCTestCase {
     }
 
     /// Production call sites omit the parameter and get the real, shipped flag value —
-    /// today `false`, so this must resolve identically to the explicit-`false` case above.
+    /// today `true` (launched build 22, 2026-09-13), so this must resolve identically to the
+    /// explicit-`true` case above.
     func testCommunityPhase1PinTypes_defaultParameter_matchesShippedFlag() {
         XCTAssertEqual(AppConstants.communityPhase1PinTypes(), AppConstants.communityPhase1PinTypes(enabled: AppConstants.communityEnabled))
-        XCTAssertTrue(AppConstants.communityPhase1PinTypes().isEmpty, "communityEnabled ships false today")
+        XCTAssertEqual(AppConstants.communityPhase1PinTypes(), [.openSpot, .leavingSoon], "communityEnabled ships true as of build 22")
     }
 }
