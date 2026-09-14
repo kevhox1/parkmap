@@ -762,6 +762,15 @@ struct ReportSheet: View {
 
     // MARK: - Sweeper direction row (per OQ-R5: "passed" + "approaching")
 
+    /// Open-items #12② (Kevin, PR #95 gate, 2026-08-28): "the chips toggle correctly but the
+    /// selected-state affordance is too weak to notice." The prior treatment tinted the
+    /// selected chip with a 15%-opacity orange background and orange text — too close to the
+    /// unselected `.systemGray6` chip at a glance. Restyled to match the app's own established
+    /// selected-chip idiom (`ParkedCarDetailView.reminderChip`'s reminder-offset chips and
+    /// `CrewFeedSection.zoneChip`'s zone chips): a fully filled accent capsule + white text
+    /// when selected, neutral gray + secondary text when not, plus a subtle weight bump on the
+    /// selected label so it reads heavier as well as brighter. No layout change — same
+    /// padding/spacing as before.
     @ViewBuilder
     private var sweeperDirectionRow: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -777,12 +786,11 @@ struct ReportSheet: View {
                         sweeperDirection = direction
                     } label: {
                         Text(direction.label)
-                            .font(.subheadline.weight(.medium))
+                            .font(.subheadline.weight(isSelected ? .semibold : .medium))
                             .padding(.horizontal, 14)
                             .padding(.vertical, 8)
-                            .background(isSelected ? Color.orange.opacity(0.15) : Color(.systemGray6))
-                            .foregroundStyle(isSelected ? .orange : .secondary)
-                            .clipShape(Capsule())
+                            .background(isSelected ? Color.blue : Color(.systemGray6), in: Capsule())
+                            .foregroundStyle(isSelected ? Color.white : Color.secondary)
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel(direction.label)
