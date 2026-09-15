@@ -346,3 +346,40 @@ final class FT7ShortestArcTests: XCTestCase {
             "Puck at 359° to target 0 should take short arc (+1°). Got: \(delta * 180 / .pi)°")
     }
 }
+
+// MARK: - Group 3: #21 nav-style drive puck image (composed course puck)
+
+/// `driveNavPuckImage()` composes a circle + ring + glyph via `UIGraphicsImageRenderer`
+/// (mirrors `PinMarkerAnnotation.markerImage`/`.ringMarkerImage`'s composed-image precedent).
+/// These tests follow the same non-nil / non-zero-size / symbol-resolves safety-net shape as
+/// `MarkerImageSafetyNetTests` in `Tier3PinFeedbackTests.swift` — they do not (and cannot,
+/// without a snapshot harness) assert on pixel content.
+final class DriveNavPuckImageTests: XCTestCase {
+
+    /// The composed puck must always render a non-nil image at the documented size —
+    /// never silently disappear (same posture as the community-pin marker safety net).
+    func testDriveNavPuckImage_returnsNonNilAtDocumentedSize() {
+        let image = MapViewRepresentable.driveNavPuckImage()
+        XCTAssertEqual(image.size.width, MapViewRepresentable.driveNavPuckDiameter,
+            "Puck image width must match driveNavPuckDiameter")
+        XCTAssertEqual(image.size.height, MapViewRepresentable.driveNavPuckDiameter,
+            "Puck image height must match driveNavPuckDiameter")
+    }
+
+    /// Regression guard on the visual-size decision (~40-44pt per spec item #21, comparable
+    /// to Apple Maps' own nav puck) — larger than the 32pt community-pin marker glyphs
+    /// elsewhere in the app, since this is the single "you are here" anchor at speed.
+    func testDriveNavPuckDiameter_isWithinAppleMapsComparableRange() {
+        XCTAssertGreaterThanOrEqual(MapViewRepresentable.driveNavPuckDiameter, 40)
+        XCTAssertLessThanOrEqual(MapViewRepresentable.driveNavPuckDiameter, 44)
+    }
+
+    /// The glyph SF Symbol used inside the composed puck must resolve on iOS 17+ — if this
+    /// ever fails, `driveNavPuckImage()`'s safety net still returns a ringed blue circle
+    /// with no glyph, but the intended puck would be silently glyph-less.
+    func testDriveNavPuckImage_glyphSymbolResolvesOnIOS17() {
+        let glyph = UIImage(systemName: "location.north.fill")
+        XCTAssertNotNil(glyph,
+            "location.north.fill must resolve on iOS 17+ for the composed drive puck's glyph")
+    }
+}

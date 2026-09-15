@@ -119,6 +119,22 @@ struct BrowseSearchAreaView: View {
     /// call site rather than implicit.
     let onSearchFieldHeightChange: (CGFloat) -> Void
 
+    /// Bug B fix (Kevin's Mac gate on PR #110, 2026-09-14): fires whenever `resolvedCoordinate`
+    /// transitions between nil/non-nil — i.e. whether the "place" state (`placeState`, the
+    /// destination card + "Go" button) is currently showing. `BrowseNavigationSheet` needs
+    /// this because ITS OWN `actionColumn` ("Find a Spot" + "New to parking?") lives in a
+    /// SEPARATE sibling slot in the outer VStack, with no visibility of this view's internal
+    /// `resolvedCoordinate` state — see `BrowseNavigationSheet.shouldShowActionColumn(
+    /// detentKind:destinationSelected:)`'s doc comment for the full root-cause writeup of why
+    /// that coexistence produced two overlapping "Go" / "Find a Spot" capsules at `.large`.
+    ///
+    /// Defaulted to a no-op (matching `onSettingsTapped`'s precedent, NOT
+    /// `onSearchFieldHeightChange`'s "no default, it's load-bearing" precedent) — this is a
+    /// one-way visibility signal for a SPECIFIC sibling-slot conflict, not the entire
+    /// height-measurement mechanism, so existing render-smoke tests that don't care about
+    /// `BrowseNavigationSheet`'s action column don't need updating.
+    let onDestinationSelectedChange: (Bool) -> Void
+
     // MARK: - Init
 
     init(
@@ -130,6 +146,7 @@ struct BrowseSearchAreaView: View {
         onRouteReady: @escaping (DriveRoute, CLLocationCoordinate2D) -> Void,
         onSearchFieldHeightChange: @escaping (CGFloat) -> Void,
         onSettingsTapped: @escaping () -> Void = {},
+        onDestinationSelectedChange: @escaping (Bool) -> Void = { _ in },
         routeService: (any RouteServicing)? = nil
     ) {
         self.currentRegion = currentRegion
@@ -140,6 +157,7 @@ struct BrowseSearchAreaView: View {
         self.onRouteReady = onRouteReady
         self.onSearchFieldHeightChange = onSearchFieldHeightChange
         self.onSettingsTapped = onSettingsTapped
+        self.onDestinationSelectedChange = onDestinationSelectedChange
         self.routeService = routeService ?? RouteService.shared
     }
 
@@ -208,6 +226,20 @@ struct BrowseSearchAreaView: View {
                 clearResolved()
             }
             completerDelegate.completer.queryFragment = newValue
+        }
+        // Bug B fix (Kevin's Mac gate on PR #110, 2026-09-14): report every transition of
+        // "is a destination currently resolved" up to `BrowseNavigationSheet` — see
+        // `onDestinationSelectedChange`'s own doc comment. Watches the DERIVED `Bool`
+        // expression, not `resolvedCoordinate` itself — `CLLocationCoordinate2D` (and
+        // therefore `CLLocationCoordinate2D?`) is NOT `Equatable`, so `.onChange(of:
+        // resolvedCoordinate)` would not compile (same reason `ContentView` watches
+        // `locationService.locationUpdateCount`, an `Int`, rather than
+        // `locationService.userLocation` directly). A single derived-boolean observer here
+        // also can't drift out of sync the way instrumenting each of `resolvedCoordinate`'s
+        // several mutation sites individually (`selectCompletion`'s success/timeout/error
+        // branches, `selectRecent`, `clearResolved`) could if a future one were added.
+        .onChange(of: resolvedCoordinate != nil) { _, isResolved in
+            onDestinationSelectedChange(isResolved)
         }
         .onChange(of: searchFieldFocused) { _, focused in
             // §3.3: the TextField's own tap already requests focus (standard SwiftUI

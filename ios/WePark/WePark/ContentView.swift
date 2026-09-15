@@ -1654,7 +1654,12 @@ struct ContentView: View {
             // straight back up via `.onGeometryChange`, replacing a `PreferenceKey` that
             // Kevin's on-device `#if DEBUG` readout showed never delivered a real value —
             // see `BrowseNavigationSheet.swift`'s removed-`PreferenceKey` doc comment.
-            searchArea: { onSearchFieldHeightChange in
+            // Bug B fix (Kevin's Mac gate on PR #110, 2026-09-14): `searchArea`'s builder
+            // closure now takes a second callback, `onDestinationSelectedChange` — forwarded
+            // straight into `BrowseSearchAreaView`'s own new init param of the same name. See
+            // `BrowseNavigationSheet.destinationSelected`'s doc comment for the full
+            // root-cause writeup (the "Go" / "Find a Spot" overlap this closes).
+            searchArea: { onSearchFieldHeightChange, onDestinationSelectedChange in
                 BrowseSearchAreaView(
                     currentRegion: region,
                     segments: tileLoader.segments,
@@ -1668,7 +1673,8 @@ struct ContentView: View {
                         driveModeActive = true
                     },
                     onSearchFieldHeightChange: onSearchFieldHeightChange,
-                    onSettingsTapped: { activeSheet = .settings }
+                    onSettingsTapped: { activeSheet = .settings },
+                    onDestinationSelectedChange: onDestinationSelectedChange
                 )
             },
             detentKind: browseSheetDetentKind,
@@ -2022,9 +2028,21 @@ struct ContentView: View {
     /// mode is active and no draft has been placed yet. Positioned to clear both the status
     /// bar and the ASP banner, matching `recenterButtonStack`'s own `.padding(.top, 100)`
     /// convention for "float below the ASP banner" (`design/screenshots/10-spot-placement.png`).
+    ///
+    /// PR #110 Bug A hardening (Kevin's Mac gate, 2026-09-14): added `&& !driveModeActive`.
+    /// `spotPlacementActive` is normally only reachable from `ReportSheet`'s "Spot open"
+    /// tile, and the in-drive Report button (`driveActionRow`) DOES open `ReportSheet` while
+    /// driving — so `enterSpotPlacementMode()` firing mid-drive was a real, if narrow, path
+    /// that this gate never excluded (unlike `communityMapChromeOverlay`/
+    /// `parkingGuideBannerOverlay`, which already both exclude `driveModeActive`). This is a
+    /// conditional-rendering exclusion (removes the node from the tree), matching this same
+    /// file's own "hidden ≠ gone" convention elsewhere, not an opacity/`.hidden()` one — see
+    /// `communityMapChromeVisible`'s doc comment for why that distinction matters. Not
+    /// confirmed as Kevin's exact PR #110 repro (a plain destination search → Go never
+    /// touches spot-placement state), but the same latent-gap CLASS his report named.
     @ViewBuilder
     private var spotPlacementHintOverlay: some View {
-        if spotPlacementActive && spotPlacementDraft == nil {
+        if spotPlacementActive && spotPlacementDraft == nil && !driveModeActive {
             VStack(spacing: 0) {
                 SpotPlacementHintBanner(onCancel: cancelSpotPlacementMode)
                     .padding(.top, 100)
@@ -2038,9 +2056,12 @@ struct ContentView: View {
     /// The "Spot open — {street} (side)" confirm card — visible once a draft position
     /// exists. Floats above the browse sheet's peek, same offset convention
     /// `parkingGuideBannerOverlay` already uses (`browseSheetPeekHeight + 12`).
+    ///
+    /// PR #110 Bug A hardening — see `spotPlacementHintOverlay`'s own doc comment for the
+    /// full reasoning (same `spotPlacementActive` source, same `!driveModeActive` addition).
     @ViewBuilder
     private var spotPlacementConfirmOverlay: some View {
-        if spotPlacementActive, let draft = spotPlacementDraft {
+        if spotPlacementActive, let draft = spotPlacementDraft, !driveModeActive {
             VStack(spacing: 0) {
                 Spacer()
                 SpotPlacementConfirmCard(
@@ -2074,9 +2095,16 @@ struct ContentView: View {
     /// mid-task around (browsing the map, mid report flow) is closer to this file's existing
     /// floating-card family than to a blocking modal. Flagged in the PR description as a
     /// judgment call, not silently decided.
+    /// PR #110 Bug A hardening (Kevin's Mac gate, 2026-09-14): added `&& !driveModeActive`.
+    /// `confirmPromptPin` is set by the push/local-notification-driven "did it pass?" flow
+    /// (WP5 rider) — genuinely reachable at ANY time, including mid-drive, and this gate
+    /// never excluded that case before (unlike `communityMapChromeOverlay`/
+    /// `parkingGuideBannerOverlay`, which already both exclude `driveModeActive`). Same
+    /// conditional-rendering (not opacity) fix shape as `spotPlacementHintOverlay`'s own
+    /// doc comment describes.
     @ViewBuilder
     private var confirmPromptOverlay: some View {
-        if AppConstants.communityEnabled, let pin = confirmPromptPin {
+        if AppConstants.communityEnabled, let pin = confirmPromptPin, !driveModeActive {
             VStack(spacing: 0) {
                 Spacer()
                 ConfirmPromptCard(
@@ -2104,9 +2132,18 @@ struct ContentView: View {
     /// already use for their own overlays above. Same "VStack + Spacer(), floats above the
     /// `.browseNav` sheet" positioning convention as `spotPlacementConfirmOverlay`/
     /// `confirmPromptOverlay` — not a new mechanism.
+    /// PR #110 Bug A hardening (Kevin's Mac gate, 2026-09-14): added `&& !driveModeActive`,
+    /// belt-and-braces — `handleLongPress(at:)` already guards `!driveModeActive` before
+    /// ever setting `pendingLongPressCoord`, so this exclusion cannot currently change
+    /// observed behavior, but every OTHER floating overlay in this file that predates a
+    /// `driveModeActive` check states its own exclusion explicitly at the gate rather than
+    /// relying solely on an upstream setter's guard (see `communityMapChromeOverlay`'s own
+    /// "already force-hide... belt-and-suspenders" precedent) — consistent with that
+    /// convention, and one fewer place a future change to `handleLongPress` could silently
+    /// reopen this exact overlay-during-drive class of bug.
     @ViewBuilder
     private var longPressParkConfirmOverlay: some View {
-        if AppConstants.communityEnabled, let coord = pendingLongPressCoord {
+        if AppConstants.communityEnabled, let coord = pendingLongPressCoord, !driveModeActive {
             VStack(spacing: 0) {
                 Spacer()
                 LongPressParkConfirmCard(

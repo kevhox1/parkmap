@@ -88,10 +88,18 @@
 //  S4 QA pass 1 fix (build 20, PR #94 Finding #1 — BLOCKING): S3's widening above was itself
 //  the bug QA found — `.openSpot`/`.leavingSoon` were unconditionally mergeable regardless of
 //  `AppConstants.communityEnabled`. `testMergeablePinTypes_containsExpectedTypes_
-//  excludesIneligibleTypes` (renamed `...AndFlaggedTypes`) now asserts the two types are
-//  EXCLUDED from the production `mergeablePinTypes` property (flag ships `false`), plus two
-//  new pure tests (`testComputeMergeablePinTypes_flagFalse/True_...`) asserting both flag
-//  states directly via `RealtimeMergeGate.computeMergeablePinTypes(communityEnabled:)`.
+//  excludesIneligibleTypes` (renamed `...AndFlaggedTypes`) asserted the two types were
+//  EXCLUDED from the production `mergeablePinTypes` property (flag shipped `false` at the
+//  time), plus two new pure tests (`testComputeMergeablePinTypes_flagFalse/True_...`) asserting
+//  both flag states directly via `RealtimeMergeGate.computeMergeablePinTypes(communityEnabled:)`.
+//
+//  LAUNCHED (build 22, PR #109 — `communityEnabled` flipped `false` → `true`): the test above
+//  was renamed again, to `testMergeablePinTypes_containsExpectedAndLaunchedTypes_
+//  excludesIneligibleTypes`, and its assertion flipped to match — `.openSpot`/`.leavingSoon`
+//  now belong in the INCLUDED list, since the production `mergeablePinTypes` property reads
+//  the real (now-`true`) flag. The two pure `testComputeMergeablePinTypes_flagFalse/True_...`
+//  tests above were untouched by that flip (they parameterize the flag explicitly and already
+//  covered both states).
 //
 //  FT-15 / TF2-15 Stream B4 (docs/ft15-tf215-temporary-block-restrictions-spec.md §12):
 //  fetchPins now issues a 3rd concurrent request (crowd block-scoped, filming/construction).

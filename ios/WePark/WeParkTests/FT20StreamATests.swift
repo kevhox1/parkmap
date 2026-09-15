@@ -373,6 +373,68 @@ final class BrowseSheetDetentKindShowsActionContentTests: XCTestCase {
     }
 }
 
+// MARK: - BrowseNavigationSheet.shouldShowActionColumn(detentKind:destinationSelected:) Tests
+//
+// Bug B fix (Kevin's Mac gate on PR #110, 2026-09-14): "Go" (the destination place-state
+// card, inside `searchArea`) and "Find a Spot" (`actionColumn`, a SIBLING slot in the same
+// outer VStack) used to both mount at `.large` whenever a destination was selected —
+// `actionColumn`'s old gate (`detentKind.showsActionContent` alone) had no way to know a
+// destination was selected. This pure function is the new, combined gate — same
+// "conditional-rendering, not opacity" discipline `showsActionContent` itself already
+// established for `.peek` (see that property's own doc comment above).
+final class BrowseNavigationSheetShouldShowActionColumnTests: XCTestCase {
+
+    func testPeek_neverShowsActionColumn_regardlessOfDestinationSelected() {
+        XCTAssertFalse(
+            BrowseNavigationSheet<EmptyView, EmptyView>.shouldShowActionColumn(
+                detentKind: .peek, destinationSelected: false
+            )
+        )
+        XCTAssertFalse(
+            BrowseNavigationSheet<EmptyView, EmptyView>.shouldShowActionColumn(
+                detentKind: .peek, destinationSelected: true
+            )
+        )
+    }
+
+    func testMedium_noDestinationSelected_showsActionColumn() {
+        XCTAssertTrue(
+            BrowseNavigationSheet<EmptyView, EmptyView>.shouldShowActionColumn(
+                detentKind: .medium, destinationSelected: false
+            )
+        )
+    }
+
+    /// `placeState` (the "Go" card) only ever renders at `.large` in practice
+    /// (`BrowseSearchAreaView.body`'s own `if detentKind == .large` gate) — but this pure
+    /// function doesn't assume that; it's correct for `.medium` too, belt-and-braces.
+    func testMedium_destinationSelected_hidesActionColumn() {
+        XCTAssertFalse(
+            BrowseNavigationSheet<EmptyView, EmptyView>.shouldShowActionColumn(
+                detentKind: .medium, destinationSelected: true
+            )
+        )
+    }
+
+    func testLarge_noDestinationSelected_showsActionColumn() {
+        XCTAssertTrue(
+            BrowseNavigationSheet<EmptyView, EmptyView>.shouldShowActionColumn(
+                detentKind: .large, destinationSelected: false
+            )
+        )
+    }
+
+    /// The exact case Kevin's PR #110 Mac-gate report reproduced: a destination is
+    /// selected at `.large` (the "Go" card is showing) — "Find a Spot" must NOT also mount.
+    func testLarge_destinationSelected_hidesActionColumn() {
+        XCTAssertFalse(
+            BrowseNavigationSheet<EmptyView, EmptyView>.shouldShowActionColumn(
+                detentKind: .large, destinationSelected: true
+            )
+        )
+    }
+}
+
 // MARK: - browseSheetDetentSelectionBindingTests
 
 /// QA docs/qa/ft20-stream-a-pr85.md Finding #4: `browseSheetDetentSelectionBinding`'s

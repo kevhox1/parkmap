@@ -481,11 +481,12 @@ final class PushRegistrationServiceWireTests: XCTestCase {
             authService: authService,
             urlSession: pushTokenMockSession(),
             environmentProvider: { "sandbox" },
-            // `AppConstants.communityEnabled` is hardcoded `false` on this branch — inject
-            // `{ true }` here rather than depending on the global flag, so these wire tests
-            // actually exercise the service's write path instead of no-oping on the flag
-            // guard. See `communityEnabledProvider`'s own doc comment in
-            // `PushRegistrationService.swift` for why this seam exists.
+            // `AppConstants.communityEnabled` is `true` in production too now (Community 2.0
+            // launched, PR #109) — but this DI seam exists regardless of the flag's real
+            // value, so these wire tests don't depend on the global flag at all. Inject
+            // `{ true }` explicitly rather than reading the live constant. See
+            // `communityEnabledProvider`'s own doc comment in `PushRegistrationService.swift`
+            // for why this seam exists.
             communityEnabledProvider: { true }
         )
     }

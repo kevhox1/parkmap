@@ -538,7 +538,14 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
     // directly, for the same "no toolchain to verify a stored-property `@ViewBuilder`" reason
     // as before.
 
-    let searchAreaBuilder: (@escaping (CGFloat) -> Void) -> SearchArea
+    // Bug B fix (Kevin's Mac gate on PR #110, 2026-09-14): the builder now ALSO hands
+    // `SearchArea` a second callback, reporting whether the destination "place" state
+    // (the "Go" button card) is currently showing — see `handleDestinationSelectedChange`
+    // and `shouldShowActionColumn(detentKind:destinationSelected:)` below for the full
+    // root-cause writeup this closes. Added as a second parameter on the SAME builder
+    // closure (not a new stored property) for the identical "self-liveness" reason
+    // `searchAreaBuilder` is a builder in the first place — see the doc comment above.
+    let searchAreaBuilder: (@escaping (CGFloat) -> Void, @escaping (Bool) -> Void) -> SearchArea
     let detentKind: BrowseSheetDetentKind
     let onCruiseTapped: () -> Void
     let onParkingGuideTapped: () -> Void
@@ -554,7 +561,7 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
     let crewFeedBuilder: () -> CrewFeed
 
     init(
-        @ViewBuilder searchArea: @escaping (@escaping (CGFloat) -> Void) -> SearchArea,
+        @ViewBuilder searchArea: @escaping (@escaping (CGFloat) -> Void, @escaping (Bool) -> Void) -> SearchArea,
         detentKind: BrowseSheetDetentKind,
         onCruiseTapped: @escaping () -> Void,
         onParkingGuideTapped: @escaping () -> Void,
@@ -574,6 +581,45 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
     // MARK: Measured content heights
 
     @State private var searchAreaHeight: CGFloat = 0
+
+    /// Bug B fix (Kevin's Mac gate on PR #110, 2026-09-14): whether `SearchArea`'s
+    /// destination "place" state (the "Go" button card) is currently showing — set by
+    /// `handleDestinationSelectedChange`, wired to `searchAreaBuilder`'s second callback
+    /// parameter. Drives `shouldShowActionColumn(detentKind:destinationSelected:)` below.
+    ///
+    /// Root cause this fixes: `actionColumn` ("Find a Spot" + "New to parking?") used to
+    /// mount whenever `detentKind.showsActionContent` was true (`.medium`/`.large`),
+    /// unconditionally — with NO knowledge of whether the SIBLING `searchArea` slot above
+    /// it was ALSO, at `.large`, rendering `BrowseSearchAreaView.placeState`'s "Go" button
+    /// card (`resolvedCoordinate != nil`). Both are members of the SAME outer
+    /// `VStack(spacing: 0)`, and `actionColumn`/`interSectionGutter` carry a HARD
+    /// `.frame(height:)` (fixed, non-shrinking) while `searchArea` has none of its own —
+    /// exactly the "round 4" fixed-vs-flexible-sibling squeeze this file's own
+    /// `BrowseSheetDetentMath` doc comment already documents for `.peek` (fixed siblings
+    /// win the layout negotiation first; the one flexible sibling gets whatever's left,
+    /// which can be near-zero). That fix only ever excluded `.peek`; it never excluded
+    /// the "`.large` AND a destination is currently selected" case, so the exact same
+    /// squeeze reappeared there once a destination card made `searchArea` genuinely taller
+    /// — visually, "Go" and "Find a Spot" rendering merged/overlapping with no gap between
+    /// them (Kevin's PR #110 Mac-gate report). Fix: exclude `actionColumn` from the mount
+    /// entirely (not just visually hide it — the SAME "conditional-rendering, not opacity"
+    /// discipline `showsActionContent` itself already uses) whenever a destination is
+    /// selected, freeing exactly the space `searchArea`'s place-state card needs. Product
+    /// rationale, independent of the layout mechanics: "Find a Spot" (cruise mode, no
+    /// destination) and "Go" (drive to the selected destination) are mutually exclusive
+    /// actions — showing both at once never made sense even before the visual bug.
+    @State private var destinationSelected: Bool = false
+
+    /// Pure decision, directly unit-testable without mounting either view — same
+    /// `nonisolated static` idiom `BrowseSheetDetentKind.showsActionContent` and the rest
+    /// of this file's decision functions already use. See `destinationSelected`'s own doc
+    /// comment above for the full root-cause writeup.
+    nonisolated static func shouldShowActionColumn(
+        detentKind: BrowseSheetDetentKind,
+        destinationSelected: Bool
+    ) -> Bool {
+        detentKind.showsActionContent && !destinationSelected
+    }
 
     /// Dynamic-Type-responsive line height for the primary "Find a Spot" button's label,
     /// via `@ScaledMetric` rather than `GeometryReader`/`.onGeometryChange` on
@@ -651,8 +697,10 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
         VStack(spacing: 0) {
             // PR #87 round 5: `searchAreaBuilder` is called HERE, in `body`, not in `init`
             // — see `searchAreaBuilder`'s own doc comment for why passing
-            // `handleSearchFieldHeightChange` requires a live, mounted `self`.
-            searchAreaBuilder(handleSearchFieldHeightChange)
+            // `handleSearchFieldHeightChange` requires a live, mounted `self`. Bug B fix
+            // (PR #110): also passes `handleDestinationSelectedChange` — see
+            // `destinationSelected`'s own doc comment.
+            searchAreaBuilder(handleSearchFieldHeightChange, handleDestinationSelectedChange)
                 // Defensive floor (Task 2): guarantees `searchArea` is never laid out
                 // shorter than a usable touch target, independent of whatever else shares
                 // this VStack. Belt-and-braces alongside the conditional-rendering fix
@@ -660,9 +708,11 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
                 // taller measurement (Dynamic Type, etc.).
                 .frame(minHeight: BrowseSheetDetentMath.minimumPeekHeight)
 
-            // Gutter + actionColumn are ONLY mounted when NOT at peek — see this property's
-            // own doc comment above for why this must be conditional rendering, not opacity.
-            if detentKind.showsActionContent {
+            // Gutter + actionColumn are ONLY mounted when NOT at peek AND no destination is
+            // currently selected — see this property's own doc comment above (peek) and
+            // `destinationSelected`'s own doc comment (the Bug B addition) for why this must
+            // be conditional rendering, not opacity, in BOTH cases.
+            if Self.shouldShowActionColumn(detentKind: detentKind, destinationSelected: destinationSelected) {
                 // Fixed-height spacer, NOT `Spacer()` — a greedy `Spacer()` here would
                 // expand to fill the sheet's full `.large`-sized layout pass and push
                 // `actionColumn` to the BOTTOM of a near-screen-height container instead of
@@ -788,6 +838,13 @@ struct BrowseNavigationSheet<SearchArea: View, CrewFeed: View>: View {
         searchAreaHeight = newHeight
         guard BrowseSheetDetentMath.isGenuineMeasurement(searchAreaHeight: newHeight) else { return }
         reportHeights()
+    }
+
+    /// Bug B fix (Kevin's Mac gate on PR #110, 2026-09-14): receives `SearchArea`'s
+    /// "is a destination currently resolved" signal — see `destinationSelected`'s own doc
+    /// comment for the full root-cause writeup this closes.
+    private func handleDestinationSelectedChange(_ selected: Bool) {
+        destinationSelected = selected
     }
 
     // MARK: - §0f Ruling 1: the rebuilt medium-detent action column

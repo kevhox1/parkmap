@@ -519,6 +519,90 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// Kevin: tune on-device — try 0.5s if 0.3s feels abrupt on a real-device drive-test.
     static let driveAnimationDuration: TimeInterval = 0.3
 
+    // MARK: - #21: Nav-style drive puck
+
+    /// Visual diameter (points) of the composed Drive Mode "course puck" — see
+    /// `driveNavPuckImage()`. Sized comparably to Apple Maps' own nav puck (roughly 40-44pt
+    /// at typical zoom), larger than the 32pt community-pin markers (`PinMarkerAnnotation
+    /// .imageSize`) because this is the single "where am I" anchor at windshield distance,
+    /// not a dense-map pin.
+    static let driveNavPuckDiameter: CGFloat = 44
+
+    /// Composed "course puck" image for the Drive Mode user-location annotation, styled after
+    /// Apple Maps' nav puck: a system-blue filled circle with a white glyph, wrapped in a
+    /// white ring + soft shadow so it reads as "you" at a glance from windshield distance.
+    ///
+    /// Replaces the prior bare `location.north.fill` SF Symbol (28pt, tinted `.systemBlue`,
+    /// no background) which read as a flat dark arrow floating over the always-dark map (#21,
+    /// Kevin — PR #107 gate, 2026-09-13: "the black arrow chevron sign is weird — match it to
+    /// whatever Maps uses").
+    ///
+    /// Rendered via `UIGraphicsImageRenderer`, mirroring the composed-image precedent already
+    /// established in `PinMarkerAnnotation.markerImage(for:bearing:)` /
+    /// `PinMarkerAnnotation.ringMarkerImage(for:)` — filled shape(s) + centered SF Symbol,
+    /// with a safety net if the symbol fails to resolve — rather than introducing a second
+    /// image-composition idiom in the app.
+    ///
+    /// Day and dark share this single asset: the map style is always-dark (TF2-18), so there
+    /// is no separate day/night puck to draw.
+    ///
+    /// Rotation contract UNCHANGED (Build-7 TF2-3 #1 — do not touch): this image is drawn at
+    /// rest, pointing screen-up, and encodes no heading. The heading-up camera does the
+    /// directional work; the annotation view is initialized to `.identity` in
+    /// `mapView(_:viewFor:)` and is only ever animated back toward identity by
+    /// `syncDriveHeading`'s shortest-arc logic. Do not add rotation to this function.
+    static func driveNavPuckImage() -> UIImage {
+        let diameter = driveNavPuckDiameter
+        let ringWidth: CGFloat = 3
+        let size = CGSize(width: diameter, height: diameter)
+        let renderer = UIGraphicsImageRenderer(size: size)
+
+        return renderer.image { context in
+            let fullRect = CGRect(origin: .zero, size: size)
+
+            // Soft shadow so the puck lifts off the dark map. Applied to the outermost
+            // (ring) stroke only, then cleared before drawing the fill/glyph on top —
+            // the ring is the puck's visible silhouette, so this reads as a single
+            // drop shadow under the whole badge.
+            let cgCtx = context.cgContext
+            cgCtx.saveGState()
+            cgCtx.setShadow(
+                offset: CGSize(width: 0, height: 1),
+                blur: 4,
+                color: UIColor.black.withAlphaComponent(0.5).cgColor
+            )
+            let ringRect = fullRect.insetBy(dx: ringWidth / 2, dy: ringWidth / 2)
+            let ringPath = UIBezierPath(ovalIn: ringRect)
+            ringPath.lineWidth = ringWidth
+            UIColor.white.setStroke()
+            ringPath.stroke()
+            cgCtx.restoreGState()
+
+            // System-blue filled circle, inset inside the ring.
+            let circleRect = fullRect.insetBy(dx: ringWidth, dy: ringWidth)
+            UIColor.systemBlue.setFill()
+            UIBezierPath(ovalIn: circleRect).fill()
+
+            // White glyph centered in the circle. Safety net (same posture as
+            // `PinMarkerAnnotation.markerImage`'s Fix 3): if the SF Symbol fails to
+            // resolve, the ringed blue circle alone still renders — the puck never
+            // silently disappears.
+            let glyphSize = diameter * 0.45
+            let glyphConfig = UIImage.SymbolConfiguration(pointSize: glyphSize, weight: .bold)
+            guard let glyph = UIImage(systemName: "location.north.fill", withConfiguration: glyphConfig)?
+                .withTintColor(.white, renderingMode: .alwaysOriginal)
+            else { return }
+
+            let glyphRect = CGRect(
+                x: (diameter - glyph.size.width) / 2,
+                y: (diameter - glyph.size.height) / 2,
+                width: glyph.size.width,
+                height: glyph.size.height
+            )
+            glyph.draw(in: glyphRect)
+        }
+    }
+
     /// Pure pitch-decision function: no MKMapView dependency, directly unit-testable.
     ///
     /// Returns the target camera pitch given the Drive Mode state and the pitch that was
@@ -2233,10 +2317,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                     ?? MKAnnotationView(annotation: annotation, reuseIdentifier: reuseID)
                 view.annotation = annotation
 
-                // SF Symbol arrow pointing north. Tinted system blue to match the default puck.
-                let config = UIImage.SymbolConfiguration(pointSize: 28, weight: .semibold)
-                view.image = UIImage(systemName: "location.north.fill", withConfiguration: config)?
-                    .withTintColor(.systemBlue, renderingMode: .alwaysOriginal)
+                // #21: Composed Apple-Maps-style course puck (circle + ring + glyph) — see
+                // `driveNavPuckImage()`'s doc comment. Replaces the prior bare
+                // `location.north.fill` SF Symbol, which read as a flat dark arrow over the
+                // always-dark map.
+                view.image = MapViewRepresentable.driveNavPuckImage()
 
                 // Build-7 TF2-3 #1: Puck initialised at IDENTITY (no rotation).
                 //
