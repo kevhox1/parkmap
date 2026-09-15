@@ -201,6 +201,8 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-09-15 (later) — ✅ Build 23 pushed to TestFlight (internal + external) by Kevin — the drive-mode tap fix is in users' hands. NEW PRODUCT THREAD opened by Kevin same day: a friends/block-crew network (direct messages + targeted leaving-soon notifications to ~5 known neighbors instead of the whole board) — assessment delivered, spec not yet commissioned.
+
 ### 2026-09-15 — ✅ POLISH-2 MERGED (PR #110 `3dd1d009`), build 23 staged. Suite 1368→1373. Two launch-affecting bugs found at the gate and fixed same-day.
 
 The planned polish (Apple-Maps-style drive nav puck #21, filled-blue sweeper-chip selected state #12② — Kevin: "I like how they are way bigger," bigger touch targets = his standing preference; #13 confirmed ALREADY fixed since PR #102, open-items row was stale; the two PR-#109-QA comment nits) PLUS two gate-found live bugs: (A) Drive-Mode Report/Park-here buttons unresponsive — fixed via defensive drive-mode exclusions on 4 overlays that lacked them (chrome-opacity hypothesis disproven; Bug B's fix likely the true resolver — Kevin's re-test confirmed taps work); (B) "Go"/"Find a Spot" capsules overlapping on the destination card — root cause was the fixed-height actionColumn never excluding the .large+destination state (PR #105-era, NOT #107; shipped in build 22) — fixed with a pure mount gate + 5 tests. Build 23 = the fast-follow carrying all of it; CURRENT_PROJECT_VERSION bumped to 23 (`acfc8154`), archive ritual handed to Kevin.
