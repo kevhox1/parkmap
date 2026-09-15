@@ -201,6 +201,10 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-09-15 — ✅ POLISH-2 MERGED (PR #110 `3dd1d009`), build 23 staged. Suite 1368→1373. Two launch-affecting bugs found at the gate and fixed same-day.
+
+The planned polish (Apple-Maps-style drive nav puck #21, filled-blue sweeper-chip selected state #12② — Kevin: "I like how they are way bigger," bigger touch targets = his standing preference; #13 confirmed ALREADY fixed since PR #102, open-items row was stale; the two PR-#109-QA comment nits) PLUS two gate-found live bugs: (A) Drive-Mode Report/Park-here buttons unresponsive — fixed via defensive drive-mode exclusions on 4 overlays that lacked them (chrome-opacity hypothesis disproven; Bug B's fix likely the true resolver — Kevin's re-test confirmed taps work); (B) "Go"/"Find a Spot" capsules overlapping on the destination card — root cause was the fixed-height actionColumn never excluding the .large+destination state (PR #105-era, NOT #107; shipped in build 22) — fixed with a pure mount gate + 5 tests. Build 23 = the fast-follow carrying all of it; CURRENT_PROJECT_VERSION bumped to 23 (`acfc8154`), archive ritual handed to Kevin.
+
 ### 2026-09-14 (later) — ✅ CONFIRMED SHIPPED: Kevin pushed build 22 to EXTERNAL TestFlight ("22 pushed to external all complete"). Community 2.0 is live to real users. The hero project that began with the design zip on 2026-08-26 is delivered: S1–S14 + flip, 18 feature/fix PRs (#93–#110 range), suite 872→1368.
 
 ### 2026-09-14 — 🚀 LAUNCH: COMMUNITY 2.0 IS LIVE. Flip merged, build 22 archived and uploaded to TestFlight (internal + external).
