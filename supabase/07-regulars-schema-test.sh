@@ -14,7 +14,17 @@
 #
 # Never hardcode credentials in this file — both env vars are required and read at runtime only.
 #
-# Requires: curl, jq.
+# Requires: curl, jq, python3 (for ISO8601 timestamp math — portable across macOS/Linux, unlike
+# `date -d`/`date -j` which differ between BSD and GNU date; same convention as
+# 03-community-2.0-test.sh).
+#
+# QA FIX ROUND CHANGELOG (2026-09-16, docs/qa/pr111-regulars-s1-schema.md — full findings on `main`):
+# added Section 12 (regulars_head_start_seconds boundary values + zone_pushed_at stays null, amended
+# spec §2.10 item 1), Section 13 (regular_notices.scheduled_for future-only/24h-horizon CHECKs +
+# expiry-anchor correctness, amended spec §2.10 item 2), Section 14 (permanent regression coverage —
+# turns QA's own two live-reproduced exploit loops, backdated created_at on regular_notices/
+# regular_invites and an extended regular_invites.expires_at, into assertions that they now fail, per
+# Findings #1/#2), Section 15 (regular_invite 20/24h rate-limit coverage, previously untested).
 #
 # This script creates real rows (regular_invites, regular_edges via RPC, regular_blocks, pins,
 # pin_notes, regular_notices) via real anonymous auth sessions against whatever project SUPABASE_URL
@@ -25,9 +35,15 @@
 # STATUS-CODE CONVENTION (established by this repo — see 03-community-2.0-test.sh Test 1 and
 # docs/qa/pr90-ft2-delete-own-pin.md's F1 finding): PostgREST returns HTTP 401, not 403, when the
 # ANON role is denied by row-level security or lacks a table/function privilege outright — a "you
-# should authenticate" hint. An AUTHENTICATED role denied by RLS (or a raised 42501 from a trigger)
-# gets 403. Every assertion below follows this convention explicitly rather than assuming either code
-# universally.
+# should authenticate" hint. An AUTHENTICATED role denied by RLS, a column-privilege REVOKE, or a
+# trigger's `raise exception ... using errcode = 'insufficient_privilege'` (SQLSTATE 42501 in every
+# case) gets 403. A plain CHECK constraint violation (SQLSTATE 23514, e.g. the
+# regulars_head_start_seconds range or either regular_notices.scheduled_for CHECK) is a DIFFERENT
+# error class from either of the above and gets HTTP 400, regardless of role — verified empirically
+# against a real local PostgREST 12.2.3 instance during the QA fix round (2026-09-16), not assumed;
+# this distinction did not exist anywhere in this script before that round because no prior section
+# exercised a bare CHECK constraint failure through the HTTP layer. Every assertion below follows
+# this three-way convention explicitly rather than assuming any one code universally.
 
 set -uo pipefail
 
@@ -40,7 +56,7 @@ PASSES=0
 : "${SUPABASE_URL:?Set SUPABASE_URL, e.g. https://jiispshyqerscdoferaw.supabase.co}"
 : "${SUPABASE_ANON_KEY:?Set SUPABASE_ANON_KEY to this project anon/public API key}"
 
-for bin in curl jq; do
+for bin in curl jq python3; do
   if ! command -v "$bin" >/dev/null 2>&1; then
     echo "FATAL: required tool '$bin' not found on PATH." >&2
     exit 1
@@ -51,6 +67,28 @@ SUPABASE_URL="${SUPABASE_URL%/}"
 
 pass() { PASSES=$((PASSES + 1)); echo "  PASS: $1"; }
 fail() { FAILURES=$((FAILURES + 1)); echo "  FAIL: $1"; }
+
+# to_epoch ISO8601_TIMESTAMP — same shape as 03-community-2.0-test.sh's helper.
+to_epoch() {
+  python3 -c "
+import sys, datetime
+s = sys.argv[1].replace('Z', '+00:00')
+print(int(datetime.datetime.fromisoformat(s).timestamp()))
+" "$1"
+}
+
+now_epoch() { date -u +%s; }
+
+# assert_close SECONDS_DIFF TOLERANCE LABEL
+assert_close() {
+  local diff=$1 tol=$2 label=$3
+  local abs=${diff#-}
+  if [ "$abs" -le "$tol" ]; then
+    pass "$label (delta ${diff}s, tolerance ${tol}s)"
+  else
+    fail "$label (delta ${diff}s EXCEEDS tolerance ${tol}s)"
+  fi
+}
 
 # assert_status ACTUAL_STATUS EXPECTED_STATUS LABEL BODY
 assert_status() {
@@ -153,7 +191,10 @@ new_session; C_TOKEN=$SESSION_TOKEN; C_ID=$SESSION_USER_ID   # never a Regular o
 new_session; D_TOKEN=$SESSION_TOKEN; D_ID=$SESSION_USER_ID   # blocker
 new_session; E_TOKEN=$SESSION_TOKEN; E_ID=$SESSION_USER_ID   # blocked
 new_session; H_TOKEN=$SESSION_TOKEN; H_ID=$SESSION_USER_ID   # rate-limit probe (isolated from other counts)
-echo "  6 anonymous sessions created (A, B, C, D, E, H)."
+new_session; I_TOKEN=$SESSION_TOKEN; I_ID=$SESSION_USER_ID   # head-start boundary + zone_pushed_at probe
+new_session; J_TOKEN=$SESSION_TOKEN; J_ID=$SESSION_USER_ID   # regular_notices scheduled_for + exploit-regression probe
+new_session; K_TOKEN=$SESSION_TOKEN; K_ID=$SESSION_USER_ID   # regular_invites exploit-regression + rate-limit probe
+echo "  9 anonymous sessions created (A, B, C, D, E, H, I, J, K)."
 echo
 
 # ==================================================================
@@ -415,6 +456,152 @@ if [ "$RL_OK" = true ]; then
   RESP=$(rest POST /rest/v1/regular_notices "$H_TOKEN" "$BODY")
   STATUS=$(echo "$RESP" | head -n1); RBODY=$(echo "$RESP" | tail -n +2)
   assert_status "$STATUS" 403 "11th regular_notices insert within the window is rejected (rate limit, 42501)"
+fi
+echo
+
+# ==================================================================
+# Section 12 — QA FIX ROUND (docs/qa/pr111-regulars-s1-schema.md, §2.10 amended coverage item 1):
+# pins.regulars_head_start_seconds boundary values against the amended [60, 3600] clamp, and
+# zone_pushed_at stays null (S1 never sets it — §2.8's sweep is deferred to a follow-up session).
+# ==================================================================
+echo "--- Section 12: regulars_head_start_seconds boundary values + zone_pushed_at stays null ---"
+for bad in 59 3601; do
+  BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" \
+    --arg author "$I_ID" --argjson hs "$bad" '{
+    pin_type: "leaving_soon", source: "crowd", lifespan: "ephemeral",
+    lat: $lat, lng: $lng, zone_id: $zone, author_id: $author, leaving_minutes: 10,
+    regulars_head_start_seconds: $hs
+  }')
+  RESP=$(rest POST /rest/v1/pins "$I_TOKEN" "$BODY")
+  STATUS=$(echo "$RESP" | head -n1)
+  assert_status "$STATUS" 400 "regulars_head_start_seconds=$bad rejected (outside amended [60,3600] clamp, CHECK violation)"
+done
+
+for good in 60 900 3600; do
+  BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" \
+    --arg author "$I_ID" --argjson hs "$good" '{
+    pin_type: "leaving_soon", source: "crowd", lifespan: "ephemeral",
+    lat: $lat, lng: $lng, zone_id: $zone, author_id: $author, leaving_minutes: 10,
+    regulars_head_start_seconds: $hs
+  }')
+  RESP=$(rest POST /rest/v1/pins "$I_TOKEN" "$BODY")
+  STATUS=$(echo "$RESP" | head -n1); RBODY=$(echo "$RESP" | tail -n +2)
+  assert_status "$STATUS" 201 "regulars_head_start_seconds=$good accepted (inside amended [60,3600] clamp)"
+  HS_OUT=$(echo "$RBODY" | jq -r '.[0].regulars_head_start_seconds // empty')
+  ZP_OUT=$(echo "$RBODY" | jq -r '.[0].zone_pushed_at // "null"')
+  assert_eq "$HS_OUT" "$good" "regulars_head_start_seconds=$good round-trips unchanged"
+  assert_eq "$ZP_OUT" "null" "zone_pushed_at stays null at insert (§2.8's sweep is deferred, S1 never sets it)"
+  I_HS_PIN_ID=$(echo "$RBODY" | jq -r '.[0].id // empty')
+  [ -n "$I_HS_PIN_ID" ] && curl -sS -X DELETE "${SUPABASE_URL}/rest/v1/pins?id=eq.${I_HS_PIN_ID}" \
+    -H "apikey: ${SUPABASE_ANON_KEY}" -H "Authorization: Bearer ${I_TOKEN}" >/dev/null
+done
+echo
+
+# ==================================================================
+# Section 13 — QA FIX ROUND (§2.10 amended coverage item 2, and Finding #3's regression coverage):
+# regular_notices.scheduled_for correctness — future-only CHECK, 24h-horizon CHECK, and expiry
+# anchored past scheduled_for (not past created_at).
+# ==================================================================
+echo "--- Section 13: regular_notices.scheduled_for correctness (future-only, 24h horizon, expiry anchor) ---"
+PAST_TS=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=1)).isoformat())")
+BODY=$(jq -n --arg ts "$PAST_TS" '{body: "past schedule — should be rejected", scheduled_for: $ts}')
+RESP=$(rest POST /rest/v1/regular_notices "$J_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 400 "scheduled_for in the past is rejected (future-only CHECK, QA Finding #3)"
+
+FAR_TS=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=25)).isoformat())")
+BODY=$(jq -n --arg ts "$FAR_TS" '{body: "25h out — should be rejected", scheduled_for: $ts}')
+RESP=$(rest POST /rest/v1/regular_notices "$J_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 400 "scheduled_for >24h ahead is rejected (24h-horizon CHECK)"
+
+NEAR_TS=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(hours=4)).isoformat())")
+BODY=$(jq -n --arg ts "$NEAR_TS" '{body: "out at 2pm", scheduled_for: $ts}')
+RESP=$(rest POST /rest/v1/regular_notices "$J_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1); RBODY=$(echo "$RESP" | tail -n +2)
+assert_status "$STATUS" 201 "scheduled_for 4h out is accepted"
+SCHED_OUT=$(echo "$RBODY" | jq -r '.[0].scheduled_for // empty')
+EXPIRES_OUT=$(echo "$RBODY" | jq -r '.[0].expires_at // empty')
+CREATED_OUT=$(echo "$RBODY" | jq -r '.[0].created_at // empty')
+if [ -n "$SCHED_OUT" ] && [ -n "$EXPIRES_OUT" ] && [ -n "$CREATED_OUT" ]; then
+  SCHED_EPOCH=$(to_epoch "$SCHED_OUT"); EXP_EPOCH=$(to_epoch "$EXPIRES_OUT"); CREATED_EPOCH=$(to_epoch "$CREATED_OUT")
+  DIFF_FROM_SCHEDULED=$((EXP_EPOCH - SCHED_EPOCH - 3600))
+  assert_close "$DIFF_FROM_SCHEDULED" 30 "expires_at ~= scheduled_for + 60min (anchored past the declared departure, not past created_at — the exact bug §2.6's reconciliation note flagged)"
+  if [ "$EXP_EPOCH" -gt "$((CREATED_EPOCH + 3600))" ]; then
+    pass "expires_at is well past created_at+60min for a several-hours-out schedule (not the flat created_at+60min default)"
+  else
+    fail "expires_at ($EXPIRES_OUT) did not land past created_at+60min ($CREATED_OUT) as expected for a scheduled notice"
+  fi
+else
+  fail "scheduled notice response missing scheduled_for/expires_at/created_at"
+fi
+echo
+
+# ==================================================================
+# Section 14 — QA FIX ROUND, permanent regression coverage for Findings #1/#2 (the two exploit loops
+# QA reproduced live must now fail outright, not silently succeed with a backdated/extended value).
+# ==================================================================
+echo "--- Section 14: rate-limit + TTL bypass via client-writable timestamps now rejected (QA Findings #1/#2) ---"
+PAST_CREATED=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)-datetime.timedelta(days=10)).isoformat())")
+
+BODY=$(jq -n --arg ts "$PAST_CREATED" '{body: "backdated notice — should be rejected", created_at: $ts}')
+RESP=$(rest POST /rest/v1/regular_notices "$J_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 403 "regular_notices INSERT with an explicit created_at is rejected (column-privilege lockdown, QA Finding #1)"
+
+BODY=$(jq -n '{body: "legit notice, no explicit created_at"}')
+RESP=$(rest POST /rest/v1/regular_notices "$J_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 201 "regular_notices INSERT with NO explicit created_at still succeeds (legitimate path unaffected by the lockdown)"
+
+BODY=$(jq -n --arg by "$K_ID" --arg ts "$PAST_CREATED" '{created_by: $by, created_at: $ts}')
+RESP=$(rest POST /rest/v1/regular_invites "$K_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 403 "regular_invites INSERT with an explicit created_at is rejected (column-privilege lockdown, QA Finding #2)"
+
+FAR_FUTURE=$(python3 -c "import datetime; print((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=365*50)).isoformat())")
+BODY=$(jq -n --arg by "$K_ID" --arg ts "$FAR_FUTURE" '{created_by: $by, expires_at: $ts}')
+RESP=$(rest POST /rest/v1/regular_invites "$K_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 403 "regular_invites INSERT with an explicit expires_at (+50 years) is rejected (column-privilege lockdown, QA Finding #2)"
+
+BODY=$(jq -n --arg by "$K_ID" '{created_by: $by}')
+RESP=$(rest POST /rest/v1/regular_invites "$K_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1); RBODY=$(echo "$RESP" | tail -n +2)
+assert_status "$STATUS" 201 "regular_invites INSERT with NO explicit created_at/expires_at still succeeds (legitimate path unaffected)"
+LEGIT_INVITE_CREATED=$(echo "$RBODY" | jq -r '.[0].created_at // empty')
+LEGIT_INVITE_EXPIRES=$(echo "$RBODY" | jq -r '.[0].expires_at // empty')
+if [ -n "$LEGIT_INVITE_CREATED" ] && [ -n "$LEGIT_INVITE_EXPIRES" ]; then
+  C_EPOCH=$(to_epoch "$LEGIT_INVITE_CREATED"); E_EPOCH=$(to_epoch "$LEGIT_INVITE_EXPIRES")
+  DIFF=$((E_EPOCH - C_EPOCH - 600))
+  assert_close "$DIFF" 30 "legitimate invite still gets the real 10-minute TTL (expires_at ~= created_at + 10min)"
+else
+  fail "legitimate invite response missing created_at/expires_at"
+fi
+echo
+
+# ==================================================================
+# Section 15 — regular_invite rate limit (20/24h), isolated session K (already used one invite above
+# in Section 14's legitimate-path check, so this loop covers the remaining 19 + the rejecting 21st).
+# ==================================================================
+echo "--- Section 15: regular_invite rate limit rejects the 21st insert within the window ---"
+RL_OK=true
+for i in $(seq 1 19); do
+  BODY=$(jq -n --arg by "$K_ID" '{created_by: $by}')
+  RESP=$(rest POST /rest/v1/regular_invites "$K_TOKEN" "$BODY")
+  STATUS=$(echo "$RESP" | head -n1)
+  if [ "$STATUS" != "201" ]; then
+    RL_OK=false
+    fail "regular_invite rate-limit setup: insert #$i expected 201, got $STATUS (body: $(echo "$RESP" | tail -n +2))"
+    break
+  fi
+done
+if [ "$RL_OK" = true ]; then
+  pass "20 regular_invites inserts under the 20/24h cap all succeeded (1 from Section 14 + 19 here)"
+  BODY=$(jq -n --arg by "$K_ID" '{created_by: $by}')
+  RESP=$(rest POST /rest/v1/regular_invites "$K_TOKEN" "$BODY")
+  STATUS=$(echo "$RESP" | head -n1)
+  assert_status "$STATUS" 403 "21st regular_invites insert within the window is rejected (rate limit, 42501)"
 fi
 echo
 

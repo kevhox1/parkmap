@@ -1,9 +1,11 @@
 -- DRAFT — DO NOT APPLY (Kevin applies at the S-gate per the spec's ceremony plan)
 --
 -- WePark Regulars network — S1 schema, RLS, RPCs
--- Spec: docs/regulars-network-spec.md §2 (§2.1-§2.7, §2.1 as AMENDED — see the MID-FLIGHT RULING
+-- Spec: docs/regulars-network-spec.md §2 (§2.1-§2.7, AS FORMALLY AMENDED at commit `cb464c65` —
+-- §0 decisions 6-8, §2.1, §2.6, §2.10. See the MID-FLIGHT RULING ADDENDUM and the QA FIX ROUND
 -- ADDENDUM immediately below). Sequencing: docs/regulars-roadmap.md, session S1.
--- Proposed by @backend-data 2026-09-15. NOT yet applied to production.
+-- Proposed by @backend-data 2026-09-15. QA fix round 2026-09-16 (docs/qa/pr111-regulars-s1-schema.md,
+-- FIX-THEN-MERGE). NOT yet applied to production.
 -- Kevin applies this via the Supabase SQL Editor — same two-step-if-needed posture as every prior
 -- migration, though nothing in this file adds a new enum value, so a single paste is expected to be
 -- safe (no STEP 1/STEP 2 split required, matching 04/05's single-paste shape rather than 03's).
@@ -26,10 +28,12 @@
 --   1. "2 minutes is nothing... I was thinking 15 minutes" — the spec's original §2.1 recommended a
 --      2-minute default inside a [15, 300]-second (15s-5min) CHECK range. Kevin wants the range to
 --      "comfortably support minutes-to-tens-of-minutes values." Addressed in §S1-1: the CHECK
---      constraint on pins.regulars_head_start_seconds is widened to [15, 3600] seconds (15s-60min).
---      The client-side default/preset choice (2min vs 15min) is a UX decision for a later iOS session,
---      not a schema concern — this file only widens the server-side ceiling to make 15 minutes (or any
---      other value up to an hour) legal; it does not hardcode 15 minutes as the default anywhere.
+--      constraint on pins.regulars_head_start_seconds was widened at the time this ruling landed —
+--      ***see the QA FIX ROUND ADDENDUM immediately below: the formal amendment that followed this
+--      ruling locked a DIFFERENT, tighter final number than this file first shipped with.*** The
+--      client-side default/preset choice (2min vs 15min) is a UX decision for a later iOS session, not
+--      a schema concern — this file only sets the server-side range such a default must fit inside; it
+--      does not hardcode 15 minutes as the default anywhere.
 --   2. NEW capability — scheduled/future departure announcements ("I'm out at 2pm today"). Addressed
 --      in §S1-6: regular_notices gains a nullable `scheduled_for timestamptz` column and a
 --      derive-expiry trigger so a scheduled notice's expiry is anchored to the announced departure
@@ -40,6 +44,47 @@
 --      constraint and no trigger anywhere in this file that requires it to ever become non-null — see
 --      that column's own comment for the explicit reasoning. This file adds no trigger/RPC that
 --      assumes the zone-wide fallthrough phase runs at all for a given leaving_soon pin.
+--
+-- ============================================================================================
+-- QA FIX ROUND ADDENDUM (2026-09-16, docs/qa/pr111-regulars-s1-schema.md, verdict FIX-THEN-MERGE —
+-- QA reproduced every item below live against its own scratch Postgres 16 instance)
+-- ============================================================================================
+-- Six items. The first two are the blocking findings; the rest are amendment-reconciliation drift
+-- that accumulated because the formal spec amendment (`cb464c65`) landed on `main` AFTER this branch
+-- forked and after the mid-flight ruling above was written, and nobody reconciled the two before this
+-- PR's first push.
+--   1/2. 🔴 `regular_notices.created_at` and `regular_invites.created_at`/`expires_at` were plain
+--      client-writable columns with no privilege lockdown — QA backdated `created_at` in a loop and
+--      pushed 16 notices past the 10/hour cap and 26 invites past the 20/day cap (the rate-limit
+--      triggers' `count(*) ... where created_at > now() - window` never counts a backdated row), and
+--      independently set `regular_invites.expires_at` to +50 years, defeating the 10-minute TTL
+--      entirely. This is the *identical* bug class `02f-block-scoped-restrictions.sql`'s own revision
+--      history already found and fixed for `pins.created_at`/`source` (three QA rounds deep,
+--      `docs/qa/ft15-a-block-scoped-schema-qa-pass3.md` Finding #2) — a column-level `REVOKE` alone is
+--      a documented no-op against Supabase's blanket table-level default grant; the fix is table-level
+--      `REVOKE` + column-level re-`GRANT`, naming only the columns a client legitimately needs to set.
+--      This file already applies that exact pattern correctly to `pins.zone_pushed_at` and to
+--      `regular_invites.revoked_at` — it was simply never extended to the three columns that needed it
+--      on these two new tables. Fixed in §S1-4 (`regular_invites`) and §S1-6 (`regular_notices`) below,
+--      each right after its `CREATE TABLE`, matching this file's own established placement convention.
+--   3. 🟡 `regular_notices.scheduled_for` was missing the amended spec's future-only CHECK
+--      (`scheduled_for > created_at`) — only the 24h-horizon CHECK existed. QA inserted a past
+--      `scheduled_for` and produced a row whose derived `expires_at` landed BEFORE its own `created_at`
+--      (already-expired the instant it's created). Fixed in §S1-6: both CHECKs now present, matching
+--      the amended spec's §2.6 literally.
+--   4. 🟡 `pins.regulars_head_start_seconds`'s CHECK was `[15, 3600]` (this file's own mid-flight-ruling
+--      number, item 1 above) but the formal amendment that followed it (§0 decision 6, §2.1) locked a
+--      tighter floor: `[60, 3600]`. Fixed in §S1-1: CHECK now reads `between 60 and 3600`, matching
+--      `cb464c65` literally. The mid-flight ruling's INTENT (comfortably reach tens of minutes) is
+--      preserved; only the exact floor number changes.
+--   5. 🟡 `07-regulars-schema-test.sh` had zero coverage for the amended spec's §2.10 items (head-start
+--      boundary values, `zone_pushed_at` staying null, `scheduled_for` expiry-derivation correctness)
+--      and no dedicated `regular_invite` rate-limit test. Fixed — see the test script's own changelog
+--      comment for the added sections, including two permanent regression sections that assert QA's
+--      exact two exploit loops now fail.
+--   6. 🟡 `docs/regulars-roadmap.md` still stated the pre-amendment "14 sessions + 2 buffer = 16"
+--      total with no S10b/S12b rows. Fixed — regenerated against the amended 18-session plan
+--      (`docs/regulars-network-spec.md` §5/§8).
 --
 -- ============================================================================================
 -- SCOPE NOTE — what S1 is and is not, and why (read before reviewing the diff)
@@ -77,7 +122,7 @@
 alter table public.pins
   add column if not exists regulars_head_start_seconds integer
     check (regulars_head_start_seconds is null
-           or regulars_head_start_seconds between 15 and 3600),
+           or regulars_head_start_seconds between 60 and 3600),
   add column if not exists zone_pushed_at timestamptz;
 
 comment on column public.pins.regulars_head_start_seconds is
@@ -87,16 +132,21 @@ comment on column public.pins.regulars_head_start_seconds is
   '(the zone push still fires immediately at insert, completely unchanged by this migration: the '
   'trigger rewrite that would actually MAKE this column change push timing is deferred to a follow-up '
   'session — see the SCOPE NOTE above — so this column is fully-defined, clamped schema today with no '
-  'live behavioral effect yet). Clamped server-side to [15, 3600] seconds (15 seconds to 60 minutes) — '
-  'never trust a client-supplied value outright, same posture as leaving_minutes '
-  '(community-2.0-reconciliation-spec.md §2.2). RANGE WIDENED from the spec''s original [15, 300] '
-  '(15s-5min) per Kevin''s mid-flight ruling, 2026-09-15 ("2 minutes is nothing... I was thinking 15 '
-  'minutes" — he wants the range to comfortably reach tens of minutes, not just a handful). This '
-  'column does not hardcode a 15-minute default anywhere — the default/preset ladder is a client-side '
-  'UX decision for a later iOS session; this CHECK only sets the server-side ceiling such a default '
-  'must fit inside. The eventual client-side stepper''s bounds MUST match [15, 3600] verbatim — the '
-  'spec''s own testAppConstants_regularsHeadStartRange_matchesServerClamp guard test '
-  '(docs/regulars-roadmap.md) exists specifically so the two can never silently drift.';
+  'live behavioral effect yet). Clamped server-side to [60, 3600] seconds (1 to 60 minutes) — never '
+  'trust a client-supplied value outright, same posture as leaving_minutes '
+  '(community-2.0-reconciliation-spec.md §2.2). RANGE LOCKED at [60, 3600] per the formal spec '
+  'amendment (docs/regulars-network-spec.md §0 decision 6, §2.1, commit cb464c65, 2026-09-15) — '
+  'reconciled from this file''s own earlier mid-flight-ruling draft, which had (correctly, in intent, '
+  'but not in the final number) widened the original [15, 300] range to [15, 3600] before the amendment '
+  'landed with the tighter 60-second floor. Kevin: "2 minutes is nothing... I was thinking 15 minutes." '
+  'This column does not hardcode a 15-minute default anywhere — the default/preset ladder (5/10/15/30 '
+  'min + Custom) is a client-side UX decision for a later iOS session; this CHECK only sets the '
+  'server-side floor/ceiling such a default must fit inside. A value at or past this pin''s own '
+  'leaving_minutes countdown is valid and expected, not an error (spec §1.2a''s honest-exclusivity '
+  'ruling — the client warns before submit, the server does not reject it). The eventual client-side '
+  'stepper''s bounds MUST match [60, 3600] verbatim — the spec''s own '
+  'testAppConstants_regularsHeadStartRange_matchesServerClamp guard test (docs/regulars-roadmap.md) '
+  'exists specifically so the two can never silently drift.';
 comment on column public.pins.zone_pushed_at is
   'Stamped the moment the DELAYED zone-wide push fires for a leaving_soon pin with a head start — a '
   'future sweep function''s job (deferred, see the SCOPE NOTE above; no such sweep exists in this '
@@ -305,6 +355,29 @@ create policy regular_invites_insert_own on public.regular_invites
 -- is exactly this policy's own WITH CHECK, so the newly-inserted row always passes the SELECT check
 -- too) — the S11/PR#100 RETURNING lesson, closed by construction here rather than discovered live.
 
+revoke insert on public.regular_invites from anon, authenticated;
+grant insert (created_by) on public.regular_invites to anon, authenticated;
+-- QA FIX ROUND, Finding #2 (docs/qa/pr111-regulars-s1-schema.md — live-reproduced, FIX-THEN-MERGE):
+-- table-level REVOKE + column-level re-GRANT, the exact `02f-block-scoped-restrictions.sql` pattern
+-- already proven for `pins.created_at`/`source` (docs/qa/ft15-a-block-scoped-schema-qa-pass3.md
+-- Finding #2) and already applied elsewhere in THIS file (pins.zone_pushed_at above,
+-- regular_invites.revoked_at below) — it was simply never extended to this table's INSERT path.
+-- Without this, RLS alone does NOT stop a client from setting created_at/expires_at explicitly on
+-- INSERT: regular_invites_insert_own's WITH CHECK only constrains created_by, so a plain
+-- `POST /regular_invites {created_by: me, created_at: <50 years ago>}` was RLS-permitted and QA
+-- reproduced it live — 25 backdated inserts, zero rejections, 26 rows for one creator against a
+-- 20/24h cap (enforce_regular_invite_rate_limit()'s `count(*) ... where created_at > now() - window`
+-- never counts a row backdated past the window), and independently, `expires_at = now() + 50 years`
+-- succeeded outright, defeating the spec's stated 10-minute invite TTL entirely (no trigger on this
+-- table overwrites expires_at the way regular_notices_derive_expiry does for regular_notices — the
+-- column-privilege lockdown is the ONLY defense here, not a belt-and-suspenders addition). A plain
+-- column-level REVOKE on top of Supabase's untouched table-level default grant would be a silent
+-- no-op (02f's own documented ACL-merge behavior — table- and column-level grants for the same
+-- privilege are OR'd, not narrowed by each other); REVOKE must happen at the table level first. Only
+-- `created_by` is re-GRANTed: id/created_at/expires_at all keep their column DEFAULTs (every
+-- legitimate insert path omits them), and redeemed_by/redeemed_at/revoked_at stay null at insert time
+-- exactly as before — no legitimate write path is narrowed by this fix, only the exploit is closed.
+
 revoke update on public.regular_invites from anon, authenticated;
 grant update (revoked_at) on public.regular_invites to authenticated;
 -- Column-level lockdown, one step further than the spec's literal text, mirroring 02f's fail-closed
@@ -490,8 +563,18 @@ create table if not exists public.regular_notices (
   scheduled_for timestamptz,
   created_at    timestamptz not null default now(),
   expires_at    timestamptz not null default (now() + interval '60 minutes'),
+  check (scheduled_for is null or scheduled_for > created_at),
   check (scheduled_for is null or scheduled_for <= created_at + interval '24 hours')
 );
+
+-- QA FIX ROUND, Finding #3 (docs/qa/pr111-regulars-s1-schema.md): the future-only CHECK
+-- (`scheduled_for > created_at`) was missing entirely — only the 24h-horizon CHECK existed. QA
+-- inserted `scheduled_for = now() - interval '1 day'` and it was accepted, producing a row whose
+-- derived `expires_at` (`scheduled_for + 60min`, see the trigger below) landed BEFORE its own
+-- `created_at` — a notice already expired the instant it is created. Both CHECKs now match the
+-- amended spec (docs/regulars-network-spec.md §2.6, commit `cb464c65`) literally. The
+-- derive-expiry trigger's formula itself was already correct (QA confirmed by trace) — the bug was
+-- the missing input-validation guard around it, not the anchoring math.
 
 comment on table public.regular_notices is
   'One-way, ephemeral broadcast to a sender''s whole Regulars list. NOT a message thread — no '
@@ -545,6 +628,20 @@ drop policy if exists regular_notices_insert_own on public.regular_notices;
 create policy regular_notices_insert_own on public.regular_notices
   for insert with check (sender_id = auth.uid());
 -- RETURNING satisfied by regular_notices_select_own_or_regular's first branch (sender_id = auth.uid()).
+
+revoke insert on public.regular_notices from anon, authenticated;
+grant insert (sender_id, body, scheduled_for) on public.regular_notices to anon, authenticated;
+-- QA FIX ROUND, Finding #1 (docs/qa/pr111-regulars-s1-schema.md — live-reproduced, FIX-THEN-MERGE):
+-- same table-level REVOKE + column-level re-GRANT pattern as regular_invites above (and as
+-- `pins.created_at`/`source` in `02f-block-scoped-restrictions.sql`). Without this,
+-- regular_notices_insert_own's WITH CHECK only constrains sender_id — a client could set an explicit
+-- past `created_at` on INSERT, and enforce_regular_notice_rate_limit()'s `count(*) ... where
+-- created_at > now() - window` would never count that row. QA reproduced this live: 15 sequential
+-- backdated inserts, zero rejections, 16 total rows for one sender against a 10/hour cap. Only
+-- sender_id/body/scheduled_for are re-GRANTed: id/created_at keep their column DEFAULTs (every
+-- legitimate insert omits them), and expires_at needs NO lockdown of its own — its own BEFORE INSERT
+-- trigger (regular_notices_derive_expiry, below) unconditionally overwrites whatever the client sends
+-- for it, verified live, so excluding it from this GRANT is belt-and-suspenders, not load-bearing.
 
 drop policy if exists regular_notices_delete_own on public.regular_notices;
 create policy regular_notices_delete_own on public.regular_notices
