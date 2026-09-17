@@ -201,6 +201,10 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-09-17 — ✅ REGULARS S1+S2 MERGED (PR #111 `db6469e9`): the friend-graph schema exists as a DRAFT — migration 07 is in the drawer, NOT applied.
+
+The most heavily QA'd schema in the repo's history: two-pass adversarial cycle where pass 1 stood up a scratch Postgres and LIVE-EXPLOITED two 🔴 holes (rate-limit/TTL bypass via client-writable `created_at`/`expires_at` — 16 notices past a 10/hr cap, 26 invites past 20/day, a 50-year invite TTL), fixed with the repo's established column-privilege REVOKE+GRANT pattern; pass 2 independently re-fired every exploit on a second fresh cluster (all dead, now permanent regression sections in the 15-section/~69-check test script). Builder validated against a REAL downloaded PostgREST 12.2.3 binary and caught its own wrong status-code assumption (CHECK violations → 400/23514, RLS/column-privilege → 403-class/42501). QA also proved applying 07 changes NOTHING about the live community push path (the deferred §2.8 trigger rewrite was sound scope-cutting). ⚠️ Standing state: `supabase/07-regulars-schema.sql` is DRAFT — DO NOT APPLY; Kevin's apply ceremony comes at the spec's designated gate several sessions out (client-first discipline, same as the 41-zone playbook). NEXT: S3 (`send-regular-push` Edge Function + trigger — depends on S1's FILE, not its apply).
+
 ### 2026-09-15 (later) — ✅ Build 23 pushed to TestFlight (internal + external) by Kevin — the drive-mode tap fix is in users' hands. NEW PRODUCT THREAD opened by Kevin same day: a friends/block-crew network (direct messages + targeted leaving-soon notifications to ~5 known neighbors instead of the whole board) — assessment delivered, spec not yet commissioned.
 
 ### 2026-09-15 — ✅ POLISH-2 MERGED (PR #110 `3dd1d009`), build 23 staged. Suite 1368→1373. Two launch-affecting bugs found at the gate and fixed same-day.
