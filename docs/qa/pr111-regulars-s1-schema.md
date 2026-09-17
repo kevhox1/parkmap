@@ -5,7 +5,9 @@
 §2.6, §2.10). Files: `supabase/07-regulars-schema.sql` (709 lines), `supabase/07-regulars-schema-test.sh`
 (440 lines, 42 assertions), `docs/regulars-roadmap.md` (133 lines), `docs/open-items.md` (+1 row).
 
-**Verdict: 🔴 FIX-THEN-MERGE — do not apply to production as drafted.**
+**Pass 1 verdict: 🔴 FIX-THEN-MERGE — do not apply to production as drafted.**
+
+**Superseded by Pass 2 below — see final verdict there.**
 
 The trust-graph design itself (deny-by-default RLS, RPC-only edge writer, race-safe redemption,
 block-severs-edge, RETURNING/SELECT closure) is genuinely solid and empirically verified against a
@@ -237,7 +239,7 @@ apply S1:
    does not require the deferred §2.8 follow-up** (push-trigger rewrite + 30s sweep) — that lands as its
    own, separately-applied migration and ceremony per the roadmap's own S1-follow-up row.
 
-## Smoke tests run
+## Smoke tests run (Pass 1)
 
 - Stood up an independent local Postgres 16.15 cluster (`initdb`/`pg_ctl`, run as the `postgres` OS
   user, not reusing the builder's instance), built a minimal Supabase-shape harness (`auth.users`,
@@ -270,7 +272,7 @@ apply S1:
   — the test script's own HTTP-layer assertions were read and audited for shape/coverage, not executed
   against a live PostgREST instance).
 
-## What's working
+## What's working (Pass 1)
 
 The trust-graph core is well-built: canonical single-row mutuality, a genuinely race-safe RPC modeled
 correctly on `claim_pin`, a block trigger that provably severs the edge in the same transaction, an
@@ -282,3 +284,228 @@ correctly and — this is the part worth calling out — actually verified true 
 just asserted in a comment. The two 🔴 findings are a narrow, mechanical gap (a known fix pattern not
 yet extended to two new tables) sitting inside an otherwise carefully-built file, not a sign the design
 needs rework.
+
+---
+
+# QA Pass 2 — 2026-09-17
+
+**Reviewed:** branch `backend/regulars-s1-schema` at `6f415305` (fix commit "fix(backend): Regulars S1
+QA fix round — close rate-limit/TTL bypass, reconcile amendment drift", on top of `71032ab9` /
+`f4fe62f8`, diffed against `main` @ `cb464c65`), against all six Pass 1 findings and a direct
+re-read of the current `supabase/07-regulars-schema.sql` (806 lines, +97 from Pass 1),
+`supabase/07-regulars-schema-test.sh` (627 lines, up from 440), and `docs/regulars-roadmap.md` (171
+lines, up from 133). **Did not reuse the builder's own re-validation** (their commit message claims a
+real local PostgREST 12.2.3 instance) — stood up a **second, independent** fresh scratch Postgres 16
+cluster and re-ran every one of my Pass 1 exploits against the fixed file directly, plus the boundary/
+CHECK cases the fix claims to have added.
+
+**Final verdict: ✅ MERGE.** All six Pass 1 findings are genuinely and robustly fixed — not
+cosmetically. Every exploit I originally reproduced now fails at the SQL layer with the correct error
+class, every legitimate insert path I checked still works with correct server-derived defaults, the
+amended spec's exact numbers are now literal in the schema, and the docs are consistent with the
+amended `main`. No new blocking or significant issues found. One small, non-blocking observation on
+HTTP-layer verification scope (below) — not a merge blocker.
+
+## Per-finding re-verification (fresh scratch Postgres, not the builder's instance)
+
+**#1 — `regular_notices.created_at` backdating (blocking → FIXED, re-verified):**
+- Re-ran my exact Pass 1 exploit (`insert ... (sender_id, body, created_at) values (..., now() -
+  interval '100 years')`) against the fixed file on a brand-new cluster: **fails immediately** with
+  `ERROR: permission denied for table regular_notices`, SQLSTATE `42501` (confirmed via an explicit
+  `EXCEPTION WHEN OTHERS` trap printing `sqlstate`/`sqlerrm` — not inferred from the error text alone).
+- Confirmed the fix is `revoke insert on public.regular_notices from anon, authenticated; grant insert
+  (sender_id, body, scheduled_for) on ...` — the correct table-REVOKE-then-column-re-GRANT shape, not a
+  bare column-level REVOKE (which `02f`'s own documentation proves is a silent no-op against the
+  untouched table-level default grant).
+- **Legitimate paths re-verified working:** a plain `insert (sender_id, body)` with no explicit
+  timestamp succeeds and returns server-correct `created_at`/`expires_at` (RETURNING clause intact,
+  S11 lesson holds — the SELECT policy still covers what a legitimate insert returns); a plain insert
+  additionally specifying `scheduled_for` (a client-legitimate field, now in the re-GRANT list)
+  succeeds and returns a correctly-derived `expires_at = scheduled_for + 60min`.
+- **Rate limiter now actually limits:** looped 12 sequential *legitimate* (no-timestamp) inserts from a
+  fresh sender — inserts 1–10 succeed, 11 and 12 both fail with SQLSTATE `42501` and the trigger's own
+  message ("rate limit exceeded: max 10 regular_notice row(s) per 1 hour(s)"), landing at exactly 10
+  total rows. This is the rate limiter behaving correctly for the first time against a live attempt to
+  exceed it — Pass 1 never got to see this because the bypass made it moot.
+
+**#2 — `regular_invites.created_at`/`expires_at` (blocking → FIXED, re-verified):**
+- Re-ran both Pass 1 exploits independently: an explicit backdated `created_at` and, separately, an
+  explicit `expires_at = now() + 50 years` — **both fail** with `ERROR: permission denied for table
+  regular_invites`, SQLSTATE `42501`.
+- Legitimate `insert (created_by)` with no other columns still succeeds, returns `created_at = now()`,
+  `expires_at = created_at + 10min`, and `redeemed_by`/`redeemed_at`/`revoked_at` all null — byte-
+  identical to the pre-fix legitimate shape, RETURNING intact.
+- **Rate limiter now actually limits:** looped 22 sequential legitimate inserts from a fresh creator —
+  1–20 succeed, 21 and 22 both fail with `42501` and the correct message, landing at exactly 20 rows
+  (cap is 20/24h). Re-ran the full invite lifecycle (create → redeem → re-redeem → self-redeem → block
+  → block-then-redeem → blocked-party-cannot-discover-block) end-to-end on this fixed schema — every
+  outcome identical to Pass 1's verified-correct behavior. The fix did not regress the happy path.
+
+**#3 — `regular_notices.scheduled_for` future-only CHECK (significant → FIXED, re-verified):**
+- `pg_constraint` now shows two CHECKs: `regular_notices_check` (`scheduled_for is null or
+  scheduled_for > created_at`) and `regular_notices_check1` (the pre-existing 24h-horizon CHECK) —
+  both present, matching the amended spec §2.6 literally.
+- Re-ran my exact Pass 1 repro (`scheduled_for = now() - interval '1 day'`): now **fails** with
+  SQLSTATE `23514` (`check_violation`), message `new row for relation "regular_notices" violates check
+  constraint "regular_notices_check"`.
+- Additionally tested the 24h-horizon boundary (`scheduled_for` 25h out): fails with `23514` against
+  `regular_notices_check1`, confirming the pre-existing CHECK wasn't disturbed by the fix.
+- Tested a valid 4-hour-out `scheduled_for`: succeeds, and `expires_at` lands at `scheduled_for +
+  60min` — well past `created_at + 60min` — confirming the anchoring fix (already verified correct by
+  trace in Pass 1) is intact and reachable now that the input is validated.
+- **On the task's specific ask about 400-vs-403:** I confirmed at the SQL layer that CHECK violations
+  raise class-23 (`23514`), a materially different SQLSTATE from the `42501` (`insufficient_privilege`)
+  class the column-lockdown fixes raise. PostgREST's documented, stable mapping is `23xxx → HTTP 400`,
+  `42501 → HTTP 403` — I did not stand up a live PostgREST instance myself in this sandbox (not
+  available; `postgrest` binary not present) to watch the literal HTTP response, so the test script's
+  `assert_status ... 400` assertions for CHECK violations and `assert_status ... 403` for the
+  column-lockdown ones are verified **correct against the SQL-layer error classes and PostgREST's
+  documented mapping**, but not independently re-observed at the HTTP layer the way the builder's
+  commit message claims to have done. This is a real, if narrow, verification gap on my side — flagged
+  explicitly rather than silently passed — but it does not change the verdict: the SQL-layer behavior
+  (the part that actually determines correctness) is confirmed, and the 400-vs-403 split the builder
+  chose is the textbook-correct one for these two error classes, not an invented convention.
+
+**#4 — `pins.regulars_head_start_seconds` range `[60, 3600]` (significant → FIXED, re-verified):**
+- `pg_constraint` confirms the literal text: `CHECK (((regulars_head_start_seconds IS NULL) OR
+  ((regulars_head_start_seconds >= 60) AND (regulars_head_start_seconds <= 3600))))` — exact match to
+  the amended spec.
+- Full boundary sweep, live: `30` → rejected (`23514`, this is exactly my Pass 1 repro value, now
+  correctly rejected); `59` → rejected; `60` → accepted, round-trips unchanged; `900` → accepted;
+  `3600` → accepted; `3601` → rejected. All six outcomes match the amended spec exactly, both ends of
+  both boundaries independently confirmed, not just the one value I originally used to find the drift.
+
+**#5 — Test script coverage (significant → FIXED, re-verified):**
+- Counted directly: 15 named sections (was 11), 58 `assert_status`/`assert_eq`/`assert_empty_array`
+  call sites (55 excluding the three function definitions) plus at least 14 additional bare
+  `pass`/`fail` call sites outside those wrapper functions — roughly **69 total check sites**, in the
+  same ballpark as the commit message's own claimed "~66" (a small counting-methodology difference,
+  not a materially different figure; both readings agree the suite grew by ~1.6x).
+- Read Sections 12–15 in full, not just their headers: **Section 12** does the exact boundary sweep
+  (59/3601 rejected as 400, 60/900/3600 accepted, `zone_pushed_at` asserted null on each) — directly
+  covers amended §2.10 item 1 and the original §2.10 item 5. **Section 13** covers `scheduled_for`
+  correctness end-to-end (past rejected 400, >24h rejected 400, 4h-out accepted with `expires_at`
+  computed and compared numerically against `scheduled_for + 3600s` via epoch math, not just eyeballed)
+  — directly covers amended §2.10 item 2, the exact item the spec's reconciliation note flagged.
+  **Section 14** is a genuine permanent-regression section: it re-runs (via real REST calls against
+  `SUPABASE_URL`, once Kevin points this at a live project) both of my exact Pass 1 exploits and
+  asserts `403`, plus asserts the legitimate no-timestamp path still returns `201` with a correct TTL —
+  this is precisely "turn QA's own exploit into a standing regression test," done correctly, not just
+  claimed. **Section 15** adds the previously-missing `regular_invite` rate-limit test (20/24h,
+  isolated fresh session), closing the asymmetry I flagged in Pass 1.
+- Session isolation confirmed: new sessions `I`/`J`/`K` are created and scoped one-per-concern
+  (head-start boundaries / `scheduled_for` + notice-exploit-regression / invite-exploit-regression +
+  invite-rate-limit) specifically so the new rate-limit-exhausting loops in Sections 12–15 don't
+  cross-contaminate each other's counts or Section 11's pre-existing `regular_notice` rate-limit test —
+  correct test hygiene, not an accident.
+
+**#6 — Docs regenerated (significant → FIXED, re-verified):**
+- `docs/regulars-roadmap.md`: now states "Total: 16 core sessions, +2 buffer = 18 sessions" up front,
+  and the session table includes both **S10b** (Scheduled Departure UI, correctly gated on S9 AND S10
+  both merged) and **S12b** (QA on S10b, correctly noted as Simulator-testable unlike S13) exactly as
+  the amended spec's §5 describes. The guard-test list is now **six** named tests, including the two
+  new ones (`testAppConstants_regularsHeadStartDefault_is15Minutes`,
+  `testRegularNoticeScheduleMode_hidden_whenRegularsDisabled`) — and the pre-existing
+  `testAppConstants_regularsHeadStartRange_matchesServerClamp` entry now correctly states `[60, 3600]`,
+  not the stale `[15, 3600]` I flagged in Pass 1.
+- `docs/open-items.md` row #23: regenerated to state "S1 QA fix round applied," the amended
+  "16 core + 2 buffer = 18 sessions," the `[60,3600]`-amendment-locked range, both `scheduled_for`
+  CHECKs, and an honest summary of Pass 1's own six findings and their fix — internally consistent with
+  both the amended spec and this QA report, not just with itself.
+
+## New-issue check (explicitly re-run, not assumed clean)
+
+- **Idempotency, independently re-tested:** applied the full fixed `07-regulars-schema.sql` to a brand
+  new, empty scratch cluster, then applied it again verbatim to the same cluster — zero errors on
+  either run (only expected `NOTICE: ... skipping` lines from the `DROP ... IF EXISTS` guards on the
+  second pass). The file's "safe to re-run" claim holds after the fix round, same as it did in Pass 1.
+- **No dangling references / no regressions to Pass-1-verified-correct behavior:** re-ran the full
+  invite lifecycle (create/redeem/re-redeem/self-redeem/block/blocked-redeem-attempt/
+  cannot-discover-block) and the `pin_notes` ownership-trigger + cross-visibility checks against the
+  *fixed* schema end to end — every outcome is identical to what I verified in Pass 1. The six fixes
+  are additive (new REVOKE/GRANT statements, new CHECKs, a tightened numeric literal) and none of them
+  touch the RPC, the block trigger, or the ownership trigger, which the diff confirms and my live
+  re-run corroborates.
+- **`pins_with_author` view / `04-community-push-trigger.sql` interaction:** unchanged by this fix
+  round (confirmed via `git diff 6f415305~1 6f415305` — zero touches to either), so Pass 1's
+  "zero live behavior change" finding stands without re-verification needed.
+- **grepped the full 806-line fixed file** for `reputation`/`helped_count`/`total_report_count` again
+  post-fix — still zero hits outside unrelated Community-2.0-trigger comments. No rep-farming surface
+  introduced by the fix round either.
+
+## Residual, non-blocking observation
+
+- **💡 HTTP-layer status codes (400 vs. 403) verified against PostgREST's documented SQLSTATE mapping
+  and confirmed-correct SQL-layer error classes, not against a live PostgREST instance in this
+  sandbox** (`postgrest` binary unavailable here). The builder's commit message claims this was done
+  against a real local PostgREST 12.2.3 instance; I did not reproduce that specific step myself. Not a
+  merge blocker — the SQL-layer behavior, which is what actually determines correctness, is fully
+  verified, and the 400/403 split chosen matches PostgREST's stable, documented convention rather than
+  an invented one. Recommend Kevin's own post-apply run of `07-regulars-schema-test.sh` (which does hit
+  a real PostgREST endpoint) as the natural final confirmation of this one narrow point, same as every
+  prior migration's test-script ceremony.
+
+## Kevin's apply ceremony, updated for the final (post-fix) SQL — unchanged in shape from Pass 1
+
+S1 merging to `main` still does not trigger a production apply — nothing changes live until Kevin runs
+this by hand. When he's ready:
+1. Paste the current `supabase/07-regulars-schema.sql` (806 lines, post-fix) into the Supabase SQL
+   Editor for project `jiispshyqerscdoferaw` — single paste, no STEP 1/STEP 2 split (still no new enum
+   value added).
+2. Sanity check: `select count(*) from public.regular_edges;` etc. — all new tables should read 0.
+3. Also worth a one-off manual check Kevin can run himself in the SQL Editor post-apply (not something
+   the test script covers, since it needs privileged introspection): confirm the new column-privilege
+   lockdowns actually landed —
+   `select table_name, column_name, privilege_type from information_schema.column_privileges where
+   table_name in ('regular_notices','regular_invites') and grantee in ('anon','authenticated') order by
+   1,2;` should show `INSERT` present only for `regular_notices.(sender_id, body, scheduled_for)` and
+   `regular_invites.(created_by)`, never for either table's `created_at`, and never for
+   `regular_invites.expires_at`.
+4. Run `supabase/07-regulars-schema-test.sh` (post-fix, 15 sections) against the live project with a
+   real anon key — this is also the step that closes this report's one residual observation above by
+   actually hitting a live PostgREST instance.
+5. Nothing else changes — the live `send-community-push` trigger, `claim_pin`, and every existing pin
+   write path remain byte-identical before and after, confirmed both in Pass 1 and re-confirmed here
+   (the fix round touches none of them). **S1's apply is still independent of, and does not require,**
+   the deferred §2.8 follow-up (push-trigger rewrite + 30s sweep) — that remains its own, separately-
+   applied migration and ceremony per the roadmap's S1-follow-up row, untouched by this fix round.
+
+## Smoke tests run (Pass 2)
+
+- `git show 6f415305 --stat` and `git diff 6f415305~1 6f415305 -- supabase/07-regulars-schema.sql`
+  read in full to see exactly what changed, before trusting the commit message's own account.
+- Stood up a **second, independent** scratch Postgres 16 cluster (fresh `initdb`, different port/
+  socket from Pass 1's instance, same `postgres`-OS-user posture), rebuilt the identical Supabase-shape
+  harness, and applied the *fixed* `07-regulars-schema.sql` verbatim — clean apply, then applied a
+  second time to confirm idempotency independently.
+- Re-ran my own Pass 1 exploit SQL essentially verbatim against the fixed schema for all of: backdated
+  `regular_notices.created_at`, backdated `regular_invites.created_at`, `regular_invites.expires_at`
+  override, past `regular_notices.scheduled_for`, `regulars_head_start_seconds = 30` — confirmed every
+  one now fails, with the exact SQLSTATE captured via an explicit exception trap rather than inferred.
+- Additionally tested cases beyond my original exploits to close the loop the fix round claims: full
+  boundary sweep on head-start (59/60/900/3600/3601), the 24h-horizon boundary on `scheduled_for`, and
+  two full rate-limit-exhaustion loops (12 legitimate `regular_notices` inserts against the 10/1h cap,
+  22 legitimate `regular_invites` inserts against the 20/24h cap) to confirm the rate limiters
+  themselves — previously moot because the timestamp bypass made them unreachable — now actually
+  enforce their caps against genuine attempts to exceed them.
+- Re-ran the full invite lifecycle and `pin_notes` visibility/ownership-trigger checks against the
+  fixed schema to confirm zero regression to Pass-1-verified-correct behavior.
+- Introspected `pg_constraint` directly (not the file text) to confirm the exact, literal CHECK
+  definitions now in the database for both `regular_notices` and `pins.regulars_head_start_seconds`.
+- Read the full 627-line fixed test script (not just the diff) and the full 171-line regenerated
+  roadmap doc end to end, cross-checked against the amended spec's §5/§8 and §2.10.
+- Did not test: a live PostgREST instance's literal HTTP status codes (unavailable in this sandbox —
+  see the residual observation above); true concurrent-session locking on `redeem_regular_invite()`
+  (same single-connection-harness constraint as Pass 1 — the mechanism is unchanged by this fix round
+  and was already verified by code trace).
+
+## What's working (Pass 2 additions)
+
+Everything praised in Pass 1 stands, re-confirmed live rather than assumed carried-forward. The fix
+round itself is not a minimal patch bolted on to satisfy a QA checklist — it correctly identifies and
+reuses this repo's own established pattern (table-REVOKE + column-re-GRANT) rather than inventing a
+new one, it adds permanent regression coverage for the exact exploits that were found rather than just
+silently fixing the underlying bug, and the doc regeneration is a genuine reconciliation against the
+amended spec rather than a find-and-replace of the numbers. The one place I could not independently
+verify to the same standard as everything else (live PostgREST HTTP codes) is disclosed explicitly
+above rather than assumed passing.
