@@ -49,15 +49,32 @@
  * shipped, so no tokens exist of either kind. Default 'sandbox' matches "no APNS_ENV secret set yet"
  * being the expected initial state, not a claim about which environment is more common in production.
  *
- * Batching / fan-out cap: see MAX_TOKENS_PER_INVOCATION and CHUNK_SIZE below.
+ * Batching / fan-out cap: see MAX_TOKENS_PER_INVOCATION below and `../_shared/apns.ts`'s CHUNK_SIZE
+ * (the concurrency-per-batch constant moved there in the S3 extraction, unchanged in value).
  *
  * Dead-token cleanup: APNs 410 (Unregistered) or a 400 with reason "BadDeviceToken" both mean the
  * token is permanently invalid — the row is deleted from device_push_tokens so it never wastes a
  * fan-out slot again. Every other non-2xx response is logged and left alone (could be transient,
  * config-related, or rate-limiting — not evidence the *token* itself is bad).
+ *
+ * REFACTOR NOTE (Regulars S3, docs/regulars-roadmap.md): the APNs JWT signing/caching and the raw
+ * send-and-classify-response logic that used to live inline in this file now live in
+ * `../_shared/apns.ts`, shared with the new sibling `send-regular-push` function. This is a
+ * BEHAVIOR-PRESERVING extraction only — the exact same body/headers this function has always sent are
+ * still constructed here (see `sendOnePush`'s payload dict in the main handler below) and handed to
+ * the shared `sendInChunks` unchanged; nothing about the wire format, dead-token rule, or fail-open
+ * posture changed. See `_shared/apns.ts`'s own header for the full reasoning and the note that this
+ * source change has no production effect until send-community-push is explicitly re-deployed.
  */
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import {
+  APNS_HOSTS,
+  DeviceTokenRow,
+  ApnsEnv,
+  getApnsJwt,
+  sendInChunks,
+} from "../_shared/apns.ts";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -74,22 +91,6 @@ interface PinRecord {
   zone_id: string | null;
 }
 
-interface DeviceTokenRow {
-  id: string;
-  apns_token: string;
-  environment: "sandbox" | "production";
-}
-
-type ApnsEnv = "sandbox" | "production";
-
-interface PushOutcome {
-  tokenId: string;
-  status: number | null;
-  ok: boolean;
-  deleted: boolean;
-  error?: string;
-}
-
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -99,188 +100,6 @@ interface PushOutcome {
 // ceiling against a runaway zone (or a future much-larger zone set), not a tuned-to-real-load number.
 // Revisit once real registration volume exists (S12+).
 const MAX_TOKENS_PER_INVOCATION = 500;
-
-// Concurrency cap per batch of APNs requests — "batch politely" per the spec's own phrasing. APNs
-// HTTP/2 connections support many concurrent streams, but capping invocation-side concurrency avoids
-// hammering both APNs and this function's own outbound connection pool in one burst.
-const CHUNK_SIZE = 25;
-
-// APNs provider JWTs are valid for up to 60 minutes; Apple's guidance is to reuse one instead of
-// re-signing per request. Cached at module scope (survives across invocations on a warm Edge Function
-// instance) and refreshed with margin before the true 60-minute ceiling.
-const APNS_JWT_TTL_SECONDS = 55 * 60;
-
-const APNS_HOSTS: Record<ApnsEnv, string> = {
-  sandbox: "https://api.sandbox.push.apple.com",
-  production: "https://api.push.apple.com",
-};
-
-// ---------------------------------------------------------------------------
-// Module-scope JWT cache (per warm instance — best-effort, not shared across cold starts)
-// ---------------------------------------------------------------------------
-
-let cachedJwt: string | null = null;
-let cachedJwtIssuedAt = 0;
-let cachedSigningKey: CryptoKey | null = null;
-
-// ---------------------------------------------------------------------------
-// Base64url helpers (Deno has no `Buffer`; Web Crypto + atob/btoa only)
-// ---------------------------------------------------------------------------
-
-function base64UrlEncodeBytes(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function base64UrlEncodeString(str: string): string {
-  return base64UrlEncodeBytes(new TextEncoder().encode(str));
-}
-
-function pemToArrayBuffer(pem: string): ArrayBuffer {
-  const b64 = pem
-    .replace(/-----BEGIN [^-]+-----/, "")
-    .replace(/-----END [^-]+-----/, "")
-    .replace(/\s+/g, "");
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes.buffer;
-}
-
-// ---------------------------------------------------------------------------
-// APNs provider-token (JWT, ES256) signing
-// ---------------------------------------------------------------------------
-
-async function getSigningKey(privateKeyPem: string): Promise<CryptoKey> {
-  if (cachedSigningKey) return cachedSigningKey;
-  const keyBuffer = pemToArrayBuffer(privateKeyPem);
-  cachedSigningKey = await crypto.subtle.importKey(
-    "pkcs8",
-    keyBuffer,
-    { name: "ECDSA", namedCurve: "P-256" },
-    false,
-    ["sign"]
-  );
-  return cachedSigningKey;
-}
-
-async function getApnsJwt(keyId: string, teamId: string, privateKeyPem: string): Promise<string> {
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  if (cachedJwt && nowSeconds - cachedJwtIssuedAt < APNS_JWT_TTL_SECONDS) {
-    return cachedJwt;
-  }
-
-  const header = { alg: "ES256", kid: keyId };
-  const payload = { iss: teamId, iat: nowSeconds };
-  const signingInput = `${base64UrlEncodeString(JSON.stringify(header))}.${base64UrlEncodeString(
-    JSON.stringify(payload)
-  )}`;
-
-  const key = await getSigningKey(privateKeyPem);
-  // Web Crypto's ECDSA sign() returns the raw (r || s) IEEE P1363 signature format, which is exactly
-  // what JOSE/JWT ES256 expects — no ASN.1 DER re-encoding needed, unlike most other ECDSA libraries.
-  const signature = await crypto.subtle.sign(
-    { name: "ECDSA", hash: "SHA-256" },
-    key,
-    new TextEncoder().encode(signingInput)
-  );
-
-  const jwt = `${signingInput}.${base64UrlEncodeBytes(new Uint8Array(signature))}`;
-  cachedJwt = jwt;
-  cachedJwtIssuedAt = nowSeconds;
-  return jwt;
-}
-
-// ---------------------------------------------------------------------------
-// APNs send
-// ---------------------------------------------------------------------------
-
-async function sendOnePush(
-  token: DeviceTokenRow,
-  host: string,
-  jwt: string,
-  topic: string,
-  pin: PinRecord
-): Promise<PushOutcome> {
-  // Silent (content-available) push, NO alert/sound/badge — see the file header's privacy note.
-  // The client's local-notification decision (and any user-facing copy) happens entirely on-device.
-  const body = {
-    aps: { "content-available": 1 },
-    pin_type: pin.pin_type,
-    segment_id: pin.segment_id,
-    pin_id: pin.id,
-    zone_id: pin.zone_id,
-  };
-
-  try {
-    const resp = await fetch(`${host}/3/device/${token.apns_token}`, {
-      method: "POST",
-      headers: {
-        authorization: `bearer ${jwt}`,
-        "apns-topic": topic,
-        // Background/silent pushes MUST use push-type "background" and priority 5 (never 10) —
-        // Apple rejects priority-10 background pushes outright.
-        "apns-push-type": "background",
-        "apns-priority": "5",
-        "apns-expiration": "0", // don't store-and-retry a stale relevance signal
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-
-    if (resp.ok) {
-      return { tokenId: token.id, status: resp.status, ok: true, deleted: false };
-    }
-
-    let reason: string | undefined;
-    try {
-      const errBody = (await resp.json()) as { reason?: string };
-      reason = errBody?.reason;
-    } catch {
-      // non-JSON error body — leave reason undefined
-    }
-
-    const isDeadToken = resp.status === 410 || (resp.status === 400 && reason === "BadDeviceToken");
-    if (isDeadToken) {
-      return {
-        tokenId: token.id,
-        status: resp.status,
-        ok: false,
-        deleted: true,
-        error: reason ?? `HTTP ${resp.status}`,
-      };
-    }
-
-    return {
-      tokenId: token.id,
-      status: resp.status,
-      ok: false,
-      deleted: false,
-      error: reason ?? `HTTP ${resp.status}`,
-    };
-  } catch (err) {
-    return { tokenId: token.id, status: null, ok: false, deleted: false, error: String(err) };
-  }
-}
-
-async function sendInChunks(
-  tokens: DeviceTokenRow[],
-  host: string,
-  jwt: string,
-  topic: string,
-  pin: PinRecord
-): Promise<PushOutcome[]> {
-  const outcomes: PushOutcome[] = [];
-  for (let i = 0; i < tokens.length; i += CHUNK_SIZE) {
-    const chunk = tokens.slice(i, i + CHUNK_SIZE);
-    const chunkOutcomes = await Promise.all(
-      chunk.map((t) => sendOnePush(t, host, jwt, topic, pin))
-    );
-    outcomes.push(...chunkOutcomes);
-  }
-  return outcomes;
-}
 
 // ---------------------------------------------------------------------------
 // Main handler
@@ -396,7 +215,21 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   const host = APNS_HOSTS[apnsEnv];
-  const outcomes = await sendInChunks(deviceTokens, host, jwt, apnsTopic, pin);
+  // Silent (content-available) push, NO alert/sound/badge — see the file header's privacy note. The
+  // client's local-notification decision (and any user-facing copy) happens entirely on-device. This
+  // exact body/push-type/priority triple is byte-identical to what this function sent before the S3
+  // _shared/apns.ts extraction — only WHERE the send loop lives changed, not what gets sent.
+  const outcomes = await sendInChunks(deviceTokens, host, jwt, apnsTopic, {
+    pushType: "background",
+    priority: "5",
+    body: {
+      aps: { "content-available": 1 },
+      pin_type: pin.pin_type,
+      segment_id: pin.segment_id,
+      pin_id: pin.id,
+      zone_id: pin.zone_id,
+    },
+  });
 
   const sent = outcomes.filter((o) => o.ok).length;
   const failed = outcomes.filter((o) => !o.ok);
