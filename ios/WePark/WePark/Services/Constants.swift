@@ -180,6 +180,61 @@ enum AppConstants {
     nonisolated static func communityPhase1PinTypes(enabled: Bool = communityEnabled) -> [PinType] {
         enabled ? [.openSpot, .leavingSoon] : []
     }
+
+    // MARK: - Regulars network (S5, build TBD)
+
+    /// DARK-SHIPS `false` through every build session — direct copy of `communityEnabled`'s own
+    /// playbook (see that flag's doc comment above for the full "why a compile-time flag, why
+    /// guard tests" rationale), not a new pattern (`docs/regulars-network-spec.md` §3.6,
+    /// `docs/regulars-roadmap.md` "Flag decision"). Flips to `true` only at S14, gated on every
+    /// session through S13 (including S10b/S12b) plus Kevin's field-confidence call.
+    ///
+    /// Six named guard tests exist specifically to keep this flag's launched-world behavior a
+    /// known checklist rather than a discovery pass at flip time (the Community 2.0 roadmap's
+    /// own retro note on why THAT flag's guard tests had to be reconciled by name after the
+    /// fact) — see `RegularsFlagGuardTests` (`WeParkTests/RegularsModelServiceTests.swift`) for
+    /// all six, named to match `docs/regulars-roadmap.md`'s "Flag decision" section verbatim.
+    static let regularsEnabled = false
+
+    /// Pure gating function for the Settings "Regulars" row's visibility (spec §3.1). A later
+    /// session (S7) builds `RegularsSettingsView`'s actual row and its real presentation
+    /// condition should read through this function rather than checking `regularsEnabled`
+    /// directly — same "single source of truth downstream consumers route through" reasoning as
+    /// `communityPhase1PinTypes(enabled:)`. `enabled` defaults to the real `regularsEnabled` flag
+    /// for production call sites; tests pass an explicit value to exercise both branches without
+    /// mutating the deliberately-immutable `let`.
+    nonisolated static func regularsSettingsRowVisible(enabled: Bool = regularsEnabled) -> Bool {
+        enabled
+    }
+
+    /// Same pattern, for the "give your Regulars a head start" chip row on the leaving-soon card
+    /// (spec §3.4, `ParkedCarDetailView.leavingSoonCard`). A later session (S9) builds the
+    /// actual row.
+    nonisolated static func regularsHeadStartRowVisible(enabled: Bool = regularsEnabled) -> Bool {
+        enabled
+    }
+
+    /// Same pattern, for the Quick Regulars Notice's Scheduled Departure "I'm out at ___"
+    /// schedule-mode toggle (spec §3.5, §0 decision 7). A later session (S10b) builds the
+    /// actual toggle.
+    nonisolated static func regularNoticeScheduleModeVisible(enabled: Bool = regularsEnabled) -> Bool {
+        enabled
+    }
+
+    /// Server-side CHECK range for `pins.regulars_head_start_seconds`
+    /// (`supabase/07-regulars-schema.sql` §S1-1, spec §0 decision 6 / §2.1): `[60, 3600]`
+    /// seconds (1-60 minutes), amended 2026-09-15 from the spec's original `[15, 300]`
+    /// recommendation. The client-side stepper a later session (S9) builds MUST match this
+    /// verbatim — `testAppConstants_regularsHeadStartRange_matchesServerClamp` exists
+    /// specifically so the two can never silently drift (per that migration file's own comment
+    /// on `pins.regulars_head_start_seconds`, which names this exact guard test).
+    static let regularsHeadStartRangeSeconds: ClosedRange<Int> = 60...3600
+
+    /// Default head-start value a later session (S9) pre-selects on the chip row (spec §0
+    /// decision 6): 15 minutes = 900 seconds. Kevin: "2 minutes is nothing... I was thinking 15
+    /// minutes haha." Locked so it can't silently drift back toward the spec's original
+    /// 2-minute recommendation (`testAppConstants_regularsHeadStartDefault_is15Minutes`).
+    static let regularsHeadStartDefaultSeconds: Int = 15 * 60
 }
 
 // MARK: - MoneyMathConstants (FT-12 §6)
