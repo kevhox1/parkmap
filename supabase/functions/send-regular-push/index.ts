@@ -97,6 +97,8 @@ import {
 interface PinRecord {
   id: string;
   pin_type: string;
+  source: string;
+  lifespan: string;
   author_id: string | null;
   segment_id: string | null;
   zone_id: string | null;
@@ -171,12 +173,14 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // Defense-in-depth: the pins_invoke_send_regular_push trigger (08-regulars-push-trigger.sql) already
-  // gates on pin_type = 'leaving_soon' via its WHEN clause — re-check here so this function is safe to
-  // invoke directly (e.g. a manual test call) too, same convention as send-community-push's own
-  // source/lifespan re-check.
-  if (pin.pin_type !== "leaving_soon") {
+  // gates on pin_type = 'leaving_soon' AND source = 'crowd' AND lifespan = 'ephemeral' via its WHEN
+  // clause — re-check the same three conditions here so this function is safe to invoke directly
+  // (e.g. a manual test call) too, same convention as send-community-push's own source/lifespan
+  // re-check. QA parity fix (docs/qa/pr112-regulars-s3-push.md 🟢 nit): originally only re-checked
+  // pin_type, which was looser than 08's own trigger gate after that file's matching fix.
+  if (pin.pin_type !== "leaving_soon" || pin.source !== "crowd" || pin.lifespan !== "ephemeral") {
     return new Response(
-      JSON.stringify({ skipped: true, reason: "not a leaving_soon pin", sent: 0 }),
+      JSON.stringify({ skipped: true, reason: "not a qualifying leaving_soon pin", sent: 0 }),
       { status: 200, headers: { "Content-Type": "application/json" } }
     );
   }

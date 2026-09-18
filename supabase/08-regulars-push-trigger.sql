@@ -116,7 +116,8 @@ begin
       ),
       -- Send the whole inserted row (to_jsonb(NEW)) as {"pin": {...}} — same convention as
       -- 04-community-push-trigger.sql's own invocation. send-regular-push/index.ts reads only
-      -- id/pin_type/author_id/segment_id/zone_id/leaving_minutes/regulars_head_start_seconds from it
+      -- id/pin_type/source/lifespan/author_id/segment_id/zone_id/leaving_minutes/
+      -- regulars_head_start_seconds from it
       -- (see that file's PinRecord interface and its own defense-in-depth pin_type re-check), and
       -- NEVER reads `notes` (pin_notes is a separate table entirely, not a pins column — see that
       -- function's file header for why the note can never race into this push regardless). Sending
@@ -137,21 +138,41 @@ $$;
 -- AFTER INSERT (not BEFORE): pure side-effect trigger, no NEW-row mutation — same posture as
 -- pins_invoke_send_community_push.
 --
--- WHEN clause: pin_type = 'leaving_soon' ONLY. Deliberately UNCONDITIONAL beyond that — no
--- regulars_head_start_seconds check, no author-has-Regulars check (both are cheap to evaluate inside
--- the Edge Function itself, per the SCOPE NOTE above; keeping the SQL WHEN clause minimal means this
--- trigger's firing condition can never silently drift out of sync with a business-logic change that
--- only touches the function). Every OTHER pin_type (open_spot, enforcement_active, sweeper_passed,
--- broken_meter, sign_correction, block_note, filming, construction, parked_car) is excluded — this
--- pipeline is Tiered-Handoff-specific, per spec §1.2/§2.9, not a general Regulars-notification
--- pipeline (Loop C's regular_notices broadcasts are a SEPARATE mechanism — a future session's own
--- trigger on public.regular_notices, not this one, and explicitly out of scope for S3's single named
--- deliverable, "the pins_invoke_send_regular_push insert trigger").
+-- WHEN clause: pin_type = 'leaving_soon' AND source = 'crowd' AND lifespan = 'ephemeral'.
+-- QA FIX (🟢 nit, docs/qa/pr112-regulars-s3-push.md): the original version of this trigger gated on
+-- pin_type ALONE. QA correctly noted this is looser than 04-community-push-trigger.sql's own WHEN
+-- clause (`source='crowd' and lifespan='ephemeral' and zone_id is not null`) — there is no DB-level
+-- CHECK tying pin_type to source/lifespan (confirmed against 02-pins-schema.sql's insert policy, which
+-- only requires source='crowd'), so a hand-crafted leaving_soon insert with a non-ephemeral lifespan
+-- would have fired send-regular-push but not send-community-push. Not exploitable beyond "send one
+-- extra push via a hand-crafted REST call" (no privacy/data-integrity impact — QA's own severity call,
+-- logged as a nit, not blocking), but cheap to close and closes a real asymmetry with 04's own
+-- gate, so fixed here rather than deferred. The app's own leaving_soon composer always sends
+-- source='crowd'/lifespan='ephemeral' today (Community 2.0 Phase 4a), so this tightening is a no-op
+-- for every legitimate insert path and only closes the hand-crafted-REST-call gap QA found.
+--
+-- Deliberately UNCHANGED, and NOT copied from 04: `zone_id is not null`. 04 requires it because the
+-- ZONE push's whole targeting mechanism is zone-scoped (device_push_tokens.zone_id) — a null zone_id
+-- pin has no zone to push to. This trigger's targeting is by author_id -> regular_edges ->
+-- device_push_tokens.user_id (spec §2.9) and has no dependency on zone_id at all; requiring it here
+-- would incorrectly withhold a Regulars push from a (currently theoretical, since the client always
+-- sets zone_id for leaving_soon today) zone-less leaving_soon pin, for no privacy or correctness
+-- reason — this trigger's own targeting never reads zone_id. Also unchanged, per the SCOPE NOTE above:
+-- no regulars_head_start_seconds check, no author-has-Regulars check — both are cheap to evaluate
+-- inside the Edge Function itself, so the SQL WHEN clause stays minimal enough to never silently drift
+-- out of sync with a business-logic change that only touches the function.
+--
+-- Every OTHER pin_type (open_spot, enforcement_active, sweeper_passed, broken_meter, sign_correction,
+-- block_note, filming, construction, parked_car) is excluded — this pipeline is Tiered-Handoff-specific,
+-- per spec §1.2/§2.9, not a general Regulars-notification pipeline (Loop C's regular_notices broadcasts
+-- are a SEPARATE mechanism — a future session's own trigger on public.regular_notices, not this one,
+-- and explicitly out of scope for S3's single named deliverable, "the pins_invoke_send_regular_push
+-- insert trigger").
 drop trigger if exists pins_invoke_send_regular_push on public.pins;
 create trigger pins_invoke_send_regular_push
   after insert on public.pins
   for each row
-  when (new.pin_type = 'leaving_soon')
+  when (new.pin_type = 'leaving_soon' and new.source = 'crowd' and new.lifespan = 'ephemeral')
   execute function internal.invoke_send_regular_push();
 
 -- Verify after applying (Kevin, SQL Editor):
