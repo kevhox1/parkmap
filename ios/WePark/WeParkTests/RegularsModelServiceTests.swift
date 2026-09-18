@@ -10,6 +10,17 @@
 //  Zero UI exercised anywhere in this file — every test targets `Models/Regular.swift` and
 //  `Services/RegularsService.swift` only.
 //
+//  QA pass 1 fix (`docs/qa/pr113-regulars-s5.md` Finding #1, 🟡): the three gating-function guard
+//  tests below originally only exercised an explicit `enabled: false` override, never the
+//  DEFAULT parameter every production call site actually uses — a wiring bug in the default
+//  itself (e.g. an accidental `Bool = true`) would have slipped past all six guard tests. Each
+//  of the three now carries a second assertion — the no-argument call must equal an explicit
+//  call with the real `AppConstants.regularsEnabled` value — carrying over
+//  `testCommunityPhase1PinTypes_defaultParameter_matchesShippedFlag`'s exact pattern
+//  (`Community2Phase1ModelTests.swift:468-474`) rather than inventing a new one. Bodies extended
+//  in place (not new sibling tests) to keep the spec's six guard-test names exactly as written;
+//  test count is unchanged at 34.
+//
 //  Test inventory (34 tests):
 //
 //  1. RegularsFlagGuardTests (6) — the six guard tests pre-declared by
@@ -82,12 +93,31 @@ final class RegularsFlagGuardTests: XCTestCase {
         XCTAssertFalse(AppConstants.regularsEnabled, "Regulars must ship dark until S14's flip")
     }
 
+    /// QA pass 1 Finding #1 (`docs/qa/pr113-regulars-s5.md`): the explicit `enabled: false`
+    /// assertion alone only proves the function doesn't hardcode `true` — it says nothing about
+    /// whether the DEFAULT parameter (the one every real call site actually uses,
+    /// `regularsSettingsRowVisible()` with no argument) is wired to the real
+    /// `AppConstants.regularsEnabled` flag. The second assertion below closes that gap, carrying
+    /// over `testCommunityPhase1PinTypes_defaultParameter_matchesShippedFlag`'s exact pattern
+    /// (`Community2Phase1ModelTests.swift:468-474`) rather than inventing a new one.
     func testRegularsSettingsRow_hidden_whenDisabled() {
         XCTAssertFalse(AppConstants.regularsSettingsRowVisible(enabled: false))
+        XCTAssertEqual(
+            AppConstants.regularsSettingsRowVisible(),
+            AppConstants.regularsSettingsRowVisible(enabled: AppConstants.regularsEnabled),
+            "the no-argument call must resolve identically to an explicit call with the real flag value"
+        )
     }
 
+    /// Same default-parameter-binding gap/fix as `testRegularsSettingsRow_hidden_whenDisabled`
+    /// above — QA pass 1 Finding #1.
     func testLeavingSoonCard_headStartRow_hidden_whenRegularsDisabled() {
         XCTAssertFalse(AppConstants.regularsHeadStartRowVisible(enabled: false))
+        XCTAssertEqual(
+            AppConstants.regularsHeadStartRowVisible(),
+            AppConstants.regularsHeadStartRowVisible(enabled: AppConstants.regularsEnabled),
+            "the no-argument call must resolve identically to an explicit call with the real flag value"
+        )
     }
 
     func testAppConstants_regularsHeadStartRange_matchesServerClamp() {
@@ -99,8 +129,15 @@ final class RegularsFlagGuardTests: XCTestCase {
         XCTAssertEqual(AppConstants.regularsHeadStartDefaultSeconds, 900)
     }
 
+    /// Same default-parameter-binding gap/fix as `testRegularsSettingsRow_hidden_whenDisabled`
+    /// above — QA pass 1 Finding #1.
     func testRegularNoticeScheduleMode_hidden_whenRegularsDisabled() {
         XCTAssertFalse(AppConstants.regularNoticeScheduleModeVisible(enabled: false))
+        XCTAssertEqual(
+            AppConstants.regularNoticeScheduleModeVisible(),
+            AppConstants.regularNoticeScheduleModeVisible(enabled: AppConstants.regularsEnabled),
+            "the no-argument call must resolve identically to an explicit call with the real flag value"
+        )
     }
 }
 
