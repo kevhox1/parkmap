@@ -27,10 +27,14 @@
 # loop; it is NOT skipped by default because it is the sharpest proof of the honest-exclusivity ruling
 # (spec §1.2a, §0 decision 8) and the one property that is easiest to get subtly wrong.
 #
-# What this script CAN verify with anon-key-only access (all of Tests 1-5 are FULLY automated — this
+# What this script CAN verify with anon-key-only access (all of Tests 0-5 are FULLY automated — this
 # is a meaningfully stronger position than 04/08's own test scripts, because pins_with_author already
 # exposes zone_pushed_at as a plain, pollable column — no SQL-Editor-only access is needed to observe
 # the delay/no-op/never-pushed properties themselves):
+#   - internal.sweep_leaving_soon_zone_push() is NOT reachable via PostgREST for anon OR authenticated
+#     (Test 0) — regression guard for docs/qa/pr114-regulars-delay.md Finding #1 (🔴 blocking, fixed:
+#     the function was originally created in `public` with only an additive grant, which does not
+#     revoke Postgres's default PUBLIC EXECUTE grant — anon/authenticated could call it directly).
 #   - A leaving_soon pin posted WITH a head start does NOT have zone_pushed_at set immediately (Test 1).
 #   - The SAME pin DOES have zone_pushed_at set once its head start has elapsed and at least one sweep
 #     tick has run (Test 2) — the delay is real, not just documented.
@@ -162,6 +166,38 @@ ZONE_ID=nolita
 echo "--- Setting up an anonymous test session ---"
 new_session; AUTHOR_TOKEN=$SESSION_TOKEN; AUTHOR_ID=$SESSION_USER_ID
 echo "  1 anonymous session created."
+echo
+
+# ------------------------------------------------------------------
+# Test 0 — regression guard for docs/qa/pr114-regulars-delay.md Finding #1 (🔴 BLOCKING, fixed):
+# internal.sweep_leaving_soon_zone_push() must NOT be reachable via PostgREST at all — the `internal`
+# schema is not exposed to PostgREST's schema cache, so calling it by its unqualified name (the only
+# name PostgREST would ever expose a `public`-schema RPC under) must 404, for BOTH anon and an
+# authenticated session. A 200/204 here would mean the function regressed back into a PostgREST-
+# reachable schema (or reappeared in `public`) — the exact bug this file's SCHEMA PLACEMENT note fixes.
+# ------------------------------------------------------------------
+echo "--- Test 0: internal.sweep_leaving_soon_zone_push() is NOT callable via PostgREST (anon or authenticated) ---"
+RESP=$(curl -sS -X POST "${SUPABASE_URL}/rest/v1/rpc/sweep_leaving_soon_zone_push" \
+  -H "apikey: ${SUPABASE_ANON_KEY}" \
+  -w '\n%{http_code}')
+STATUS=$(echo "$RESP" | tail -n1)
+if [ "$STATUS" = "404" ]; then
+  pass "anon cannot invoke sweep_leaving_soon_zone_push via PostgREST (HTTP 404 — not in the exposed schema)"
+elif [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
+  pass "anon invocation of sweep_leaving_soon_zone_push rejected outright (HTTP $STATUS)"
+else
+  fail "anon invocation of sweep_leaving_soon_zone_push did NOT 404/401/403 (got HTTP $STATUS) — the sweep function may have regressed into a PostgREST-exposed schema, re-check it is internal.sweep_leaving_soon_zone_push(), not public.*"
+fi
+
+RESP=$(rest POST "/rest/v1/rpc/sweep_leaving_soon_zone_push" "$AUTHOR_TOKEN" "")
+STATUS=$(echo "$RESP" | head -n1)
+if [ "$STATUS" = "404" ]; then
+  pass "authenticated cannot invoke sweep_leaving_soon_zone_push via PostgREST (HTTP 404 — not in the exposed schema)"
+elif [ "$STATUS" = "401" ] || [ "$STATUS" = "403" ]; then
+  pass "authenticated invocation of sweep_leaving_soon_zone_push rejected outright (HTTP $STATUS)"
+else
+  fail "authenticated invocation of sweep_leaving_soon_zone_push did NOT 404/401/403 (got HTTP $STATUS) — same regression risk as the anon check above"
+fi
 echo
 
 # ------------------------------------------------------------------

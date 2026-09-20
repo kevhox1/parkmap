@@ -221,7 +221,33 @@ comment on trigger pins_invoke_send_community_push on public.pins is
 -- alert for a spot that is already claimed or already resolved would be actively wrong, not just late).
 -- No trigger or stamp is needed to enforce "forever" here — it falls out of resolved_at/expires_at being
 -- one-way, monotonic state transitions that this file does not need to duplicate or race against.
-create or replace function public.sweep_leaving_soon_zone_push()
+--
+-- SCHEMA PLACEMENT — `internal.sweep_leaving_soon_zone_push()`, NOT `public.sweep_leaving_soon_zone_push()`
+-- (fixed post-QA, docs/qa/pr114-regulars-delay.md Finding #1, live-reproduced 🔴): this function is
+-- SECURITY DEFINER, reads vault.decrypted_secrets, and issues real net.http_post calls carrying the
+-- service-role key, system-wide, bypassing RLS. Postgres grants EXECUTE to PUBLIC by default on
+-- function creation — an earlier version of this file created the function in `public` with only an
+-- ADDITIVE `grant ... to postgres`, which does NOT revoke PUBLIC's retained default grant, so `anon`
+-- and `authenticated` (both PostgREST-exposed) could call it directly via
+-- `POST /rest/v1/rpc/sweep_leaving_soon_zone_push` using nothing but the public anon key — QA confirmed
+-- this live (`set role anon; select public.sweep_leaving_soon_zone_push();` succeeded). The file's own
+-- prior comment credited `internal.invoke_film_permit_ingest()` (02d-ingest-cron.sql) as "the same
+-- convention," but that function is safe for a DIFFERENT reason than its grant statement: it lives in
+-- the `internal` schema, which this repo has established throughout (04, 08, 02d) specifically as the
+-- "PostgREST does not expose this" boundary — its own `pg_proc.proacl` has the identical
+-- PUBLIC-retained EXECUTE grant, it's just harmless there because of schema placement. This file now
+-- matches that precedent for real (schema placement, not just the grant line) rather than copying only
+-- its surface-level GRANT statement, per QA's own recommended fix (a) — "prefer the schema move for
+-- consistency" over an explicit `REVOKE EXECUTE FROM PUBLIC` (fix (b)), since it is the LEAST NOVEL
+-- pattern: every other cron-invoked SECURITY DEFINER helper in this repo (internal.invoke_send_community_push,
+-- internal.invoke_send_regular_push, internal.invoke_film_permit_ingest) already lives in `internal`
+-- with no explicit REVOKE anywhere, and this function now does too.
+create schema if not exists internal;
+-- Idempotent restatement — `internal` already exists by this point in the chain (created by `04`
+-- and/or `08`), same "no undeclared dependency on file-apply order" reasoning this file's own header
+-- already applies to `create extension if not exists pg_cron` below.
+
+create or replace function internal.sweep_leaving_soon_zone_push()
 returns void language plpgsql security definer as $$
 declare
   r                  record;
@@ -290,7 +316,7 @@ begin
 end;
 $$;
 
-comment on function public.sweep_leaving_soon_zone_push() is
+comment on function internal.sweep_leaving_soon_zone_push() is
   'The delayed half of spec §2.8''s Tiered Handoff push. Runs on a 30-second pg_cron schedule (see the '
   'cron.schedule call below). Finds every leaving_soon pin whose Regulars head start has elapsed '
   '(created_at + regulars_head_start_seconds <= now()), is not yet zone-pushed, and has not expired or '
@@ -307,11 +333,12 @@ comment on function public.sweep_leaving_soon_zone_push() is
   'redeem_regular_invite() writing regular_edges, which has no client INSERT policy at all).';
 
 -- Grant execute to postgres only — the role pg_cron invocations run as on this project, same convention
--- as 02d-ingest-cron.sql's internal.invoke_film_permit_ingest() grant. Not exposed to anon/authenticated
--- via PostgREST: there is no product reason for a client to trigger this sweep on demand, and the
+-- as 02d-ingest-cron.sql's internal.invoke_film_permit_ingest() grant. NOT reachable via PostgREST at
+-- all now (the `internal` schema itself is the boundary, not this grant — see the SCHEMA PLACEMENT
+-- note above): there is no product reason for a client to trigger this sweep on demand, and the
 -- existing community-pin-expiry-hygiene-sweep job (03-community-2.0-schema.sql §2.12) sets the same
 -- precedent (a raw SQL cron body with zero RPC exposure) for a cron-only helper.
-grant execute on function public.sweep_leaving_soon_zone_push() to postgres;
+grant execute on function internal.sweep_leaving_soon_zone_push() to postgres;
 
 -- Enable required extension (idempotent — already enabled and in production use per
 -- 02d-ingest-cron.sql:17 / 03-community-2.0-schema.sql §2.12; restated here so this file has no
@@ -326,12 +353,17 @@ create extension if not exists pg_cron;
 select cron.schedule(
   'sweep-leaving-soon-zone-push',
   '30 seconds',
-  $$ select public.sweep_leaving_soon_zone_push(); $$
+  $$ select internal.sweep_leaving_soon_zone_push(); $$
 );
 
 -- Verify after applying (Kevin, SQL Editor):
 --   select jobname, schedule, active from cron.job where jobname = 'sweep-leaving-soon-zone-push';
 --   select tgname, tgenabled from pg_trigger where tgname = 'pins_invoke_send_community_push';
+-- Verify the function is NOT anon/authenticated-callable via PostgREST (the QA-found gap this file
+-- now fixes — docs/qa/pr114-regulars-delay.md Finding #1):
+--   curl -sS -X POST "https://jiispshyqerscdoferaw.supabase.co/rest/v1/rpc/sweep_leaving_soon_zone_push" \
+--     -H "apikey: <anon key>" -H "Authorization: Bearer <anon key>"
+--   -- expect 404 (function not found in the exposed public schema), not 200/204.
 -- Verify the sweep has actually run and swept a test pin (after inserting a qualifying test pin with a
 -- short head start, e.g. regulars_head_start_seconds=60, and waiting ~60-90s):
 --   select id, created_at, regulars_head_start_seconds, zone_pushed_at from public.pins
