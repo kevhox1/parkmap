@@ -390,6 +390,18 @@ struct ContentView: View {
     /// `RealtimePinSubscribing` protocol type — this file never needs `import Realtime`.
     let supabaseClients: SupabaseClients
 
+    // MARK: - Regulars network (S7, docs/regulars-network-spec.md §3.1)
+
+    /// Injected from `WeParkApp` — SAME instance `WeParkApp` also uses for its own
+    /// `.onOpenURL` invite-redemption sheet (mirrors `authService`'s own AC-A5 singleton
+    /// invariant: `RegularsService` is built once, wrapping that one shared `authService`, not
+    /// re-constructed per consumer). Threaded straight through to `SettingsView` →
+    /// `RegularsSettingsView` at the `.settings` sheet case below; `ContentView` itself never
+    /// calls anything on it directly. Zero live effect while
+    /// `AppConstants.regularsEnabled == false` (today's shipped default) — the row that would
+    /// ever present `RegularsSettingsView` is itself gated on that flag (`SettingsView.swift`).
+    let regularsService: RegularsService
+
     // MARK: - Environment
 
     @Environment(\.scenePhase) private var scenePhase
@@ -869,10 +881,16 @@ struct ContentView: View {
     ///
     /// All other `@State` properties retain their inline default-expression initializers;
     /// those do not depend on injected values.
-    init(appDelegate: AppDelegate, authService: SupabaseAuthService, supabaseClients: SupabaseClients) {
+    init(
+        appDelegate: AppDelegate,
+        authService: SupabaseAuthService,
+        supabaseClients: SupabaseClients,
+        regularsService: RegularsService
+    ) {
         self.appDelegate = appDelegate
         self.authService = authService
         self.supabaseClients = supabaseClients
+        self.regularsService = regularsService
         // Community 2.0 S14: constructed BEFORE pinService below so the same instance can be
         // threaded into pinService's own zoneStore: parameter — see this property's own doc
         // comment for why one shared instance (not each service defaulting its own) matters.
@@ -1319,9 +1337,12 @@ struct ContentView: View {
 
         case .settings:
             // W7: Global settings sheet.
+            // S7 (docs/regulars-network-spec.md §3.1): regularsService threaded through for the
+            // gated "Regulars" row → RegularsSettingsView. See this property's own doc comment.
             SettingsView(
                 notificationsMuted: $notificationsMuted,
                 offsets: $reminderOffsets,
+                regularsService: regularsService,
                 onUnmute: {
                     // Reschedule notification for the current pin if it opted in.
                     if let car = parkPinService.parkedCar, car.notifyOnRestriction {
@@ -4986,5 +5007,11 @@ func recenterPillBottomPadding(showApproachStrip: Bool, parkUntilVisible: Bool) 
 
 #Preview {
     let clients = SupabaseClients()
-    ContentView(appDelegate: AppDelegate(), authService: clients.makeAuthService(), supabaseClients: clients)
+    let previewAuthService = clients.makeAuthService()
+    ContentView(
+        appDelegate: AppDelegate(),
+        authService: previewAuthService,
+        supabaseClients: clients,
+        regularsService: RegularsService(authService: previewAuthService)
+    )
 }

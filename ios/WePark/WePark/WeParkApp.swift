@@ -294,6 +294,24 @@ struct WeParkApp: App {
     /// alive for the full app lifetime.
     @State private var authService: SupabaseAuthService
 
+    // MARK: - Regulars network (S7, docs/regulars-network-spec.md §3.2)
+
+    /// Single `RegularsService` instance for the app lifetime, wrapping the SAME `authService`
+    /// instance above (AC-A5-style singleton — mirrors `pinService`/`zoneMessageService` in
+    /// `ContentView.init`, which all share the one `authService` rather than each calling
+    /// `clients.makeAuthService()` again and getting a second, independent wrapper object).
+    /// Used both here (the `.onOpenURL` invite-redemption sheet below) and passed into
+    /// `ContentView` → `SettingsView` → `RegularsSettingsView` for the Regulars list/invite
+    /// surfaces. Zero live effect while `AppConstants.regularsEnabled == false` (today's shipped
+    /// default).
+    @State private var regularsService: RegularsService
+
+    /// The invite token parsed from the most recent `wepark://invite/<uuid>` open, or `nil`.
+    /// Drives the `.sheet(isPresented:)` below via a computed `Binding<Bool>` rather than a
+    /// second `Identifiable` wrapper type — `UUID` alone isn't `Identifiable`, and this is the
+    /// only sheet this property ever needs to present.
+    @State private var pendingInviteToken: UUID?
+
     /// Explicit init required because `authService` (a `@State` property) depends on
     /// `supabaseClients.authClient` — Swift stored properties can't reference sibling stored
     /// properties in their default-expression form (same reasoning as `ContentView.init`'s own
@@ -302,17 +320,49 @@ struct WeParkApp: App {
     init() {
         let clients = SupabaseClients()
         _supabaseClients = State(initialValue: clients)
-        _authService = State(initialValue: clients.makeAuthService())
+        let sharedAuthService = clients.makeAuthService()
+        _authService = State(initialValue: sharedAuthService)
+        // S7: reuses `sharedAuthService` (NOT a second `clients.makeAuthService()` call) — see
+        // `regularsService`'s own doc comment for why a second call would violate the AC-A5
+        // singleton invariant.
+        _regularsService = State(initialValue: RegularsService(authService: sharedAuthService))
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView(appDelegate: appDelegate, authService: authService, supabaseClients: supabaseClients)
+            ContentView(
+                appDelegate: appDelegate,
+                authService: authService,
+                supabaseClients: supabaseClients,
+                regularsService: regularsService
+            )
                 .task {
                     // Non-blocking: the map loads while auth completes in the background.
                     // ensureSession() fails silently if the network is unavailable (AC-A4).
                     // The app stays in read-only mode until auth is available.
                     await authService.ensureSession()
+                }
+                // S7 (docs/regulars-network-spec.md §3.2): parses `wepark://invite/<uuid>` deep
+                // links (Camera-app QR scan, a tapped share-link, AirDrop, etc.) and presents the
+                // redemption confirm sheet. FULLY gated on `AppConstants.regularsEnabled` — a
+                // malformed/foreign URL, or ANY URL at all while the flag is off, is silently
+                // ignored (no sheet, no state mutation) rather than opening Safari to a
+                // broken-looking address; see `RegularsInviteLink.parse(_:)`'s own doc comment
+                // for the exact rejection rules (wrong scheme, wrong host, non-UUID token, extra
+                // path segments all reject).
+                .onOpenURL { url in
+                    guard let token = RegularsInviteLink.resolveRedemptionToken(from: url) else { return }
+                    pendingInviteToken = token
+                }
+                .sheet(isPresented: Binding(
+                    get: { pendingInviteToken != nil },
+                    set: { isPresented in
+                        if !isPresented { pendingInviteToken = nil }
+                    }
+                )) {
+                    if let token = pendingInviteToken {
+                        RegularInviteRedemptionView(token: token, service: regularsService)
+                    }
                 }
                 // FT-20 (2026-08-19): app defaults to dark mode, always, regardless of the
                 // device's system appearance setting. Kevin: "I think that looks cleaner."

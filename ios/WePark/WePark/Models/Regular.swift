@@ -221,3 +221,36 @@ struct RegularNotice: Identifiable, Codable, Equatable {
         case expiresAt    = "expires_at"
     }
 }
+
+// MARK: - RegularProfileSummary
+
+/// S7 addition (iOS UI session, `docs/regulars-roadmap.md` row S7) — a minimal read of
+/// `public.profiles` (NOT a Regulars-owned table; `01-mvp-schema.sql`/`03-community-2.0-schema.sql`)
+/// used ONLY to resolve a handle + avatar emoji for a Regulars-list row or an invite-redemption
+/// confirmation, exactly the two display needs `docs/regulars-network-spec.md` §3.1/§3.2 call for
+/// ("handle + avatar, mirroring the existing profile-row visual language from `CrewFeedSection`").
+///
+/// This is a DELIBERATE, narrow exception to `RegularsService`'s own header note ("there is no
+/// public/anonymous read surface anywhere in the Regulars feature, by design") — that note is
+/// about the four Regulars-OWNED tables (`regular_edges`/`regular_invites`/`regular_notices`/
+/// `regular_blocks`), all of which stay `auth.uid()`-gated. `public.profiles` is a pre-existing,
+/// app-wide, intentionally public table (`profiles_select_all using (true)`,
+/// `01-mvp-schema.sql`) that `CommunityPinService.fetchOwnProfile`/`pins_with_author` already read
+/// anonymously — this struct/the `RegularsService.fetchProfiles(ids:)` method that decodes it
+/// (`Services/RegularsService.swift`) is not opening any new privacy surface, just a second,
+/// batched (`id=in.(...)`) reader of a table that was already fully public.
+///
+/// Deliberately NOT `CommunityPinService.CommunityProfile` reused directly — this repo's own
+/// "no cross-service-file type/helper sharing" convention (see `RegularsService`'s own header on
+/// why its date decoder is duplicated, not imported) applies here too, and this struct only needs
+/// three of that type's eight columns.
+struct RegularProfileSummary: Identifiable, Codable, Equatable {
+    let id: UUID
+    let username: String
+    /// A single emoji, or `nil` if the user never picked one (`IdentitySheet.avatarOptions`).
+    let avatar: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, username, avatar
+    }
+}

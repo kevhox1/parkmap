@@ -632,4 +632,189 @@ final class RegularsService {
             throw RegularsServiceError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
         }
     }
+
+    // MARK: - Remove a Regular (S7, spec §2.2/§3.1 "remove/block affordances")
+
+    /// Deletes the `regular_edges` row between the caller and `otherUserId` — "unfriend"
+    /// WITHOUT blocking (`regular_edges_delete_own`, `07-regulars-schema.sql` §S1-2: "either
+    /// party can end the relationship unilaterally"). Flagged in `RegularsService`'s own S5
+    /// header as deliberately left unwired that session ("a standalone `regular_edges` DELETE
+    /// ... not named in this session's dispatch list") — this is that follow-up, S7's own
+    /// "remove ... affordance" dispatch item.
+    ///
+    /// Filters with an `or=(and(...),and(...))` PostgREST combinator covering BOTH orderings of
+    /// the composite primary key, rather than computing the canonical `low_user_id < high_user_id`
+    /// ordering client-side — this table's own low/high assignment is a Postgres `uuid <`
+    /// comparison, and duplicating that comparison's exact semantics in Swift (whose `UUID`
+    /// doesn't define `Comparable` at all) would be a second, unverified place for the two
+    /// orderings to silently drift apart. The RLS policy (`auth.uid() in (low_user_id,
+    /// high_user_id)`) already guarantees this can only ever match a row the caller participates
+    /// in, so the OR-both-orderings filter is exactly as safe as a canonical-order filter would
+    /// be, without needing one.
+    ///
+    /// - Parameter otherUserId: The Regular to remove.
+    func removeRegular(otherUserId: UUID) async throws {
+        guard let authSvc = authService, let myId = authSvc.currentUserId else {
+            throw RegularsServiceError.notAuthenticated
+        }
+        let jwt = try await requireJWT()
+
+        let orFilter = "or=(and(low_user_id.eq.\(myId.uuidString),high_user_id.eq.\(otherUserId.uuidString))," +
+                       "and(low_user_id.eq.\(otherUserId.uuidString),high_user_id.eq.\(myId.uuidString)))"
+        guard var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/regular_edges"),
+            resolvingAgainstBaseURL: false
+        ) else {
+            throw RegularsServiceError.encodingFailure
+        }
+        // Built as a raw query string (not `[URLQueryItem]`) because the `or=(...)` combinator's
+        // own commas/parentheses must reach PostgREST unescaped-in-structure — `URLQueryItem`
+        // would percent-encode the parentheses correctly but there is no clean way to express
+        // the nested `and(...)`  groups as a *value* of a single named item without hand-building
+        // the same string anyway; this mirrors PostgREST's own documented `or`/`and` filter
+        // syntax examples verbatim.
+        components.percentEncodedQuery = orFilter
+        guard let url = components.url else {
+            throw RegularsServiceError.encodingFailure
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "DELETE"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("Bearer \(jwt)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("return=minimal", forHTTPHeaderField: "Prefer")
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw RegularsServiceError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+
+        // Optimistic removal from the locally-cached list, mirroring `sendNotice`'s own
+        // optimistic-mutation precedent — `RegularsSettingsView` doesn't need to re-`fetchEdges()`
+        // just to reflect a delete it just performed successfully.
+        edges.removeAll { $0.lowUserId == otherUserId || $0.highUserId == otherUserId }
+    }
+
+    // MARK: - Fetch a single invite (S7, invite-sheet redemption polling)
+
+    /// Re-fetches one `regular_invites` row by its own `id` — used by `RegularInviteView`'s
+    /// polling loop to detect `redeemed_at` flipping non-null (spec §3.2: "Polls ... for
+    /// `redeemed_at` and flips to a success state"). Only ever resolves for the CREATOR's own
+    /// invite (`regular_invites_select_own`, `created_by = auth.uid()`) — a redeemer's session
+    /// can never read someone else's invite row this way, which is exactly why the
+    /// redemption-side confirm sheet (`RegularInviteRedemptionView`) cannot look up the inviter's
+    /// handle before calling `redeemInvite(token:)`; see that view's own header comment.
+    ///
+    /// - Parameter id: The invite's own `id` (the same value rendered as the QR/link token).
+    /// - Returns: `nil` if the row no longer matches (deleted/RLS-filtered) rather than throwing
+    ///   — mirrors `fetchOwnProfile`'s "not found is a normal state" convention, not an error.
+    func fetchInvite(id: UUID) async throws -> RegularInvite? {
+        let jwt = try await requireJWT()
+
+        guard let request = buildRequest(
+            path: "rest/v1/regular_invites",
+            method: "GET",
+            jwt: jwt,
+            queryItems: [
+                URLQueryItem(name: "id", value: "eq.\(id.uuidString)"),
+                URLQueryItem(
+                    name: "select",
+                    value: "id,created_by,created_at,expires_at,redeemed_by,redeemed_at,revoked_at"
+                ),
+                URLQueryItem(name: "limit", value: "1"),
+            ]
+        ) else {
+            throw RegularsServiceError.encodingFailure
+        }
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw RegularsServiceError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        let invites = try Self.makeDateDecodingJSONDecoder().decode([RegularInvite].self, from: data)
+        return invites.first
+    }
+
+    // MARK: - Cancel invite (S7, spec §3.2 "Cancel" button)
+
+    /// Sets `revoked_at = now()` on the caller's own still-open invite
+    /// (`regular_invites_update_own` + the column-level `grant update (revoked_at)` —
+    /// `07-regulars-schema.sql` §S1-4). Sends ONLY `revoked_at` — every other column on this
+    /// table is either server-derived or, per that same column-level grant, simply not
+    /// client-writable at all regardless of what this method sends.
+    ///
+    /// - Parameter id: The invite's own `id`.
+    func cancelInvite(id: UUID) async throws {
+        let jwt = try await requireJWT()
+
+        let payload: [String: Any] = ["revoked_at": Self.iso8601StringWithFraction(Date())]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw RegularsServiceError.encodingFailure
+        }
+
+        guard let request = buildRequest(
+            path: "rest/v1/regular_invites",
+            method: "PATCH",
+            jwt: jwt,
+            queryItems: [URLQueryItem(name: "id", value: "eq.\(id.uuidString)")],
+            body: body,
+            extraHeaders: ["Prefer": "return=minimal"]
+        ) else {
+            throw RegularsServiceError.encodingFailure
+        }
+
+        let (_, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw RegularsServiceError.httpError(statusCode: (response as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+    }
+
+    // MARK: - Fetch profiles (S7, handle/avatar resolution — see `RegularProfileSummary`'s header)
+
+    /// Batch-reads `public.profiles` (a pre-existing, app-wide public table — see
+    /// `RegularProfileSummary`'s own doc comment for why this is not a new privacy surface) for
+    /// exactly the handle/avatar fields a Regulars-list row or an invite-redemption confirmation
+    /// needs to display. Public read, no `Authorization` header — mirrors
+    /// `CommunityPinService.fetchOwnProfile`'s exact "apikey + Accept only" shape, the
+    /// established convention for this one publicly-readable table.
+    ///
+    /// - Parameter ids: The user ids to resolve. Empty input short-circuits to `[:]` without a
+    ///   network call (an empty `id=in.()` PostgREST filter is a guaranteed-empty, wasted round
+    ///   trip).
+    /// - Returns: A dictionary keyed by `id` for every row PostgREST returned. Silently omits
+    ///   (never throws for) any id with no matching row, or on any network/decode failure —
+    ///   this is optional cosmetic enrichment (a row still renders, just without a resolved
+    ///   handle) never a required read, mirroring `CrewFeedSection.profileRow`'s own
+    ///   renders-nothing-when-absent posture for missing profile data.
+    func fetchProfiles(ids: [UUID]) async -> [UUID: RegularProfileSummary] {
+        guard !ids.isEmpty else { return [:] }
+
+        var components = URLComponents(
+            url: supabaseURL.appendingPathComponent("rest/v1/profiles"),
+            resolvingAgainstBaseURL: false
+        )
+        let idList = ids.map(\.uuidString).joined(separator: ",")
+        components?.queryItems = [
+            URLQueryItem(name: "id", value: "in.(\(idList))"),
+            URLQueryItem(name: "select", value: "id,username,avatar"),
+        ]
+        guard let url = components?.url else { return [:] }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.setValue(supabaseAnonKey, forHTTPHeaderField: "apikey")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        guard
+            let (data, response) = try? await urlSession.data(for: request),
+            let http = response as? HTTPURLResponse,
+            (200..<300).contains(http.statusCode),
+            let profiles = try? JSONDecoder().decode([RegularProfileSummary].self, from: data)
+        else {
+            return [:]
+        }
+
+        return Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
+    }
 }
