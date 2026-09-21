@@ -1077,3 +1077,27 @@ already-listed `ParkedCarDetailView.swift`. The only new backend surface is insi
 `07-regulars-schema.sql` itself (the `scheduled_for` column + its derive-expiry trigger, §2.6) — no new
 migration file, no new Edge Function, no new cron job (the T-0 poster reminder is a local
 `UNUserNotificationCenter` schedule, client-only, §3.5).
+
+## Amendment 2026-09-21 — push copy must be street-accurate (Kevin's ruling)
+
+Kevin rejected zone-level push copy ("I think 'Nolita' is too open. This must be street dependent
+or at least when I click the notification it should take me to the location that the regular
+logged they are leaving from"). Ruling implemented as BOTH halves:
+
+1. **Street label in the visible copy — via author-supplied label, not server geocoding.** The
+   posting client already renders the human street label at handoff time (the My Car sheet's own
+   "MOTT ST — West side · between PRINCE ST and SPRING ST" resolution). Amend DRAFT migration 07
+   (unapplied — free to amend): `pins` gains nullable `street_label text` with a server-side
+   length cap (CHECK, ~80 chars) and the same column-privilege posture as other client-writable
+   columns; the client writes it at leaving_soon insert. `send-regular-push` prefers
+   `street_label` in the alert body when present, falling back to `zones.name`. The label is
+   disclosed ONLY via the Regulars push + pin detail (same consensual disclosure class as the
+   handoff itself — §2.9 reasoning unchanged). No Notification Service Extension, no server
+   geocoding — the device that knows the street tells the server the string.
+2. **Tap-through deep-link (the "at least" floor).** Tapping the Regulars push routes to the pin's
+   location on the map (payload already carries `pin_id`/`segment_id`/coords) — lands in the S13
+   push-integration session's scope; named there explicitly.
+
+Sizing: absorbed into existing sessions (07 amendment + function change = one small backend
+session; client label-write joins the S9/handoff UI session; deep-link joins S13). No new
+sessions.
