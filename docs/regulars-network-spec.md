@@ -1101,3 +1101,12 @@ logged they are leaving from"). Ruling implemented as BOTH halves:
 Sizing: absorbed into existing sessions (07 amendment + function change = one small backend
 session; client label-write joins the S9/handoff UI session; deep-link joins S13). No new
 sessions.
+
+## Amendment 2026-09-21b — pre-redemption confirm copy is generic (orchestrator ruling, PR #115)
+
+§3.2's sketch named the inviter pre-redemption ("Dave wants to add you…"), but `regular_invites`'s
+RLS correctly hides invites from everyone but their creator until redemption. Ruled: generic
+pre-confirm copy is ACCEPTED — invites are exchanged in person (QR) or via a direct share; the
+inviter's identity is physically/socially present, and a "peek" RPC would weaken the deny-by-default
+posture to display a name the redeemer already knows. Post-success copy stays personalized (the RPC
+returns the new edge). Kevin may veto at the S7 gate.
