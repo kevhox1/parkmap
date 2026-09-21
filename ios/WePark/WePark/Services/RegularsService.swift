@@ -374,6 +374,45 @@ final class RegularsService {
         return invite
     }
 
+    // MARK: - Regenerate invite (S7 QA fix — docs/qa/pr115-regulars-s7.md Finding #1)
+
+    /// Revokes `previousId` (if any) BEFORE creating its replacement — the "New invite" button's
+    /// entire flow (`RegularInviteView`). QA pass 1 caught the original shape (plain
+    /// `createInvite()` with no revoke): the OLD token stayed fully redeemable for the rest of
+    /// its 10-minute TTL, silently, even after the QR/link on screen had been replaced — a real
+    /// screenshot/already-shared-link risk, not just theoretical.
+    ///
+    /// Revoke-FIRST, not revoke-alongside (e.g. `async let` running both concurrently): creating
+    /// the replacement before confirming the old one is dead would still leave a real (if brief)
+    /// window with two simultaneously-live tokens if the app were killed between the two calls.
+    /// Sequencing this strictly (`await` the revoke, only then create) makes "two live invites at
+    /// once" unreachable through this method, not just unlikely.
+    ///
+    /// Retries the revoke exactly ONCE on failure — a single transient network blip shouldn't
+    /// permanently block getting a fresh invite — but if BOTH attempts fail, this method THROWS
+    /// and never calls `createInvite()` at all. This is the deliberate choice QA's framing asked
+    /// for ("if cancel fails, still proceed?"): proceeding anyway would recreate exactly the bug
+    /// this fix closes (an orphaned, still-redeemable old token, just with the added confusion of
+    /// a bogus revoke attempt the user never sees fail). The caller
+    /// (`RegularInviteView.regenerateInvite()`) surfaces the thrown error honestly rather than
+    /// silently discarding it.
+    ///
+    /// - Parameter previousId: The currently-displayed invite's own `id`, or `nil` on first
+    ///   creation (nothing to revoke — this degrades to a plain `createInvite()` call).
+    /// - Returns: The newly-created `RegularInvite`.
+    func regenerateInvite(previousId: UUID?) async throws -> RegularInvite {
+        if let previousId {
+            do {
+                try await cancelInvite(id: previousId)
+            } catch {
+                // One retry, then give up — the second failure propagates un-caught, which is
+                // exactly what stops `createInvite()` below from ever running.
+                try await cancelInvite(id: previousId)
+            }
+        }
+        return try await createInvite()
+    }
+
     // MARK: - Redeem invite
 
     /// Calls the `redeem_regular_invite(p_token)` RPC (`07-regulars-schema.sql` §S1-4) — the

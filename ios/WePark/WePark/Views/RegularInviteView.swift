@@ -7,9 +7,16 @@
 //  docs/regulars-roadmap.md, session S7.
 //
 //  Presented as a sheet from `RegularsSettingsView`'s "Add a Regular" button. On appear, inserts
-//  one `regular_invites` row (`RegularsService.createInvite()`) and renders it as BOTH a QR code
+//  one `regular_invites` row (`RegularsService.regenerateInvite(previousId:)`, which degrades to
+//  a plain create when there's nothing to revoke yet) and renders it as BOTH a QR code
 //  (`CoreImage`'s `CIQRCodeGenerator` — no third-party library, per this session's explicit
 //  constraint) and a `ShareLink` — same underlying token, two presentations (spec decision 5).
+//
+//  "New invite" (regenerate) — S7 QA fix (`docs/qa/pr115-regulars-s7.md` Finding #1): the
+//  currently-displayed invite is REVOKED before its replacement is created
+//  (`RegularsService.regenerateInvite(previousId:)`), so the old QR/link can never be silently
+//  screenshotted-and-still-valid after a fresh one is shown. See that method's own doc comment
+//  for the revoke-first ordering guarantee and the retry-once-then-give-up failure policy.
 //
 //  Redemption detection: POLLS `RegularsService.fetchInvite(id:)` every 3s (not Realtime — this
 //  session's dispatch explicitly defers "the live-push half of its gate" to S13; a lightweight
@@ -36,8 +43,8 @@ struct RegularInviteView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var invite: RegularInvite?
-    // Starts `true` (not `false`) — `.task` below always calls `createInvite()` immediately on
-    // appear, so defaulting to "working" avoids a one-frame flash of `errorState`'s "couldn't
+    // Starts `true` (not `false`) — `.task` below always calls `regenerateInvite()` immediately
+    // on appear, so defaulting to "working" avoids a one-frame flash of `errorState`'s "couldn't
     // create an invite" copy before that call has even started.
     @State private var isWorking = true
     @State private var errorMessage: String?
@@ -70,7 +77,7 @@ struct RegularInviteView: View {
         }
         .task {
             guard AppConstants.regularsEnabled, invite == nil else { return }
-            await createInvite()
+            await regenerateInvite()
         }
         .onDisappear {
             pollTask?.cancel()
@@ -145,7 +152,11 @@ struct RegularInviteView: View {
                     .buttonStyle(.bordered)
 
                     Button {
-                        Task { await createInvite() }
+                        // S7 QA fix (Finding #1): regenerateInvite() revokes THIS invite before
+                        // creating its replacement — see that method's own doc comment (and
+                        // RegularsService.regenerateInvite(previousId:)'s) for why this must not
+                        // be a plain createInvite() call.
+                        Task { await regenerateInvite() }
                     } label: {
                         Text("New invite")
                             .frame(maxWidth: .infinity)
@@ -186,7 +197,7 @@ struct RegularInviteView: View {
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
             Button("Try again") {
-                Task { await createInvite() }
+                Task { await regenerateInvite() }
             }
             .buttonStyle(.borderedProminent)
         }
@@ -195,18 +206,37 @@ struct RegularInviteView: View {
 
     // MARK: - Actions
 
-    private func createInvite() async {
+    /// The single entry point for "get me a live invite" — used by the initial `.task`, the
+    /// "New invite" button, and errorState's "Try again" button alike. Delegates the actual
+    /// revoke-then-create composition to `RegularsService.regenerateInvite(previousId:)` (S7 QA
+    /// fix, Finding #1) — this view only owns the resulting UI state, not the ordering
+    /// guarantee, which lives in the service where it's directly wire-testable.
+    ///
+    /// `invite?.id` is `nil` on first creation (nothing to revoke, degrades to a plain create)
+    /// and non-`nil` on every subsequent call from a still-displayed invite (the "New invite"
+    /// path) — `errorState`'s "Try again" also passes `nil` here, since `invite` is always `nil`
+    /// by construction whenever `errorState` itself is showing (see `body`'s own state-selection
+    /// `if`/`else` chain: `errorState` is only reachable when `invite == nil`).
+    private func regenerateInvite() async {
+        let previousId = invite?.id
         pollTask?.cancel()
         isWorking = true
         errorMessage = nil
         redeemedByProfile = nil
         do {
-            let created = try await service.createInvite()
+            let created = try await service.regenerateInvite(previousId: previousId)
             invite = created
             startPolling(inviteId: created.id)
         } catch {
             invite = nil
-            errorMessage = "Couldn't create an invite. Check your connection and try again."
+            // Deliberately generic — this single catch covers BOTH sub-failures
+            // (`regenerateInvite(previousId:)` can fail either revoking the old token or
+            // creating the new one) and there is no honest way to tell the user which step
+            // failed without over-claiming certainty this view doesn't have. Either way the
+            // outcome is the same and safe: no replacement was created, so there is never a
+            // silent second live token — see `RegularsService.regenerateInvite`'s own doc
+            // comment for why a failed revoke short-circuits before the create call runs at all.
+            errorMessage = "Couldn't create a new invite. Check your connection and try again."
         }
         isWorking = false
     }

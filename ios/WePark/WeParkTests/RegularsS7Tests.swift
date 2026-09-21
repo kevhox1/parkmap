@@ -21,18 +21,23 @@
 //  `.onOpenURL` entry point's own gate) IS covered below, since it didn't exist before this
 //  session.
 //
-//  Test inventory (33 tests):
-//   1. RegularsInviteLinkTests (13) — build/parse round-trip, malformed/foreign-URL rejection,
-//      the net-new `resolveRedemptionToken` gating helper.
+//  Test inventory (39 tests, updated post-QA-pass-1 — see `docs/qa/pr115-regulars-s7.md`):
+//   1. RegularsInviteLinkTests (14) — build/parse round-trip, malformed/foreign-URL rejection,
+//      the net-new `resolveRedemptionToken` gating helper, and (QA finding #2) an explicit,
+//      documented trailing-slash-is-accepted lock-in test.
 //   2. InviteCountdownTests (6) — countdown math against an explicit, fixed clock (no
 //      `Date()`/`Calendar.current` internally).
 //   3. RegularInviteRedemptionCopyTests (7) — all four result states + the pre-confirm copy,
 //      including a banned-word sweep across every string this session's dispatch specifically
 //      named (avoid, ticket, fine, evasion, dodge).
 //   4. RegularInviteViewQRTests (2) — the CoreImage QR payload/geometry contract.
-//   5. RegularsServiceS7WireTests (5) — the three S7 `RegularsService` additions
+//   5. RegularsServiceS7WireTests (10) — the three original S7 `RegularsService` additions
 //      (`removeRegular`/`cancelInvite`/`fetchProfiles`) at the actual outgoing `URLRequest`
-//      level, same discipline as S5's own `RegularsServiceWireTests`.
+//      level, same discipline as S5's own `RegularsServiceWireTests`; PLUS, added in the QA-fix
+//      pass: `fetchInvite(id:)`'s own dedicated wire test (finding #6, matching its three
+//      siblings) and three tests on the NEW `regenerateInvite(previousId:)` method (finding #1,
+//      the actual fix — revoke-before-create ordering, the nil-previousId first-creation path,
+//      and the "a failed revoke must never be followed by a create" guarantee).
 //
 //  No Calendar.current.
 //
@@ -96,6 +101,16 @@ final class RegularsInviteLinkTests: XCTestCase {
     func testParse_rejectsExtraPathSegments() {
         let url = URL(string: "wepark://invite/\(kToken.uuidString)/extra")!
         XCTAssertNil(RegularsInviteLink.parse(url))
+    }
+
+    /// S7 QA finding #2 (`docs/qa/pr115-regulars-s7.md`) — locks in the deliberate,
+    /// documented-not-accidental choice to accept a trailing slash as equivalent to no trailing
+    /// slash, rather than leaving it an untested assumption about `URL.pathComponents`'s own
+    /// normalization behavior. See `RegularsInviteLink.parse(_:)`'s own doc comment for the full
+    /// reasoning.
+    func testParse_acceptsTrailingSlash_normalizedEquivalentToNoTrailingSlash() {
+        let url = URL(string: "wepark://invite/\(kToken.uuidString)/")!
+        XCTAssertEqual(RegularsInviteLink.parse(url), kToken)
     }
 
     // MARK: resolveRedemptionToken (the .onOpenURL gate)
@@ -322,6 +337,29 @@ private func s7WireMockSession() -> URLSession {
     return URLSession(configuration: config)
 }
 
+/// Shared `regular_invites` row-echo fixture for `fetchInvite`/`regenerateInvite`'s wire tests
+/// below. Deliberately a TOP-LEVEL function (not an instance method on
+/// `RegularsServiceS7WireTests`) — `RegularsAuthMockURLProtocol`/`RegularsS7WireMockURLProtocol`'s
+/// `requestHandler` closures are invoked by `URLProtocol.startLoading()` off the main actor, and
+/// this file's mock-response closures are assigned from `@MainActor`-isolated test methods; a
+/// captured `self.someInstanceMethod()` call inside one of those closures would need to cross an
+/// actor boundary this codebase's own `s7WireSessionJSON()`/`regularsWireSessionJSON()` precedent
+/// (both ALSO plain top-level functions, same file shape) avoids entirely by never capturing
+/// `self` in the first place.
+private func s7InviteEchoJSON(id: UUID) -> Data {
+    """
+    [{
+      "id": "\(id.uuidString)",
+      "created_by": "\(kS7User.uuidString)",
+      "created_at": "2026-09-18T10:00:00+00:00",
+      "expires_at": "2026-09-18T10:10:00+00:00",
+      "redeemed_by": null,
+      "redeemed_at": null,
+      "revoked_at": null
+    }]
+    """.data(using: .utf8)!
+}
+
 @MainActor
 final class RegularsServiceS7WireTests: XCTestCase {
 
@@ -466,5 +504,98 @@ final class RegularsServiceS7WireTests: XCTestCase {
         }
         let result = await service.fetchProfiles(ids: [kS7Target])
         XCTAssertTrue(result.isEmpty)
+    }
+
+    // MARK: fetchInvite (S7 QA finding #6 — a dedicated wire test matching its three siblings)
+
+    func testFetchInvite_requestShape_pathAndQueryItems() async throws {
+        let service = await makeAuthenticatedService()
+        let inviteId = UUID()
+        var capturedRequest: URLRequest?
+        RegularsS7WireMockURLProtocol.requestHandler = { request in
+            capturedRequest = request
+            return (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, s7InviteEchoJSON(id: inviteId))
+        }
+
+        let fetched = try await service.fetchInvite(id: inviteId)
+
+        guard let request = capturedRequest else { return XCTFail("no request captured") }
+        XCTAssertEqual(request.httpMethod, "GET")
+        let components = request.url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
+        XCTAssertTrue(components?.path.hasSuffix("/rest/v1/regular_invites") == true)
+        XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "id" })?.value, "eq.\(inviteId.uuidString)")
+        XCTAssertEqual(components?.queryItems?.first(where: { $0.name == "limit" })?.value, "1")
+        XCTAssertNotNil(components?.queryItems?.first(where: { $0.name == "select" }))
+        XCTAssertEqual(fetched?.id, inviteId)
+    }
+
+    func testFetchInvite_noMatchingRow_returnsNilNotError() async throws {
+        let service = await makeAuthenticatedService()
+        RegularsS7WireMockURLProtocol.requestHandler = { request in
+            (HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!, "[]".data(using: .utf8)!)
+        }
+        let fetched = try await service.fetchInvite(id: UUID())
+        XCTAssertNil(fetched)
+    }
+
+    // MARK: regenerateInvite (S7 QA finding #1 — the actual fix)
+
+    func testRegenerateInvite_previousId_revokesBeforeCreating() async throws {
+        let service = await makeAuthenticatedService()
+        let previousId = UUID()
+        var capturedRequests: [URLRequest] = []
+        RegularsS7WireMockURLProtocol.requestHandler = { request in
+            capturedRequests.append(request)
+            if request.httpMethod == "PATCH" {
+                return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+            }
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, s7InviteEchoJSON(id: UUID()))
+        }
+
+        _ = try await service.regenerateInvite(previousId: previousId)
+
+        XCTAssertEqual(capturedRequests.count, 2, "exactly one revoke PATCH, then one create POST — no more, no fewer")
+        XCTAssertEqual(capturedRequests[0].httpMethod, "PATCH", "the previous invite must be revoked BEFORE the replacement is created (S7 QA Finding #1)")
+        let patchComponents = capturedRequests[0].url.flatMap { URLComponents(url: $0, resolvingAgainstBaseURL: false) }
+        XCTAssertEqual(patchComponents?.queryItems?.first(where: { $0.name == "id" })?.value, "eq.\(previousId.uuidString)")
+        XCTAssertEqual(capturedRequests[1].httpMethod, "POST")
+        XCTAssertTrue(capturedRequests[1].url?.path.hasSuffix("/rest/v1/regular_invites") == true)
+    }
+
+    func testRegenerateInvite_noPreviousId_skipsRevoke_onlyCreates() async throws {
+        let service = await makeAuthenticatedService()
+        var capturedRequests: [URLRequest] = []
+        RegularsS7WireMockURLProtocol.requestHandler = { request in
+            capturedRequests.append(request)
+            return (HTTPURLResponse(url: request.url!, statusCode: 201, httpVersion: nil, headerFields: nil)!, s7InviteEchoJSON(id: UUID()))
+        }
+
+        _ = try await service.regenerateInvite(previousId: nil)
+
+        XCTAssertEqual(capturedRequests.count, 1, "first-ever invite creation has nothing to revoke")
+        XCTAssertEqual(capturedRequests[0].httpMethod, "POST")
+    }
+
+    func testRegenerateInvite_revokeFailsTwice_neverCreatesReplacement() async throws {
+        let service = await makeAuthenticatedService()
+        let previousId = UUID()
+        var capturedRequests: [URLRequest] = []
+        RegularsS7WireMockURLProtocol.requestHandler = { request in
+            capturedRequests.append(request)
+            return (HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!, Data())
+        }
+
+        do {
+            _ = try await service.regenerateInvite(previousId: previousId)
+            XCTFail("expected regenerateInvite to throw when the revoke fails twice in a row")
+        } catch {
+            // expected — see the assertions below for what actually matters: no create attempt.
+        }
+
+        XCTAssertEqual(capturedRequests.count, 2, "retries the revoke exactly once, then gives up")
+        XCTAssertTrue(
+            capturedRequests.allSatisfy { $0.httpMethod == "PATCH" },
+            "a failed revoke must NEVER be followed by a create — that would silently leave two live invites, the exact bug S7 QA Finding #1 fixed"
+        )
     }
 }

@@ -75,9 +75,19 @@ enum RegularsInviteLink {
     }
 
     /// Parses a URL that may or may not be a valid WePark invite link. Returns `nil` for
-    /// anything that isn't EXACTLY `wepark://invite/<uuid>` (case-insensitive scheme/host, per
-    /// `URL`'s own RFC 3986 comparison rules) — a wrong scheme, wrong host, missing/extra path
+    /// anything that isn't `wepark://invite/<uuid>` (case-insensitive scheme/host, per `URL`'s
+    /// own RFC 3986 comparison rules) — a wrong scheme, wrong host, missing/extra NON-EMPTY path
     /// segments, or a non-UUID token all reject rather than guess.
+    ///
+    /// **Trailing slash is accepted, not rejected** (S7 QA finding #2,
+    /// `docs/qa/pr115-regulars-s7.md`) — `wepark://invite/<uuid>/` parses identically to
+    /// `wepark://invite/<uuid>`. This is a deliberate call, locked in by
+    /// `testParse_acceptsTrailingSlash_normalizedEquivalentToNoTrailingSlash`
+    /// (`WeParkTests/RegularsS7Tests.swift`), not an accident of `URL.pathComponents`'s own
+    /// behavior (which drops a trailing slash's implied empty final component rather than
+    /// preserving it as a distinct, rejectable segment) — being lenient here costs nothing
+    /// (scheme/host/token are still checked exactly) and avoids rejecting a link some
+    /// third-party share/copy flow might append a trailing slash to.
     ///
     /// - Parameter url: Any URL, including a "foreign" one (a plain `https://` link, a
     ///   different app's custom scheme, or a malformed WePark-looking link).
@@ -113,6 +123,16 @@ enum RegularsInviteLink {
 
 /// The invite sheet's "expires in 9:47" countdown (spec §3.2, 10-minute TTL per
 /// `regular_invites.expires_at`'s server-side `default (now() + interval '10 minutes')`).
+///
+/// This countdown is COSMETIC ONLY (S7 QA finding #3, `docs/qa/pr115-regulars-s7.md`) — it is
+/// computed entirely from the DEVICE's own clock against the server-issued `expires_at`
+/// timestamp, so a skewed device clock can make it disagree with the server by a few seconds.
+/// That's harmless: the actual redeemability window is enforced server-side by
+/// `redeem_regular_invite`'s own `expires_at > now()` check (`07-regulars-schema.sql` §S1-4),
+/// which never trusts this (or any) client-side clock — a redemption attempt this countdown says
+/// is still valid, but the server disagrees with, simply comes back `expired_or_used`
+/// (`RegularInviteRedeemResult.expiredOrUsed`), same as any other expiry. Nothing in this view
+/// ever treats the countdown reaching zero as an authoritative "the invite is now dead" signal.
 enum InviteCountdown {
 
     /// Seconds remaining until `expiresAt`, clamped to zero (never negative) — an already-past
