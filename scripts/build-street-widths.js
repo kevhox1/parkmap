@@ -4,7 +4,9 @@
 // extracts the streetwidth field and builds a per-way polyline lookup.
 //
 // Output: street_widths.json at repo root.
-// Format: { "<CANONICAL_NAME>": [{ polyline: [[lat,lng],...], stWidthFt: <number> }, ...] }
+// Format: { "<CANONICAL_NAME>": [{ polyline: [[lat,lng],...], stWidthFt: <number|null>,
+//                                    physicalid, trafdir, lLow, lHigh, rLow, rHigh,
+//                                    segLengthFt: <number|null> }, ...] }
 //
 // Run BEFORE node build/preprocess.js:
 //   node scripts/build-street-widths.js && node build/preprocess.js
@@ -23,10 +25,15 @@
 //   CSCL stores each carriageway as a SEPARATE record with its own centerline
 //   polyline and its own streetwidth.  "streetwidth" for each carriageway is the paved
 //   width of THAT carriageway only (from median/separation edge to outer curb).
-//   preprocess.js handles the dual-carriageway case via getCurbOffsetFromWidth():
-//   it finds ALL CSCL ways within 30m of the block midpoint, detects a dual pair
-//   when two ways are separated by > 12m but < 60m, and uses the farther way's
-//   geometry to estimate the full half-width to the outer curb.
+//
+// FT-21 Option A (docs/ft21-carriageway-investigation.md, docs/ft21-option-a-feasibility.md):
+//   `l_low_hn`/`l_high_hn`/`r_low_hn`/`r_high_hn` (address ranges) and `physicalid`/
+//   `trafdir` are now fetched alongside `streetwidth`. build/preprocess.js's
+//   carriageway-pairing step (`buildCarriagewayPairs()`) uses one-sided addressing
+//   (one side's range populated, the other 0/0) + geometric proximity + address-range
+//   adjacency to pair a divided street's two CSCL rows per block, replacing the old
+//   proximity-only `getCurbOffsetFromWidth()` divided-street fudge for blocks where a
+//   confident pair is found. Unmatched blocks are untouched (see preprocess.js).
 
 const fs = require('fs');
 const path = require('path');
@@ -83,9 +90,19 @@ function multiLineToPolylines(geom) {
   return out;
 }
 
+// FT-21 Option A: parse a CSCL house-number field leniently. Returns 0 for
+// blank/non-numeric/absent values (CSCL's own convention for "no addresses on
+// this side" is a literal 0, but blanks and non-numeric junk show up too).
+function parseAddr(v) {
+  if (v === undefined || v === null || v === '') return 0;
+  const n = parseInt(v, 10);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
 async function fetchPage(offset) {
-  // Request streetwidth along with the fields needed for polyline + name
-  const select = '$select=full_street_name,stname_label,street_name,streetwidth,trafdir,rw_type,the_geom';
+  // Request streetwidth along with the fields needed for polyline + name, plus
+  // (FT-21 Option A) physicalid/trafdir/address-range fields for carriageway pairing.
+  const select = '$select=full_street_name,stname_label,street_name,streetwidth,trafdir,rw_type,the_geom,physicalid,l_low_hn,l_high_hn,r_low_hn,r_high_hn,segmentlength';
   const url = `${ENDPOINT}?$where=${encodeURIComponent(WHERE)}&$limit=${PAGE_SIZE}&$offset=${offset}&${select}`;
   const resp = await fetch(url, {
     headers: {
@@ -139,11 +156,21 @@ async function fetchPage(offset) {
     const polylines = multiLineToPolylines(row.the_geom);
     if (!polylines.length) continue;
 
+    // FT-21 Option A fields — see header comment.
+    const lLow = parseAddr(row.l_low_hn), lHigh = parseAddr(row.l_high_hn);
+    const rLow = parseAddr(row.r_low_hn), rHigh = parseAddr(row.r_high_hn);
+    const segLengthRaw = row.segmentlength !== undefined ? parseFloat(row.segmentlength) : NaN;
+    const segLengthFt = Number.isFinite(segLengthRaw) && segLengthRaw > 0 ? segLengthRaw : null;
+
     if (!byStreet[name]) byStreet[name] = [];
     for (const pl of polylines) {
       byStreet[name].push({
         polyline: pl,
         stWidthFt: stWidthFt !== null && !isNaN(stWidthFt) && stWidthFt > 0 ? stWidthFt : null,
+        physicalid: row.physicalid !== undefined ? String(row.physicalid) : null,
+        trafdir: row.trafdir || null,
+        lLow, lHigh, rLow, rHigh,
+        segLengthFt,
       });
     }
   }
@@ -153,6 +180,20 @@ async function fetchPage(offset) {
   console.log(`unique streets: ${streetCount}`);
   console.log(`total way-segments: ${waysTotal}`);
   console.log(`ways with width: ${withWidthCount}, ways without width: ${noWidthCount}, no-name rows: ${noNameCount}`);
+
+  // FT-21 Option A sanity check: one-sided (candidate divided-carriageway) vs
+  // both-sided (undivided) vs neither, citywide-in-Manhattan. Mirrors the
+  // methodology in docs/ft21-carriageway-investigation.md §1.
+  let oneSided = 0, bothSided = 0, neitherSided = 0;
+  for (const ways of Object.values(byStreet)) {
+    for (const w of ways) {
+      const hasL = w.lHigh > 0, hasR = w.rHigh > 0;
+      if (hasL && hasR) bothSided++;
+      else if (hasL || hasR) oneSided++;
+      else neitherSided++;
+    }
+  }
+  console.log(`one-sided (candidate carriageway) ways: ${oneSided}, both-sided (undivided) ways: ${bothSided}, neither: ${neitherSided}`);
 
   const outPath = path.join(__dirname, '..', 'street_widths.json');
   fs.writeFileSync(outPath, JSON.stringify(byStreet));
