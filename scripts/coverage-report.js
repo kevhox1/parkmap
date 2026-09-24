@@ -3,9 +3,14 @@
 // Denominator: CSCL centerlines (street_widths.json), highways/bridges/tunnels excluded.
 // Numerator: tile curb-face miles with >=1 rule, /2 to approximate centerline miles.
 // Run from repo root after any tile regen: node scripts/coverage-report.js
+// Optional argv[2]: an alternate tiles directory (default "tiles") — lets a
+// before/after regen comparison (e.g. FT-21 Option A) run this same report
+// against two tile sets without overwriting either. street_widths.json (the
+// denominator) is always read from the repo root regardless.
 // Caveats: neighborhood bounds are approximate boxes; 10m intersection setbacks and
 // one-sided streets make percentages UNDERCOUNT by ~10-15 points. Ranking is the signal.
 const fs = require("fs");
+const TILES_DIR = process.argv[2] || "tiles";
 
 const R = 6371000;
 function dist(a, b) {
@@ -60,8 +65,8 @@ for (const [name, segs] of Object.entries(cscl)) {
 }
 
 const num = {}, faces = {};
-for (const f of fs.readdirSync("tiles").filter(f => f.startsWith("tile_"))) {
-  const j = JSON.parse(fs.readFileSync("tiles/"+f));
+for (const f of fs.readdirSync(TILES_DIR).filter(f => f.startsWith("tile_"))) {
+  const j = JSON.parse(fs.readFileSync(TILES_DIR+"/"+f));
   const arr = Array.isArray(j) ? j : (j.segments || j.blocks || []);
   for (const s of arr) {
     if (!s.line || s.line.length < 2 || !s.rules || !s.rules.length) continue;

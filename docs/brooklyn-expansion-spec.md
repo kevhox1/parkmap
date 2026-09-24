@@ -161,6 +161,20 @@ inheriting the bug and refighting it at 2x scale. **Explicitly excluded from thi
 (Chinatown diagonals) — stays parked per Kevin's own call; only a regression spot-check (not a fix)
 rides along in QA (Stream B6).
 
+**🟢 DONE — FT-21 Option A PR (`data/ft21-option-a-manhattan`).** Carriageway pairing (proximity +
+address-parity, live CSCL `l_low_hn`/`l_high_hn`/`r_low_hn`/`r_high_hn`/`trafdir` — new fields added to
+`scripts/build-street-widths.js`'s fetch) replaces the allow-list fudge for blocks where a confident
+pair is found: 118/10,616 Manhattan geometry-successful blocks (1.1%), 23 streets including Houston,
+Bowery, Allen, Delancey, and (newly, not on the old allow-list at all) Park Ave, Broadway, Riverside
+Dr, Lenox Ave, ACP Jr Blvd. Every unmatched block is byte-identical to pre-PR geometry — proven via
+`scripts/compare-tilesets.js` on a same-input-data before/after diff (zero rule-content drift, zero
+segment-count drift). #9 and #10 riders bundled as planned. **B1 (pipeline generalization) can now
+build on this — no further Manhattan-side rework expected before Brooklyn's own data enters the
+pipeline.** Surfaced one incidental, out-of-scope finding worth carrying forward: `getCurbOffsetFromWidth()`'s
+CSCL-width machinery (the pre-existing, non-Option-A per-street-width offset) has never actually run in
+a production regen since TF2-14 — `main()` never calls `initWidths()`. Deliberately left as-is (fixing
+it is a separate, much larger, unscoped geometry change) — see `docs/open-items.md` #25.
+
 ### Stream B1 — Pipeline generalization (`@backend-data`, ~1 session)
 Mechanical parameterization: borough/neighborhood-allowlist argument threading through
 `build/preprocess.js`, `build-oneway-data.js`, `build-street-widths.js`. Introduces the
