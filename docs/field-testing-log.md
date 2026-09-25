@@ -788,6 +788,19 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
 - **Status:** 🟢 regen 4 SHIPPED — zone cap implemented (isolated towards-arrow NO PARKING ANYTIME,
   ~50ft cap, 4 guards). Validated: Elizabeth W now ASP everywhere except the ~21m garage pocket.
   Blast radius ~614 faces citywide improved. (Park-here sheet TF2-9 confirmed better on-device.)
+- **2026-09-25 update — superseded by, but NOT made redundant by, #26's arrow_direction fix
+  (PR #117, `docs/open-items.md` #26):** #26 found the deeper root cause this cap was patching —
+  `build/preprocess.js` never read NYC's authoritative `arrow_direction` field, only the printed
+  description glyph, so signs whose real-world arrow disagreed with the glyph got their zone
+  flipped (Kevin's E 4th St / Bowery→2nd Ave photographed find is the same class of bug this row
+  first named). **Verdict: this cap is KEPT, not removed.** It solves a different problem —
+  physical driveway extent when no closing sign exists within ~50ft — that arrow_direction doesn't
+  address on its own. Live-verified in #117's session: of 500 real Manhattan "NO PARKING ANYTIME
+  -->" signs, 139/473 resolvable ones still resolve forward after the arrow-direction fix and would
+  still need this cap if isolated. E 4th St's own driveway sign (SP-854CA, 421ft, `arrow_direction
+  =West`) is the one case that no longer needs it — `coversAfter` resolves false entirely post-fix,
+  so this cap's code block never runs for that sign — but that's one sign, not TF2-13's whole
+  population.
 
 ### TF2-10 🔴 Polylines still look mid-road on WIDE streets (offset magnitude, not direction)
 - **Observed (Kevin, build 9):** center polylines still appear mid-street despite the TF2-5 rebuild.
