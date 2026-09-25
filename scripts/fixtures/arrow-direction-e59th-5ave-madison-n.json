@@ -1,0 +1,136 @@
+[
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING ANYTIME --> (SUPERSEDES SP-1044BA, SP-10BA, SP-216BA & SP-270BA)",
+    "distance_from_intersection": "80",
+    "arrow_direction": "West",
+    "order_number": "P-01801082",
+    "sign_code": "PS-1GA"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING 3PM-7PM EXCEPT SUNDAY <-> (SUPERSEDES SP-350B)",
+    "distance_from_intersection": "302",
+    "order_number": "P-01801082",
+    "sign_code": "PS-193G"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING ANYTIME <-> (SUPERSEDES SP-1044B, SP-10B, SP-216B & SP-270B)",
+    "distance_from_intersection": "420",
+    "order_number": "P-01801082",
+    "sign_code": "PS-1G"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING 3PM-7PM EXCEPT SUNDAY --> (SUPERSEDES SP-350BA)",
+    "distance_from_intersection": "374",
+    "arrow_direction": "West",
+    "order_number": "P-01801082",
+    "sign_code": "PS-193GA"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "5 HMP 7PM-MIDNIGHT EXCEPT SUNDAY <->",
+    "distance_from_intersection": "100",
+    "order_number": "P-01801082",
+    "sign_code": "PS-367C"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "PAY-BY-CELL LOCATOR NUMBER",
+    "distance_from_intersection": "100",
+    "order_number": "P-01801082",
+    "sign_code": "PS-9A"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "3 HMP COMMERCIAL VEHICLES ONLY 7AM-3PM EXCEPT SUNDAY <-> (SUPERSEDES PS-25C)",
+    "distance_from_intersection": "302",
+    "order_number": "P-01801082",
+    "sign_code": "PS-293C"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "3 HMP COMMERCIAL VEHICLES ONLY 7AM-3PM EXCEPT SUNDAY --> (SUPERSEDES PS-25CA)",
+    "distance_from_intersection": "374",
+    "arrow_direction": "West",
+    "order_number": "P-01801082",
+    "sign_code": "PS-293CA"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "5 HMP 7PM-MIDNIGHT EXCEPT SUNDAY -->",
+    "distance_from_intersection": "374",
+    "arrow_direction": "West",
+    "order_number": "P-01801082",
+    "sign_code": "PS-367CA"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "5 HMP 7PM-MIDNIGHT EXCEPT SUNDAY <->",
+    "distance_from_intersection": "302",
+    "order_number": "P-01801082",
+    "sign_code": "PS-367C"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "3 HMP COMMERCIAL VEHICLES ONLY 7AM-3PM EXCEPT SUNDAY <-> (SUPERSEDES PS-25C)",
+    "distance_from_intersection": "100",
+    "order_number": "P-01801082",
+    "sign_code": "PS-293C"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "PAY-BY-CELL LOCATOR NUMBER",
+    "distance_from_intersection": "374",
+    "order_number": "P-01801082",
+    "sign_code": "PS-9A"
+  },
+  {
+    "on_street": "EAST   59 STREET",
+    "from_street": "5 AVENUE",
+    "to_street": "MADISON AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING 3PM-7PM EXCEPT SUNDAY <-> (SUPERSEDES SP-350B)",
+    "distance_from_intersection": "100",
+    "order_number": "P-01801082",
+    "sign_code": "PS-193G"
+  }
+]
