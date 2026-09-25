@@ -32,6 +32,17 @@ first; this doc assumes its verdicts and does not re-litigate them). Hoboken sta
    session (the S1-follow-up push-trigger rewrite) should land first — it's already blocking
    Regulars' own next step and touches none of the files Brooklyn touches. After that, the two
    features don't compete for the same files. See §6.
+7. **🔴 NEW (2026-09-25) — the #26 arrow_direction composition fix (PR #117) MUST land before any
+   Brooklyn regen.** `createSubSegments()` in `build/preprocess.js` — the exact function Stream B1
+   parameterizes — is the code that composes which rule applies to which stretch of curb from raw
+   sign data. It had a systemic bug (glyph-only direction reads, ignoring NYC's authoritative
+   `arrow_direction` field) that flips rule zones onto the wrong half of a block; measured at
+   ~70% of confidently-resolvable signs disagreeing with the old glyph assumption citywide. Brooklyn
+   pulls from the SAME Socrata sign datasets and runs through the SAME composition code — it
+   inherits this bug identically, unfixed. Regenerating Brooklyn tiles before #26/#117 lands (or
+   worse, regenerating Brooklyn and Manhattan together while #26 is still open) would ship a
+   brand-new borough with the exact class of error Kevin field-caught in Manhattan, at first-impression
+   time. See `docs/open-items.md` #26 and PR #117 for the fix, quantification, and acceptance test.
 
 Everything below is the reasoning and the checklist. Read on for detail; the five items above are
 the only things that actually need a yes/no from Kevin before work starts.
@@ -162,6 +173,11 @@ inheriting the bug and refighting it at 2x scale. **Explicitly excluded from thi
 rides along in QA (Stream B6).
 
 ### Stream B1 — Pipeline generalization (`@backend-data`, ~1 session)
+**Prerequisite: PR #117 (docs/open-items.md #26, arrow_direction span-authority fix) must be merged
+before this stream starts** — it touches the same function (`createSubSegments()`) this stream
+parameterizes, and its own production regen must be sequenced deliberately (see #26/#117), not
+accidentally bundled into Brooklyn's first regen. Confirm #26/#117's status before starting B1.
+
 Mechanical parameterization: borough/neighborhood-allowlist argument threading through
 `build/preprocess.js`, `build-oneway-data.js`, `build-street-widths.js`. Introduces the
 neighborhood-allowlist mechanism itself — a generic `name → bbox` list (mirrors
