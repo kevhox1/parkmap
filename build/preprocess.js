@@ -17,13 +17,21 @@ const OSM_ONEWAY_PATH = path.join(ROOT, 'osm_oneway.json');
 // TF2-14: CSCL real-street-width artifact (built by scripts/build-street-widths.js).
 // Optional — if absent, falls back to name-tier offsets (getStreetCurbOffset).
 const STREET_WIDTHS_PATH = path.join(ROOT, 'street_widths.json');
-const TILES_DIR = path.join(ROOT, 'tiles');
+// #26 validation regens: PREPROCESS_OUT_DIR redirects tile output to a scratch
+// directory instead of the committed tiles/ (e.g. for a local regen used only
+// to quantify a rule-composition fix and diff against committed tiles via
+// scripts/compare-tilesets.js). Defaults to the committed tiles/ dir, unchanged
+// from before this override existed.
+const TILES_DIR = process.env.PREPROCESS_OUT_DIR ? path.resolve(process.env.PREPROCESS_OUT_DIR) : path.join(ROOT, 'tiles');
 // iOS app bundle reads tiles from this Resources path (see HANDOFF.md
 // "iOS app: Resources land flat at app bundle root at build time").
 // Build must keep this in sync with TILES_DIR or the iOS app will run
 // against stale tiles. Discovered 2026-05-14 when PRs #21 and #22
 // shipped tile updates that never reached the iOS bundle because only
 // TILES_DIR was being written.
+// #26: skipped entirely when PREPROCESS_OUT_DIR is set (scratch regen) via the
+// PREPROCESS_SKIP_IOS_SYNC guard at the sync call site below — a scratch
+// validation run must never touch the iOS bundle's committed tiles.
 const IOS_TILES_DIR = path.join(ROOT, 'ios', 'WePark', 'WePark', 'Resources', 'tiles');
 
 // Two data sources: main signs + ASP-specific signs
@@ -691,7 +699,8 @@ function trimIntersectionSetback(blockGeo) {
     blockLenM: trimmedBlockLenM,
     blockLenFt: trimmedBlockLenM * 3.28084,
     setbackFt,
-    rawBlockLenFt: blockLenFt
+    rawBlockLenFt: blockLenFt,
+    fromToBearing: blockGeo.fromToBearing, // #26: pass through unchanged, see getBlockPolyline
   };
 }
 
@@ -714,7 +723,28 @@ function getBlockPolyline(block) {
   const blockLenM = totalLen[totalLen.length - 1];
   const blockLenFt = blockLenM * 3.28084;
 
-  const rawBlockGeo = { line, totalLen, blockLenM, blockLenFt };
+  // #26: raw from_street -> to_street bearing, computed directly from the two
+  // intersection points BEFORE extractPolylineBetween() above. That function
+  // does NOT guarantee `line` comes back oriented ptFrom-first -- it returns
+  // whichever end appears first in the OSM chain's own internal digitization
+  // order, which this session found is observably REVERSED relative to
+  // (from_street, to_street) for at least some real blocks (e.g. Pike St,
+  // Henry St -> East Broadway) -- a distinct, pre-existing characteristic of
+  // this function, out of scope here (geometry changes are sequenced
+  // separately from this composition fix per docs/open-items.md #26's own
+  // note; flagged as a new item, not fixed in this PR). createSubSegments()/
+  // extractSubSegment() still interpret raw distance against `line` exactly
+  // as before -- completely untouched by this field. fromToBearing exists
+  // ONLY so getBlockBearingVector() has an unambiguous from->to direction
+  // for arrow_direction resolution, independent of how `line` is oriented.
+  const bearingMeanLat = (ptFrom[0] + ptTo[0]) / 2;
+  const bearingCosLat = Math.cos(bearingMeanLat * DEG_TO_RAD);
+  const bearingDx = (ptTo[1] - ptFrom[1]) * bearingCosLat;
+  const bearingDy = ptTo[0] - ptFrom[0];
+  const bearingLen = Math.sqrt(bearingDx * bearingDx + bearingDy * bearingDy);
+  const fromToBearing = bearingLen > 1e-10 ? { x: bearingDx / bearingLen, y: bearingDy / bearingLen } : null;
+
+  const rawBlockGeo = { line, totalLen, blockLenM, blockLenFt, fromToBearing };
   return trimIntersectionSetback(rawBlockGeo);
 }
 
@@ -1069,6 +1099,122 @@ const SIDE_COMPASS = {
   W: { x: -1, y: 0 },
 };
 
+// #26: unit vectors for the raw NYC `arrow_direction` sign field (a real-world
+// compass reading -- "North"/"South"/"East"/"West", full words, distinct from
+// SIDE_COMPASS's single-letter side_of_street keys). Same projected space.
+const ARROW_DIRECTION_COMPASS = {
+  North: { x: 0, y: 1 },
+  South: { x: 0, y: -1 },
+  East: { x: 1, y: 0 },
+  West: { x: -1, y: 0 },
+};
+
+// #26: confidence threshold for converting a cardinal arrow_direction reading
+// into "toward increasing distance_from_intersection" vs "toward decreasing
+// distance" via dot product against the blockface's own from->to bearing.
+// Manhattan's grid runs avenues ~29 deg and streets ~61 deg off true N/S --
+// comfortably clear of the 45 deg ambiguity point -- so any genuinely
+// on-axis blockface produces |dot| well above this. Only the rare near-45-deg
+// diagonal connector (parts of Broadway, angled short streets) falls under
+// it; for those we conservatively decline to guess and fall back to the
+// sign's own printed glyph (the pre-#26 behavior) rather than risk resolving
+// a rule onto the wrong half of the block.
+const ARROW_DIRECTION_CONFIDENCE = 0.35;
+
+// #26 instrumentation -- printed in the build summary and consumed by the
+// quantification report (docs/open-items.md #26). Not read by any rule-
+// composition logic; purely diagnostic.
+const ARROW_STATS = {
+  classifiedSigns: 0,
+  arrowDirPresent: 0,
+  arrowDirAbsent: 0,
+  arrowDirAmbiguousFallback: 0, // present, but blockface bearing too diagonal to trust
+  agree: 0,     // arrow_direction present+confident, glyph gave a definite single direction, they matched
+  flip: 0,      // arrow_direction present+confident, glyph gave a definite single direction, they DISAGREED
+  narrowed: 0,  // arrow_direction present+confident, glyph was null/both (non-committal) -- arrow_direction pins it to one side
+  blockFacesWithFlip: new Set(),
+  blockFacesWithNarrowed: new Set(),
+};
+
+// #26: the blockface's own "from_street -> to_street" travel-direction unit
+// vector, in the same projected space as SIDE_COMPASS/ARROW_DIRECTION_COMPASS.
+// distance_from_intersection (and therefore every sign's before/after span) is
+// measured along this axis, from_street = 0 -- so this is the vector a raw
+// compass arrow_direction reading must be compared against to know whether it
+// points toward increasing distance (coversAfter) or back toward the
+// from_street corner (coversBefore).
+//
+// Reads blockGeo.fromToBearing (computed in getBlockPolyline() directly from
+// the raw from/to intersection points) rather than deriving direction from
+// blockGeo.line's own endpoints. This session found that extractPolylineBetween()
+// does NOT guarantee `line` comes back oriented from_street-first -- it orders
+// by the OSM chain's own internal digitization, which is observably reversed
+// relative to (from_street, to_street) for at least some real blocks (verified:
+// Pike St, Henry St -> East Broadway). Deriving from line[0]/line[last] would
+// silently invert the bearing -- and therefore every arrow_direction resolution
+// -- for exactly the blocks where that reversal happens. fromToBearing sidesteps
+// it entirely by construction. See docs/open-items.md #26 for the write-up;
+// that line-orientation characteristic itself is flagged there as a new,
+// separate, pre-existing item -- not fixed here (geometry changes are
+// sequenced separately from this composition fix).
+function getBlockBearingVector(blockGeo) {
+  if (!blockGeo) return null;
+  return blockGeo.fromToBearing || null;
+}
+
+// #26 root cause (docs/open-items.md #26): createSubSegments() previously
+// derived a sign's before/after span purely from the printed description
+// GLYPH (`-->`/`<--`/`<->`), assuming `-->` always means "toward increasing
+// distance_from_intersection." That assumption is false whenever the sign is
+// physically mounted so its printed arrow points the other way along the
+// curb -- which the dataset already records, separately and authoritatively,
+// in the `arrow_direction` field (a real-world compass reading). Verified
+// live case: E 4th St N side, Bowery->2 Ave, order P-01798286 -- glyph "-->"
+// (would read "towards"/forward) but arrow_direction "West" (physically
+// points backward, toward Bowery) -- see the TF2-13 field-testing-log entry
+// this session supersedes for the on-block symptom.
+//
+// Resolves ONE sign's coversBefore/coversAfter. Authority order:
+//   1. arrow_direction present AND blockface bearing confident -> WINS,
+//      overrides the glyph entirely (source: 'arrow_direction').
+//   2. arrow_direction present but the bearing/arrow dot product is too
+//      close to perpendicular to trust (ARROW_DIRECTION_CONFIDENCE) ->
+//      conservative fallback to the glyph reading (source: 'glyph_fallback_ambiguous').
+//   3. arrow_direction absent entirely -> fallback to the glyph reading,
+//      unchanged pre-#26 behavior (source: 'glyph_fallback_absent').
+// sd is a createSubSegments() signData entry ({ sign, category, schedule,
+// distance, arrow }); bearingVector is getBlockBearingVector()'s result (may
+// be null if OSM geometry was degenerate -- treated the same as "ambiguous").
+function resolveSignSpanDirection(sd, bearingVector) {
+  const glyphArrow = sd.arrow; // 'towards' | 'away' | 'both' | null
+  const glyphCoversBefore = glyphArrow === 'both' || glyphArrow === null || glyphArrow === 'away';
+  const glyphCoversAfter = glyphArrow === 'both' || glyphArrow === null || glyphArrow === 'towards';
+  const glyphResult = { coversBefore: glyphCoversBefore, coversAfter: glyphCoversAfter };
+
+  const rawDir = sd.sign && sd.sign.arrow_direction ? String(sd.sign.arrow_direction).trim() : null;
+  const compassVec = rawDir ? ARROW_DIRECTION_COMPASS[rawDir] : null;
+
+  if (!compassVec) {
+    return { ...glyphResult, source: 'glyph_fallback_absent' };
+  }
+  if (!bearingVector) {
+    return { ...glyphResult, source: 'glyph_fallback_ambiguous' };
+  }
+
+  const dot = compassVec.x * bearingVector.x + compassVec.y * bearingVector.y;
+  if (Math.abs(dot) < ARROW_DIRECTION_CONFIDENCE) {
+    return { ...glyphResult, source: 'glyph_fallback_ambiguous' };
+  }
+
+  // dot > 0: arrow_direction points toward increasing distance (same way as
+  // the block's own from->to travel direction) -> the sign covers AFTER its
+  // position. dot < 0: arrow points back toward the from_street corner ->
+  // the sign covers BEFORE its position.
+  return dot > 0
+    ? { coversBefore: false, coversAfter: true, source: 'arrow_direction' }
+    : { coversBefore: true, coversAfter: false, source: 'arrow_direction' };
+}
+
 // offsetPolyline(points, side, offsetMeters)
 // offsetMeters defaults to CURB_OFFSET_DEFAULT_METERS; callers pass
 // getCurbOffsetFromWidth(block.street, midLat, midLng) (TF2-14) which falls back
@@ -1166,7 +1312,12 @@ function offsetPolyline(points, side, offsetMeters) {
 }
 
 // ==== Sub-segment creation ====
-function createSubSegments(block) {
+// bearingVector: getBlockBearingVector(blockGeo)'s result for this block, or
+// null (e.g. no OSM geometry). Passed through to resolveSignSpanDirection()
+// (#26) so an authoritative arrow_direction reading can be converted into
+// coversBefore/coversAfter; every call site in this file computes it once per
+// block (constant across all signs on the same face) rather than per sign.
+function createSubSegments(block, bearingVector) {
   const signData = block.signs
     .map(s => {
       const cat = classifySign(s.sign_description);
@@ -1178,6 +1329,37 @@ function createSubSegments(block) {
 
   if (signData.length === 0) return [];
   signData.sort((a, b) => a.distance - b.distance);
+
+  // #26: resolve + instrument every classified sign on this face once, up
+  // front, before any zone-boundary math touches coversBefore/coversAfter.
+  const faceKey = `${block.blockKey}|${block.side}`;
+  signData.forEach(sd => {
+    sd.resolved = resolveSignSpanDirection(sd, bearingVector);
+    ARROW_STATS.classifiedSigns++;
+    const rawDir = sd.sign && sd.sign.arrow_direction;
+    if (!rawDir) {
+      ARROW_STATS.arrowDirAbsent++;
+      return;
+    }
+    ARROW_STATS.arrowDirPresent++;
+    if (sd.resolved.source !== 'arrow_direction') {
+      ARROW_STATS.arrowDirAmbiguousFallback++;
+      return;
+    }
+    const glyphIsDefinite = sd.arrow === 'towards' || sd.arrow === 'away';
+    if (glyphIsDefinite) {
+      const glyphCoversAfter = sd.arrow === 'towards';
+      if (glyphCoversAfter === sd.resolved.coversAfter) {
+        ARROW_STATS.agree++;
+      } else {
+        ARROW_STATS.flip++;
+        ARROW_STATS.blockFacesWithFlip.add(faceKey);
+      }
+    } else {
+      ARROW_STATS.narrowed++;
+      ARROW_STATS.blockFacesWithNarrowed.add(faceKey);
+    }
+  });
 
   const uniqueDists = [...new Set(signData.map(s => s.distance))].sort((a, b) => a - b);
 
@@ -1213,23 +1395,41 @@ function createSubSegments(block) {
     zones.push({ distStart: uniqueBounds[i], distEnd: uniqueBounds[i + 1], rules: [] });
   }
 
-  // Assign signs to zones based on arrow direction
-  // --> (towards): sign applies from this position TOWARDS increasing distance
-  // <-- (away): sign applies from this position TOWARDS decreasing distance (back to intersection)
-  // <-> (both): sign applies in both directions until the next sign
-  // null (no arrow): treat like <-> (applies in both directions)
+  // Assign signs to zones based on direction (#26: resolveSignSpanDirection()
+  // resolved this per sign above -- arrow_direction wins when present and the
+  // blockface bearing is confident enough to trust; otherwise falls back to
+  // the description glyph, same convention as before:
+  //   --> (towards): sign applies from this position TOWARDS increasing distance
+  //   <-- (away): sign applies from this position TOWARDS decreasing distance (back to intersection)
+  //   <-> (both): sign applies in both directions until the next sign
+  //   null (no arrow): treat like <-> (applies in both directions)
   uniqueDists.forEach(d => {
     const signsAtD = signsByDist[d];
 
     signsAtD.forEach(sd => {
-      const arrow = sd.arrow;
-      const coversBefore = arrow === 'both' || arrow === null || arrow === 'away';
-      const coversAfter = arrow === 'both' || arrow === null || arrow === 'towards';
+      const coversBefore = sd.resolved.coversBefore;
+      const coversAfter = sd.resolved.coversAfter;
 
       // Find the zone boundaries for this sign position
       const zoneAtIdx = zones.findIndex(z => z.distStart === d || (d >= z.distStart && d < z.distEnd));
 
       if (coversAfter) {
+        // #26 note: this cap is a DIFFERENT problem from the arrow-direction
+        // fix above and is NOT made redundant by it. The arrow fix corrects
+        // signs whose printed glyph disagrees with the sign's real-world
+        // arrow_direction (wrong DIRECTION); this cap corrects signs whose
+        // direction is correctly forward -- confirmed forward, whether by
+        // agreeing arrow_direction or by glyph fallback -- but which still
+        // have no closing sign within a real driveway's physical footprint,
+        // so the ordinary "extend to the next sign" rule would run them all
+        // the way to the block end (wrong EXTENT). A sign can fail either
+        // way independently, so both checks are still needed. Re-verified
+        // post-#26: on E 4th St's own SP-854CA sign (421ft, arrow_direction
+        // West) coversAfter is now false, so this block never runs for that
+        // sign at all -- the arrow fix alone fixes it. This cap remains load-
+        // bearing for the isolated-driveway signs that still resolve forward
+        // (glyph-fallback or arrow_direction-agreeing) -- see docs/open-items.md #26.
+        //
         // TF2-13: Isolated "NO PARKING ANYTIME -->" towards-arrow cap.
         //
         // A driveway/garage marker (plate SP-854CA or similar) whose description
@@ -1621,11 +1821,19 @@ async function main() {
     }
 
     const block = blocks[fullKey];
-    const subSegments = createSubSegments(block);
     const blockGeo = getBlockPolyline(block);
 
     if (blockGeo) {
       osmHits++;
+
+      // #26: the blockface's own from->to bearing, used by createSubSegments()
+      // to convert a raw arrow_direction compass reading into coversBefore/
+      // coversAfter. Constant across every sign on this face, so computed once
+      // here rather than per sign. Must be computed before createSubSegments()
+      // is called (createSubSegments() used to run before getBlockPolyline() --
+      // reordered so the bearing is available at sign-resolution time).
+      const bearingVector = getBlockBearingVector(blockGeo);
+      const subSegments = createSubSegments(block, bearingVector);
 
       // TF2-14: compute block midpoint once for width lookup (shared by all sub-segments).
       // Use the raw (un-offset) block centerline midpoint so the CSCL proximity
@@ -1788,16 +1996,22 @@ async function main() {
   // 7b. Sync to iOS Resources path. The iOS app bundles tiles from
   // ios/WePark/WePark/Resources/tiles/ at build time. Keep it in lock-step
   // with TILES_DIR so the iOS app sees the same data as the PWA.
-  console.log('🔁 Syncing tiles to iOS Resources path...');
-  if (fs.existsSync(IOS_TILES_DIR)) {
-    for (const f of fs.readdirSync(IOS_TILES_DIR)) {
-      fs.unlinkSync(path.join(IOS_TILES_DIR, f));
-    }
+  // #26: skipped for a PREPROCESS_OUT_DIR scratch regen (validation run) —
+  // must never touch the real, committed iOS bundle tiles.
+  if (process.env.PREPROCESS_OUT_DIR) {
+    console.log('🔁 Skipping iOS Resources sync (PREPROCESS_OUT_DIR scratch regen)\n');
   } else {
-    fs.mkdirSync(IOS_TILES_DIR, { recursive: true });
-  }
-  for (const f of fs.readdirSync(TILES_DIR)) {
-    fs.copyFileSync(path.join(TILES_DIR, f), path.join(IOS_TILES_DIR, f));
+    console.log('🔁 Syncing tiles to iOS Resources path...');
+    if (fs.existsSync(IOS_TILES_DIR)) {
+      for (const f of fs.readdirSync(IOS_TILES_DIR)) {
+        fs.unlinkSync(path.join(IOS_TILES_DIR, f));
+      }
+    } else {
+      fs.mkdirSync(IOS_TILES_DIR, { recursive: true });
+    }
+    for (const f of fs.readdirSync(TILES_DIR)) {
+      fs.copyFileSync(path.join(TILES_DIR, f), path.join(IOS_TILES_DIR, f));
+    }
   }
 
   // 8. Summary
@@ -1817,6 +2031,33 @@ async function main() {
   console.log('\n   Category breakdown:');
   for (const [cat, count] of Object.entries(catCounts).sort((a, b) => b[1] - a[1])) {
     console.log(`     ${cat}: ${count}`);
+  }
+
+  // #26 quantification (docs/open-items.md #26). See that entry for the
+  // full write-up of what these numbers mean and their PR.
+  const pct = (n, total) => total > 0 ? `${(n / total * 100).toFixed(1)}%` : 'n/a';
+  console.log('\n📍 #26 arrow_direction authority stats:');
+  console.log(`   Classified signs (participate in zone composition): ${ARROW_STATS.classifiedSigns}`);
+  console.log(`   arrow_direction present: ${ARROW_STATS.arrowDirPresent} (${pct(ARROW_STATS.arrowDirPresent, ARROW_STATS.classifiedSigns)})`);
+  console.log(`   arrow_direction absent (glyph fallback, unchanged behavior): ${ARROW_STATS.arrowDirAbsent} (${pct(ARROW_STATS.arrowDirAbsent, ARROW_STATS.classifiedSigns)})`);
+  console.log(`   present but ambiguous bearing (glyph fallback): ${ARROW_STATS.arrowDirAmbiguousFallback}`);
+  console.log(`   present + confident, glyph agreed: ${ARROW_STATS.agree}`);
+  console.log(`   present + confident, glyph FLIPPED (wrong direction, now corrected): ${ARROW_STATS.flip}`);
+  console.log(`   present + confident, glyph was non-committal (both/null) -- now pinned to one side: ${ARROW_STATS.narrowed}`);
+  console.log(`   blockfaces with >=1 flipped sign: ${ARROW_STATS.blockFacesWithFlip.size}`);
+  console.log(`   blockfaces with >=1 narrowed sign: ${ARROW_STATS.blockFacesWithNarrowed.size}`);
+  if (process.env.PREPROCESS_ARROW_STATS_JSON) {
+    fs.writeFileSync(process.env.PREPROCESS_ARROW_STATS_JSON, JSON.stringify({
+      classifiedSigns: ARROW_STATS.classifiedSigns,
+      arrowDirPresent: ARROW_STATS.arrowDirPresent,
+      arrowDirAbsent: ARROW_STATS.arrowDirAbsent,
+      arrowDirAmbiguousFallback: ARROW_STATS.arrowDirAmbiguousFallback,
+      agree: ARROW_STATS.agree,
+      flip: ARROW_STATS.flip,
+      narrowed: ARROW_STATS.narrowed,
+      blockFacesWithFlip: ARROW_STATS.blockFacesWithFlip.size,
+      blockFacesWithNarrowed: ARROW_STATS.blockFacesWithNarrowed.size,
+    }, null, 2));
   }
 }
 
@@ -1900,6 +2141,25 @@ if (require.main !== module) {
     _DIVIDED_STREET_ALLOW_LIST:     DIVIDED_STREET_ALLOW_LIST,
     // Expose pre-computed map for diagnostics (read-only after initWidths())
     get _perStreetOffset() { return _perStreetOffset; },
+    // #26: exported so scripts/test-arrow-direction-fix.js can exercise the
+    // real span-resolution/zone-composition code path directly (no network
+    // fetch, no writing tiles) rather than duplicating pipeline logic in a
+    // test fixture.
+    classifySign,
+    parseSchedule,
+    normalizeNYCName,
+    createSubSegments,
+    getBlockBearingVector,
+    resolveSignSpanDirection,
+    getBlockPolyline,
+    mostRestrictiveCategory,
+    ARROW_DIRECTION_COMPASS,
+    ARROW_DIRECTION_CONFIDENCE,
+    get _ARROW_STATS() { return ARROW_STATS; },
+    // Needed by the acceptance test to load real OSM geometry the same way
+    // main() does, since getBlockPolyline() reads the module-level OSM_STREETS.
+    _setOsmStreets(data) { OSM_STREETS = data; },
+    _setOsmOneway(data) { OSM_ONEWAY = data; },
   };
 } else {
   main().catch(err => {

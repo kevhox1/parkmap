@@ -1,0 +1,99 @@
+[
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "NO PARKING ANYTIME --> (SUPERSEDES SP-854CA)",
+    "distance_from_intersection": "90",
+    "arrow_direction": "North",
+    "order_number": "P-01705191",
+    "sign_code": "PS-2GA"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "NO PARKING ANYTIME --> (SUPERSEDES SP-854CA)",
+    "distance_from_intersection": "130",
+    "arrow_direction": "South",
+    "order_number": "P-01705191",
+    "sign_code": "PS-2GA"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "2 HMP 8AM-7PM EXCEPT SUNDAY --> (SUPERSEDES R7-128RBA)",
+    "distance_from_intersection": "90",
+    "arrow_direction": "South",
+    "order_number": "P-01705191",
+    "sign_code": "PS-65CA"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "2 HMP 8AM-7PM EXCEPT SUNDAY --> (SUPERSEDES R7-128RBA)",
+    "distance_from_intersection": "186",
+    "arrow_direction": "South",
+    "order_number": "P-01705191",
+    "sign_code": "PS-65CA"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "NO PARKING ANYTIME --> (SUPERSEDES SP-854CA)",
+    "distance_from_intersection": "69",
+    "arrow_direction": "South",
+    "order_number": "P-01705191",
+    "sign_code": "PS-2GA"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "PAY-BY-CELL LOCATOR NUMBER",
+    "distance_from_intersection": "90",
+    "order_number": "P-01705191",
+    "sign_code": "PS-9A"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "PAY-BY-CELL LOCATOR NUMBER",
+    "distance_from_intersection": "186",
+    "order_number": "P-01705191",
+    "sign_code": "PS-9A"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "NO PARKING (SANITATION BROOM SYMBOL) 7:30AM-8AM EXCEPT SUNDAY -->",
+    "distance_from_intersection": "186",
+    "arrow_direction": "South",
+    "order_number": "P-01705191",
+    "sign_code": "PS-121BA"
+  },
+  {
+    "on_street": "PIKE STREET",
+    "from_street": "HENRY STREET",
+    "to_street": "EAST BROADWAY",
+    "side_of_street": "E",
+    "sign_description": "NO PARKING (SANITATION BROOM SYMBOL) 7:30AM-8AM EXCEPT SUNDAY -->",
+    "distance_from_intersection": "90",
+    "arrow_direction": "South",
+    "order_number": "P-01705191",
+    "sign_code": "PS-121BA"
+  }
+]

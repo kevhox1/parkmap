@@ -1,0 +1,181 @@
+[
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING ANYTIME --> (SUPERSEDES SP-1044BA, SP-10BA, SP-216BA & SP-270BA)",
+    "distance_from_intersection": "49",
+    "arrow_direction": "West",
+    "order_number": "P-01798286",
+    "sign_code": "PS-1GA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "2 HMP 9AM-7PM EXCEPT SUNDAY --> (SUPERSEDES R7-182RBA)",
+    "distance_from_intersection": "545",
+    "arrow_direction": "West",
+    "order_number": "P-01798286",
+    "sign_code": "PS-54CA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "2 HMP 9AM-7PM EXCEPT SUNDAY --> (SUPERSEDES R7-182RBA)",
+    "distance_from_intersection": "485",
+    "arrow_direction": "East",
+    "order_number": "P-01798286",
+    "sign_code": "PS-54CA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "PAY-BY-CELL LOCATOR NUMBER",
+    "distance_from_intersection": "485",
+    "order_number": "P-01798286",
+    "sign_code": "PS-9A"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING ANYTIME --> (SUPERSEDES SP-1044BA, SP-10BA, SP-216BA & SP-270BA)",
+    "distance_from_intersection": "545",
+    "arrow_direction": "East",
+    "order_number": "P-01798286",
+    "sign_code": "PS-1GA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDAY 9AM-10:30AM <-> (SUPERSEDES SP-413C)",
+    "distance_from_intersection": "315",
+    "order_number": "P-01798286",
+    "sign_code": "PS-113B"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDAY 9AM-10:30AM --> (SUPERSEDES SP-413CA)",
+    "distance_from_intersection": "399",
+    "arrow_direction": "West",
+    "order_number": "P-01798286",
+    "sign_code": "PS-113BA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "OPEN STREETS (INFORMATION SIGN)",
+    "distance_from_intersection": "49",
+    "order_number": "P-01798286",
+    "sign_code": "SI-2647G"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDAY 9AM-10:30AM --> (SUPERSEDES SP-413CA)",
+    "distance_from_intersection": "545",
+    "arrow_direction": "West",
+    "order_number": "P-01798286",
+    "sign_code": "PS-113BA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "METERS ARE NOT IN EFFECT ABOVE TIMES (TO BE USED ONLY FOR CONFLICTING STREET CLEANING AND METERED PARKING REGULATIONS) (SUPERSEDES SW-473)",
+    "distance_from_intersection": "485",
+    "order_number": "P-01798286",
+    "sign_code": "PS-7A"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO PARKING ANYTIME --> (SUPERSEDES SP-854CA)",
+    "distance_from_intersection": "421",
+    "arrow_direction": "West",
+    "order_number": "P-01798286",
+    "sign_code": "PS-2GA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "PAY-BY-CELL LOCATOR NUMBER",
+    "distance_from_intersection": "545",
+    "order_number": "P-01798286",
+    "sign_code": "PS-9A"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDAY 9AM-10:30AM <-> (SUPERSEDES SP-413C)",
+    "distance_from_intersection": "191",
+    "order_number": "P-01798286",
+    "sign_code": "PS-113B"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDAY 9AM-10:30AM --> (SUPERSEDES SP-413CA)",
+    "distance_from_intersection": "485",
+    "arrow_direction": "East",
+    "order_number": "P-01798286",
+    "sign_code": "PS-113BA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "NO STANDING ANYTIME --> (SUPERSEDES SP-1044BA, SP-10BA, SP-216BA & SP-270BA)",
+    "distance_from_intersection": "485",
+    "arrow_direction": "West",
+    "order_number": "P-01798286",
+    "sign_code": "PS-1GA"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "OPEN STREETS (INFORMATION SIGN)",
+    "distance_from_intersection": "545",
+    "order_number": "P-01798286",
+    "sign_code": "SI-2647G"
+  },
+  {
+    "on_street": "EAST    4 STREET",
+    "from_street": "BOWERY",
+    "to_street": "2 AVENUE",
+    "side_of_street": "N",
+    "sign_description": "METERS ARE NOT IN EFFECT ABOVE TIMES (TO BE USED ONLY FOR CONFLICTING STREET CLEANING AND METERED PARKING REGULATIONS) (SUPERSEDES SW-473)",
+    "distance_from_intersection": "545",
+    "order_number": "P-01798286",
+    "sign_code": "PS-7A"
+  }
+]
