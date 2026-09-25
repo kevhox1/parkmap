@@ -321,6 +321,40 @@ enum ActiveSheet: Identifiable {
     /// `onDismiss` catch-all to restore `.browseNav`. See `MapKeyLegendView.swift`'s header
     /// for why a sheet (not a floating popover) is the correct native mapping here.
     case mapKeyLegend
+    /// Regulars network S7 LIVE-GATE FIX (`docs/qa/pr115-regulars-s7-livegate.md`): the
+    /// invite-redemption confirm sheet (`RegularInviteRedemptionView`), presented when
+    /// `wepark://invite/<uuid>` is opened. Payload: the parsed invite token
+    /// (`RegularsInviteLink.resolveRedemptionToken(from:)`, `.onOpenURL` in `body` below).
+    ///
+    /// **Root cause this case fixes:** the original S7 build attached this sheet as a SECOND,
+    /// independent `.sheet(isPresented:)` modifier directly on `ContentView(...)` from
+    /// `WeParkApp.swift`. Live on-device testing (flag-on) confirmed it never presented, in
+    /// any app state, including the map's plain rest state — because `.browseNav` already
+    /// occupies THIS file's one `.sheet(item: $activeSheet)` host at all times at rest (FT-20
+    /// Stream A made `.browseNav` the persistent default, not "nothing"), and SwiftUI only
+    /// supports a single `.sheet` host presenting from one view hierarchy at a time (this
+    /// file's own W5.1-era header comment: "SwiftUI only supports a single .sheet() host per
+    /// view"). This is the EXACT same *class* of bug PR #96 found and fixed for
+    /// `.identityPrompt` (see that case's own doc comment) — a second, independently-toggled
+    /// `.sheet` modifier chained onto `ContentView`'s own view tree, even though the two flows
+    /// don't overlap in time. Routing through this single presenter, exactly like
+    /// `.identityPrompt`/`.mapKeyLegend`, is the fix.
+    ///
+    /// No per-case dismiss target needed: `RegularInviteRedemptionView`'s own "Close"/"Done"
+    /// buttons call the SwiftUI environment `dismiss()` action, which SwiftUI resolves by
+    /// setting `activeSheet` back to `nil` on this binding automatically (same mechanism an
+    /// interactive swipe-to-dismiss uses) — the `.sheet(item:)` `onDismiss` catch-all then
+    /// restores `.browseNav` from there, identical to `.settings`/`.mapKeyLegend`'s own
+    /// no-explicit-transition posture.
+    ///
+    /// Presents reliably from ANY app state by design, not just the map's rest state: this
+    /// case is assigned UNCONDITIONALLY by `routeRegularsInviteRedemption(_:)` (no `guard
+    /// activeSheet == nil`/`== .browseNav` check) — the exact same "just overwrite whatever's
+    /// showing" contract `routePendingDeepLink(_:)` (the notification-tap deep link) already
+    /// uses for `.parkedCarDetail`. Opening an invite link is just as deliberate a user action
+    /// as tapping a notification; whatever was open (browse sheet at any detent, block detail,
+    /// My Car) is preempted, not silently dropped.
+    case regularsInviteRedemption(token: UUID)
 
     var id: String {
         switch self {
@@ -340,6 +374,7 @@ enum ActiveSheet: Identifiable {
         case .identityPrompt:              return "identityPrompt"
         case .browseNav:                  return "browseNav"
         case .mapKeyLegend:               return "mapKeyLegend"
+        case .regularsInviteRedemption(let token): return "regularsInviteRedemption-\(token.uuidString)"
         }
     }
 }
@@ -971,6 +1006,13 @@ struct ContentView: View {
                 handleRemoteCarChanged(newCar: newCar, oldCarID: oldCarID)
             }
             .onChange(of: appDelegate.pendingDeepLinkCarID) { _, carID in routePendingDeepLink(carID) }
+            // S7 LIVE-GATE FIX (docs/qa/pr115-regulars-s7-livegate.md): moved here from
+            // `WeParkApp.swift` — `.onOpenURL` must be attached where the resulting sheet is
+            // actually presented (this file's one `.sheet(item: $activeSheet)` host), not on a
+            // second, independent `.sheet` modifier wrapping `ContentView` from outside. See
+            // `ActiveSheet.regularsInviteRedemption`'s own doc comment for the full root-cause
+            // writeup.
+            .onOpenURL { url in routeRegularsInviteRedemption(url) }
             // Community 2.0 Phase 4b (S12): forward a captured APNs device token to
             // PushRegistrationService, then clear the buffer (idempotency — same shape as
             // pendingDeepLinkCarID's own onChange handler, W6.1 precedent).
@@ -1619,6 +1661,18 @@ struct ContentView: View {
                 }
             )
             .presentationDetents([.medium])
+
+        case .regularsInviteRedemption(let token):
+            // S7 LIVE-GATE FIX — see this case's own doc comment on `ActiveSheet` for the
+            // root-cause writeup. No dismiss closure of its own (same shape as `.settings`/
+            // `.mapKeyLegend` above) — `RegularInviteRedemptionView`'s own `dismiss()` calls
+            // resolve to `activeSheet = nil` automatically, and the `.sheet(item:)` `onDismiss`
+            // catch-all restores `.browseNav` from there.
+            RegularInviteRedemptionView(token: token, service: regularsService)
+                .presentationDetents([.medium])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(.regularMaterial)
+                .presentationCornerRadius(20)
 
         case .browseNav:
             browseNavigationSheetContent
@@ -4684,6 +4738,35 @@ struct ContentView: View {
         let coord = CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude)
         recenterMap(on: coord)
         activeSheet = .parkedCarDetail(car)
+    }
+
+    // MARK: - S7 LIVE-GATE FIX: route a wepark://invite/<uuid> deep link
+
+    /// `.onOpenURL`'s entry point (moved here from `WeParkApp.swift` — see
+    /// `ActiveSheet.regularsInviteRedemption`'s own doc comment for the full root-cause
+    /// writeup of why the sheet has to be presented from THIS file, through the single
+    /// `.sheet(item: $activeSheet)` host, rather than a second independent `.sheet` modifier).
+    ///
+    /// `RegularsInviteLink.resolveRedemptionToken(from:)` is the ENTIRE gate: it folds in
+    /// `AppConstants.regularsEnabled` (defaults to the real flag; `false` today) and strict
+    /// URL validation (wrong scheme/host, non-UUID token, extra path segments) in one call — a
+    /// malformed/foreign URL, or ANY url at all while the flag is off, resolves to `nil` and
+    /// this function does nothing (no `activeSheet` mutation, no state touched at all).
+    ///
+    /// Deliberately UNCONDITIONAL once a valid token resolves — no `guard activeSheet ==
+    /// nil`/`== .browseNav` check, matching `routePendingDeepLink(_:)`'s own precedent for
+    /// `.parkedCarDetail` immediately above. Opening an invite link is exactly as deliberate a
+    /// user action as tapping a notification; whatever sheet was already showing (browse sheet
+    /// at any detent, block detail, My Car, anything) is preempted, not silently dropped —
+    /// this is what makes the redemption sheet present reliably from every app state, not just
+    /// the map's rest state.
+    ///
+    /// - Parameter url: The URL passed to `.onOpenURL` (Camera-app QR scan, a tapped
+    ///   share-link, AirDrop, etc. — anything that can open this app via its registered
+    ///   `wepark://` scheme, `Info.plist`'s `CFBundleURLTypes`).
+    private func routeRegularsInviteRedemption(_ url: URL) {
+        guard let token = RegularsInviteLink.resolveRedemptionToken(from: url) else { return }
+        activeSheet = .regularsInviteRedemption(token: token)
     }
 
     // MARK: - W5: findCandidateSegments

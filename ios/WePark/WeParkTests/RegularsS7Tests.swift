@@ -21,7 +21,8 @@
 //  `.onOpenURL` entry point's own gate) IS covered below, since it didn't exist before this
 //  session.
 //
-//  Test inventory (39 tests, updated post-QA-pass-1 — see `docs/qa/pr115-regulars-s7.md`):
+//  Test inventory (42 tests, updated post-QA-pass-1 AND post-live-gate-fix — see
+//  `docs/qa/pr115-regulars-s7.md` and the live-gate bug report on this same PR):
 //   1. RegularsInviteLinkTests (14) — build/parse round-trip, malformed/foreign-URL rejection,
 //      the net-new `resolveRedemptionToken` gating helper, and (QA finding #2) an explicit,
 //      documented trailing-slash-is-accepted lock-in test.
@@ -38,6 +39,12 @@
 //      siblings) and three tests on the NEW `regenerateInvite(previousId:)` method (finding #1,
 //      the actual fix — revoke-before-create ordering, the nil-previousId first-creation path,
 //      and the "a failed revoke must never be followed by a create" guarantee).
+//   6. RegularsInviteRedemptionActiveSheetTests (3) — added for the LIVE-GATE FIX (the
+//      redemption sheet never presented; root cause was a second, independent `.sheet`
+//      modifier competing with `ContentView`'s one `.sheet(item: $activeSheet)` host). Covers
+//      the new `ActiveSheet.regularsInviteRedemption(token:)` case's `id` shape and
+//      per-payload uniqueness — the actual on-device presentation is Kevin's live gate, not
+//      unit-testable from this target.
 //
 //  No Calendar.current.
 //
@@ -597,5 +604,47 @@ final class RegularsServiceS7WireTests: XCTestCase {
             capturedRequests.allSatisfy { $0.httpMethod == "PATCH" },
             "a failed revoke must NEVER be followed by a create — that would silently leave two live invites, the exact bug S7 QA Finding #1 fixed"
         )
+    }
+}
+
+// MARK: - 6. ActiveSheet.regularsInviteRedemption (S7 LIVE-GATE FIX)
+//
+// The presentation itself (does the sheet actually appear on a real simulator?) is gate-
+// verified by Kevin, not by this test target — this file has no SwiftUI-view-hosting harness.
+// What IS extractable and pure: `ActiveSheet.regularsInviteRedemption`'s `id` shape (mirrors
+// `ParkingGuideActiveSheetTests`'s own precedent, `FT12Tests.swift`, for testing a NEW
+// `ActiveSheet` case's identity without hosting `ContentView`) and the fact that its payload
+// makes two different tokens resolve to two different, stable ids — the same
+// per-payload-uniqueness property `.blockDetail`/`.parkedCarDetail`/`.pinDetail` already rely
+// on for SwiftUI's `Identifiable`-driven sheet-replacement behavior to work correctly at all.
+
+final class RegularsInviteRedemptionActiveSheetTests: XCTestCase {
+
+    func testRegularsInviteRedemptionCase_idEmbedsToken() {
+        let token = UUID()
+        XCTAssertEqual(ActiveSheet.regularsInviteRedemption(token: token).id, "regularsInviteRedemption-\(token.uuidString)")
+    }
+
+    func testRegularsInviteRedemptionCase_idDistinctPerToken() {
+        let first = ActiveSheet.regularsInviteRedemption(token: UUID())
+        let second = ActiveSheet.regularsInviteRedemption(token: UUID())
+        XCTAssertNotEqual(first.id, second.id, "two different invite tokens must never collide onto the same ActiveSheet id")
+    }
+
+    func testRegularsInviteRedemptionCase_idDistinctFromOtherStaticCases() {
+        // Same pattern as `ParkingGuideActiveSheetTests.testParkingGuideCase_idDistinctFromOtherStaticCases`
+        // (`FT12Tests.swift`) — a sample of other cases' ids, confirming this new one doesn't
+        // accidentally collide with any of them.
+        let ids: Set<String> = [
+            ActiveSheet.regularsInviteRedemption(token: UUID()).id,
+            ActiveSheet.parkingGuide.id,
+            ActiveSheet.notificationRationale.id,
+            ActiveSheet.settings.id,
+            ActiveSheet.parkUntil.id,
+            ActiveSheet.identityPrompt.id,
+            ActiveSheet.browseNav.id,
+            ActiveSheet.mapKeyLegend.id,
+        ]
+        XCTAssertEqual(ids.count, 8, "ActiveSheet.regularsInviteRedemption's id must not collide with any other case")
     }
 }

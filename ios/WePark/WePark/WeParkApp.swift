@@ -300,17 +300,18 @@ struct WeParkApp: App {
     /// instance above (AC-A5-style singleton — mirrors `pinService`/`zoneMessageService` in
     /// `ContentView.init`, which all share the one `authService` rather than each calling
     /// `clients.makeAuthService()` again and getting a second, independent wrapper object).
-    /// Used both here (the `.onOpenURL` invite-redemption sheet below) and passed into
-    /// `ContentView` → `SettingsView` → `RegularsSettingsView` for the Regulars list/invite
-    /// surfaces. Zero live effect while `AppConstants.regularsEnabled == false` (today's shipped
-    /// default).
+    /// Passed into `ContentView` → `SettingsView` → `RegularsSettingsView` for the Regulars
+    /// list/invite surfaces, and into `ContentView`'s own `.onOpenURL`-driven
+    /// `ActiveSheet.regularsInviteRedemption` case (see that case's own doc comment in
+    /// `ContentView.swift` for why the redemption sheet is NOT presented from this file — a
+    /// LIVE-GATE bug found it never appeared: this file used to attach a second, independent
+    /// `.sheet(isPresented:)` directly to `ContentView(...)`, which silently never presents
+    /// while `ContentView`'s own single `.sheet(item: $activeSheet)` host is already showing
+    /// something (which it always is at rest — `.browseNav`), exactly the class of bug PR #96's
+    /// `identityPrompt` fix closed for the same reason. `.onOpenURL` and the sheet presentation
+    /// both moved into `ContentView`, which owns the one legitimate sheet host). Zero live
+    /// effect while `AppConstants.regularsEnabled == false` (today's shipped default).
     @State private var regularsService: RegularsService
-
-    /// The invite token parsed from the most recent `wepark://invite/<uuid>` open, or `nil`.
-    /// Drives the `.sheet(isPresented:)` below via a computed `Binding<Bool>` rather than a
-    /// second `Identifiable` wrapper type — `UUID` alone isn't `Identifiable`, and this is the
-    /// only sheet this property ever needs to present.
-    @State private var pendingInviteToken: UUID?
 
     /// Explicit init required because `authService` (a `@State` property) depends on
     /// `supabaseClients.authClient` — Swift stored properties can't reference sibling stored
@@ -341,28 +342,6 @@ struct WeParkApp: App {
                     // ensureSession() fails silently if the network is unavailable (AC-A4).
                     // The app stays in read-only mode until auth is available.
                     await authService.ensureSession()
-                }
-                // S7 (docs/regulars-network-spec.md §3.2): parses `wepark://invite/<uuid>` deep
-                // links (Camera-app QR scan, a tapped share-link, AirDrop, etc.) and presents the
-                // redemption confirm sheet. FULLY gated on `AppConstants.regularsEnabled` — a
-                // malformed/foreign URL, or ANY URL at all while the flag is off, is silently
-                // ignored (no sheet, no state mutation) rather than opening Safari to a
-                // broken-looking address; see `RegularsInviteLink.parse(_:)`'s own doc comment
-                // for the exact rejection rules (wrong scheme, wrong host, non-UUID token, extra
-                // path segments all reject).
-                .onOpenURL { url in
-                    guard let token = RegularsInviteLink.resolveRedemptionToken(from: url) else { return }
-                    pendingInviteToken = token
-                }
-                .sheet(isPresented: Binding(
-                    get: { pendingInviteToken != nil },
-                    set: { isPresented in
-                        if !isPresented { pendingInviteToken = nil }
-                    }
-                )) {
-                    if let token = pendingInviteToken {
-                        RegularInviteRedemptionView(token: token, service: regularsService)
-                    }
                 }
                 // FT-20 (2026-08-19): app defaults to dark mode, always, regardless of the
                 // device's system appearance setting. Kevin: "I think that looks cleaner."
