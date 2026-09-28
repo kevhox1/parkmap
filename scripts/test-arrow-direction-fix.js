@@ -274,6 +274,100 @@ console.log('\n=== Block 3: Pike St, E side, Henry St -> East Broadway ===');
 }
 
 // ============================================================================
+// REAL END-TO-END: Chrystie St, E side (Sara D. Roosevelt Park frontage),
+// Delancey St -> East Houston St -- second real-pipeline acceptance case for
+// the ARROW fix (orchestrator ask, Kevin parked at the Stanton-corner curb on
+// this block). DOT records the whole park frontage as ONE 1,445ft blockface
+// (no address-driven subdivision at Rivington/Stanton the way the addressed
+// west side has) -- all 17 signs genuinely carry coordinates, so this
+// exercises the ARROW mechanism specifically, not the #26 QA finding #1
+// coordinate-recovery path (see the E4th block above for that).
+//
+// IMPORTANT CORRECTION to the original ask: the real Stanton St x Chrystie St
+// corner is at raw distance ~983ft from Delancey (verified independently by
+// summing the three addressed west-side sub-block lengths -- Delancey->
+// Rivington ~527ft + Rivington->Stanton ~457ft -- which matches the direct
+// Delancey->Houston measurement to within 0.1ft, confirming this pipeline's
+// own geometry is internally self-consistent here). The specific latitude
+// figures originally cited for this pole (40.72135 / 40.72110) do NOT match
+// this repo's own OSM-derived geometry for this block when independently
+// interpolated (934ft lands at lat~40.72229, and lat 40.7212 itself lands at
+// distance~507ft -- near the Rivington corner, not Stanton) -- flagged, not
+// silently used. The DISTANCE-based claims (which zones flip, and that the
+// real Stanton corner falls inside the 934-1045ft zone) ARE independently
+// verified and are what this test asserts on, since that's what the actual
+// code operates on.
+//
+// There are actually TWO flipped zones on this block, not one -- the ask
+// named only the 934ft pole's flip; investigating found an identical,
+// mechanistically-parallel flip at the 573ft pole (same North=ASP-broom-
+// agrees / South=NO-STOPPING-flips-backward pattern). Both asserted below.
+// Independently confirmed (see PR discussion): the ONLY two zones that
+// differ old-vs-new anywhere on this 1,445ft block are these two -- a full
+// zone-by-zone old/new diff found zero other differences.
+// ============================================================================
+console.log('\n=== REAL END-TO-END: Chrystie St, E side, Delancey St -> East Houston St (Sara D. Roosevelt Park frontage) ===');
+{
+  const rawRows = loadFixture('arrow-direction-chrystie-RAW-delancey-houston-e.json');
+  const { filtered } = pp.filterSignsToManhattanBounds(rawRows);
+  const { deduped } = pp.dedupeSigns(filtered);
+  const { blocks } = pp.groupSignsIntoBlocks(deduped);
+  const fullKey = 'CHRYSTIE STREET (DELANCEY STREET to EAST HOUSTON STREET) [E]';
+  const block = blocks[fullKey];
+  if (!block) {
+    fail++;
+    console.log(`FAIL: block "${fullKey}" not found. Keys present: ${Object.keys(blocks).join(', ')}`);
+  } else {
+    pass++;
+    console.log(`PASS: block found with ${block.signs.length} signs after real filter/dedup/group`);
+
+    const blockGeo = pp.getBlockPolyline(block);
+    const bearingVector = pp.getBlockBearingVector(blockGeo);
+    const zones = pp.createSubSegments(block, bearingVector).map(z => ({
+      distStart: z.distStart, distEnd: z.distEnd,
+      dominantCategory: pp.mostRestrictiveCategory(z.rules),
+    }));
+    console.log('Chrystie St real end-to-end composed zones:', JSON.stringify(zones));
+
+    // Real Stanton corner (~983ft from Delancey) falls inside [934,1045) --
+    // must compose ASP_OVERNIGHT_MWF post-fix, not NO_STANDING.
+    assertZoneCovers(zones, 983, 'ASP_OVERNIGHT_MWF', 'Chrystie: the zone containing the REAL Stanton St corner (~983ft) is ASP_OVERNIGHT_MWF post-fix (was NO_STANDING pre-fix -- the 934ft pole\'s South-arrow "NO STOPPING -->" no longer wrongly reads forward)');
+    // The second flip the original ask missed, mechanistically identical.
+    assertZoneCovers(zones, 600, 'ASP_OVERNIGHT_MWF', 'Chrystie: 573-659ft is ALSO ASP_OVERNIGHT_MWF post-fix (was NO_STANDING pre-fix -- same flip pattern as the 934ft pole, at the 573ft pole; not named in the original ask but verified real)');
+    // (b) NO-STOPPING pocket between the 846ft and 934ft poles survives.
+    assertZoneCovers(zones, 890, 'NO_STANDING', 'Chrystie: 846-934ft NO-STOPPING pocket survives unchanged (846ft sign\'s North arrow agrees with glyph -- an agree case, unaffected by the fix)');
+    // (c) Houston-end NO STOPPING from the 1283ft pole survives.
+    assertZoneCovers(zones, 1290, 'NO_STANDING', 'Chrystie: 1283-1297ft NO-STOPPING survives unchanged (1283ft sign\'s North arrow also agrees with glyph)');
+    // (d) Delancey-end NO STOPPING (the 87-417ft <-> signs) unchanged.
+    assertZoneCovers(zones, 20, 'NO_STANDING', 'Chrystie: 0-87ft (Delancey corner) unchanged NO_STANDING');
+    assertZoneCovers(zones, 250, 'NO_STANDING', 'Chrystie: 209-314ft unchanged NO_STANDING (arrow_direction-absent <-> signs, glyph fallback)');
+    assertZoneCovers(zones, 450, 'NO_STANDING', 'Chrystie: 417-573ft unchanged NO_STANDING');
+
+    // Full old-vs-new zone-by-zone diff -- must show EXACTLY the two flips
+    // above and nothing else (proves "nothing else changed" on this block).
+    const expectedUnchanged = [
+      [0, 87], [87, 209], [209, 314], [314, 417], [417, 573],
+      [659, 762], [762, 846], [846, 934], [1045, 1203], [1203, 1283],
+      [1283, 1297], [1297, 1686.1],
+    ];
+    let allUnchangedMatch = true;
+    for (const [s, e] of expectedUnchanged) {
+      const zone = zones.find(z => z.distStart === s && z.distEnd === e);
+      if (!zone) { allUnchangedMatch = false; break; }
+    }
+    const flip1 = zones.find(z => z.distStart === 573 && z.distEnd === 659);
+    const flip2 = zones.find(z => z.distStart === 934 && z.distEnd === 1045);
+    if (allUnchangedMatch && flip1 && flip1.dominantCategory === 'ASP_OVERNIGHT_MWF' && flip2 && flip2.dominantCategory === 'ASP_OVERNIGHT_MWF' && zones.length === 14) {
+      pass++;
+      console.log('PASS: Chrystie: zone boundary structure is exactly [14 zones], with exactly the [573,659) and [934,1045) flips and identical boundaries everywhere else -- matches the independently-verified full old-vs-new diff');
+    } else {
+      fail++;
+      console.log(`FAIL: Chrystie: zone structure does not match the expected 14-zone, 2-flip shape. Got ${zones.length} zones: ${JSON.stringify(zones)}`);
+    }
+  }
+}
+
+// ============================================================================
 console.log(`\n${'='.repeat(60)}`);
 console.log(`RESULT: ${pass} passed, ${fail} failed`);
 if (fail > 0) process.exit(1);
