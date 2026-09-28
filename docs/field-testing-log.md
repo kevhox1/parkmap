@@ -811,14 +811,31 @@ Findings from Kevin testing the TF2 build (FT-1/5/6/7/8/9/10) on his iPhone. Lab
   `build/preprocess.js` never read NYC's authoritative `arrow_direction` field, only the printed
   description glyph, so signs whose real-world arrow disagreed with the glyph got their zone
   flipped (Kevin's E 4th St / Bowery→2nd Ave photographed find is the same class of bug this row
-  first named). **Verdict: this cap is KEPT, not removed.** It solves a different problem —
-  physical driveway extent when no closing sign exists within ~50ft — that arrow_direction doesn't
-  address on its own. Live-verified in #117's session: of 500 real Manhattan "NO PARKING ANYTIME
-  -->" signs, 139/473 resolvable ones still resolve forward after the arrow-direction fix and would
-  still need this cap if isolated. E 4th St's own driveway sign (SP-854CA, 421ft, `arrow_direction
-  =West`) is the one case that no longer needs it — `coversAfter` resolves false entirely post-fix,
-  so this cap's code block never runs for that sign — but that's one sign, not TF2-13's whole
-  population.
+  first named). E 4th St's own driveway sign (SP-854CA, 421ft, `arrow_direction=West`) is the case
+  that no longer needs this cap — `coversAfter` resolves false entirely post-fix, so this cap's code
+  block never runs for that sign at all.
+- **2026-09-26/27 update — QA pass 1 (`docs/qa/pr117-arrow-direction.md` finding #2) then a deeper
+  discovery while fixing it — verdict revised:** QA found the cap's own guard condition still
+  checked the raw printed glyph (`sd.arrow === 'towards'`) instead of the #26-resolved direction,
+  so a null/both-glyph sign that #26 newly resolves to strictly-forward-only via a confident
+  `arrow_direction` reading slipped past the cap uncapped. Fixed (now keyed on
+  `sd.resolved.coversAfter && !sd.resolved.coversBefore`). **But investigating that fix surfaced a
+  much bigger, pre-existing problem: the cap's own break condition is provably UNREACHABLE DEAD
+  CODE**, given how `createSubSegments()` builds zone boundaries (every boundary except the first
+  and the synthetic tail is, by construction, already a member of `uniqueDists`, so the ordinary
+  "stop at the next sign" break always fires first; and when the isolated sign is the LAST sign in
+  the block, the loop naturally ends after one iteration without a second check at all). Verified
+  empirically — disabling the cap entirely produces byte-identical output across 3 constructed
+  scenarios (including the exact "isolated + last sign in block" shape this row's own original
+  fix describes) — on **both PR #117's tip and its unmodified base commit**, confirming this
+  predates #26 entirely and is not a regression from anything in this session. **Revised verdict:
+  the guard condition is now correct, but the cap has had ZERO real effect on tile output for some
+  time (dating to at least the FT-14/FT-19 zone-construction rework, plausibly what silently
+  neutralized it) — this row's own claimed "~614 faces citywide improved" impact must have come
+  from something else in that same regen 4 commit, not this specific cap.** Logged as
+  `docs/open-items.md` #28 for a dedicated follow-up (rework zone construction to make an
+  isolation-cap meaningful again, or formally retire the dead branch) — not fixed in #117, which
+  correctly limited itself to the guard-condition correctness fix.
 
 ### TF2-10 🔴 Polylines still look mid-road on WIDE streets (offset magnitude, not direction)
 - **Observed (Kevin, build 9):** center polylines still appear mid-street despite the TF2-5 rebuild.

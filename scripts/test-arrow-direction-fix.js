@@ -6,13 +6,27 @@
  *
  * Runs the REAL pipeline functions from build/preprocess.js (classifySign,
  * parseSchedule, getBlockPolyline, getBlockBearingVector,
- * resolveSignSpanDirection, createSubSegments, mostRestrictiveCategory --
+ * resolveSignSpanDirection, createSubSegments, mostRestrictiveCategory,
+ * filterSignsToManhattanBounds, dedupeSigns, groupSignsIntoBlocks --
  * shared via module.exports, no logic duplicated here) against real,
- * live-fetched (2026-09-25) NYC sign data for three hand-verified blockfaces,
- * and asserts the exact post-fix rule composition.
+ * live-fetched NYC sign data for three hand-verified blockfaces, and asserts
+ * the exact post-fix rule composition.
  *
- * Fixtures under scripts/fixtures/arrow-direction-*.json are slimmed real
- * Socrata rows (only the fields the pipeline reads) -- not synthetic.
+ * Fixtures under scripts/fixtures/arrow-direction-*.json are real Socrata
+ * rows -- not synthetic. Two flavors:
+ *   - `arrow-direction-{e4th,e59th,pike}-*.json`: hand-slimmed (only the
+ *     fields the composition layer reads), fetched 2026-09-25. Exercise
+ *     createSubSegments()/resolveSignSpanDirection() directly -- proves the
+ *     RESOLUTION mechanism given the data it's fed, but NOT sufficient
+ *     end-to-end acceptance proof on their own (see #26 QA finding #1,
+ *     docs/qa/pr117-arrow-direction.md).
+ *   - `arrow-direction-e4th-RAW-unfiltered-n-bowery-2ave.json`: genuinely
+ *     raw, unfiltered live pull (fetched 2026-09-27, coordinate fields
+ *     preserved exactly as NYC's live data has them -- some present, some
+ *     missing). Run through the REAL filterSignsToManhattanBounds() ->
+ *     dedupeSigns() -> groupSignsIntoBlocks() chain in the "REAL END-TO-END"
+ *     block below -- this is the test that actually proves the flagship E4th
+ *     claim holds against the real production pipeline, not just a fixture.
  *
  * Usage: node scripts/test-arrow-direction-fix.js
  */
@@ -91,14 +105,25 @@ function assertNoZoneCovers(zones, distance, label) {
 }
 
 // ============================================================================
-// Block 1 (PRIMARY): E 4th St, N side, Bowery -> 2nd Ave.
-// Kevin's field-verified case (docs/open-items.md #26). Ground truth: the
-// No Standing Anytime sign at 49ft (order P-01798286, arrow_direction West)
-// covers ONLY the 49ft corner toward Bowery; the block's real ASP Mon/Thu
-// stretch (SP-413C/SP-413CA, sign at 191ft = 63 E 4th St, Kevin's photo)
-// must NOT be swallowed by it.
+// Block 1: E 4th St, N side, Bowery -> 2nd Ave -- COMPOSITION-LAYER test only.
+//
+// #26 QA finding #1 (docs/qa/pr117-arrow-direction.md): this block exercises
+// createSubSegments()/resolveSignSpanDirection() directly against a fixture
+// built from real field values -- but that fixture (like a `block` object
+// built directly) sits BELOW filterSignsToManhattanBounds(), the real
+// pipeline's Manhattan-bounds filter. QA found that filter used to silently
+// drop the three signs (191/315/399ft) load-bearing for this exact block's
+// claimed result, because NYC's live data omits their sign_x_coord/
+// sign_y_coord -- a real, live, unrelated-to-this-fixture data gap. This
+// block's assertions below are still valid (they prove the RESOLUTION
+// mechanism is correct given the data it's fed) but are NOT sufficient
+// end-to-end acceptance proof by themselves -- see the REAL END-TO-END
+// section immediately after, which runs the actual filter/dedup/group chain
+// (filterSignsToManhattanBounds/dedupeSigns/groupSignsIntoBlocks) against an
+// unfiltered raw live pull that still has the coordinate-missing rows in it,
+// exactly as main() would receive them.
 // ============================================================================
-console.log('\n=== Block 1: E 4th St, N side, Bowery -> 2nd Ave ===');
+console.log('\n=== Block 1: E 4th St, N side, Bowery -> 2nd Ave (composition-layer only -- see real end-to-end test below) ===');
 {
   const rows = loadFixture('arrow-direction-e4th-bowery-2ave-n.json');
   const block = buildBlock(rows, 'EAST 4 STREET', 'BOWERY', '2 AVENUE', 'N');
@@ -129,6 +154,74 @@ console.log('\n=== Block 1: E 4th St, N side, Bowery -> 2nd Ave ===');
   } else {
     fail++;
     console.log(`FAIL: E4th: expected contiguous ASP_MON_THU [49,399), got [${aspStart},${aspEnd})`);
+  }
+}
+
+// ============================================================================
+// REAL END-TO-END TEST: E 4th St, N side, Bowery -> 2nd Ave.
+//
+// #26 QA finding #1 fix proof. scripts/fixtures/arrow-direction-e4th-RAW-
+// unfiltered-n-bowery-2ave.json is a genuinely RAW, unfiltered live pull
+// (re-fetched fresh for this fix, both Socrata datasets, deduplicated only
+// for identical-object API duplication -- not hand-slimmed of coordinate
+// fields) for this exact block. 8 of its 17 rows are missing sign_x_coord/
+// sign_y_coord in NYC's live data TODAY, including all three ASP_MON_THU
+// signs (191/315/399ft) this block's claimed result depends on -- confirmed
+// present in this fixture exactly as QA found them.
+//
+// This runs the REAL production functions in the REAL order main() calls
+// them: filterSignsToManhattanBounds() -> dedupeSigns() -> groupSignsIntoBlocks()
+// -> getBlockPolyline() -> getBlockBearingVector() -> createSubSegments().
+// If the coordinate-filter fix regresses, this test fails the same way QA's
+// live full-pipeline regen did.
+// ============================================================================
+console.log('\n=== REAL END-TO-END: E 4th St, N side, Bowery -> 2nd Ave (full ingestion pipeline, not a fixture bypass) ===');
+{
+  const rawRows = loadFixture('arrow-direction-e4th-RAW-unfiltered-n-bowery-2ave.json');
+  const missingCoords = rawRows.filter(r => !r.sign_x_coord || !r.sign_y_coord).length;
+  console.log(`Raw fixture: ${rawRows.length} rows, ${missingCoords} missing sign_x_coord/sign_y_coord (must be > 0 -- this test is meaningless otherwise)`);
+  if (missingCoords === 0) {
+    fail++;
+    console.log('FAIL: fixture has no coordinate-missing rows -- this test no longer exercises finding #1, fixture needs refreshing from a live pull');
+  } else {
+    pass++;
+    console.log(`PASS: fixture genuinely exercises the coordinate-missing path (${missingCoords}/${rawRows.length} rows)`);
+  }
+
+  const { filtered, coordMissingCount } = pp.filterSignsToManhattanBounds(rawRows);
+  console.log(`filterSignsToManhattanBounds: ${filtered.length}/${rawRows.length} kept, ${coordMissingCount} coordinate-missing (all must be recovered, not dropped)`);
+  if (filtered.length !== rawRows.length) {
+    fail++;
+    console.log(`FAIL: expected ALL ${rawRows.length} rows to survive the real Manhattan-bounds filter (every row is genuinely borough=Manhattan) -- only ${filtered.length} did`);
+  } else {
+    pass++;
+    console.log('PASS: no rows dropped by filterSignsToManhattanBounds -- coordinate-missing rows recovered via borough membership');
+  }
+
+  const { deduped } = pp.dedupeSigns(filtered);
+  const { blocks } = pp.groupSignsIntoBlocks(deduped);
+  const fullKey = 'EAST 4TH STREET (BOWERY to 2ND AVENUE) [N]';
+  const block = blocks[fullKey];
+  if (!block) {
+    fail++;
+    console.log(`FAIL: block "${fullKey}" not found after real grouping. Keys present: ${Object.keys(blocks).join(', ')}`);
+  } else {
+    pass++;
+    console.log(`PASS: block found with ${block.signs.length} signs after real filter/dedup/group`);
+
+    const blockGeo = pp.getBlockPolyline(block);
+    const bearingVector = pp.getBlockBearingVector(blockGeo);
+    const zones = pp.createSubSegments(block, bearingVector).map(z => ({
+      distStart: z.distStart, distEnd: z.distEnd,
+      dominantCategory: pp.mostRestrictiveCategory(z.rules),
+    }));
+    console.log('Real end-to-end composed zones:', JSON.stringify(zones));
+
+    assertZoneCovers(zones, 20, 'NO_STANDING', 'E4th REAL PIPELINE: 0-49ft is NO_STANDING');
+    assertZoneCovers(zones, 100, 'ASP_MON_THU', 'E4th REAL PIPELINE: 63 E 4th St (~100-191ft) is ASP_MON_THU end-to-end -- the coordinate-missing 191/315/399ft signs were recovered, not dropped, and this is the actual claim this PR/#26 exists to fix');
+    assertZoneCovers(zones, 360, 'ASP_MON_THU', 'E4th REAL PIPELINE: 315-399ft is ASP_MON_THU');
+    assertZoneCovers(zones, 410, 'NO_PARKING', 'E4th REAL PIPELINE: 399-421ft is NO_PARKING');
+    assertZoneCovers(zones, 500, 'METERED', 'E4th REAL PIPELINE: 485-545ft is METERED (both 485ft agreeing signs were also coordinate-missing and recovered)');
   }
 }
 
