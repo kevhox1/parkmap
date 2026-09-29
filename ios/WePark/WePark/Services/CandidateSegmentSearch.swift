@@ -201,8 +201,12 @@ enum CandidateSegmentSearch {
     /// `Views/PinMarkerAnnotation.swift`) reuses this SAME cumulative-length math for its own
     /// "no positionFraction, project the raw lat/lng onto the known-correct line" branch,
     /// rather than duplicating it a fourth time — this file's own stated "extract the shared
-    /// helper" mandate (header comment above).
-    static func nearestPointOnPolyline(
+    /// helper" mandate (header comment above). QA pass 1 (PR #118) nit: marked `nonisolated`
+    /// for consistency with its new siblings (`coordinate(atFraction:along:)`,
+    /// `reportRepositionCandidates`) — every function in this `enum` is already effectively
+    /// nonisolated (no actor/SwiftUI/instance state anywhere in the file, per the header
+    /// comment), so this is a no-op for behavior, purely a readability/consistency fix.
+    nonisolated static func nearestPointOnPolyline(
         from point: CLLocationCoordinate2D,
         polyline: [CLLocationCoordinate2D]
     ) -> (distanceMeters: Double, fraction: Double, coordinate: CLLocationCoordinate2D)? {

@@ -364,6 +364,23 @@ struct ReportSheet: View {
         )
     }
 
+    /// QA pass 1 (PR #118, finding #1): whether `reportPlacementSection` (the wrapper around
+    /// `confirmStreetSection` + `repositionRow`) should render AT ALL — the widened `||` guard
+    /// every one of `reportPlacementSection`'s 4 render call sites already used inline, now
+    /// extracted to one pure, directly-testable function so it can't drift between those 4
+    /// call sites and `body`'s S13c Fix #8 auto-scroll `.onChange(of: selectedType)` guard,
+    /// which needed the exact same widened predicate (the auto-scroll must ALSO fire for the
+    /// OD-1 case — reposition-row-only, no candidate list — the case that benefits most from
+    /// the affordance being easy to find).
+    private var showsReportPlacementSection: Bool {
+        ReportSheet.showsReportPlacementSection(
+            communityEnabled: AppConstants.communityEnabled,
+            selectedType: selectedType,
+            candidates: confirmCandidates,
+            allowsReposition: allowsReposition
+        )
+    }
+
     /// Community 2.0 Phase 2a (build 20 S6): whether the "confirm the street" section should
     /// render. Instance wrapper over the pure static `showsConfirmStreetStep` — reads the real
     /// `AppConstants.communityEnabled` flag for production call sites; tests call the static
@@ -484,8 +501,9 @@ struct ReportSheet: View {
                             // wraps `confirmStreetSection` (still independently gated on
                             // `showsConfirmStreetStep` inside it — AC-13) together with the new
                             // "Reposition" row, which is NOT gated on a non-empty candidate list
-                            // (OD-1 benefits most from it) — hence the widened outer `||` guard.
-                            if selectedType == .enforcementActive && (showsConfirmStreetStep || showsRepositionAffordance) {
+                            // (OD-1 benefits most from it) — hence `showsReportPlacementSection`,
+                            // QA pass 1's (PR #118) extracted `||` of both gates.
+                            if selectedType == .enforcementActive && showsReportPlacementSection {
                                 reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
@@ -500,8 +518,9 @@ struct ReportSheet: View {
                                     .padding(.leading, 20)
                                     .padding(.bottom, 4)
                             }
-                            // #22: same widened guard as the enforcementActive case above.
-                            if selectedType == .sweeper && (showsConfirmStreetStep || showsRepositionAffordance) {
+                            // #22: same `showsReportPlacementSection` guard as the
+                            // enforcementActive case above.
+                            if selectedType == .sweeper && showsReportPlacementSection {
                                 reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
@@ -577,8 +596,9 @@ struct ReportSheet: View {
                             // wraps `confirmStreetSection` (still independently gated on
                             // `showsConfirmStreetStep` inside it — AC-13) together with the new
                             // "Reposition" row, which is NOT gated on a non-empty candidate list
-                            // (OD-1 benefits most from it) — hence the widened outer `||` guard.
-                            if selectedType == .enforcementActive && (showsConfirmStreetStep || showsRepositionAffordance) {
+                            // (OD-1 benefits most from it) — hence `showsReportPlacementSection`,
+                            // QA pass 1's (PR #118) extracted `||` of both gates.
+                            if selectedType == .enforcementActive && showsReportPlacementSection {
                                 reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
@@ -608,8 +628,9 @@ struct ReportSheet: View {
                             }
 
                             // Community 2.0 Phase 2a (build 20 S6): "confirm the street" for sweeper.
-                            // #22: same widened guard as the enforcementActive case above.
-                            if selectedType == .sweeper && (showsConfirmStreetStep || showsRepositionAffordance) {
+                            // #22: same `showsReportPlacementSection` guard as the
+                            // enforcementActive case above.
+                            if selectedType == .sweeper && showsReportPlacementSection {
                                 reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
@@ -632,14 +653,22 @@ struct ReportSheet: View {
                     }
                     .padding(.vertical, 12)
                 }
-                // S13c Fix #8: scroll `confirmStreetSection` into view the first time it
-                // mounts after a type selection makes `showsConfirmStreetStep` true. Watches
-                // `selectedType` (the section's own gate also depends on `confirmCandidates`,
-                // which is fixed at init and never changes mid-sheet) — a no-op whenever
-                // `showsConfirmStreetStep` is false (including always, flag-off — zero
+                // S13c Fix #8: scroll `reportPlacementSection` into view the first time it
+                // mounts after a type selection makes it render. Watches `selectedType` (the
+                // section's own gates also depend on `confirmCandidates`/`allowsReposition`,
+                // both fixed at init and never changing mid-sheet) — a no-op whenever
+                // `showsReportPlacementSection` is false (including always, flag-off — zero
                 // behavior change there).
+                //
+                // QA pass 1 (PR #118, finding #1): widened from `showsConfirmStreetStep` alone
+                // to `showsReportPlacementSection` (`showsConfirmStreetStep ||
+                // showsRepositionAffordance`) — the OD-1 case (no segment resolved) renders
+                // ONLY the Reposition row, with no candidate list, and that row must ALSO
+                // auto-scroll into view exactly like the candidate list already did. Both this
+                // guard and `reportPlacementSection`'s 4 render call sites now read the SAME
+                // extracted predicate, so they can't drift apart again.
                 .onChange(of: selectedType) { _, newType in
-                    guard newType != nil, showsConfirmStreetStep else { return }
+                    guard newType != nil, showsReportPlacementSection else { return }
                     withAnimation {
                         scrollProxy.scrollTo(Self.confirmStreetSectionID, anchor: .top)
                     }
@@ -1127,6 +1156,15 @@ struct ReportSheet: View {
     /// (AC-13: the pre-existing candidate list is pixel/behavior-identical whenever it was
     /// already showing). `showsRepositionAffordance` is a SEPARATE, wider gate — deliberately
     /// not requiring a non-empty candidate list (spec §3.1's OD-1 case).
+    ///
+    /// QA pass 1 (PR #118, finding #1): `.id(Self.confirmStreetSectionID)` lives HERE, on the
+    /// wrapper, not on `confirmStreetSection` itself (moved from there — see that property's
+    /// own doc comment for the S13c Fix #8 history this scroll-target id predates). In the
+    /// OD-1 case (no segment resolved — `showsConfirmStreetStep == false`, only `repositionRow`
+    /// renders) `confirmStreetSection` never mounts, so an id attached only to IT would give
+    /// `ScrollViewReader.scrollTo` nothing to find in exactly the case the spec says benefits
+    /// most from the Reposition affordance. Attaching the id to the wrapper instead means it's
+    /// present whenever EITHER child renders, at the same visual position.
     @ViewBuilder
     private var reportPlacementSection: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1137,6 +1175,7 @@ struct ReportSheet: View {
                 repositionRow
             }
         }
+        .id(Self.confirmStreetSectionID)
     }
 
     /// #22 (docs/report-tap-to-place-spec.md §3.1, §3.3): lets the user tap-to-place this
@@ -1195,11 +1234,14 @@ struct ReportSheet: View {
     /// from there into the (unchanged) direction picker and the submit payload's `segmentId`.
     ///
     /// S13c Fix #8 (`docs/design/community-2.0-final-parity-audit.md` §2 item 8 / open-items
-    /// #12④): `.id(Self.confirmStreetSectionID)` here, paired with `body`'s
-    /// `ScrollViewReader`/`.onChange(of: selectedType)`, scrolls this section into view the
-    /// first time it mounts after a type is selected — the logic was always correct (PR #95
-    /// QA traced this to a genuine discoverability flaw, not a bug: the section mounted
-    /// below the sheet's visible fold before the user scrolled).
+    /// #12④): paired with `body`'s `ScrollViewReader`/`.onChange(of: selectedType)`, this
+    /// section scrolls into view the first time it mounts after a type is selected — the
+    /// logic was always correct (PR #95 QA traced this to a genuine discoverability flaw, not
+    /// a bug: the section mounted below the sheet's visible fold before the user scrolled).
+    ///
+    /// QA pass 1 (PR #118, finding #1): the `.id(Self.confirmStreetSectionID)` scroll-target
+    /// id that used to live on THIS view moved up to `reportPlacementSection` (its wrapper) —
+    /// see that property's own doc comment for why.
     @ViewBuilder
     private var confirmStreetSection: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -1229,12 +1271,13 @@ struct ReportSheet: View {
                 }
             }
         }
-        .id(Self.confirmStreetSectionID)
     }
 
-    /// S13c Fix #8: stable scroll-target id for `ScrollViewReader.scrollTo` — one constant
-    /// shared by `confirmStreetSection`'s single definition (rendered at up to 4 call sites,
-    /// but only ever one at a time) and `body`'s `.onChange(of: selectedType)` handler.
+    /// S13c Fix #8: stable scroll-target id for `ScrollViewReader.scrollTo`. QA pass 1 (PR
+    /// #118, finding #1) moved the `.id()` application itself from `confirmStreetSection` up
+    /// to `reportPlacementSection` (its wrapper) — this constant is still shared by both that
+    /// wrapper (rendered at up to 4 call sites, but only ever one at a time) and `body`'s
+    /// `.onChange(of: selectedType)` handler.
     private static let confirmStreetSectionID = "S13c-confirm-street-section"
 
     @ViewBuilder
@@ -1730,6 +1773,24 @@ struct ReportSheet: View {
         case .enforcementActive, .sweeper: return true
         case nil: return false
         }
+    }
+
+    /// QA pass 1 (PR #118, finding #1): whether `reportPlacementSection` should render at
+    /// all — `true` whenever EITHER `showsConfirmStreetStep` (the pre-existing candidate
+    /// list) OR `showsRepositionAffordance` (the new row, independently gated — no candidate
+    /// list required) is `true`. Extracted as its own pure function, rather than leaving the
+    /// `||` inlined at each of `reportPlacementSection`'s 4 render call sites plus `body`'s
+    /// S13c Fix #8 auto-scroll guard, so those 5 sites can never drift out of sync with each
+    /// other — a report that resolved no segment (OD-1) renders ONLY the Reposition row, and
+    /// that row must ALSO auto-scroll into view exactly like the candidate list already did.
+    static func showsReportPlacementSection(
+        communityEnabled: Bool,
+        selectedType: ReportType?,
+        candidates: [Segment],
+        allowsReposition: Bool
+    ) -> Bool {
+        showsConfirmStreetStep(communityEnabled: communityEnabled, selectedType: selectedType, candidates: candidates)
+            || showsRepositionAffordance(communityEnabled: communityEnabled, selectedType: selectedType, allowsReposition: allowsReposition)
     }
 
     /// Pure derivation of the coordinate `performSubmit()` writes — the repositioned point

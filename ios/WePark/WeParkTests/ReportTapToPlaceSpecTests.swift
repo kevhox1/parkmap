@@ -42,6 +42,18 @@
 //      23. testActiveSheetReportPinId_dependsOnlyOnCoordinate_notSegmentCandidatesOrSource
 //      24. testActiveSheetReportPinId_changesWhenCoordinateChanges
 //
+//  QA pass 1 (PR #118, finding #1) added `ReportSheet.showsReportPlacementSection` — the
+//  extracted `showsConfirmStreetStep || showsRepositionAffordance` predicate shared by
+//  `reportPlacementSection`'s 4 render call sites and the S13c Fix #8 auto-scroll guard (both
+//  previously duplicated the same `||` inline, which is exactly how the finding's OD-1 case —
+//  reposition-only, no candidate list — got missed by the scroll guard in the first place):
+//      25. testShowsReportPlacementSection_flagOff_false
+//      26. testShowsReportPlacementSection_noTypeSelected_false
+//      27. testShowsReportPlacementSection_neitherGateSatisfied_false
+//      28. testShowsReportPlacementSection_confirmStreetOnly_true
+//      29. testShowsReportPlacementSection_repositionOnly_od1Case_true
+//      30. testShowsReportPlacementSection_bothGatesSatisfied_true
+//
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never compiled
 //  or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
@@ -281,6 +293,64 @@ final class ShowsRepositionAffordanceTests: XCTestCase {
     func testShowsRepositionAffordance_sweeper_true() {
         XCTAssertTrue(ReportSheet.showsRepositionAffordance(
             communityEnabled: true, selectedType: .sweeper, allowsReposition: true
+        ))
+    }
+}
+
+// MARK: - ReportSheet.showsReportPlacementSection(communityEnabled:selectedType:candidates:allowsReposition:)
+// QA pass 1 (PR #118, finding #1): extracted predicate shared by `reportPlacementSection`'s
+// 4 render call sites AND `body`'s S13c Fix #8 auto-scroll guard.
+
+final class ShowsReportPlacementSectionTests: XCTestCase {
+
+    private func aSegment() -> Segment { fixtureSegment(id: "seg-1") }
+
+    func testShowsReportPlacementSection_flagOff_false() {
+        XCTAssertFalse(ReportSheet.showsReportPlacementSection(
+            communityEnabled: false, selectedType: .enforcementActive,
+            candidates: [aSegment()], allowsReposition: true
+        ))
+    }
+
+    func testShowsReportPlacementSection_noTypeSelected_false() {
+        XCTAssertFalse(ReportSheet.showsReportPlacementSection(
+            communityEnabled: true, selectedType: nil,
+            candidates: [aSegment()], allowsReposition: true
+        ))
+    }
+
+    /// Neither the confirm-street list (empty candidates) nor the Reposition row
+    /// (`allowsReposition: false`) can show — the wrapper must not render.
+    func testShowsReportPlacementSection_neitherGateSatisfied_false() {
+        XCTAssertFalse(ReportSheet.showsReportPlacementSection(
+            communityEnabled: true, selectedType: .enforcementActive,
+            candidates: [], allowsReposition: false
+        ))
+    }
+
+    func testShowsReportPlacementSection_confirmStreetOnly_true() {
+        XCTAssertTrue(ReportSheet.showsReportPlacementSection(
+            communityEnabled: true, selectedType: .enforcementActive,
+            candidates: [aSegment()], allowsReposition: false
+        ))
+    }
+
+    /// THE QA-pass-1 finding #1 case: no segment resolved (OD-1 — empty candidates), but
+    /// `allowsReposition` is true. `reportPlacementSection` renders ONLY the Reposition row
+    /// in this case (`confirmStreetSection` itself stays hidden, gated on `showsConfirmStreetStep`
+    /// separately) — this predicate, and therefore the auto-scroll guard reading it, must
+    /// still be `true` so that lone row scrolls into view.
+    func testShowsReportPlacementSection_repositionOnly_od1Case_true() {
+        XCTAssertTrue(ReportSheet.showsReportPlacementSection(
+            communityEnabled: true, selectedType: .enforcementActive,
+            candidates: [], allowsReposition: true
+        ))
+    }
+
+    func testShowsReportPlacementSection_bothGatesSatisfied_true() {
+        XCTAssertTrue(ReportSheet.showsReportPlacementSection(
+            communityEnabled: true, selectedType: .sweeper,
+            candidates: [aSegment()], allowsReposition: true
         ))
     }
 }

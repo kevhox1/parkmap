@@ -2550,9 +2550,12 @@ struct ContentView: View {
             //
             // #22 (docs/report-tap-to-place-spec.md §3.4): reuses this SAME tentative-marker
             // slot for the reposition-mode draft pin, rather than adding a near-duplicate
-            // annotation type — `spotPlacementActive`/`reportRepositionModeActive` are
-            // mutually exclusive by construction (see `handleMapTap`'s own comment), so at
-            // most one of `spotPlacementDraft`/`repositionUpdate` is ever non-nil at a time.
+            // annotation type. QA pass 1 (PR #118, finding #2): `spotPlacementActive`/
+            // `reportRepositionModeActive` are mutually exclusive by the DEFENSIVE synchronous
+            // reset in `enterSpotPlacementMode()` (see that function's own doc comment for why
+            // this needed fixing, not merely "the report sheet dismissed") — so at most one of
+            // `spotPlacementDraft`/`repositionUpdate` is ever non-nil at a time, and this
+            // `??` never has to arbitrate between two simultaneously-real drafts.
             draftSpotCoordinate: spotPlacementDraft?.coordinate ?? repositionUpdate?.coordinate,
             // Open item #17 residual (2026-09-11): tentative "car will go here" marker at
             // the long-press point while the flag-on `LongPressParkConfirmCard` is up.
@@ -3848,11 +3851,20 @@ struct ContentView: View {
 
         // #22 (docs/report-tap-to-place-spec.md §3.3): in report-reposition mode, a tap
         // re-derives the report's segment/candidates instead of opening BlockDetailView.
-        // Checked alongside the `spotPlacementActive` branch above — the two are mutually
-        // exclusive by construction: spot placement dismisses the report sheet entirely to
-        // enter its own mode, while reposition mode only ever exists while THAT sheet is
-        // still presented (a "Spot open" tap can't happen from inside an already-dismissed
-        // sheet).
+        // Checked alongside the `spotPlacementActive` branch above (spot placement wins on
+        // tap-routing precedence if both were ever true at once — never observed to matter in
+        // practice, since the QA-pass-1 fix below closes the window entirely).
+        //
+        // QA pass 1 (PR #118, finding #2): NOT "mutually exclusive by construction" — an
+        // earlier version of this comment claimed the "Spot open" tile dismissing the report
+        // sheet was sufficient on its own, but that dismiss is an ASYNC animation; the sheet's
+        // own `onDismiss` closure (which used to be the only place resetting
+        // `reportRepositionModeActive`) doesn't fire until that animation completes, leaving a
+        // window where `spotPlacementActive` and `reportRepositionModeActive` could both read
+        // `true`. `enterSpotPlacementMode()` now ALSO synchronously resets
+        // `reportRepositionModeActive`/`repositionUpdate` in the same transaction that sets
+        // `spotPlacementActive = true` — see that function's own doc comment — which is what
+        // actually makes these two mutually exclusive, not merely "the sheet went away."
         if reportRepositionModeActive {
             handleReportRepositionTap(at: coordinate)
             return
@@ -4001,10 +4013,27 @@ struct ContentView: View {
     /// Dismisses the report sheet and starts intercepting map taps — same force-hide shape
     /// as `enterBlockSelectMode()`'s `activeSheet = nil` (a deliberate hide, not an ordinary
     /// sheet dismiss back to `.browseNav`, since the whole point is a clear map for tapping).
+    ///
+    /// QA pass 1 (PR #118, finding #2): also synchronously resets `reportRepositionModeActive`/
+    /// `repositionUpdate` — this is reachable from INSIDE an already-presented `ReportSheet`
+    /// (the "Spot open" grid tile sits in the same sheet the "Reposition" row does), so without
+    /// this reset, tapping "Reposition" and then immediately "Spot open" would leave
+    /// `reportRepositionModeActive == true` for the entire dismiss-animation window before the
+    /// `.sheet(item:)` `onDismiss` closure's own (async, animation-gated) cleanup fires —
+    /// `spotPlacementActive` and `reportRepositionModeActive` would both read `true`
+    /// simultaneously for that window, which is NOT "mutually exclusive by construction" as
+    /// this file previously claimed elsewhere. `handleMapTap` checks `spotPlacementActive`
+    /// before `reportRepositionModeActive` (so tap routing during the window would still have
+    /// been correct — spot placement wins), but the stale flag left `communityMapChromeVisible`
+    /// and any other `reportRepositionModeActive` reader in an inconsistent state for that
+    /// window regardless. Mirrors `cancelSpotPlacementMode()`'s own synchronous reset shape —
+    /// no defensive claim can safely be "by construction" without eliminating the actual window.
     private func enterSpotPlacementMode() {
         activeSheet = nil
         spotPlacementDraft = nil
         spotPlacementActive = true
+        reportRepositionModeActive = false
+        repositionUpdate = nil
     }
 
     /// Exits placement mode without posting anything (hint banner's or confirm card's
