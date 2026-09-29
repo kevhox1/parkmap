@@ -22,7 +22,11 @@
 //  gating tests were updated to pass the new parameter explicitly (all `false`), not given
 //  a default, matching this function's existing "every case explicit" style.
 //
-//  Test inventory (27 tests):
+//  #22 (docs/report-tap-to-place-spec.md §3.3) added `testChromeVisible_flagOn_reportRepositionModeActive_hidden`
+//  — same exclusion shape as the `longPressParkConfirmActive` addition above, one test added
+//  (16b below), no existing test touched (the new parameter has a trailing default).
+//
+//  Test inventory (28 tests):
 //    MapKeyLegendView content — curb colors VERBATIM, live pins match the shipped marker set:
 //      1. testCurbColorEntries_count
 //      2. testCurbColorEntries_red_matchesPrototypeVerbatim
@@ -44,6 +48,7 @@
 //      15. testChromeVisible_flagOn_blockSelectModeActive_hidden
 //      16. testChromeVisible_flagOn_spotPlacementActive_hidden
 //      16a. testChromeVisible_flagOn_longPressParkConfirmActive_hidden
+//      16b. testChromeVisible_flagOn_reportRepositionModeActive_hidden (#22, docs/report-tap-to-place-spec.md §3.3)
 //
 //    ContentView.resolveHomeZoneId (S13c Fix #1) — car > device location > nil, NEVER viewport:
 //      17. testResolveHomeZoneId_parkedCarWins_evenWhenDeviceLocationInDifferentZone
@@ -219,6 +224,22 @@ final class CommunityMapChromeVisibleTests: XCTestCase {
             blockSelectModeActive: false,
             spotPlacementActive: false,
             longPressParkConfirmActive: true
+        ))
+    }
+
+    /// #22 (docs/report-tap-to-place-spec.md §3.3): `reportRepositionModeActive` is the 4th
+    /// mutually-exclusive mode flag this function composes (spec's own directive to reuse
+    /// this exact exclusivity convention). Passed explicitly here (not relying on its
+    /// trailing default) — every OTHER case in this class also passes every parameter
+    /// explicitly, matching this function's "every case explicit" house style.
+    func testChromeVisible_flagOn_reportRepositionModeActive_hidden() {
+        XCTAssertFalse(ContentView.communityMapChromeVisible(
+            communityEnabled: true,
+            driveModeActive: false,
+            blockSelectModeActive: false,
+            spotPlacementActive: false,
+            longPressParkConfirmActive: false,
+            reportRepositionModeActive: true
         ))
     }
 }

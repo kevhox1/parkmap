@@ -779,6 +779,28 @@ struct ContentView: View {
     /// now, matching this codebase's W5.1 single-sheet decision).
     @State private var pendingIdentityAction: (() -> Void)? = nil
 
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3.3): report tap-to-reposition mode
+
+    /// True while the "Reposition" affordance inside an already-presented `ReportSheet` is
+    /// active — mirrors `blockSelectModeActive`/`spotPlacementActive`'s shape (a mutually-
+    /// exclusive, map-tap-intercepting mode), with ONE deliberate difference: entering this
+    /// mode does NOT force-hide `activeSheet` (spec §3.3 — the whole point is that
+    /// `ReportSheet` stays presented at `.medium`/`.large` so the user can tap the
+    /// already-visible map above it). Entered via `ReportSheet`'s `onRequestReposition`
+    /// closure; cleared on that sheet's own dismiss (success or Cancel) via the `.sheet(item:)`
+    /// `onDismiss` backstop, same shape `cancelSpotPlacementMode()` already uses.
+    @State private var reportRepositionModeActive: Bool = false
+
+    /// The latest reposition-tap result, pushed into the already-presented `ReportSheet` via
+    /// its `repositionUpdate` binding — see `ReportRepositionUpdate`'s own doc comment
+    /// (`Views/ReportSheet.swift`) for why this is a SEPARATE channel from
+    /// `ActiveSheet.reportPin`'s own coordinate payload (§3.2's landmine). Also drives the
+    /// tentative draft-pin marker on the map (`mapRepresentable`'s `draftSpotCoordinate:`,
+    /// reusing `DraftSpotPinAnnotation` — spec §3.4) — replaced, never appended, on every
+    /// subsequent reposition tap, mirroring `spotPlacementDraft`'s own "tap elsewhere to move
+    /// the pin" idiom.
+    @State private var repositionUpdate: ReportRepositionUpdate? = nil
+
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
     /// Community pin service. Fetches filming / asp_suspended_today / special_event pins
@@ -1007,6 +1029,19 @@ struct ContentView: View {
                 if pendingIdentityAction != nil {
                     pendingIdentityAction = nil
                     cancelSpotPlacementMode()
+                }
+                // #22 (docs/report-tap-to-place-spec.md §3.3): reposition mode's own
+                // cleanup — mirrors `cancelSpotPlacementMode()`'s reset shape. Fires on ANY
+                // `.reportPin` sheet dismiss (Report CTA success, Cancel button inside the
+                // sheet, or an interactive swipe-to-dismiss) so a stale
+                // `reportRepositionModeActive`/`repositionUpdate` never leaks into the NEXT
+                // report sheet presentation. Unlike `spotPlacementActive`'s cleanup above,
+                // this one does NOT need to reassign `activeSheet` — reposition mode never
+                // force-hid it in the first place (spec §3.3), so whatever this closure's
+                // other branches already decided for `activeSheet` stands unchanged.
+                if reportRepositionModeActive || repositionUpdate != nil {
+                    reportRepositionModeActive = false
+                    repositionUpdate = nil
                 }
                 // FT-20 Stream A: `.browseNav` is browse mode's persistent rest state, not
                 // "nothing" — restore it here as a backstop for any dismiss path that
@@ -1407,6 +1442,20 @@ struct ContentView: View {
             // QA STOP-AND-INSTRUMENT (PR #95): coordinateSource/pinDropRadiusMeters passed
             // through to ReportSheet's #if DEBUG diagnostics footer only — no production
             // behavior reads either.
+            //
+            // #22 (docs/report-tap-to-place-spec.md §3.1/§3.3):
+            //   - allowsReposition: !driveModeActive — the ONLY entry point that can reach
+            //     this case while driveModeActive == true is driveActionRow's in-drive
+            //     Report button (the resting long-press dialog and the Report pill are both
+            //     already hidden while driving — handleLongPress's own !driveModeActive
+            //     guard, communityMapChromeVisible's own !driveModeActive exclusion), so
+            //     gating on !driveModeActive here — rather than threading a redundant flag
+            //     through ActiveSheet.reportPin's own payload — correctly and exclusively
+            //     targets that one call site (spec §0 decision 4: no reposition while
+            //     driving, safety not an oversight).
+            //   - repositionModeActive/onRequestReposition/repositionUpdate wire the
+            //     "Reposition" row to this file's own `reportRepositionModeActive`/
+            //     `repositionUpdate` @State — see those properties' own doc comments.
             ReportSheet(
                 coordinate: coord,
                 pinService: pinService,
@@ -1417,7 +1466,11 @@ struct ContentView: View {
                 onRequestStreetClosure: { enterBlockSelectMode() },
                 onRequestSpotPlacement: { enterSpotPlacementMode() },
                 coordinateSource: coordinateSource,
-                candidateSearchRadiusMeters: pinDropRadiusMeters
+                candidateSearchRadiusMeters: pinDropRadiusMeters,
+                allowsReposition: !driveModeActive,
+                repositionModeActive: reportRepositionModeActive,
+                onRequestReposition: { reportRepositionModeActive = true },
+                repositionUpdate: $repositionUpdate
             )
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
@@ -2175,15 +2228,23 @@ struct ContentView: View {
     /// own floating chrome (the park-confirm card) shouldn't compete with this persistent
     /// row, and it hides/returns exactly when the card does, since both read off the same
     /// `pendingLongPressCoord != nil` condition at the call site below.
+    ///
+    /// #22 (docs/report-tap-to-place-spec.md §3.3): added `reportRepositionModeActive` — the
+    /// 4th mutually-exclusive mode flag this function composes (spec's own directive: "reuse
+    /// the existing exclusivity convention verbatim... already composes three of these; add
+    /// the fourth"). Defaults to `false` so every existing call site (including this file's
+    /// own production call below, until updated) and every existing test call site keeps
+    /// compiling unchanged.
     nonisolated static func communityMapChromeVisible(
         communityEnabled: Bool,
         driveModeActive: Bool,
         blockSelectModeActive: Bool,
         spotPlacementActive: Bool,
-        longPressParkConfirmActive: Bool
+        longPressParkConfirmActive: Bool,
+        reportRepositionModeActive: Bool = false
     ) -> Bool {
         communityEnabled && !driveModeActive && !blockSelectModeActive && !spotPlacementActive
-            && !longPressParkConfirmActive
+            && !longPressParkConfirmActive && !reportRepositionModeActive
     }
 
     /// Community 2.0 S13a (WP1, build 20): the persistent Report pill (bottom-left) + "?"
@@ -2216,7 +2277,8 @@ struct ContentView: View {
             driveModeActive: driveModeActive,
             blockSelectModeActive: blockSelectModeActive,
             spotPlacementActive: spotPlacementActive,
-            longPressParkConfirmActive: pendingLongPressCoord != nil
+            longPressParkConfirmActive: pendingLongPressCoord != nil,
+            reportRepositionModeActive: reportRepositionModeActive
         ) {
             VStack(spacing: 0) {
                 Spacer()
@@ -2485,7 +2547,13 @@ struct ContentView: View {
             // (see `MapViewRepresentable.updateUIView`'s own architecture-invariant comment).
             // NB: argument order must match the memberwise init (declaration order) —
             // draftSpotCoordinate is declared directly after destinationCoordinate.
-            draftSpotCoordinate: spotPlacementDraft?.coordinate,
+            //
+            // #22 (docs/report-tap-to-place-spec.md §3.4): reuses this SAME tentative-marker
+            // slot for the reposition-mode draft pin, rather than adding a near-duplicate
+            // annotation type — `spotPlacementActive`/`reportRepositionModeActive` are
+            // mutually exclusive by construction (see `handleMapTap`'s own comment), so at
+            // most one of `spotPlacementDraft`/`repositionUpdate` is ever non-nil at a time.
+            draftSpotCoordinate: spotPlacementDraft?.coordinate ?? repositionUpdate?.coordinate,
             // Open item #17 residual (2026-09-11): tentative "car will go here" marker at
             // the long-press point while the flag-on `LongPressParkConfirmCard` is up.
             // `pendingParkPinCoordinate` is the pure gate that keeps this `nil` for flag-off
@@ -3778,6 +3846,18 @@ struct ContentView: View {
             return
         }
 
+        // #22 (docs/report-tap-to-place-spec.md §3.3): in report-reposition mode, a tap
+        // re-derives the report's segment/candidates instead of opening BlockDetailView.
+        // Checked alongside the `spotPlacementActive` branch above — the two are mutually
+        // exclusive by construction: spot placement dismisses the report sheet entirely to
+        // enter its own mode, while reposition mode only ever exists while THAT sheet is
+        // still presented (a "Spot open" tap can't happen from inside an already-dismissed
+        // sheet).
+        if reportRepositionModeActive {
+            handleReportRepositionTap(at: coordinate)
+            return
+        }
+
         // FT-15/TF2-15 §4.2 step 3: in block-select mode, a tap toggles the closest
         // segment's blockfaceKey in/out of the selection instead of opening
         // BlockDetailView. Checked FIRST so none of the normal-mode tap behavior below
@@ -3956,6 +4036,34 @@ struct ContentView: View {
             segment: snap.segment,
             positionFraction: snap.positionFraction,
             coordinate: snap.snappedCoordinate
+        )
+    }
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3.3): report tap-to-reposition
+
+    /// A tap while `reportRepositionModeActive` — re-runs EXACTLY the same candidate search
+    /// every existing report entry point already performs
+    /// (`CandidateSegmentSearch.reportRepositionCandidates`, same 35m
+    /// `pinDropRadiusMeters` every other call site uses) and pushes the result into the
+    /// already-presented `ReportSheet` via `repositionUpdate` — NEVER by reassigning
+    /// `activeSheet`'s `.reportPin` coordinate payload (§3.2's landmine: that would tear
+    /// down and reconstruct the sheet, wiping every prior selection). A tap beyond the
+    /// radius (or with no segments loaded) yields `segment: nil, candidates: []` — the same
+    /// OD-1 degrade-gracefully contract every other report entry point already has (AC-11:
+    /// never a crash, never a silently-adopted wrong segment). Replaces (never appends to)
+    /// `repositionUpdate` on every subsequent tap — "tap elsewhere to move the pin," the
+    /// same idiom `handleSpotPlacementTap` already established (AC-12).
+    private func handleReportRepositionTap(at coordinate: CLLocationCoordinate2D) {
+        let result = CandidateSegmentSearch.reportRepositionCandidates(
+            forTap: coordinate.latitude,
+            lng: coordinate.longitude,
+            in: tileLoader.segments,
+            radius: pinDropRadiusMeters
+        )
+        repositionUpdate = ReportRepositionUpdate(
+            coordinate: coordinate,
+            segment: result.segment,
+            candidates: result.candidates
         )
     }
 

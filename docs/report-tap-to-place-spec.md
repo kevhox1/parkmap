@@ -1,10 +1,13 @@
 # Report flow: tap-to-place + curb-snap-on-display — execution spec
 
 **Open item:** `docs/open-items.md` #22 (Kevin, S14 gate, 2026-09-13).
-**Status:** spec-first, not started. **NOT flag-gated** — `AppConstants.communityEnabled = true`
-(`Services/Constants.swift:152`), so everything here ships in the flag-off-equivalent binary,
-i.e. to 100% of TestFlight users, immediately on merge. Treat this like a core-flow change, not
-a Community 2.0 feature-flag rollout.
+**Status:** Implemented — `ios/report-tap-to-place` branch, COMPILE-UNVERIFIED (no Xcode
+toolchain on the VPS this was built on). PR open, pending `@qa-verifier` + Kevin's Mac gate.
+Both work streams (§2 curb-snap-on-display, §3 tap-to-reposition) landed in one PR per §4's
+"serialize, don't parallelize" instruction. **NOT flag-gated** — `AppConstants.communityEnabled
+= true` (`Services/Constants.swift:152`), so everything here ships in the flag-off-equivalent
+binary, i.e. to 100% of TestFlight users, immediately on merge. Treat this like a core-flow
+change, not a Community 2.0 feature-flag rollout.
 
 ---
 

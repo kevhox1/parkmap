@@ -54,6 +54,41 @@
 import SwiftUI
 import MapKit
 
+// MARK: - ReportRepositionUpdate (#22 tap-to-reposition)
+
+/// Pushed from `ContentView.handleReportRepositionTap(at:)` into the already-presented
+/// `ReportSheet` via the `repositionUpdate` binding — NEVER via a new `ActiveSheet.reportPin`
+/// coordinate payload. `ActiveSheet.reportPin`'s `Identifiable.id` is keyed off the
+/// coordinate (`ContentView.swift`'s `ActiveSheet.id`); reassigning that case's `coord` on
+/// reposition would give `.sheet(item:)` a new `id`, tearing down and reconstructing this
+/// sheet — wiping every `@State` selection the user has already made
+/// (`selectedType`/`selectedSubTag`/`sweeperDirection`/`selectedHeadingToward`/
+/// `headingNotSure`). docs/report-tap-to-place-spec.md §3.2 — THE landmine this type exists
+/// to route around.
+///
+/// `id` exists purely so `ReportSheet`'s `.onChange(of: repositionUpdate.wrappedValue?.id)`
+/// has an `Equatable` value to key off — neither `CLLocationCoordinate2D` nor `Segment`
+/// conforms to `Equatable` in this codebase, so the payload itself can't drive `.onChange`
+/// directly without adding that conformance elsewhere.
+struct ReportRepositionUpdate: Identifiable {
+    let id = UUID()
+
+    /// The reposition tap's coordinate. Becomes `ReportSheet.effectiveCoordinate` once
+    /// applied — and, via `CommunityPinAnnotation.resolveDisplayCoordinate` (#22
+    /// curb-snap-on-display), the eventual rendered marker position.
+    let coordinate: CLLocationCoordinate2D
+
+    /// The nearest resolved segment at the tap point, or `nil` if the tap landed beyond the
+    /// candidate-search radius (AC-11: degrade gracefully — same as any other off-segment
+    /// report; never a crash, never a silently-adopted wrong segment).
+    let segment: Segment?
+
+    /// `CandidateSegmentSearch.confirmStreetCandidates(for:in:)` result for `segment`, or `[]`
+    /// when `segment` is nil — the same OD-1 shape every existing report entry point already
+    /// produces.
+    let candidates: [Segment]
+}
+
 // MARK: - ReportSheet
 
 struct ReportSheet: View {
@@ -122,6 +157,38 @@ struct ReportSheet: View {
     /// default for the same reason: no test in this file constructs a `ReportSheet` view
     /// instance directly.
     var onRequestSpotPlacement: (() -> Void)? = nil
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3): tap-to-reposition
+
+    /// `false` at exactly one call site — the in-drive Report button
+    /// (`ContentView.driveActionRow`) — per spec §0 decision 4: no tap-to-reposition while
+    /// driving, safety not an oversight. Every other entry point (resting long-press, the
+    /// persistent Report pill) leaves this at its default `true`. Additive default, same
+    /// convention as `onRequestStreetClosure`/`onRequestSpotPlacement` above.
+    var allowsReposition: Bool = true
+
+    /// Whether `ContentView`'s `reportRepositionModeActive` is currently `true` for THIS
+    /// sheet — read-only from this view's perspective (flipped by `onRequestReposition`
+    /// below, which the OWNER, not this sheet, actually sets). Drives `repositionRow`'s
+    /// "Reposition" → "Tap the map to place the pin" label swap. Plain `Bool`, not a
+    /// `Binding`, because this sheet never needs to write it — `ContentView` re-renders this
+    /// sheet with the new value once its own `@State` flips (same "owner-driven read-only
+    /// input" shape as `confirmCandidates`).
+    var repositionModeActive: Bool = false
+
+    /// Called when the user taps the "Reposition" row. `ContentView` wires this to
+    /// `reportRepositionModeActive = true` — same hand-off shape as
+    /// `onRequestStreetClosure`/`onRequestSpotPlacement`, except this one does NOT dismiss
+    /// this sheet (spec §3.3: reposition stays inside the already-presented sheet).
+    var onRequestReposition: (() -> Void)? = nil
+
+    /// The channel `ContentView.handleReportRepositionTap(at:)` pushes new tap results
+    /// through — see `ReportRepositionUpdate`'s own doc comment for why this is a Binding
+    /// rather than a reassigned `ActiveSheet.reportPin` payload. `.constant(nil)` default
+    /// keeps every existing call site (which doesn't pass this) behaviorally unaffected —
+    /// `repositionUpdate.wrappedValue` never becomes non-nil, so
+    /// `applyRepositionUpdateIfNeeded()` never fires (AC-13).
+    var repositionUpdate: Binding<ReportRepositionUpdate?> = .constant(nil)
 
     // MARK: - QA STOP-AND-INSTRUMENT (PR #95) — plain data, DEBUG-only consumer
 
@@ -205,6 +272,17 @@ struct ReportSheet: View {
     /// `segment`, preserving today's flow byte-for-byte (product rule 7).
     @State private var confirmedSegment: Segment?
 
+    /// #22 (docs/report-tap-to-place-spec.md §3.3): the coordinate from the most recent
+    /// `repositionUpdate`, or `nil` if the user has never repositioned. Overlays (never
+    /// replaces at the model level) `coordinate` — see `effectiveCoordinate`.
+    @State private var repositionedCoordinate: CLLocationCoordinate2D? = nil
+
+    /// #22: the "confirm the street" candidate list from the most recent `repositionUpdate`,
+    /// or `nil` if the user has never repositioned. `confirmStreetSection`'s `ForEach` reads
+    /// `repositionedCandidates ?? confirmCandidates` — same overlay shape as
+    /// `repositionedCoordinate` above.
+    @State private var repositionedCandidates: [Segment]? = nil
+
     /// Community 2.0 Phase 2b (build 20 S7): holds the "resume this contribution" closure
     /// while the identity sheet is up. Non-nil drives the identity `.sheet(isPresented:)`
     /// below (see `body`) — set by `submitReport()`'s interception check, cleared and
@@ -216,7 +294,8 @@ struct ReportSheet: View {
     /// Custom init only to seed `confirmedSegment` from `segment` — every other property
     /// keeps its declared default, so existing call sites that don't pass
     /// `confirmCandidates`/`onRequestStreetClosure`/`onRequestSpotPlacement`/
-    /// `coordinateSource`/`candidateSearchRadiusMeters` are unaffected.
+    /// `coordinateSource`/`candidateSearchRadiusMeters`/`allowsReposition`/
+    /// `repositionModeActive`/`onRequestReposition`/`repositionUpdate` are unaffected.
     init(
         coordinate: CLLocationCoordinate2D,
         pinService: CommunityPinService,
@@ -227,7 +306,11 @@ struct ReportSheet: View {
         onRequestStreetClosure: (() -> Void)? = nil,
         onRequestSpotPlacement: (() -> Void)? = nil,
         coordinateSource: String = "unknown",
-        candidateSearchRadiusMeters: Double = 35.0
+        candidateSearchRadiusMeters: Double = 35.0,
+        allowsReposition: Bool = true,
+        repositionModeActive: Bool = false,
+        onRequestReposition: (() -> Void)? = nil,
+        repositionUpdate: Binding<ReportRepositionUpdate?> = .constant(nil)
     ) {
         self.coordinate = coordinate
         self.pinService = pinService
@@ -239,6 +322,10 @@ struct ReportSheet: View {
         self.onRequestSpotPlacement = onRequestSpotPlacement
         self.coordinateSource = coordinateSource
         self.candidateSearchRadiusMeters = candidateSearchRadiusMeters
+        self.allowsReposition = allowsReposition
+        self.repositionModeActive = repositionModeActive
+        self.onRequestReposition = onRequestReposition
+        self.repositionUpdate = repositionUpdate
         _confirmedSegment = State(initialValue: segment)
     }
 
@@ -253,6 +340,29 @@ struct ReportSheet: View {
     /// picked a different candidate in the "confirm the street" step (flag-on only; see
     /// `confirmedSegment`'s doc comment for why flag-off is unaffected).
     private var effectiveSegment: Segment? { confirmedSegment }
+
+    /// #22 (docs/report-tap-to-place-spec.md §3.3): the coordinate `performSubmit()` writes
+    /// — the repositioned point if the user placed one, else this sheet's original entry
+    /// `coordinate`. "The one line that actually matters for §2's [curb-snap] fix to
+    /// matter" — a repositioned report writes the point the user explicitly corrected, not
+    /// the passively-resolved GPS/long-press point.
+    private var effectiveCoordinate: CLLocationCoordinate2D {
+        ReportSheet.effectiveCoordinate(original: coordinate, repositioned: repositionedCoordinate)
+    }
+
+    /// #22 (docs/report-tap-to-place-spec.md §3.1): whether the "Reposition" row should
+    /// render. Instance wrapper over the pure static `showsRepositionAffordance` — same
+    /// "real flag for production, static for tests" split as `showsConfirmStreetStep` above.
+    /// Deliberately NOT gated on `confirmCandidates.isEmpty` (unlike `showsConfirmStreetStep`)
+    /// — a report that resolved no segment at all (OD-1) is the case that benefits MOST from
+    /// being able to place it manually (spec §3.1).
+    private var showsRepositionAffordance: Bool {
+        ReportSheet.showsRepositionAffordance(
+            communityEnabled: AppConstants.communityEnabled,
+            selectedType: selectedType,
+            allowsReposition: allowsReposition
+        )
+    }
 
     /// Community 2.0 Phase 2a (build 20 S6): whether the "confirm the street" section should
     /// render. Instance wrapper over the pure static `showsConfirmStreetStep` — reads the real
@@ -370,8 +480,13 @@ struct ReportSheet: View {
                                     .padding(.leading, 20)
                                     .padding(.bottom, 4)
                             }
-                            if selectedType == .enforcementActive && showsConfirmStreetStep {
-                                confirmStreetSection
+                            // #22 (docs/report-tap-to-place-spec.md §3.1): `reportPlacementSection`
+                            // wraps `confirmStreetSection` (still independently gated on
+                            // `showsConfirmStreetStep` inside it — AC-13) together with the new
+                            // "Reposition" row, which is NOT gated on a non-empty candidate list
+                            // (OD-1 benefits most from it) — hence the widened outer `||` guard.
+                            if selectedType == .enforcementActive && (showsConfirmStreetStep || showsRepositionAffordance) {
+                                reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
                             }
@@ -385,8 +500,9 @@ struct ReportSheet: View {
                                     .padding(.leading, 20)
                                     .padding(.bottom, 4)
                             }
-                            if selectedType == .sweeper && showsConfirmStreetStep {
-                                confirmStreetSection
+                            // #22: same widened guard as the enforcementActive case above.
+                            if selectedType == .sweeper && (showsConfirmStreetStep || showsRepositionAffordance) {
+                                reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
                             }
@@ -457,8 +573,13 @@ struct ReportSheet: View {
                             // Community 2.0 Phase 2a (build 20 S6): "confirm the street" —
                             // communityEnabled-gated, so flag-off skips straight to the direction
                             // picker below exactly as it did before this session.
-                            if selectedType == .enforcementActive && showsConfirmStreetStep {
-                                confirmStreetSection
+                            // #22 (docs/report-tap-to-place-spec.md §3.1): `reportPlacementSection`
+                            // wraps `confirmStreetSection` (still independently gated on
+                            // `showsConfirmStreetStep` inside it — AC-13) together with the new
+                            // "Reposition" row, which is NOT gated on a non-empty candidate list
+                            // (OD-1 benefits most from it) — hence the widened outer `||` guard.
+                            if selectedType == .enforcementActive && (showsConfirmStreetStep || showsRepositionAffordance) {
+                                reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
                             }
@@ -487,8 +608,9 @@ struct ReportSheet: View {
                             }
 
                             // Community 2.0 Phase 2a (build 20 S6): "confirm the street" for sweeper.
-                            if selectedType == .sweeper && showsConfirmStreetStep {
-                                confirmStreetSection
+                            // #22: same widened guard as the enforcementActive case above.
+                            if selectedType == .sweeper && (showsConfirmStreetStep || showsRepositionAffordance) {
+                                reportPlacementSection
                                     .padding(.horizontal, 20)
                                     .padding(.bottom, 4)
                             }
@@ -566,6 +688,14 @@ struct ReportSheet: View {
                     Button("Cancel") { onDismiss() }
                 }
             }
+            // #22 (docs/report-tap-to-place-spec.md §3.2/§3.3): applies the latest
+            // `repositionUpdate` payload into this sheet's OWN `@State`, in place — the fix
+            // for the landmine this spec section flags. Keyed off `.id` (a `UUID`, the one
+            // `Equatable` value on the payload) rather than the payload itself, since neither
+            // `CLLocationCoordinate2D` nor `Segment` conforms to `Equatable` here.
+            .onChange(of: repositionUpdate.wrappedValue?.id) { _, _ in
+                applyRepositionUpdateIfNeeded()
+            }
             #if DEBUG
             // QA STOP-AND-INSTRUMENT (PR #95, 2026-08-28) — root cause found (no code bug;
             // discoverability finding logged for S13), on-screen footer removed post-diagnosis.
@@ -622,6 +752,22 @@ struct ReportSheet: View {
             )
             .presentationDetents([.medium])
         }
+    }
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3.2/§3.3): reposition state application
+
+    /// Applies the latest `repositionUpdate` payload into this sheet's own `@State`,
+    /// preserving every OTHER selection — `selectedType`/`selectedSubTag`/
+    /// `sweeperDirection`/`selectedHeadingToward`/`headingNotSure` are simply never
+    /// referenced here, by construction, which IS the fix (spec §3.2's landmine: this
+    /// function's whole job is to change ONLY `repositionedCoordinate`/
+    /// `repositionedCandidates`/`confirmedSegment`, never anything else, and never by
+    /// tearing down/reconstructing this view).
+    private func applyRepositionUpdateIfNeeded() {
+        guard let update = repositionUpdate.wrappedValue else { return }
+        repositionedCoordinate = update.coordinate
+        repositionedCandidates = update.candidates
+        confirmedSegment = update.segment
     }
 
     // MARK: - Report type row builder
@@ -972,6 +1118,75 @@ struct ReportSheet: View {
         return "Heading toward \(street), inferred"
     }
 
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3.1): report placement section
+
+    /// Wraps the existing `confirmStreetSection` together with the new "Reposition" row so
+    /// both can share ONE outer `if` gate at each of `confirmStreetSection`'s 4 render call
+    /// sites, without changing WHEN `confirmStreetSection` itself renders — it is still
+    /// independently gated on `showsConfirmStreetStep` inside here, unconditionally unchanged
+    /// (AC-13: the pre-existing candidate list is pixel/behavior-identical whenever it was
+    /// already showing). `showsRepositionAffordance` is a SEPARATE, wider gate — deliberately
+    /// not requiring a non-empty candidate list (spec §3.1's OD-1 case).
+    @ViewBuilder
+    private var reportPlacementSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if showsConfirmStreetStep {
+                confirmStreetSection
+            }
+            if showsRepositionAffordance {
+                repositionRow
+            }
+        }
+    }
+
+    /// #22 (docs/report-tap-to-place-spec.md §3.1, §3.3): lets the user tap-to-place this
+    /// report on the map instead of relying on the passively-resolved GPS/long-press
+    /// coordinate. Rendered even when `confirmCandidates` is empty (OD-1 — the case that
+    /// benefits most, per the spec) via `reportPlacementSection`'s separate outer gate.
+    ///
+    /// Before the first tap: label "Reposition", tappable — calls `onRequestReposition?()`.
+    /// `ContentView` flips its own `reportRepositionModeActive` `@State` in response (spec
+    /// §3.3); this sheet has no local notion of "am I in reposition mode" other than the
+    /// `repositionModeActive` input, re-rendered from the owner whenever it changes.
+    ///
+    /// After: label becomes "Tap the map to place the pin" and the row disables itself — a
+    /// second tap here would be a confusing no-op once the map itself is the input surface
+    /// (sheet stays at `.medium`/`.large`, map visible/tappable above it at `.medium` per
+    /// spec §3.3).
+    ///
+    /// AC-15: >=44pt min height, matching `driveActionRow`'s 48pt precedent /
+    /// `confirmStreetRow`'s existing row padding (`:1041-1042` per the spec).
+    @ViewBuilder
+    private var repositionRow: some View {
+        Button {
+            onRequestReposition?()
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: repositionModeActive ? "hand.tap.fill" : "location.viewfinder")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(repositionModeActive ? Color.accentColor : .secondary)
+                    .frame(width: 20)
+                Text(repositionModeActive ? "Tap the map to place the pin" : "Reposition")
+                    .font(.subheadline.weight(.medium))
+                    .foregroundStyle(repositionModeActive ? Color.accentColor : .primary)
+                Spacer()
+            }
+            .padding(.horizontal, 13)
+            .padding(.vertical, 12)
+            .frame(minHeight: 44)
+            .background(Color(.systemGray6))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .disabled(repositionModeActive)
+        .accessibilityLabel(
+            repositionModeActive
+                ? "Reposition mode active. Tap the map to place the pin."
+                : "Reposition"
+        )
+        .accessibilityHint("Lets you tap the map to place this report precisely instead of using your current location.")
+    }
+
     // MARK: - Community 2.0 Phase 2a (build 20 S6): Confirm the street
 
     /// "CONFIRM THE STREET" — up to 4 candidate rows (current segment + opposite curb + one
@@ -1004,7 +1219,12 @@ struct ReportSheet: View {
                 .padding(.leading, 4)
 
             VStack(spacing: 7) {
-                ForEach(confirmCandidates) { candidate in
+                // #22 (docs/report-tap-to-place-spec.md §3.3): a reposition tap's own
+                // "confirm the street" list overrides the entry-time one — same overlay
+                // shape as `effectiveCoordinate`/`effectiveSegment`. `nil` (never
+                // repositioned) falls back to the original `confirmCandidates`, byte-
+                // identical to pre-#22 behavior (AC-13).
+                ForEach(repositionedCandidates ?? confirmCandidates) { candidate in
                     confirmStreetRow(candidate)
                 }
             }
@@ -1316,8 +1536,12 @@ struct ReportSheet: View {
             try await pinService.insertCrowdPin(
                 type: pinType,
                 meta: meta,
-                lat: coordinate.latitude,
-                lng: coordinate.longitude,
+                // #22 (docs/report-tap-to-place-spec.md §3.3): effectiveCoordinate is the
+                // repositioned point if the user placed one, else the original entry
+                // coordinate — byte-identical to pre-#22 `coordinate.latitude/longitude`
+                // whenever the user never taps "Reposition" (AC-13).
+                lat: effectiveCoordinate.latitude,
+                lng: effectiveCoordinate.longitude,
                 // FT-11: wire segmentId (was hard-coded nil). Community 2.0 Phase 2a: reads
                 // effectiveSegment so a "confirm the street" pick is what actually gets
                 // written — coordinate (the real GPS/tap point) above is never altered by it.
@@ -1482,6 +1706,43 @@ struct ReportSheet: View {
         case .enforcementActive, .sweeper: return true
         case nil: return false
         }
+    }
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3): tap-to-reposition (static, for test access)
+
+    /// Whether the "Reposition" row should render.
+    ///
+    /// `false` whenever `communityEnabled` is `false`, or `allowsReposition` is `false`
+    /// (the in-drive Report button — spec §0 decision 4, safety not an oversight).
+    /// Otherwise `true` only for `enforcementActive`/`sweeper` — same explicit-enumeration
+    /// style as `showsConfirmStreetStep` above.
+    ///
+    /// Deliberately NOT gated on a non-empty candidate list, unlike `showsConfirmStreetStep`
+    /// — spec §3.1: "a report that resolved no segment at all is the case that benefits
+    /// most from being able to place it manually."
+    static func showsRepositionAffordance(
+        communityEnabled: Bool,
+        selectedType: ReportType?,
+        allowsReposition: Bool
+    ) -> Bool {
+        guard communityEnabled, allowsReposition else { return false }
+        switch selectedType {
+        case .enforcementActive, .sweeper: return true
+        case nil: return false
+        }
+    }
+
+    /// Pure derivation of the coordinate `performSubmit()` writes — the repositioned point
+    /// if the user placed one (`repositioned` non-nil), else the sheet's original entry
+    /// coordinate. Extracted as a static function (same "pure logic, no view instance
+    /// needed" pattern as `isEnabled`/`locationContextLabel` elsewhere in this file) so this
+    /// exact fix — spec §3.3: "the one line that actually matters for §2's fix to matter" —
+    /// is directly unit-tested.
+    static func effectiveCoordinate(
+        original: CLLocationCoordinate2D,
+        repositioned: CLLocationCoordinate2D?
+    ) -> CLLocationCoordinate2D {
+        repositioned ?? original
     }
 
     // MARK: - Report grid tap routing (static, for test access — QA pass 2 / PR #95 Mac-gate

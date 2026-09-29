@@ -194,10 +194,14 @@ struct CommunityPin: Identifiable {
     // which stay empty for exactly this reason.
 
     /// Position along the blockface, `[0,1]` from the segment's "from" endpoint to its "to"
-    /// endpoint (same directional convention as `meta.heading_toward`). `nil` = render at the
-    /// segment midpoint — every existing pin type's current, unchanged behavior. Populated for
-    /// `open_spot` reports placed via the map-tap flow (Phase 2); absent on every other type
-    /// and on every pin that predates this migration.
+    /// endpoint (same directional convention as `meta.heading_toward`). `nil` = at display
+    /// time, `CommunityPinAnnotation.resolveDisplayCoordinate` projects the raw `lat`/`lng`
+    /// onto the resolved segment's polyline instead (nearest-point, not the midpoint) —
+    /// docs/report-tap-to-place-spec.md §2 (#22) fixed a prior version of this comment's
+    /// blanket "render at the segment midpoint" claim, which was only ever true for
+    /// `BlockRestrictionReportSheet`'s own write-time-midpoint pins, not for every pin type.
+    /// Populated for `open_spot` reports placed via the map-tap flow (Phase 2); absent on
+    /// every other type and on every pin that predates this migration.
     let positionFraction: Double?
 
     /// User-chosen countdown (5/10/15/20 minutes) for a `leaving_soon` pin. Display-only on the

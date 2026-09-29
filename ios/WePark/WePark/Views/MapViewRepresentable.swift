@@ -1963,7 +1963,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                 guard let pin = desiredByID[id] else { continue }
                 // FT-11: compute bearing when the pin carries a heading_toward value.
                 let bearing = Self.resolveBearing(for: pin, segmentByID: segmentByID)
-                let annotation = CommunityPinAnnotation(pin: pin, bearing: bearing)
+                // #22 (docs/report-tap-to-place-spec.md §2.3): compute the curb-snapped
+                // display position ONCE here, same precomputation shape as `bearing` above —
+                // never resolved lazily inside `CommunityPinAnnotation.coordinate`'s getter.
+                let displayCoordinate = CommunityPinAnnotation.resolveDisplayCoordinate(
+                    for: pin, segmentByID: segmentByID
+                )
+                let annotation = CommunityPinAnnotation(
+                    pin: pin, bearing: bearing, displayCoordinate: displayCoordinate
+                )
                 communityPinAnnotations[id] = annotation
                 mapView.addAnnotation(annotation)
             }

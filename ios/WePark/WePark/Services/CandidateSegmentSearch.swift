@@ -195,7 +195,14 @@ enum CandidateSegmentSearch {
     /// Finds the nearest point on a multi-vertex polyline to `point`, returning its
     /// distance, its coordinate, and its fraction [0,1] along the ENTIRE polyline (start →
     /// end) via cumulative-length interpolation across every vertex.
-    private static func nearestPointOnPolyline(
+    ///
+    /// #22 (docs/report-tap-to-place-spec.md §2.3): promoted from `private` to `internal` —
+    /// the curb-snap-on-display projection (`CommunityPinAnnotation.resolveDisplayCoordinate`,
+    /// `Views/PinMarkerAnnotation.swift`) reuses this SAME cumulative-length math for its own
+    /// "no positionFraction, project the raw lat/lng onto the known-correct line" branch,
+    /// rather than duplicating it a fourth time — this file's own stated "extract the shared
+    /// helper" mandate (header comment above).
+    static func nearestPointOnPolyline(
         from point: CLLocationCoordinate2D,
         polyline: [CLLocationCoordinate2D]
     ) -> (distanceMeters: Double, fraction: Double, coordinate: CLLocationCoordinate2D)? {
@@ -223,6 +230,80 @@ enum CandidateSegmentSearch {
             }
         }
         return (bestDistance, min(1, max(0, bestFraction)), bestCoordinate)
+    }
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §2.3): curb-snap-on-display, fraction-walk
+
+    /// Given a fraction `[0,1]` along a multi-vertex polyline's cumulative length (the SAME
+    /// directional convention as `positionFraction`/`meta.heading_toward`), returns the
+    /// coordinate AT that point.
+    ///
+    /// Companion to `nearestPointOnPolyline` above: that function projects an arbitrary
+    /// point ONTO the line (nearest-point search); this one walks TO an already-known
+    /// fraction along it (no search — used when a pin already carries a `positionFraction`).
+    /// `fraction` is clamped to `[0,1]` before use — a stored value should already be in
+    /// range (write paths clamp too), but display-time must never crash or extrapolate past
+    /// either endpoint on a malformed row.
+    ///
+    /// Returns `nil` only for a degenerate polyline (`< 2` vertices) — same "nothing to
+    /// project onto" contract as `nearestPointOnPolyline`.
+    nonisolated static func coordinate(
+        atFraction fraction: Double,
+        along polyline: [CLLocationCoordinate2D]
+    ) -> CLLocationCoordinate2D? {
+        guard polyline.count >= 2 else { return nil }
+        let clamped = min(1, max(0, fraction))
+
+        var cumulative: [Double] = [0]
+        for i in 1..<polyline.count {
+            cumulative.append(cumulative[i - 1] + haversine(from: polyline[i - 1], to: polyline[i]))
+        }
+        let totalLength = cumulative.last ?? 0
+        guard totalLength > 0 else { return polyline[0] }
+
+        let targetLength = clamped * totalLength
+        for i in 0..<(polyline.count - 1) {
+            guard cumulative[i + 1] >= targetLength else { continue }
+            let segLength = cumulative[i + 1] - cumulative[i]
+            let t = segLength > 0 ? (targetLength - cumulative[i]) / segLength : 0
+            let a = polyline[i], b = polyline[i + 1]
+            return CLLocationCoordinate2D(
+                latitude: a.latitude + t * (b.latitude - a.latitude),
+                longitude: a.longitude + t * (b.longitude - a.longitude)
+            )
+        }
+        // Floating-point edge case only (targetLength fractionally exceeds the last
+        // cumulative entry) — the last vertex is the correct answer for fraction == 1.
+        return polyline.last
+    }
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3.3): reposition tap re-derivation
+
+    /// Result of `reportRepositionCandidates` — the nearest segment (if any) to a reposition
+    /// tap, plus the up-to-4 "confirm the street" candidates for it.
+    struct ReportRepositionCandidates {
+        let segment: Segment?
+        let candidates: [Segment]
+    }
+
+    /// Re-runs EXACTLY the same two-call search every existing report entry point already
+    /// performs (`findCandidateSegments(max: 1)` → nearest segment, then
+    /// `confirmStreetCandidates(for:in:)` → the up-to-4 confirm-the-street list) — extracted
+    /// as one pure, directly-testable function so `ContentView.handleReportRepositionTap`
+    /// (spec §3.3, AC-9) can't drift from that shared shape. A tap beyond `radius` (or with
+    /// no segments loaded) yields `segment: nil, candidates: []` — the SAME OD-1
+    /// degrade-gracefully contract every other report entry point already has (AC-11: never
+    /// a crash, never a silently-adopted wrong segment).
+    nonisolated static func reportRepositionCandidates(
+        forTap lat: Double,
+        lng: Double,
+        in segments: [Segment],
+        radius: Double
+    ) -> ReportRepositionCandidates {
+        let segment = findCandidateSegments(lat: lat, lng: lng, in: segments, radius: radius, max: 1)
+            .first?.segment
+        let candidates = segment.map { confirmStreetCandidates(for: $0, in: segments) } ?? []
+        return ReportRepositionCandidates(segment: segment, candidates: candidates)
     }
 
     // MARK: - Geometry helpers (duplicated from ContentView — see file header)
