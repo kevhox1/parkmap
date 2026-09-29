@@ -26,6 +26,12 @@
 # regular_invites and an extended regular_invites.expires_at, into assertions that they now fail, per
 # Findings #1/#2), Section 15 (regular_invite 20/24h rate-limit coverage, previously untested).
 #
+# AMENDMENT 2026-09-21 CHANGELOG ("push copy must be street-accurate," docs/regulars-network-spec.md):
+# added Section 16 — pins.street_label coverage (insert with a valid label, insert with none at all
+# confirming zero regression, an 81-char label rejected by the new CHECK, and a privilege sweep
+# confirming street_label is client-writable ONLY at INSERT, never via a post-insert UPDATE, and that
+# zone_pushed_at remains excluded from the insert grant regardless of street_label being present).
+#
 # This script creates real rows (regular_invites, regular_edges via RPC, regular_blocks, pins,
 # pin_notes, regular_notices) via real anonymous auth sessions against whatever project SUPABASE_URL
 # points at. Best-effort cleanup runs at the end via each row's own author/creator token. Anonymous
@@ -603,6 +609,100 @@ if [ "$RL_OK" = true ]; then
   STATUS=$(echo "$RESP" | head -n1)
   assert_status "$STATUS" 403 "21st regular_invites insert within the window is rejected (rate limit, 42501)"
 fi
+echo
+
+# ==================================================================
+# Section 16 — AMENDMENT 2026-09-21 ("push copy must be street-accurate", docs/regulars-network-spec.md):
+# pins.street_label coverage — insert with a valid label, insert with none (zero regression), an
+# 81-char label rejected by the new CHECK, and a privilege sweep confirming street_label is
+# client-writable ONLY at INSERT, never via a post-insert UPDATE, and that zone_pushed_at stays
+# excluded from the insert grant regardless. Reuses session I (already used for the head-start
+# boundary probe in Section 12 — an independent concern on the same pins table).
+# ==================================================================
+echo "--- Section 16: pins.street_label insert/oversize/privilege coverage ---"
+
+# 16a — insert WITH a valid street_label; round-trips verbatim.
+BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" \
+  --arg author "$I_ID" '{
+  pin_type: "leaving_soon", source: "crowd", lifespan: "ephemeral",
+  lat: $lat, lng: $lng, zone_id: $zone, author_id: $author, leaving_minutes: 10,
+  street_label: "Mott St — West side, between Prince St and Spring St"
+}')
+RESP=$(rest POST /rest/v1/pins "$I_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1); RBODY=$(echo "$RESP" | tail -n +2)
+assert_status "$STATUS" 201 "leaving_soon insert WITH a valid street_label succeeds"
+LABEL_OUT=$(echo "$RBODY" | jq -r '.[0].street_label // empty')
+assert_eq "$LABEL_OUT" "Mott St — West side, between Prince St and Spring St" "street_label round-trips verbatim"
+LABELED_PIN_ID=$(echo "$RBODY" | jq -r '.[0].id // empty')
+
+# 16b — insert WITHOUT a street_label at all; column stays null, zero regression to the pre-amendment
+# insert shape (this is the exact request shape Section 9/12's pins inserts already use).
+BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" \
+  --arg author "$I_ID" '{
+  pin_type: "leaving_soon", source: "crowd", lifespan: "ephemeral",
+  lat: $lat, lng: $lng, zone_id: $zone, author_id: $author, leaving_minutes: 10
+}')
+RESP=$(rest POST /rest/v1/pins "$I_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1); RBODY=$(echo "$RESP" | tail -n +2)
+assert_status "$STATUS" 201 "leaving_soon insert with NO street_label still succeeds (zero regression)"
+UNLABELED_OUT=$(echo "$RBODY" | jq -r '.[0].street_label // "null"')
+assert_eq "$UNLABELED_OUT" "null" "street_label stays null when the client omits it"
+UNLABELED_PIN_ID=$(echo "$RBODY" | jq -r '.[0].id // empty')
+
+# 16c — an 81-char label is rejected by the new CHECK (23514 -> HTTP 400), an 80-char label succeeds
+# (exact boundary, both ends).
+LABEL_80=$(python3 -c "print('x' * 80)")
+LABEL_81=$(python3 -c "print('x' * 81)")
+BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" \
+  --arg author "$I_ID" --arg label "$LABEL_80" '{
+  pin_type: "leaving_soon", source: "crowd", lifespan: "ephemeral",
+  lat: $lat, lng: $lng, zone_id: $zone, author_id: $author, leaving_minutes: 10,
+  street_label: $label
+}')
+RESP=$(rest POST /rest/v1/pins "$I_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1); RBODY=$(echo "$RESP" | tail -n +2)
+assert_status "$STATUS" 201 "street_label at exactly 80 chars is accepted (CHECK boundary)"
+BOUNDARY_PIN_ID=$(echo "$RBODY" | jq -r '.[0].id // empty')
+
+BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" \
+  --arg author "$I_ID" --arg label "$LABEL_81" '{
+  pin_type: "leaving_soon", source: "crowd", lifespan: "ephemeral",
+  lat: $lat, lng: $lng, zone_id: $zone, author_id: $author, leaving_minutes: 10,
+  street_label: $label
+}')
+RESP=$(rest POST /rest/v1/pins "$I_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 400 "street_label at 81 chars is rejected (CHECK violation, 23514 -> HTTP 400)"
+
+# 16d — privilege sweep: street_label is insert-only. A's own row (LABELED_PIN_ID) cannot have its
+# street_label changed via a plain authenticated PATCH, even by the pin's own author — the column has
+# no UPDATE re-GRANT anywhere in 07/02f/03/04, so the table-level `revoke update on public.pins`
+# (02f-block-scoped-restrictions.sql) is the only defense here, same posture as
+# regulars_head_start_seconds and every other insert-only-granted pins column.
+if [ -n "$LABELED_PIN_ID" ]; then
+  BODY=$(jq -n '{street_label: "a different street entirely"}')
+  RESP=$(rest PATCH "/rest/v1/pins?id=eq.${LABELED_PIN_ID}" "$I_TOKEN" "$BODY")
+  STATUS=$(echo "$RESP" | head -n1)
+  assert_status "$STATUS" 403 "street_label cannot be changed via UPDATE post-insert (no update grant exists, 42501)"
+fi
+
+# 16e — privilege sweep continued: attempting to set zone_pushed_at alongside a legitimate street_label
+# insert is still rejected (zone_pushed_at stays excluded from the insert grant regardless of
+# street_label's own presence — the amendment does not widen any other column's privilege).
+BODY=$(jq -n --argjson lat "$TEST_LAT" --argjson lng "$TEST_LNG" --arg zone "$ZONE_ID" \
+  --arg author "$I_ID" '{
+  pin_type: "leaving_soon", source: "crowd", lifespan: "ephemeral",
+  lat: $lat, lng: $lng, zone_id: $zone, author_id: $author, leaving_minutes: 10,
+  street_label: "should not matter", zone_pushed_at: "2026-01-01T00:00:00Z"
+}')
+RESP=$(rest POST /rest/v1/pins "$I_TOKEN" "$BODY")
+STATUS=$(echo "$RESP" | head -n1)
+assert_status "$STATUS" 403 "inserting zone_pushed_at alongside a valid street_label is still rejected (column-privilege lockdown unaffected by the amendment, 42501)"
+
+for id in "$LABELED_PIN_ID" "$UNLABELED_PIN_ID" "$BOUNDARY_PIN_ID"; do
+  [ -n "$id" ] && curl -sS -X DELETE "${SUPABASE_URL}/rest/v1/pins?id=eq.${id}" \
+    -H "apikey: ${SUPABASE_ANON_KEY}" -H "Authorization: Bearer ${I_TOKEN}" >/dev/null
+done
 echo
 
 # ------------------------------------------------------------------
