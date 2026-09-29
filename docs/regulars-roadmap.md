@@ -86,6 +86,30 @@ column-level-re-GRANT pattern this repo already proved for `pins.created_at`/`so
 
 ---
 
+## Amendment 2026-09-21 — push copy must be street-accurate → implemented in draft 2026-09-29
+
+Kevin rejected zone-level push copy ("I think 'Nolita' is too open. This must be street dependent").
+**`@backend-data`, branch `backend/regulars-street-label`, files only — `07` is still NOT applied.**
+`supabase/07-regulars-schema.sql` §S1-1 gains nullable `pins.street_label text` (≤80-char CHECK,
+insert-only client-writable, never updatable post-insert — same posture as
+`regulars_head_start_seconds`); `supabase/functions/send-regular-push/index.ts` now prefers it over
+`zones.name` in the alert body, falling back unchanged when absent. Author-supplied, not server
+geocoding — no Notification Service Extension, no new disclosure class (same consensual-disclosure
+reasoning as §2.9). Re-validated on a scratch Postgres 16 instance: full chain applies clean and
+idempotent; insert-with-label, insert-without-label, the 80/81-char CHECK boundary, and the S1
+exploit-column privilege sweep (`zone_pushed_at`/`regular_notices.created_at`/
+`regular_invites.expires_at` all still blocked) all behave exactly as spec'd. New test coverage:
+`07-regulars-schema-test.sh` Section 16. Full detail: `docs/regulars-network-spec.md`'s own
+"Amendment 2026-09-21" section and its "IMPLEMENTED IN DRAFT" follow-up. **This does not change 07's
+apply status or the push-pipeline ceremony above** — it's one more reason the ceremony's own ordering
+(07 still unapplied, waiting on the same gate as everything else) was correct: the street-label
+column rides the same unapplied file, no separate migration, no separate ceremony step. **iOS
+write-side (the client actually sending `streetLabel` at `leaving_soon` post) lands in S9** (below),
+not this session — S9's row is annotated accordingly. Tap-through deep-link (the amendment's "at
+least" floor) is unchanged, still S13's scope.
+
+---
+
 ## What a "session" means
 
 Same unit as the Community 2.0 roadmap: **one focused working block (~2–4 h wall clock) driving this
@@ -107,7 +131,7 @@ which attach to the end of specific sessions and are called out explicitly below
 | S6 | ✅ **DONE with S5** (single-pass QA per risk-scaled policy, `docs/qa/pr113-regulars-s5.md`; one 🟡 default-param guard gap fixed pre-gate) | — |
 | S7 | ⬜ Not started | `@ios-engineer` | iOS UI: `RegularsSettingsView.swift`, `RegularInviteView.swift` (QR + `ShareLink`), `WeParkApp.swift` `.onOpenURL`, `Info.plist` URL scheme (Kevin's one-time step), `SettingsView.swift` row wiring. Depends on S5; needs S3/S4 deployed for the live-push half of its gate (can build against S5 alone and defer that half to S13). | — |
 | S8 | ⬜ Not started | `@qa-verifier` | QA on S7 + Kevin's `Info.plist` step + a live two-device QR-scan-and-redeem smoke. | — |
-| S9 | ⬜ Not started | `@ios-engineer` | iOS UI: `ParkedCarDetailView.swift` head-start chip row + custom stepper + optional note field (spec §3.4). **Amended scope:** preset ladder 5/10/15/30 min + Custom (1–60 min), default 15 min; plus the new honest-exclusivity inline warning (§1.2a — shown when the chosen head start ≥ the leaving-in value). Still one session, growth fits inside the existing ~2–4h unit. Depends on S5. **Parallel-execution seam** — S9/S7/S10 are three disjoint diffs sharing only the S5 dependency, safe as up to three concurrent worktrees once S5 merges. | — |
+| S9 | ⬜ Not started | `@ios-engineer` | iOS UI: `ParkedCarDetailView.swift` head-start chip row + custom stepper + optional note field (spec §3.4). **Amended scope:** preset ladder 5/10/15/30 min + Custom (1–60 min), default 15 min; plus the new honest-exclusivity inline warning (§1.2a — shown when the chosen head start ≥ the leaving-in value). **Also amended, 2026-09-21/2026-09-29 (street-accurate push copy):** the leaving_soon insert must now also send `street_label` — the same human street-label string the My Car sheet already renders at handoff time (the "MOTT ST — West side · between PRINCE ST and SPRING ST" resolution), ≤80 chars, matching `07-regulars-schema.sql`'s CHECK verbatim (client-side truncation/validation should mirror the server clamp, same "stepper can't produce an invalid value" discipline as the head-start control). `07`'s schema-side half is already implemented in draft (branch `backend/regulars-street-label`, files only, 07 still unapplied) — this session is the one that actually populates the column from a real device. Still one session, growth fits inside the existing ~2–4h unit. Depends on S5. **Parallel-execution seam** — S9/S7/S10 are three disjoint diffs sharing only the S5 dependency, safe as up to three concurrent worktrees once S5 merges. | — |
 | S10 | ⬜ Not started | `@ios-engineer` | iOS UI: `RegularNoticeView.swift` (Quick Regulars Notice, spec §3.5) + entry point wiring. **Amended scope: stays send-now only** — Scheduled Departure's schedule mode is broken out into S10b so this session doesn't blow past its ~2–4h unit and the S7/S9/S10 parallel batch stays clean. Depends on S5. | — |
 | S10b | ⬜ **New, §0 decision 7.** Not started | `@ios-engineer` | Scheduled Departure — `RegularNoticeView.swift` schedule mode (4th canned phrase, time picker, "Schedule for ___" button), local-notification scheduling for the T-0 poster reminder, deep link into `ParkedCarDetailView`'s existing Tiered Handoff sheet pre-filled for one-tap conversion, "no active parked car" fallback state (spec §3.5). Depends on **S9 AND S10 both merged** — reuses S9's composer as the conversion target, S10's sheet as the scheduling surface. This is the point the S7/S9/S10 parallel batch converges back to serial. Safe to run alongside S11/S12 (QA on the now-merged S9/S10) — no shared files. | — |
 | S11 | ⬜ Not started | `@qa-verifier` | QA on S9. | S12 |

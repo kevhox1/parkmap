@@ -1102,6 +1102,27 @@ Sizing: absorbed into existing sessions (07 amendment + function change = one sm
 session; client label-write joins the S9/handoff UI session; deep-link joins S13). No new
 sessions.
 
+**IMPLEMENTED IN DRAFT, 2026-09-29 (`@backend-data`, branch `backend/regulars-street-label`; files
+only, nothing applied — 07 remains unapplied DRAFT):** item 1 above (author-supplied street label,
+no server geocoding) is done. `supabase/07-regulars-schema.sql` §S1-1 gains nullable
+`pins.street_label text` with `check (street_label is null or char_length(street_label) <= 80)`,
+extends the existing insert-only column grant (`grant insert (regulars_head_start_seconds,
+street_label) on public.pins to anon, authenticated;` — same insert-only, never-updatable posture
+`regulars_head_start_seconds` already uses, no update re-GRANT anywhere), and appends the column to
+`pins_with_author`. `supabase/functions/send-regular-push/index.ts` now prefers `street_label` over
+`zones.name` in the alert body when present, falling back to `zones.name` unchanged when it isn't —
+zero regression for older clients/rows. Re-validated on a scratch Postgres 16 instance: full
+`00(harness)→01→02→02e→02f(minus Storage)→03(minus pg_cron)→04(minus pg_net)→07` chain applies
+clean and idempotent (07 re-applied a second time with zero errors); a `leaving_soon` insert with a
+valid `street_label` round-trips verbatim, an insert with none at all still succeeds with
+`street_label` null (unchanged pre-amendment shape), an 80-char label is accepted at the exact
+boundary, an 81-char label is rejected with `23514` (`pins_street_label_check`), a post-insert
+`UPDATE street_label` by the pin's own author is rejected with `42501` (no update grant exists),
+and the pre-existing S1 exploit columns (`pins.zone_pushed_at`, `regular_notices.created_at`,
+`regular_invites.expires_at`) remain blocked (`42501`) regardless of `street_label`'s presence —
+the amendment widens no other column's privilege. Test coverage: `07-regulars-schema-test.sh`
+Section 16. **Item 2 (tap-through deep-link) is unchanged — still S13's scope, not touched here.**
+
 ## Amendment 2026-09-21b — pre-redemption confirm copy is generic (orchestrator ruling, PR #115)
 
 §3.2's sketch named the inviter pre-redemption ("Dave wants to add you…"), but `regular_invites`'s

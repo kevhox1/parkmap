@@ -34,24 +34,30 @@
  * to get attention, the app's job is to show content," the same shape send-community-push's silent
  * push already uses for its own on-device-resolved content.
  *
- * COPY-GENERATION AMBIGUITY, RESOLVED HERE (flagged for the PR description — the spec's own worked
- * example, "Kevin's leaving in 10 min, 15 min head start — Mott St near Prince," names a STREET-LEVEL
- * location descriptor this function cannot reproduce: `pins.segment_id` is an internal tile-index key
- * (e.g. "SOUTH_STREET_WHITEHALL_STREET_OLD_SLIP_E_9"), not a human-readable street name, and the
- * street/segment geometry that WOULD resolve it (tiles/*.json) is a client-side-only dataset — it is
- * never loaded into Supabase and this Edge Function has no access to it. Rather than guess at parsing
- * the segment_id slug (fragile, and risks a wrong/misleading location in a push a Regular can't easily
- * verify), this function uses `zones.name` instead — a real, already-public, already-existing column
- * (the same "coarse zone concept the UI already shows" send-community-push's own header already relies
- * on for its own privacy argument) as the location descriptor, and the pin author's `profiles.username`
- * (falling back to a generic "A Regular" if the author has no profile row yet) as the name. Exact push
- * copy is NOT a locked contract per the spec (§2.9 gives one illustrative example, not a literal
- * string) — this is a reasonable, defensible substitution, not a scope deviation, and is called out
- * explicitly here so `@qa-verifier`/Kevin can weigh in if street-level copy turns out to matter enough
- * to justify a future segment_id -> street-name resolution path (e.g. a small lookup table seeded from
- * the same tile pipeline, or moving resolution client-side via a follow-up local-notification
- * enhancement). No banned words anywhere in the generated copy (avoid/ticket/fine/evasion/dodge) —
- * verified by direct read of every string template below.
+ * COPY-GENERATION, street-accurate as of the 2026-09-21 amendment (docs/regulars-network-spec.md's
+ * "Amendment 2026-09-21 — push copy must be street-accurate," Kevin's ruling): Kevin rejected
+ * zone-level push copy ("I think 'Nolita' is too open. This must be street dependent") — this function
+ * now PREFERS `pins.street_label` (new, `supabase/07-regulars-schema.sql` §S1-1) when the inserted pin
+ * has one, and falls back to `zones.name` only when it doesn't (null, or an older client build that
+ * predates this amendment) — exactly today's pre-amendment behavior in that fallback case, zero
+ * regression. `street_label` is an AUTHOR-SUPPLIED string, not server-side geocoding: the posting
+ * client already renders a human street label at handoff time (the My Car sheet's own resolution),
+ * and simply sends that exact string along with the pin insert; this function passes it through to the
+ * push body VERBATIM, never re-derives or re-validates its content (the CHECK on `07`'s own column is
+ * the only server-side bound — an 80-char length ceiling — because the string describes a location
+ * that is already unconditionally public the instant this leaving_soon pin posts, per §0 decision 3 /
+ * §2.9's consensual-disclosure reasoning, shown only to the author's own Regulars, same as before this
+ * amendment). This function still has NO access to `pins.segment_id`'s underlying street/segment
+ * geometry (`tiles/*.json` is a client-side-only dataset never loaded into Supabase) and still does not
+ * attempt to parse or resolve it — that constraint is unchanged; what changed is that the client no
+ * longer needs the server to resolve it at all, since the client already knows the street and now tells
+ * the server directly. The pin author's `profiles.username` (falling back to "A Regular") remains the
+ * name half of the copy, unchanged by this amendment. No banned words anywhere in the generated copy
+ * (avoid/ticket/fine/evasion/dodge) — `street_label` is free text but is the AUTHOR'S OWN string about
+ * their own already-public location, passed through verbatim; it is capped in length server-side (07's
+ * CHECK), not filtered for banned words, because it is not app-authored copy, it is a quoted user string
+ * — same posture this app already takes toward `pin_notes.body`/`regular_notices.body`. Verified by
+ * direct read of every string template below regardless.
  *
  * Secrets: IDENTICAL names/loading pattern to send-community-push (same Supabase project, same APNs
  * credentials — Regulars pushes and zone pushes go out under the same APNs topic/team/key):
@@ -104,6 +110,10 @@ interface PinRecord {
   zone_id: string | null;
   leaving_minutes: number | null;
   regulars_head_start_seconds: number | null;
+  /** AMENDMENT 2026-09-21 — author-supplied, ≤80-char street descriptor (07's CHECK), preferred over
+   * `zones.name` in the push body below when present. Null on older rows/clients — falls back to the
+   * pre-amendment zones.name behavior, unchanged. */
+  street_label: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -259,7 +269,7 @@ Deno.serve(async (req: Request): Promise<Response> => {
   }
 
   // Best-effort cosmetic lookups — a failure here degrades the push's COPY, never blocks sending it.
-  // Never trust/require these: worst case is a generic "A Regular" / omitted zone name, not a dropped
+  // Never trust/require these: worst case is a generic "A Regular" / omitted location, not a dropped
   // push. Fetched via the service-role client (bypasses RLS, same as every other read in this
   // function); profiles/zones are both broadly public-read tables already (profiles per the standing
   // username-is-public convention; zones per the community-2.0 zone-picker UI), so this is not a new
@@ -276,7 +286,11 @@ Deno.serve(async (req: Request): Promise<Response> => {
   } catch (err) {
     console.error(`send-regular-push: profiles lookup failed (non-fatal): ${String(err)}`);
   }
-  if (pin.zone_id) {
+  // AMENDMENT 2026-09-21 — only fall back to the zones.name lookup when the pin has no author-supplied
+  // street_label. When street_label is present, this query is skipped entirely (a small, deliberate
+  // savings, not a correctness requirement — locationDescriptor's own fallback chain below would produce
+  // the identical result either way since street_label always wins when non-null).
+  if (!pin.street_label && pin.zone_id) {
     try {
       const { data: zoneRow } = await supabase
         .from("zones")
@@ -288,6 +302,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       console.error(`send-regular-push: zones lookup failed (non-fatal): ${String(err)}`);
     }
   }
+  // AMENDMENT 2026-09-21 ("push copy must be street-accurate", Kevin's ruling) — street_label (author-
+  // supplied, passed through verbatim per the file header) wins over zones.name whenever present; the
+  // zones.name fallback is byte-identical to pre-amendment behavior when it isn't.
+  const locationDescriptor = pin.street_label || zoneName;
 
   let jwt: string;
   try {
@@ -316,7 +334,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const bodyParts: string[] = [];
   if (leavingMinutes !== null) bodyParts.push(`${leavingMinutes} min out`);
   if (headStartMinutes !== null) bodyParts.push(`${headStartMinutes} min head start for your Regulars`);
-  if (zoneName) bodyParts.push(zoneName);
+  // AMENDMENT 2026-09-21 — street_label (author-supplied) preferred over zones.name; see
+  // locationDescriptor's own definition above and the file header for the full reasoning.
+  if (locationDescriptor) bodyParts.push(locationDescriptor);
   const body = bodyParts.length > 0 ? bodyParts.join(" — ") : "Leaving soon — tap to see the spot.";
 
   const outcomes = await sendInChunks(deviceTokens, host, jwt, apnsTopic, {

@@ -20,6 +20,17 @@
 -- 'leaving_soon', and the current pins_with_author view definition, both extended in §S1-1 below).
 --
 -- ============================================================================================
+-- AMENDMENT 2026-09-21 — "push copy must be street-accurate" (Kevin's ruling, docs/regulars-network-
+-- spec.md's "Amendment 2026-09-21" section). This file is still unapplied DRAFT — free to amend
+-- directly rather than adding a new migration file. Adds ONE nullable column, §S1-1's
+-- `pins.street_label` (author-supplied, ≤80-char, insert-only-client-writable, never updatable
+-- post-insert) — no server-side geocoding, no new table, no RLS-policy change (street_label rides
+-- the existing pins RLS/visibility posture: public the instant a leaving_soon pin posts, per §0
+-- decision 3, exactly like every other pins column). `supabase/functions/send-regular-push/index.ts`
+-- is amended in the same PR to prefer this column over `zones.name` in its push body when present.
+-- See that file's own header for the copy-generation change and this file's §S1-1 for the column
+-- itself. Test coverage: `07-regulars-schema-test.sh` Section 16.
+-- ============================================================================================
 -- MID-FLIGHT RULING ADDENDUM (Kevin, 2026-09-15, arrived while this session was already in flight —
 -- a formal amendment to docs/regulars-network-spec.md is being written separately; this file does not
 -- wait for it, per the coordinator's explicit instruction)
@@ -117,13 +128,17 @@
 -- docs/regulars-roadmap.md's S1-follow-up row and docs/open-items.md.
 --
 -- ============================================================================================
--- §S1-1 `pins` — Tiered Handoff head-start marker (spec §2.1, AMENDED per the ruling above)
+-- §S1-1 `pins` — Tiered Handoff head-start marker (spec §2.1, AMENDED per the ruling above), PLUS
+-- the 2026-09-21 street-label amendment below (spec's "Amendment 2026-09-21 — push copy must be
+-- street-accurate")
 -- ============================================================================================
 alter table public.pins
   add column if not exists regulars_head_start_seconds integer
     check (regulars_head_start_seconds is null
            or regulars_head_start_seconds between 60 and 3600),
-  add column if not exists zone_pushed_at timestamptz;
+  add column if not exists zone_pushed_at timestamptz,
+  add column if not exists street_label text
+    check (street_label is null or char_length(street_label) <= 80);
 
 comment on column public.pins.regulars_head_start_seconds is
   'Only meaningful for leaving_soon. How long Regulars get an exclusive, content-bearing push before '
@@ -159,22 +174,50 @@ comment on column public.pins.zone_pushed_at is
   'by the existing hygiene job (03-community-2.0-schema.sql §2.12) before the zone-wide fallthrough '
   'phase ever runs. That is a valid, expected outcome, not a bug — no part of this schema, RLS policy, '
   'or RPC in this file assumes zone_pushed_at is ever guaranteed to become non-null for a given row.';
+comment on column public.pins.street_label is
+  'AMENDMENT 2026-09-21 ("push copy must be street-accurate", docs/regulars-network-spec.md — Kevin''s '
+  'ruling): only meaningful for leaving_soon. A short, author-supplied, human-readable street '
+  'descriptor ("Mott St — West side, between Prince St and Spring St") captured client-side at handoff '
+  'time from the exact same street-label resolution the My Car sheet already renders for the poster''s '
+  'own eyes — NOT server-side geocoding. Kevin rejected zone-level push copy ("I think ''Nolita'' is '
+  'too open. This must be street dependent") — the device that already knows the street tells the '
+  'server the string; the server never resolves segment_id -> street name itself (no Notification '
+  'Service Extension, no geocoding dependency added here or anywhere in this migration). Null = poster''s '
+  'client did not supply one (older client build, or the resolution failed) — send-regular-push falls '
+  'back to zones.name exactly as it did before this amendment, zero regression. Length-capped at 80 '
+  'chars server-side (CHECK below) purely as an abuse/APNs-payload-size ceiling — free text, passed '
+  'through to the push body VERBATIM once present: it is the author''s own street string, describing a '
+  'location that is already unconditionally public the instant this leaving_soon pin posts (§0 decision '
+  '3, §2.9''s consensual-disclosure reasoning, unchanged by this amendment), shown only to the author''s '
+  'own chosen Regulars (send-regular-push targets by regular_edges/user_id, never zone-wide) — this is '
+  'not a new disclosure class, and the server does not need to parse or validate its *content*, only '
+  'bound its *length*. Deliberately client-writable ONLY at INSERT (see the GRANT below) and NEVER '
+  'updatable post-insert — same one-shot-at-creation posture this file already uses for '
+  'regulars_head_start_seconds, closing off a class of "the street changed after the fact" tampering '
+  'that would otherwise let an author silently rewrite the location a Regular already saw/tapped '
+  'through on a push notification.';
 
-grant insert (regulars_head_start_seconds) on public.pins to anon, authenticated;
+grant insert (regulars_head_start_seconds, street_label) on public.pins to anon, authenticated;
 -- Column-level grant required per 02f-block-scoped-restrictions.sql's fail-closed model: that file
 -- REVOKEd blanket table-level INSERT/UPDATE on public.pins from anon/authenticated and re-GRANTed it
 -- back column-by-column — by that file's own stated design, a new pins column is NOT client-writable
 -- until explicitly added to a GRANT list here. zone_pushed_at is deliberately EXCLUDED from this
 -- grant, same reasoning 03-community-2.0-schema.sql already documents for excluding claimed_by from
 -- its own grant lists: only a server-side SECURITY DEFINER writer (a future sweep function, not built
--- in this session) should ever be able to set it.
+-- in this session) should ever be able to set it. street_label (AMENDMENT 2026-09-21) is added to this
+-- SAME insert-only grant, deliberately NOT to any update grant anywhere in this file or 02f/03/04 — the
+-- table-level `revoke update on public.pins from anon, authenticated` in 02f already blocks it by
+-- default, and no update re-GRANT for street_label is ever added, so a client can set it once at
+-- INSERT and never again. This is the identical shape 03-community-2.0-schema.sql already uses for
+-- `position_fraction`/`leaving_minutes` (insert-only grant, no update counterpart) — not a new pattern.
 
--- pins_with_author — append the two new columns. Same "p.* is frozen at CREATE VIEW time" bug class
+-- pins_with_author — append the three new columns. Same "p.* is frozen at CREATE VIEW time" bug class
 -- 02f section 5 and 03/04's own view recreations already fixed for this exact view — required again
--- here or these two columns would never reach any client (iOS/PWA both read pins exclusively via this
+-- here or these columns would never reach any client (iOS/PWA both read pins exclusively via this
 -- view). Full explicit column list below is 04-community-push-trigger.sql's exact list (the most
--- recent prior recreation, which already includes author_avatar), with the two new columns appended
--- at the end — appending to an explicit SELECT list is always a safe CREATE OR REPLACE.
+-- recent prior recreation, which already includes author_avatar), with the head-start columns and the
+-- amendment's street_label appended at the end — appending to an explicit SELECT list is always a safe
+-- CREATE OR REPLACE.
 create or replace view public.pins_with_author as
   select
     p.id,
@@ -203,7 +246,8 @@ create or replace view public.pins_with_author as
     p.claimed_by,
     pr.avatar      as author_avatar,
     p.regulars_head_start_seconds,
-    p.zone_pushed_at
+    p.zone_pushed_at,
+    p.street_label
   from public.pins p
   left join public.profiles pr on pr.id = p.author_id;
 
