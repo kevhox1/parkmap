@@ -785,10 +785,13 @@ struct ContentView: View {
     /// active — mirrors `blockSelectModeActive`/`spotPlacementActive`'s shape (a mutually-
     /// exclusive, map-tap-intercepting mode), with ONE deliberate difference: entering this
     /// mode does NOT force-hide `activeSheet` (spec §3.3 — the whole point is that
-    /// `ReportSheet` stays presented at `.medium`/`.large` so the user can tap the
-    /// already-visible map above it). Entered via `ReportSheet`'s `onRequestReposition`
-    /// closure; cleared on that sheet's own dismiss (success or Cancel) via the `.sheet(item:)`
-    /// `onDismiss` backstop, same shape `cancelSpotPlacementMode()` already uses.
+    /// `ReportSheet` stays presented, DRIVEN DOWN to `.medium` so the map is visible/tappable
+    /// above it — see `reportSheetDetent`'s own doc comment; Kevin's live gate on PR #118,
+    /// finding F1, is why "stays presented" alone wasn't enough: at `.large` the sheet fully
+    /// covered the map with no way back except a drag-to-dismiss that destroyed the whole
+    /// report). Entered via `ReportSheet`'s `onRequestReposition` closure; cleared on that
+    /// sheet's own dismiss (success or Cancel) via the `.sheet(item:)` `onDismiss` backstop,
+    /// same shape `cancelSpotPlacementMode()` already uses.
     @State private var reportRepositionModeActive: Bool = false
 
     /// The latest reposition-tap result, pushed into the already-presented `ReportSheet` via
@@ -800,6 +803,27 @@ struct ContentView: View {
     /// subsequent reposition tap, mirroring `spotPlacementDraft`'s own "tap elsewhere to move
     /// the pin" idiom.
     @State private var repositionUpdate: ReportRepositionUpdate? = nil
+
+    /// Kevin's live gate on PR #118, finding F1: the `.reportPin` sheet's own DRIVEN detent
+    /// selection — the only `.presentationDetents` call site in this file using the
+    /// `selection:` form (every other one stays the bare, non-driven `[.medium, .large]`
+    /// this file already used everywhere; spec §6's own out-of-scope note flagged a driven
+    /// detent as "new-pattern risk for a nice-to-have" — Kevin's live testing proved it's
+    /// load-bearing, not optional: entering reposition mode while the sheet happened to be
+    /// dragged to `.large` left the map fully covered, with no way to see or tap the target
+    /// curb). Forced down to `.medium` the instant reposition mode is entered
+    /// (`ReportSheet.onRequestReposition` → `ContentView.detentOnEnteringReposition`), and
+    /// restored to whatever it was before once a reposition tap lands
+    /// (`handleReportRepositionTap` → `ContentView.detentAfterRepositionTapLands`). Defaults
+    /// to `.medium`, matching the pre-F1 unselected form's own starting behavior — reset back
+    /// to this default on every `.reportPin` sheet dismiss (the NEXT report sheet always
+    /// starts fresh, never inheriting a stale detent from a previous session).
+    @State private var reportSheetDetent: PresentationDetent = .medium
+
+    /// Snapshot of `reportSheetDetent` taken the instant reposition mode is entered (before
+    /// forcing it down to `.medium`) — restored once a reposition tap lands, per F1(c).
+    /// `nil` outside reposition mode (including always, before the first "Reposition" tap).
+    @State private var reportSheetDetentBeforeReposition: PresentationDetent? = nil
 
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
@@ -1043,6 +1067,15 @@ struct ContentView: View {
                     reportRepositionModeActive = false
                     repositionUpdate = nil
                 }
+                // Kevin's live gate on PR #118, finding F1: `reportSheetDetent` reset back to
+                // its default `.medium` UNCONDITIONALLY on every sheet dismiss (not gated on
+                // `reportRepositionModeActive` like the block above) — a user can drag the
+                // `.reportPin` sheet to `.large` WITHOUT ever tapping "Reposition," and that
+                // manual drag alone must not leak into the NEXT report sheet's starting
+                // detent either. Harmless no-op for every OTHER `ActiveSheet` case's dismiss
+                // (this state is dormant until the next `.reportPin` presentation reads it).
+                reportSheetDetent = .medium
+                reportSheetDetentBeforeReposition = nil
                 // FT-20 Stream A: `.browseNav` is browse mode's persistent rest state, not
                 // "nothing" — restore it here as a backstop for any dismiss path that
                 // doesn't already route through `dismissTargetOutsideBrowseNav` above (an
@@ -1456,6 +1489,13 @@ struct ContentView: View {
             //   - repositionModeActive/onRequestReposition/repositionUpdate wire the
             //     "Reposition" row to this file's own `reportRepositionModeActive`/
             //     `repositionUpdate` @State — see those properties' own doc comments.
+            //
+            // Kevin's live gate on PR #118, finding F1: onRequestReposition now ALSO drives
+            // the sheet down to `.medium` (`detentOnEnteringReposition`, applied via the
+            // `selection:` binding below) so the map is visible/tappable the instant
+            // reposition mode starts — see `reportSheetDetent`'s own doc comment for the
+            // live-testing bug this closes (the map was fully covered at `.large`, with no
+            // safe way back).
             ReportSheet(
                 coordinate: coord,
                 pinService: pinService,
@@ -1469,13 +1509,29 @@ struct ContentView: View {
                 candidateSearchRadiusMeters: pinDropRadiusMeters,
                 allowsReposition: !driveModeActive,
                 repositionModeActive: reportRepositionModeActive,
-                onRequestReposition: { reportRepositionModeActive = true },
+                onRequestReposition: {
+                    let (newDetent, saved) = ContentView.detentOnEnteringReposition(current: reportSheetDetent)
+                    reportSheetDetentBeforeReposition = saved
+                    reportSheetDetent = newDetent
+                    reportRepositionModeActive = true
+                },
                 repositionUpdate: $repositionUpdate
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.medium, .large], selection: $reportSheetDetent)
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+            // Kevin's live gate on PR #118, finding F1(b): while reposition mode is active, a
+            // drag-down past `.medium` (the smallest allowed detent) must NOT dismiss the
+            // sheet — that would destroy the in-progress report exactly like a naive
+            // ActiveSheet.reportPin coordinate reassignment would (§3.2's landmine, same
+            // failure class: state loss from an unwanted teardown). Dragging BETWEEN the two
+            // allowed detents is still fully available; only the swipe-to-dismiss gesture is
+            // blocked. Programmatic dismiss (Cancel button, successful submit) is UNAFFECTED
+            // — `interactiveDismissDisabled` only gates the interactive swipe gesture.
+            // Reverts to normal dismiss behavior automatically once the sheet closes (the
+            // whole view — and this modifier with it — is torn down at that point).
+            .interactiveDismissDisabled(reportRepositionModeActive)
 
         case .signCheckConfirm(let intent):
             // TF2-7: Sign-check confirmation sheet — presented when the driver taps "Park here"
@@ -4028,12 +4084,23 @@ struct ContentView: View {
     /// and any other `reportRepositionModeActive` reader in an inconsistent state for that
     /// window regardless. Mirrors `cancelSpotPlacementMode()`'s own synchronous reset shape —
     /// no defensive claim can safely be "by construction" without eliminating the actual window.
+    ///
+    /// Kevin's live gate on PR #118, finding F1: also synchronously resets
+    /// `reportSheetDetent`/`reportSheetDetentBeforeReposition` for the same reason —
+    /// belt-and-braces alongside the `.sheet(item:)` `onDismiss` closure's own unconditional
+    /// reset of both (which still fires once the dismiss animation completes); this state
+    /// doesn't feed `handleMapTap` routing or `communityMapChromeVisible` the way
+    /// `reportRepositionModeActive` does, so there's no OBSERVABLE bug from the async window
+    /// alone, but resetting it here too costs nothing and keeps every reposition-related
+    /// `@State` var reset at the exact same call site.
     private func enterSpotPlacementMode() {
         activeSheet = nil
         spotPlacementDraft = nil
         spotPlacementActive = true
         reportRepositionModeActive = false
         repositionUpdate = nil
+        reportSheetDetent = .medium
+        reportSheetDetentBeforeReposition = nil
     }
 
     /// Exits placement mode without posting anything (hint banner's or confirm card's
@@ -4082,6 +4149,14 @@ struct ContentView: View {
     /// never a crash, never a silently-adopted wrong segment). Replaces (never appends to)
     /// `repositionUpdate` on every subsequent tap — "tap elsewhere to move the pin," the
     /// same idiom `handleSpotPlacementTap` already established (AC-12).
+    ///
+    /// Kevin's live gate on PR #118, finding F1(c): also restores `reportSheetDetent` to
+    /// whatever it was before reposition mode was entered (`detentAfterRepositionTapLands`),
+    /// so the sheet automatically comes back up with the updated candidate list visible — the
+    /// user isn't left staring at a `.medium` sheet with no indication anything changed. If
+    /// the user wants to fine-tune the position again, dragging back down to `.medium`
+    /// remains available (still one of the two allowed detents; `interactiveDismissDisabled`
+    /// only blocks dismissal, never dragging BETWEEN allowed detents).
     private func handleReportRepositionTap(at coordinate: CLLocationCoordinate2D) {
         let result = CandidateSegmentSearch.reportRepositionCandidates(
             forTap: coordinate.latitude,
@@ -4093,6 +4168,9 @@ struct ContentView: View {
             coordinate: coordinate,
             segment: result.segment,
             candidates: result.candidates
+        )
+        reportSheetDetent = ContentView.detentAfterRepositionTapLands(
+            savedDetent: reportSheetDetentBeforeReposition
         )
     }
 
@@ -4191,6 +4269,29 @@ struct ContentView: View {
             }
         }
         return result
+    }
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §3.3), Kevin's live gate finding F1:
+    // report-sheet detent transitions (pure, for test access)
+
+    /// Entering reposition mode: snapshot the sheet's CURRENT detent (whatever the user had
+    /// dragged it to) and force it down to `.medium` so the map is visible/tappable above it.
+    /// Pure function — no `@State`/SwiftUI dependency — `ContentView.detentOnEnteringReposition`
+    /// callers assign both halves of the returned tuple to `reportSheetDetentBeforeReposition`/
+    /// `reportSheetDetent` respectively.
+    static func detentOnEnteringReposition(
+        current: PresentationDetent
+    ) -> (newDetent: PresentationDetent, savedDetent: PresentationDetent) {
+        (.medium, current)
+    }
+
+    /// After a reposition tap lands: restore whichever detent was saved on entry, so the
+    /// user sees the updated candidate list without having to manually drag the sheet back
+    /// up. Falls back to `.medium` if nothing was saved (defensive — entry always saves one;
+    /// this branch should be unreachable in practice, but a missing snapshot must never
+    /// leave the sheet stuck at an undefined detent).
+    static func detentAfterRepositionTapLands(savedDetent: PresentationDetent?) -> PresentationDetent {
+        savedDetent ?? .medium
     }
 
     /// AC-R2: finds the loaded segment describing the opposite curb of the same physical

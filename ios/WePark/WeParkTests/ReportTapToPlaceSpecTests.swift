@@ -54,12 +54,30 @@
 //      29. testShowsReportPlacementSection_repositionOnly_od1Case_true
 //      30. testShowsReportPlacementSection_bothGatesSatisfied_true
 //
+//  Kevin's live gate on PR #118 added two findings:
+//
+//  F2 — CommunityPinAnnotation.resolveDisplayCoordinate(lat:lng:segmentId:positionFraction:
+//  segmentByID:), the primitive overload `MapViewRepresentable.Coordinator.syncCarPin` now
+//  calls directly for the parked-car marker (no `CommunityPin` involved):
+//      31. testResolveDisplayCoordinate_carPinShape_nilSegmentId_fallsBackToRawLatLng
+//      32. testResolveDisplayCoordinate_carPinShape_segmentResolves_projectsOntoCurb
+//
+//  F1 — ContentView.detentOnEnteringReposition(current:) / detentAfterRepositionTapLands
+//  (savedDetent:), the pure detent-transition helpers behind the `.reportPin` sheet's driven
+//  `reportSheetDetent` selection:
+//      33. testDetentOnEnteringReposition_savesLarge_forcesToMedium
+//      34. testDetentOnEnteringReposition_alreadyAtMedium_savesMediumAndStaysAtMedium
+//      35. testDetentAfterRepositionTapLands_restoresSavedLarge
+//      36. testDetentAfterRepositionTapLands_restoresSavedMedium
+//      37. testDetentAfterRepositionTapLands_nilSaved_fallsBackToMedium
+//
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never compiled
 //  or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
 
 import XCTest
 import CoreLocation
+import SwiftUI
 @testable import WePark
 
 // MARK: - Fixture helpers
@@ -258,6 +276,43 @@ final class ResolveDisplayCoordinateTests: XCTestCase {
     }
 }
 
+// MARK: - CommunityPinAnnotation.resolveDisplayCoordinate(lat:lng:segmentId:positionFraction:segmentByID:)
+// Kevin's live gate on PR #118, finding F2: the primitive overload, exercised directly
+// (no `CommunityPin` involved) — this is the exact call shape
+// `MapViewRepresentable.Coordinator.syncCarPin` uses for the parked-car marker.
+
+final class ResolveDisplayCoordinatePrimitiveCarPinShapeTests: XCTestCase {
+
+    private let line: [[Double]] = [[40.7230, -73.9950], [40.7230, -73.9940]]
+
+    /// The car path's fallback: no resolvable segment (nil `detectedSegmentID`, or a
+    /// segment id that isn't in the currently-loaded tile set) → the raw stored
+    /// `latitude`/`longitude`, unchanged — same AC-3 contract as the pin-shaped overload.
+    func testResolveDisplayCoordinate_carPinShape_nilSegmentId_fallsBackToRawLatLng() {
+        let result = CommunityPinAnnotation.resolveDisplayCoordinate(
+            lat: 40.7231, lng: -73.9945, segmentId: nil, positionFraction: nil, segmentByID: [:]
+        )
+        XCTAssertEqual(result.latitude, 40.7231)
+        XCTAssertEqual(result.longitude, -73.9945)
+    }
+
+    /// THE bug Kevin found live: a parked car with a resolved `detectedSegmentID` rendering
+    /// at its raw (off-curb, "inside a building") coordinate. With a resolvable segment and
+    /// `positionFraction: nil` (parked cars are never fraction-placed), the marker must
+    /// project onto the segment's polyline via nearest-point projection — landing ON the
+    /// curb, not at the raw tap/GPS point.
+    func testResolveDisplayCoordinate_carPinShape_segmentResolves_projectsOntoCurb() {
+        let segment = fixtureSegment(id: "car-seg", line: line)
+        let result = CommunityPinAnnotation.resolveDisplayCoordinate(
+            lat: 40.7231, lng: -73.9945, segmentId: "car-seg", positionFraction: nil,
+            segmentByID: ["car-seg": segment]
+        )
+        XCTAssertEqual(result.latitude, 40.7230, accuracy: 0.0001,
+            "Parked-car marker must project onto its resolved segment's curb, not render at the raw off-line coordinate")
+        XCTAssertEqual(result.longitude, -73.9945, accuracy: 0.0001)
+    }
+}
+
 // MARK: - ReportSheet.showsRepositionAffordance(communityEnabled:selectedType:allowsReposition:) — AC-7/AC-8
 
 final class ShowsRepositionAffordanceTests: XCTestCase {
@@ -450,5 +505,45 @@ final class ActiveSheetReportPinIdStabilityTests: XCTestCase {
         let b = ActiveSheet.reportPin(coord: CLLocationCoordinate2D(latitude: 40.7231, longitude: -73.9946), streetName: nil)
         XCTAssertNotEqual(a.id, b.id,
             "id DOES change with coord — this is exactly why a reposition must never reassign ActiveSheet.reportPin's own coord payload (spec §3.2's landmine)")
+    }
+}
+
+// MARK: - ContentView.detentOnEnteringReposition(current:) / detentAfterRepositionTapLands(savedDetent:)
+// Kevin's live gate on PR #118, finding F1 — pure detent-transition helpers for the
+// `.reportPin` sheet's driven `reportSheetDetent` selection.
+
+final class ReportSheetDetentTransitionTests: XCTestCase {
+
+    /// F1(a): entering reposition mode must snapshot whatever detent the sheet was
+    /// ACTUALLY at (here: `.large`, the exact case Kevin hit live — the sheet fully
+    /// covering the map) and force it down to `.medium`.
+    func testDetentOnEnteringReposition_savesLarge_forcesToMedium() {
+        let (newDetent, saved) = ContentView.detentOnEnteringReposition(current: .large)
+        XCTAssertEqual(newDetent, .medium)
+        XCTAssertEqual(saved, .large)
+    }
+
+    /// If the sheet was already at `.medium` when "Reposition" was tapped, the snapshot is
+    /// still taken (and happens to equal the forced value) — no special-casing needed.
+    func testDetentOnEnteringReposition_alreadyAtMedium_savesMediumAndStaysAtMedium() {
+        let (newDetent, saved) = ContentView.detentOnEnteringReposition(current: .medium)
+        XCTAssertEqual(newDetent, .medium)
+        XCTAssertEqual(saved, .medium)
+    }
+
+    /// F1(c): after a reposition tap lands, restore whatever was saved on entry.
+    func testDetentAfterRepositionTapLands_restoresSavedLarge() {
+        XCTAssertEqual(ContentView.detentAfterRepositionTapLands(savedDetent: .large), .large)
+    }
+
+    func testDetentAfterRepositionTapLands_restoresSavedMedium() {
+        XCTAssertEqual(ContentView.detentAfterRepositionTapLands(savedDetent: .medium), .medium)
+    }
+
+    /// Defensive fallback — should be unreachable in practice (entry always saves a value
+    /// before this function is ever called), but a missing snapshot must resolve to a
+    /// concrete detent, never leave the sheet in an undefined state.
+    func testDetentAfterRepositionTapLands_nilSaved_fallsBackToMedium() {
+        XCTAssertEqual(ContentView.detentAfterRepositionTapLands(savedDetent: nil), .medium)
     }
 }
