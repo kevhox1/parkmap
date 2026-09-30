@@ -530,12 +530,53 @@ function closestPointOnStreet(streetName, lat, lng) {
 }
 
 const intersectionCache = {};
+// #27 fix (see docs/qa/pr117-arrow-direction.md Finding #4 /
+// docs/ft21-width-offset-investigation.md §4): findIntersection() is memoized under a
+// CANONICAL, order-independent cache key (`[street1, street2].sort().join('|')`), but
+// prior to this fix the actual search below iterated street1/street2 in whatever raw
+// argument order the caller happened to use, NOT the sorted order the cache key implies.
+//
+// That mismatch is harmless for the overwhelming majority of street pairs (which have
+// exactly one real geometric crossing, so there is nothing to tie-break). It is NOT
+// harmless for a street pair with more than one exact (dist === 0) crossing candidate —
+// which happens for streets whose OSM way is split into several chains that pass close
+// to each other near an intersection (Delancey St's westbound chain is one such case,
+// confirmed live: it crosses Essex St's single chain at TWO distinct exact points ~17m
+// apart). The loop below breaks that kind of tie by "first exact match encountered
+// wins" (`pt.dist < best.dist` never fires again once dist has hit 0) — and which
+// candidate is encountered FIRST depends on which street drives the outer loop
+// (chains1) vs the inner loop (chains2), which depended on caller argument order.
+//
+// getBlockPolyline() calls findIntersection(streetOsm, fromOsm) /
+// findIntersection(streetOsm, toOsm) — i.e. the BLOCK'S OWN street is always
+// argument 1. So a block whose primary street is "Delancey Street" gets the search
+// order (Delancey, Essex) and finds the correct, short crossing. But main() processes
+// blocks in whatever order Object.keys(blocks) yields (itself a function of sign-fetch
+// order), so an unrelated block whose PRIMARY street is "Essex Street" and whose cross
+// street is "Delancey Street" — e.g. "ESSEX STREET (RIVINGTON STREET to DELANCEY
+// STREET)" — calls findIntersection(Essex, Delancey) first, which finds the OTHER,
+// wrong exact crossing and permanently caches it under the SAME sorted key for the
+// rest of the run. Every later call to findIntersection(Delancey, Essex) then reads
+// that wrong point back out of the cache. That one wrong point sits ~70 chain-vertices
+// away from the correct one along Delancey's chain, so extractPolylineBetween() (which
+// walks the raw chain between the two matched vertex indices) returns a ~961m/3,154ft
+// polyline for what is really a ~53m/175ft block face — reproduced directly via
+// scripts/test-pipeline-determinism.js.
+//
+// Fix: make the SEARCH use the same canonical (sorted) order as the cache key, so
+// findIntersection(A, B) and findIntersection(B, A) always walk the segment pairs in
+// the identical sequence and therefore always resolve any tie the same way, regardless
+// of which caller (which block, in which processing order) reaches this function
+// first. This is a same-inputs-same-output fix only — it does not change which
+// candidate wins for the (overwhelming majority of) pairs that only have one real
+// crossing to begin with.
 function findIntersection(street1, street2) {
   const key = [street1, street2].sort().join('|');
   if (intersectionCache[key] !== undefined) return intersectionCache[key];
 
-  const chains1 = OSM_STREETS[street1];
-  const chains2 = OSM_STREETS[street2];
+  const [a, b] = [street1, street2].sort();
+  const chains1 = OSM_STREETS[a];
+  const chains2 = OSM_STREETS[b];
   if (!chains1 || !chains2) { intersectionCache[key] = null; return null; }
 
   let best = null;
@@ -1883,6 +1924,28 @@ function initWidths(data) {
   }
 }
 
+// #27 determinism harness support: inject OSM street geometry into module scope the
+// same way initWidths() injects street_widths.json, without needing to run the full
+// main() pipeline. Also resets the memoized geometry caches so a harness can run
+// multiple independent trials inside one process (see
+// scripts/test-pipeline-determinism.js).
+function initStreets(data) {
+  OSM_STREETS = data;
+  clearGeometryCaches();
+}
+
+// Clears every module-level memoization cache that getBlockPolyline()'s helper chain
+// populates. Exported purely for test isolation — production main() never needs this
+// (it runs once per process) — but a determinism harness that calls getBlockPolyline()
+// repeatedly in one process, in permuted order, needs a clean slate per trial so a
+// warm cache from trial N can't be mistaken for order-dependence in trial N+1.
+function clearGeometryCaches() {
+  for (const k of Object.keys(intersectionCache)) delete intersectionCache[k];
+  for (const k of Object.keys(osmNameCache)) delete osmNameCache[k];
+  compactStreetIndex = null;
+  stSaintIndex = null;
+}
+
 if (require.main !== module) {
   // Required as a module (by validate-widths.js or tests) — export the probe surface.
   module.exports = {
@@ -1892,6 +1955,14 @@ if (require.main !== module) {
     findNearbyWidthWays,
     polylineCentroidDist,
     initWidths,
+    // #27 determinism harness surface (scripts/test-pipeline-determinism.js)
+    initStreets,
+    clearGeometryCaches,
+    getBlockPolyline,
+    findIntersection,
+    closestPointOnStreet,
+    extractPolylineBetween,
+    osmName,
     // Constants exposed for diagnostic printing in the probe
     _CSCL_OFFSET_FRACTION:          CSCL_OFFSET_FRACTION,
     _CSCL_OFFSET_MIN_M:             CSCL_OFFSET_MIN_M,

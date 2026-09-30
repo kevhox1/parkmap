@@ -256,7 +256,11 @@ look better"), not a blocker.
 
 ---
 
-## 4. The determinism prerequisite (#27)
+## 4. The determinism prerequisite (#27) — ✅ RESOLVED 2026-09-30
+
+**Status update:** #27 is fixed on branch `data/pipeline-determinism` (no tiles/ regen in that PR — the
+fix ships with this resurrection's own regen, or whichever geometry regen lands first). This section is
+left in place as the investigation record; the risk it describes is closed.
 
 **The code paths do not overlap.** Width computation (`initWidths()`, `getCurbOffsetFromWidth()`) is
 entirely per-street, precomputed once from `street_widths.json`'s own polylines — it never calls
@@ -264,7 +268,7 @@ entirely per-street, precomputed once from `street_widths.json`'s own polylines 
 `docs/qa/pr117-arrow-direction.md` names as the source of #27's order-dependent results), and it never
 calls `getBlockPolyline()`. Nothing about resurrecting #25 exercises the buggy code.
 
-**But #27 must still land first, operationally, for two reasons.** First, the general reason already on
+**But #27 had to land first, operationally, for two reasons.** First, the general reason already on
 the board: a regen pipeline must be deterministic for `compare-tilesets.js` diffs to mean anything, and
 this resurrection touches **74 streets** (vs. Option A's 23) — a much larger, harder-to-eyeball diff
 that leans on the comparator being trustworthy even more than Option A did. Second, and more concretely:
@@ -272,12 +276,22 @@ that leans on the comparator being trustworthy even more than Option A did. Seco
 per PR #117 QA, in isolation it returns a normal ~53m block, but after ~1,000 other blocks are processed
 first in the same run it can return a corrupted ~961m result. Delancey is also **the single
 largest-magnitude street in this resurrection's own blast radius (+8.00m, top of the list in §2)**.
-Running a resurrection regen while #27 is unresolved risks nondeterministically baking either the
+Running a resurrection regen while #27 was unresolved risked nondeterministically baking either the
 correct short block or the corrupted long one into committed tiles, on exactly the street getting the
 largest offset change, with no reliable tool to catch it (the QA-flagged `compare-tilesets.js`
 displacement-metric bug, PR #116 finding #1, should also be fixed first — this regen will produce far
 more moved segments than Option A's 355, and that tool is already known to misreport by up to 10x on
 vertex-count-mismatched segments).
+
+**Root cause, for the record (full mechanism in `build/preprocess.js`'s `findIntersection()` comment and
+`docs/open-items.md` #27):** the function's cache key was canonical/order-independent
+(`[street1,street2].sort().join('|')`), but the search that populated the cache used raw caller argument
+order to decide loop nesting. Delancey's OSM way is fragmented into overlapping chains that create a
+genuine second exact crossing candidate with Essex St ~17m from the real one; whichever block's
+`findIntersection()` call reached that shared cache entry first (Delancey-primary or Essex-primary)
+silently determined which of the two candidates won for the rest of the run. Fixed by canonicalizing the
+search to the same sorted order as the cache key — same-inputs-same-output only, no other semantic
+change. `scripts/test-pipeline-determinism.js` is now a standing regression gate for this class of bug.
 
 ---
 
