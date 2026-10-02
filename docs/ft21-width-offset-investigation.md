@@ -256,11 +256,19 @@ look better"), not a blocker.
 
 ---
 
-## 4. The determinism prerequisite (#27) — ✅ RESOLVED 2026-09-30
+## 4. The determinism prerequisite (#27) — 🟡 IN PROGRESS, NOT YET SAFE TO BUILD ON
 
-**Status update:** #27 is fixed on branch `data/pipeline-determinism` (no tiles/ regen in that PR — the
-fix ships with this resurrection's own regen, or whichever geometry regen lands first). This section is
-left in place as the investigation record; the risk it describes is closed.
+**Status update (2026-10-01):** #27's first fix attempt (alphabetical-sort canonicalization) was
+**QA-BLOCKED** (`docs/qa/pr120-determinism.md`) — it made `findIntersection()` deterministic but NOT
+necessarily geographically correct, and QA found a live counterexample (Park Avenue × East 135th St
+resolving to the Bronx). A round-2 fix (context-aware candidate-pair disambiguation, using the block's
+OTHER cross-street point to pick the correct candidate) has landed on `data/pipeline-determinism` and
+passes all three now-pinned ground-truth cases (Delancey St, Park Avenue, John St), but **has not yet
+passed a second QA pass** and surfaced a NEW, separate edge-case population (highway/limited-access-road
+"blocks" spanning multiple miles, e.g. Harlem River Drive × FDR Drive, where neither candidate is
+genuinely close to the block's other end) that the context-aware fix does not resolve. **Do not treat
+#27 as closed for FT-21's purposes until QA Pass 2 confirms the round-2 fix and the highway-edge-case
+population is scoped.** This section is left in place as the investigation record.
 
 **The code paths do not overlap.** Width computation (`initWidths()`, `getCurbOffsetFromWidth()`) is
 entirely per-street, precomputed once from `street_widths.json`'s own polylines — it never calls
@@ -283,15 +291,25 @@ displacement-metric bug, PR #116 finding #1, should also be fixed first — this
 more moved segments than Option A's 355, and that tool is already known to misreport by up to 10x on
 vertex-count-mismatched segments).
 
-**Root cause, for the record (full mechanism in `build/preprocess.js`'s `findIntersection()` comment and
-`docs/open-items.md` #27):** the function's cache key was canonical/order-independent
+**Root cause, for the record (full mechanism in `build/preprocess.js`'s `findIntersectionCandidates()` /
+`getBlockPolyline()` comments and `docs/open-items.md` #27):** the original bug was that
+`findIntersection()`'s cache key was canonical/order-independent
 (`[street1,street2].sort().join('|')`), but the search that populated the cache used raw caller argument
 order to decide loop nesting. Delancey's OSM way is fragmented into overlapping chains that create a
 genuine second exact crossing candidate with Essex St ~17m from the real one; whichever block's
 `findIntersection()` call reached that shared cache entry first (Delancey-primary or Essex-primary)
-silently determined which of the two candidates won for the rest of the run. Fixed by canonicalizing the
-search to the same sorted order as the cache key — same-inputs-same-output only, no other semantic
-change. `scripts/test-pipeline-determinism.js` is now a standing regression gate for this class of bug.
+silently determined which of the two candidates won for the rest of the run. Round 1 fixed the
+non-determinism by canonicalizing the search order, but QA correctly blocked it: deterministic isn't the
+same as correct, and the same alphabetical tie-break that happens to fix Delancey/Essex permanently
+breaks Park Avenue/East 135th St (resolves to the Bronx) and would have applied the same unprincipled
+logic to the ~140 other multi-chain street names QA found. Round 2 replaces the alphabetical tie-break
+with a context-aware one: `getBlockPolyline()` now resolves ambiguity by picking whichever candidate is
+closest to the block's OTHER cross-street point, since two ends of one real block face are necessarily
+close together — verified correct against all three pinned cases. `scripts/test-pipeline-determinism.js`
+is a standing regression gate for both the non-determinism class of bug AND (via its plausibility sweep)
+a partial guard against the wrong-candidate class, though it cannot fully substitute for live-data
+ground-truthing (see the real regen A/B results logged in `docs/open-items.md` #27, including the new
+highway-edge-case population this round's fix does not resolve).
 
 ---
 

@@ -530,70 +530,116 @@ function closestPointOnStreet(streetName, lat, lng) {
 }
 
 const intersectionCache = {};
-// #27 fix (see docs/qa/pr117-arrow-direction.md Finding #4 /
-// docs/ft21-width-offset-investigation.md §4): findIntersection() is memoized under a
-// CANONICAL, order-independent cache key (`[street1, street2].sort().join('|')`), but
-// prior to this fix the actual search below iterated street1/street2 in whatever raw
-// argument order the caller happened to use, NOT the sorted order the cache key implies.
+// #27 fix, round 2 (see docs/qa/pr117-arrow-direction.md Finding #4,
+// docs/ft21-width-offset-investigation.md §4, and docs/qa/pr120-determinism.md Finding
+// #1 — QA Pass 1 BLOCKED the first version of this fix, which canonicalized the SEARCH
+// order but used a context-free alphabetical tie-break with no geographic correctness
+// guarantee. Keep both QA docs for the full history.)
 //
-// That mismatch is harmless for the overwhelming majority of street pairs (which have
-// exactly one real geometric crossing, so there is nothing to tie-break). It is NOT
-// harmless for a street pair with more than one exact (dist === 0) crossing candidate —
-// which happens for streets whose OSM way is split into several chains that pass close
-// to each other near an intersection (Delancey St's westbound chain is one such case,
-// confirmed live: it crosses Essex St's single chain at TWO distinct exact points ~17m
-// apart). The loop below breaks that kind of tie by "first exact match encountered
-// wins" (`pt.dist < best.dist` never fires again once dist has hit 0) — and which
-// candidate is encountered FIRST depends on which street drives the outer loop
-// (chains1) vs the inner loop (chains2), which depended on caller argument order.
+// BACKGROUND (round 1's bug, now subsumed): findIntersectionCandidates() below used to
+// be findIntersection() and returned a single point. It was memoized under a CANONICAL,
+// order-independent cache key (`[street1, street2].sort().join('|')`), but the search
+// that populated it used street1/street2 in raw CALLER argument order to decide which
+// street drives the outer vs inner loop. For a street pair with more than one exact
+// (dist === 0) crossing — which happens when a street's OSM way is fragmented into
+// multiple chains that pass close to one another, e.g. Delancey St crossing Essex St's
+// chain at two points ~17m apart — the "first exact match wins" tie-break then depended
+// on which BLOCK happened to call this function first in a given run (getBlockPolyline()
+// always passes the block's own street as argument 1), silently flipping the answer
+// based on unrelated processing order. Round 1 fixed THAT by canonicalizing the search
+// to match the cache key's sorted order.
 //
-// getBlockPolyline() calls findIntersection(streetOsm, fromOsm) /
-// findIntersection(streetOsm, toOsm) — i.e. the BLOCK'S OWN street is always
-// argument 1. So a block whose primary street is "Delancey Street" gets the search
-// order (Delancey, Essex) and finds the correct, short crossing. But main() processes
-// blocks in whatever order Object.keys(blocks) yields (itself a function of sign-fetch
-// order), so an unrelated block whose PRIMARY street is "Essex Street" and whose cross
-// street is "Delancey Street" — e.g. "ESSEX STREET (RIVINGTON STREET to DELANCEY
-// STREET)" — calls findIntersection(Essex, Delancey) first, which finds the OTHER,
-// wrong exact crossing and permanently caches it under the SAME sorted key for the
-// rest of the run. Every later call to findIntersection(Delancey, Essex) then reads
-// that wrong point back out of the cache. That one wrong point sits ~70 chain-vertices
-// away from the correct one along Delancey's chain, so extractPolylineBetween() (which
-// walks the raw chain between the two matched vertex indices) returns a ~961m/3,154ft
-// polyline for what is really a ~53m/175ft block face — reproduced directly via
-// scripts/test-pipeline-determinism.js.
+// ROUND 1's NEW BUG (why that wasn't enough): canonicalizing by alphabetical sort makes
+// the result deterministic, but alphabetical order has no relationship to which
+// candidate is geographically correct. QA found a real counterexample: 'Park Avenue'
+// has 17 disconnected OSM chains (a real Manhattan stretch plus an unrelated Bronx-area
+// fragment near the Harlem River viaduct), and crosses 'East 135th Street' at two exact
+// points — one in Manhattan (correct), one on the Major Deegan Expressway in the Bronx
+// (wrong). Alphabetically, 'East 135th Street' < 'Park Avenue', so round 1's fix
+// PERMANENTLY locked onto whichever candidate that fixed order happens to find first —
+// which, for this pair, is the wrong one. QA also found 140 street names with this
+// "multi-borough/multi-neighborhood disconnected chain" shape (John St, Pine St, Cedar
+// St, Spruce St, and more), so this isn't a one-off.
 //
-// Fix: make the SEARCH use the same canonical (sorted) order as the cache key, so
-// findIntersection(A, B) and findIntersection(B, A) always walk the segment pairs in
-// the identical sequence and therefore always resolve any tie the same way, regardless
-// of which caller (which block, in which processing order) reaches this function
-// first. This is a same-inputs-same-output fix only — it does not change which
-// candidate wins for the (overwhelming majority of) pairs that only have one real
-// crossing to begin with.
-function findIntersection(street1, street2) {
+// FIX (round 2): don't resolve the tie here at all — findIntersectionCandidates()
+// below returns EVERY exact-tied candidate (still via the canonicalized, order-
+// independent search from round 1, so the CANDIDATE SET is deterministic regardless of
+// caller order). The actual choice among candidates is made by getBlockPolyline()
+// (see its own comment), which has context this function doesn't: the block's OTHER
+// cross-street point. Two real cross streets of the SAME block face are necessarily
+// close together (a NYC block is at most a few hundred feet); a wrong, cross-borough,
+// or cross-chain-fragment candidate is not. getBlockPolyline() picks whichever
+// (ptFrom, ptTo) candidate PAIR has the smallest distance between them — a geography-
+// grounded disambiguator, not an arbitrary one. This function stays a pure,
+// context-free, cacheable search; it just no longer silently throws away information
+// a context-free tie-break can't safely use.
+function findIntersectionCandidates(street1, street2) {
   const key = [street1, street2].sort().join('|');
   if (intersectionCache[key] !== undefined) return intersectionCache[key];
 
   const [a, b] = [street1, street2].sort();
   const chains1 = OSM_STREETS[a];
   const chains2 = OSM_STREETS[b];
-  if (!chains1 || !chains2) { intersectionCache[key] = null; return null; }
+  if (!chains1 || !chains2) { intersectionCache[key] = []; return []; }
 
-  let best = null;
+  let bestDist = Infinity;
+  const candidates = []; // [{ pt, dist }], all tied at (approximately) bestDist
+  const TIE_EPS_M = 0.01; // sub-centimeter: only true exact/near-exact ties count
   for (const c1 of chains1) {
     for (let i = 0; i < c1.length - 1; i++) {
       for (const c2 of chains2) {
         for (let j = 0; j < c2.length - 1; j++) {
           const pt = segSegClosest(c1[i], c1[i+1], c2[j], c2[j+1]);
-          if (pt && (!best || pt.dist < best.dist)) best = pt;
+          if (!pt) continue;
+          if (pt.dist < bestDist - TIE_EPS_M) {
+            bestDist = pt.dist;
+            candidates.length = 0;
+            candidates.push(pt);
+          } else if (pt.dist <= bestDist + TIE_EPS_M) {
+            // Within tie tolerance of the current best — but only keep it if it's not
+            // essentially the same physical point as one already collected (OSM chains
+            // often re-touch the exact same vertex from multiple segment-pair
+            // combinations; that's not a real ambiguity and must not be reported as one).
+            const dup = candidates.some(c => geoDist(c.pt[0], c.pt[1], pt.pt[0], pt.pt[1]) < 1);
+            if (!dup) candidates.push(pt);
+          }
         }
       }
     }
   }
 
-  const result = (best && best.dist < 30) ? best.pt : null;
+  const result = (bestDist < 30) ? candidates.map(c => c.pt) : [];
   intersectionCache[key] = result;
   return result;
+}
+
+// Backward-compatible single-point accessor for callers with no block context to
+// disambiguate a tie against (diagnostics, scripts/validate-widths.js-style probes).
+// getBlockPolyline() does NOT use this — it calls findIntersectionCandidates()
+// directly so it can resolve ties using the block's other cross-street. Picking
+// candidates[0] here is an arbitrary (but deterministic) choice; do not use this
+// function's return value as a correctness oracle for an ambiguous pair.
+function findIntersection(street1, street2) {
+  const cands = findIntersectionCandidates(street1, street2);
+  return cands.length > 0 ? cands[0] : null;
+}
+
+// Returns the maximum pairwise distance (meters) among findIntersectionCandidates()'s
+// result for a street pair — 0 (or NaN for <2 candidates) when there's no real
+// ambiguity. Exposed for scripts/test-pipeline-determinism.js's plausibility check
+// (docs/qa/pr120-determinism.md Finding #3) and for future citywide ambiguity audits
+// (docs/qa/pr120-determinism.md Finding #4's "140 streets" follow-up).
+function maxCandidateSpreadM(street1, street2) {
+  const cands = findIntersectionCandidates(street1, street2);
+  if (cands.length < 2) return 0;
+  let max = 0;
+  for (let i = 0; i < cands.length; i++) {
+    for (let j = i + 1; j < cands.length; j++) {
+      const d = geoDist(cands[i][0], cands[i][1], cands[j][0], cands[j][1]);
+      if (d > max) max = d;
+    }
+  }
+  return max;
 }
 
 function segSegClosest(a1, a2, b1, b2) {
@@ -736,6 +782,32 @@ function trimIntersectionSetback(blockGeo) {
   };
 }
 
+// #27 round 2 (docs/qa/pr120-determinism.md Finding #1): resolves which candidate wins
+// when the street's own intersection with `from` and/or `to` is genuinely ambiguous
+// (findIntersectionCandidates() returns more than one exact-tied point — see that
+// function's comment for why this happens and why a context-free tie-break there is
+// unsafe). This is the one place in the file with enough context to disambiguate
+// correctly: a block's `from` and `to` cross streets are, by definition, the two ends
+// of the SAME short block face, so their real-world intersection points with the
+// block's own street must be close together (NYC blocks top out well under ~1000ft;
+// the committed codebase's own max curb offset is 14m/~46ft, so even generous geometric
+// slop is nowhere near the hundreds-to-thousands-of-feet (or cross-borough) separation
+// a wrong candidate produces). Picking the (ptFrom, ptTo) candidate PAIR with the
+// smallest distance between them is therefore a geography-grounded disambiguator, not
+// an arbitrary one — and it degrades to exactly today's single-candidate behavior
+// whenever there's no real ambiguity (the overwhelming majority of blocks), since the
+// double loop below is then just 1x1.
+function pickClosestCandidatePair(candsA, candsB) {
+  let bestA = candsA[0], bestB = candsB[0], bestDist = Infinity;
+  for (const a of candsA) {
+    for (const b of candsB) {
+      const d = geoDist(a[0], a[1], b[0], b[1]);
+      if (d < bestDist) { bestDist = d; bestA = a; bestB = b; }
+    }
+  }
+  return { a: bestA, b: bestB, dist: bestDist };
+}
+
 function getBlockPolyline(block) {
   const streetOsm = osmName(block.street);
   const fromOsm = osmName(block.from);
@@ -743,10 +815,11 @@ function getBlockPolyline(block) {
 
   if (!streetOsm || !OSM_STREETS[streetOsm]) return null;
 
-  let ptFrom = null, ptTo = null;
-  if (fromOsm && OSM_STREETS[fromOsm]) ptFrom = findIntersection(streetOsm, fromOsm);
-  if (toOsm && OSM_STREETS[toOsm]) ptTo = findIntersection(streetOsm, toOsm);
-  if (!ptFrom || !ptTo) return null;
+  const candsFrom = (fromOsm && OSM_STREETS[fromOsm]) ? findIntersectionCandidates(streetOsm, fromOsm) : [];
+  const candsTo = (toOsm && OSM_STREETS[toOsm]) ? findIntersectionCandidates(streetOsm, toOsm) : [];
+  if (candsFrom.length === 0 || candsTo.length === 0) return null;
+
+  const { a: ptFrom, b: ptTo } = pickClosestCandidatePair(candsFrom, candsTo);
 
   const line = extractPolylineBetween(streetOsm, ptFrom, ptTo);
   if (!line || line.length < 2) return null;
@@ -1960,6 +2033,9 @@ if (require.main !== module) {
     clearGeometryCaches,
     getBlockPolyline,
     findIntersection,
+    findIntersectionCandidates,
+    maxCandidateSpreadM,
+    pickClosestCandidatePair,
     closestPointOnStreet,
     extractPolylineBetween,
     osmName,
