@@ -1765,18 +1765,45 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         // MARK: - W5: Car pin annotation management
 
+        /// #22 live-gate F2 follow-up: radius (meters) for the parked-car marker's nearest-
+        /// loaded-segment display fallback (`syncCarPin`, below) — matches
+        /// `ContentView.pinDropRadiusMeters` (35m, "W5: Radius for candidate-segment search,
+        /// matches PWA findCandidateSegments"), the same value every other nearest-segment
+        /// search in this app already uses. `ContentView`'s constant is `private`, so this
+        /// is a deliberate, documented duplication of the SAME number (not an independent
+        /// guess) — matching this codebase's own established precedent for radius constants
+        /// that can't be shared across files without a larger refactor (see
+        /// `CandidateSegmentSearch.swift`'s header comment on its own "duplicated 3x" geometry
+        /// helpers).
+        static let carPinSnapRadiusMeters: Double = 35.0
+
         /// Syncs the car-pin annotation to match the current ParkedCar state.
         /// Called from updateUIView on every SwiftUI render cycle.
         ///
         /// #22 (Kevin's live gate F2): `segments` added so the marker's DISPLAY position can
-        /// be curb-snapped via `CommunityPinAnnotation.resolveDisplayCoordinate` — the SAME
-        /// projection community pins use, reused rather than duplicated (spec §2's own
-        /// "fix it once, at display time" framing extends to any annotation carrying a
-        /// resolved segment id, not narrowly community pins). `ParkedCar.latitude`/`.longitude`
-        /// themselves are NEVER touched — this only changes where `CarPinAnnotation.coordinate`
-        /// renders (see `Models/ParkedCar.swift`'s own updated doc comment). The dict build
-        /// below only runs on the (rare) car-changed path, gated by the fast-path check just
-        /// above it — not per frame, matching this fix's own "precompute once" requirement.
+        /// be curb-snapped. `ParkedCar.latitude`/`.longitude` themselves are NEVER touched —
+        /// this only changes where `CarPinAnnotation.coordinate` renders (see
+        /// `Models/ParkedCar.swift`'s own updated doc comment). The dict build below only
+        /// runs on the (rare) car-changed path, gated by the fast-path check just above it —
+        /// not per frame, matching this fix's own "precompute once" requirement.
+        ///
+        /// F2 FOLLOW-UP (live-gate re-repro, Bowery btwn Houston/Stanton): the first version
+        /// of this fix called `CommunityPinAnnotation.resolveDisplayCoordinate` directly,
+        /// which falls back to the car's RAW (in-building) coordinate whenever
+        /// `detectedSegmentID` is nil — and nil is the COMMON case for an arrival-path car
+        /// (`ContentView.swift`'s `onParkHere` never populates it), not a rare edge case. Now
+        /// calls `resolveCarDisplayCoordinate` instead — same "detected segment wins when
+        /// present" behavior, PLUS a nearest-loaded-segment fallback for the nil/unresolved
+        /// case (see that function's own doc comment for the full fallback chain).
+        /// Community pins are UNAFFECTED — `syncCommunityPinAnnotations` below still calls
+        /// `resolveDisplayCoordinate` directly, byte-identical to before this follow-up.
+        ///
+        /// `carPinSnapRadiusMeters` matches `ContentView.pinDropRadiusMeters` (35m, "W5:
+        /// Radius for candidate-segment search, matches PWA findCandidateSegments") — the
+        /// same house-wide radius every other nearest-segment search in this app already
+        /// uses (spot placement, report candidate search, in-drive GPS snap), so a car more
+        /// than 35m from any loaded segment (sparse tile coverage, no tiles loaded yet)
+        /// degrades to raw rather than snapping across the map to an unrelated curb.
         func syncCarPin(_ car: ParkedCar?, segments: [Segment], on mapView: MKMapView) {
             let newID = car?.id
 
@@ -1793,15 +1820,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             if let car = car {
                 let annotation = CarPinAnnotation()
                 let segmentByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
-                annotation.coordinate = CommunityPinAnnotation.resolveDisplayCoordinate(
+                annotation.coordinate = CommunityPinAnnotation.resolveCarDisplayCoordinate(
                     lat: car.latitude,
                     lng: car.longitude,
                     segmentId: car.detectedSegmentID,
-                    // Parked cars are never fraction-placed — nearest-point projection (or
-                    // raw fallback if detectedSegmentID is nil/unresolved) is the only
-                    // reachable branch for this caller.
-                    positionFraction: nil,
-                    segmentByID: segmentByID
+                    segmentByID: segmentByID,
+                    segments: segments,
+                    nearestSegmentRadius: Self.carPinSnapRadiusMeters
                 )
                 annotation.accessibilityLabel = "My parked car. Tap for parking details."
                 carPinAnnotation = annotation

@@ -32,6 +32,17 @@
 //    13. testResolveDisplayCoordinate_carPinShape_nilSegmentId_fallsBackToRawLatLng
 //    14. testResolveDisplayCoordinate_carPinShape_segmentResolves_projectsOntoCurb
 //
+//  CommunityPinAnnotation.resolveCarDisplayCoordinate(lat:lng:segmentId:segmentByID:
+//  segments:nearestSegmentRadius:) — live-gate RE-repro (Bowery btwn Houston/Stanton): the
+//  primitive overload's raw fallback above turned out to be the COMMON case for an
+//  arrival-path parked car (`detectedSegmentID` is always nil on that path), not a rare
+//  edge case, so it reproduced the original in-building bug. This function adds a
+//  nearest-loaded-segment fallback for the car path ONLY — community pins are unaffected,
+//  they still call `resolveDisplayCoordinate` directly (tests 8-14 above, unchanged):
+//    15. testResolveCarDisplayCoordinate_nilSegmentId_nearestLoadedSegmentWithinRadius_snapsToCurb
+//    16. testResolveCarDisplayCoordinate_nilSegmentId_nothingWithinRadius_fallsBackToRaw
+//    17. testResolveCarDisplayCoordinate_detectedSegmentResolves_winsOverNearerLoadedSegment
+//
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never compiled
 //  or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
@@ -269,6 +280,89 @@ final class ResolveDisplayCoordinatePrimitiveCarPinShapeTests: XCTestCase {
         )
         XCTAssertEqual(result.latitude, 40.7230, accuracy: 0.0001,
             "Parked-car marker must project onto its resolved segment's curb, not render at the raw off-line coordinate")
+        XCTAssertEqual(result.longitude, -73.9945, accuracy: 0.0001)
+    }
+}
+
+// MARK: - CommunityPinAnnotation.resolveCarDisplayCoordinate(lat:lng:segmentId:segmentByID:segments:nearestSegmentRadius:)
+// Live-gate re-repro (Bowery btwn Houston/Stanton, mid-block car rendering inside a
+// building): `resolveDisplayCoordinate`'s raw fallback is the COMMON case for an
+// arrival-path parked car (`detectedSegmentID` is always nil on that path,
+// `ContentView.swift`'s `onParkHere`) — not a rare edge case. `syncCarPin` now calls THIS
+// function instead, which adds a nearest-loaded-segment fallback on top for cars only.
+// Community pins are unaffected — they keep calling `resolveDisplayCoordinate` directly.
+
+final class ResolveCarDisplayCoordinateTests: XCTestCase {
+
+    /// A loaded segment near the car's raw coordinate (~11m away, same offset convention as
+    /// `ResolveDisplayCoordinateTests`'s `noPositionFraction` case) — the fallback's target.
+    private let nearLine: [[Double]] = [[40.7230, -73.9950], [40.7230, -73.9940]]
+
+    /// A loaded segment far from the car's raw coordinate (~334m north — well past any
+    /// plausible snap radius) — stands in for "the only tile loaded is nowhere near the
+    /// car," proving the far segment is never mistakenly chosen.
+    private let farLine: [[Double]] = [[40.7260, -73.9950], [40.7260, -73.9940]]
+
+    /// THE Bowery repro, reduced to a unit test: `detectedSegmentID` is nil (arrival-path
+    /// car), but a real curb segment IS loaded nearby. The marker must snap to that
+    /// segment's nearest point, not render at the raw in-building coordinate.
+    func testResolveCarDisplayCoordinate_nilSegmentId_nearestLoadedSegmentWithinRadius_snapsToCurb() {
+        let nearSegment = fixtureSegment(id: "near-seg", line: nearLine)
+        let farSegment = fixtureSegment(id: "far-seg", line: farLine)
+
+        let result = CommunityPinAnnotation.resolveCarDisplayCoordinate(
+            lat: 40.7231, lng: -73.9945,
+            segmentId: nil,
+            segmentByID: [:],
+            segments: [nearSegment, farSegment],
+            nearestSegmentRadius: 35
+        )
+        XCTAssertEqual(result.latitude, 40.7230, accuracy: 0.0001,
+            "Must snap to the nearest LOADED segment's curb, not stay at the raw in-building coordinate")
+        XCTAssertEqual(result.longitude, -73.9945, accuracy: 0.0001)
+    }
+
+    /// AC-3-equivalent for the car path: nothing loaded within radius (sparse tile coverage,
+    /// no tiles loaded yet) — must degrade to raw, never snap across the map to an unrelated
+    /// curb far outside the search radius.
+    func testResolveCarDisplayCoordinate_nilSegmentId_nothingWithinRadius_fallsBackToRaw() {
+        let farSegment = fixtureSegment(id: "far-seg", line: farLine)
+
+        let result = CommunityPinAnnotation.resolveCarDisplayCoordinate(
+            lat: 40.7231, lng: -73.9945,
+            segmentId: nil,
+            segmentByID: [:],
+            segments: [farSegment],
+            nearestSegmentRadius: 35
+        )
+        XCTAssertEqual(result.latitude, 40.7231,
+            "No segment within radius — must fall back to the raw, unchanged latitude")
+        XCTAssertEqual(result.longitude, -73.9945,
+            "No segment within radius — must fall back to the raw, unchanged longitude")
+    }
+
+    /// Regression guard: a resolved `detectedSegmentID` must still win outright, even when a
+    /// DIFFERENT, closer segment exists in the loaded `segments` list — the nearest-segment
+    /// search is a fallback for the no-stored-segment case only, never a second opinion that
+    /// overrides a real detection.
+    func testResolveCarDisplayCoordinate_detectedSegmentResolves_winsOverNearerLoadedSegment() {
+        let detectedSegment = fixtureSegment(id: "detected-seg", line: nearLine)
+        // Passes directly through the car's raw coordinate (distance 0) — if the
+        // implementation ever ran the nearest-segment search instead of honoring the
+        // resolved `segmentId`, this decoy would win and the assertion below would fail.
+        let decoySegment = fixtureSegment(
+            id: "decoy-seg", line: [[40.7231, -73.9945], [40.7231, -73.9944]]
+        )
+
+        let result = CommunityPinAnnotation.resolveCarDisplayCoordinate(
+            lat: 40.7231, lng: -73.9945,
+            segmentId: "detected-seg",
+            segmentByID: ["detected-seg": detectedSegment],
+            segments: [decoySegment],
+            nearestSegmentRadius: 35
+        )
+        XCTAssertEqual(result.latitude, 40.7230, accuracy: 0.0001,
+            "A resolved detectedSegmentID must win outright — never overridden by a nearest-segment search")
         XCTAssertEqual(result.longitude, -73.9945, accuracy: 0.0001)
     }
 }
