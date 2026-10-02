@@ -805,19 +805,34 @@ struct ContentView: View {
     @State private var repositionUpdate: ReportRepositionUpdate? = nil
 
     /// Kevin's live gate on PR #118, finding F1: the `.reportPin` sheet's own DRIVEN detent
-    /// selection — the only `.presentationDetents` call site in this file using the
-    /// `selection:` form (every other one stays the bare, non-driven `[.medium, .large]`
-    /// this file already used everywhere; spec §6's own out-of-scope note flagged a driven
-    /// detent as "new-pattern risk for a nice-to-have" — Kevin's live testing proved it's
-    /// load-bearing, not optional: entering reposition mode while the sheet happened to be
-    /// dragged to `.large` left the map fully covered, with no way to see or tap the target
-    /// curb). Forced down to `.medium` the instant reposition mode is entered
+    /// selection — the second `.presentationDetents` call site in this file using the
+    /// `selection:` form. The FIRST is `.browseNav`'s own `.presentationDetents(_:selection:)`
+    /// (FT-20 Stream A, predates this PR entirely — `browseSheetDetentSelectionBinding`),
+    /// which this reuses the exact same established, ALREADY-SHIPPED pattern from, not a new
+    /// one — correcting the spec's own §6 out-of-scope note, which claimed "this codebase has
+    /// no existing usage of `.presentationDetents(_:selection:)`... checked" — that check was
+    /// stale (or predated FT-20 landing); `.browseNav` has used it, together with
+    /// `.presentationBackgroundInteraction`, to keep the map pannable/tappable under the
+    /// persistent browse sheet since FT-20. Kevin's live testing proved a driven detent is
+    /// load-bearing here too, not optional: entering reposition mode while the sheet happened
+    /// to be dragged to `.large` left the map fully covered, with no way to see or tap the
+    /// target curb. Forced down to `.medium` the instant reposition mode is entered
     /// (`ReportSheet.onRequestReposition` → `ContentView.detentOnEnteringReposition`), and
     /// restored to whatever it was before once a reposition tap lands
     /// (`handleReportRepositionTap` → `ContentView.detentAfterRepositionTapLands`). Defaults
     /// to `.medium`, matching the pre-F1 unselected form's own starting behavior — reset back
     /// to this default on every `.reportPin` sheet dismiss (the NEXT report sheet always
     /// starts fresh, never inheriting a stale detent from a previous session).
+    ///
+    /// Round 2 (same live gate, same PR): forcing the detent down to `.medium` was NECESSARY
+    /// but not SUFFICIENT — a SwiftUI sheet at `.medium` still covers the exposed presenter
+    /// with a dimming scrim that swallows (and, per Kevin's live symptom, dismisses on) any
+    /// tap by default. `sheetContent(_:)`'s `.reportPin` case also conditionally applies
+    /// `.presentationBackgroundInteraction` (same API `.browseNav` already uses, gated here on
+    /// `reportRepositionModeActive` via the testable `ContentView.reportSheetBackgroundInteractionMode`)
+    /// — THIS is what actually lets a reposition tap reach the map's own
+    /// `UITapGestureRecognizer` instead of the scrim. See that modifier's own inline comment
+    /// for the full mechanism.
     @State private var reportSheetDetent: PresentationDetent = .medium
 
     /// Snapshot of `reportSheetDetent` taken the instant reposition mode is entered (before
@@ -1521,6 +1536,42 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+            // Kevin's live gate on PR #118, ROUND 2 (F1 regression): dropping the sheet to
+            // `.medium` alone does NOT make the map behind it tappable — a SwiftUI sheet at a
+            // non-`.large` detent covers the presenting content with a dimming scrim that
+            // swallows (and, per the live symptom, dismisses on) any tap, by default. That
+            // scrim is what ate every reposition tap in round 1's "fix," which is why tapping
+            // the map just dismissed the whole sheet instead of reaching
+            // `ContentView.handleReportRepositionTap` — the UITapGestureRecognizer on the
+            // underlying MKMapView (`MapViewRepresentable.makeUIView`, added via
+            // `mapView.addGestureRecognizer(tap)`) never received the touch at all.
+            //
+            // `.presentationBackgroundInteraction(.enabled(upThrough:))` is the SAME API
+            // `.browseNav`'s own sheet already uses (FT-20 Stream A — search this file for
+            // `presentationBackgroundInteraction` to find that other call site) — "lets users
+            // still tap and pan the map while the sheet sits at a lower detent" is literally
+            // what keeps the map interactive under the persistent browse sheet today. Enabled
+            // ONLY while `reportRepositionModeActive` — `.disabled` (the
+            // default, zero behavior change) at every other time, so the fast path (AC-13)
+            // and every OTHER report interaction while this sheet is up keeps today's
+            // "background is inert while a sheet is presented" behavior exactly as before
+            // this fix. `upThrough: .medium` matches the ONE detent reposition mode ever
+            // forces the sheet to (`detentOnEnteringReposition`) — if the user manually drags
+            // up to `.large` while still in reposition mode, background interaction correctly
+            // (and, per Apple's own docs, automatically) turns back off, matching native
+            // Maps-app sheet behavior: drag back down to `.medium` to resume tapping.
+            //
+            // The `reportRepositionModeActive ? enabled-up-through-medium : disabled` decision
+            // itself is extracted to `ContentView.reportSheetBackgroundInteractionMode(
+            // reportRepositionModeActive:)`, returning a small `Equatable` wrapper enum rather
+            // than `PresentationBackgroundInteraction` directly (which isn't `Equatable`) — so
+            // the EXACT mapping this bug depends on is directly unit-tested, not just visible
+            // in this one call site.
+            .presentationBackgroundInteraction(
+                ContentView.reportSheetBackgroundInteractionMode(
+                    reportRepositionModeActive: reportRepositionModeActive
+                ).resolved
+            )
             // Kevin's live gate on PR #118, finding F1(b): while reposition mode is active, a
             // drag-down past `.medium` (the smallest allowed detent) must NOT dismiss the
             // sheet — that would destroy the in-progress report exactly like a naive
@@ -1528,9 +1579,13 @@ struct ContentView: View {
             // failure class: state loss from an unwanted teardown). Dragging BETWEEN the two
             // allowed detents is still fully available; only the swipe-to-dismiss gesture is
             // blocked. Programmatic dismiss (Cancel button, successful submit) is UNAFFECTED
-            // — `interactiveDismissDisabled` only gates the interactive swipe gesture.
-            // Reverts to normal dismiss behavior automatically once the sheet closes (the
-            // whole view — and this modifier with it — is torn down at that point).
+            // — `interactiveDismissDisabled` only gates the interactive swipe gesture, a
+            // SEPARATE mechanism from the background-interaction scrim above: this blocks
+            // DRAGGING the sheet down past its smallest detent; `presentationBackgroundInteraction`
+            // is what makes a TAP on the exposed map reach the map instead of the scrim. Both
+            // are required together — neither alone fixes this bug. Reverts to normal dismiss
+            // behavior automatically once the sheet closes (the whole view — and this
+            // modifier with it — is torn down at that point).
             .interactiveDismissDisabled(reportRepositionModeActive)
 
         case .signCheckConfirm(let intent):
@@ -4292,6 +4347,46 @@ struct ContentView: View {
     /// leave the sheet stuck at an undefined detent).
     static func detentAfterRepositionTapLands(savedDetent: PresentationDetent?) -> PresentationDetent {
         savedDetent ?? .medium
+    }
+
+    /// Kevin's live gate on PR #118, round 2 (F1 regression — the map tap dismissed the
+    /// sheet instead of placing the pin): `PresentationBackgroundInteraction` itself isn't
+    /// `Equatable`, so this small wrapper exists purely so the decision of WHICH value to
+    /// pass `.presentationBackgroundInteraction(_:)` is directly unit-testable, pinning the
+    /// exact mapping this fix depends on rather than leaving it only visible as an inline
+    /// ternary at the call site.
+    enum ReportSheetBackgroundInteractionMode: Equatable {
+        /// The default — matches every OTHER sheet/detent in this app that doesn't
+        /// deliberately opt into `.browseNav`'s own "interactive map behind the sheet"
+        /// pattern. Zero behavior change outside reposition mode (AC-13).
+        case disabled
+        /// Background (map) interaction permitted up through (and including) `detent` —
+        /// ABOVE that detent, interaction reverts to `.disabled` automatically (Apple's own
+        /// documented behavior, not something this app re-implements).
+        case enabledUpThrough(PresentationDetent)
+
+        /// Converts to the real SwiftUI type for the actual `.presentationBackgroundInteraction(_:)`
+        /// call — kept as a computed property (not a free function) so call sites read as
+        /// `mode.resolved`. Same general shape `.browseNav`'s own `BrowseSheetDetentKind`
+        /// (`Views/BrowseNavigationSheet.swift`) already established in this codebase: an
+        /// `Equatable` enum carries the TESTABLE decision, a thin conversion step translates
+        /// it to whatever real, not-reliably-Equatable SwiftUI value the live call site needs.
+        var resolved: PresentationBackgroundInteraction {
+            switch self {
+            case .disabled: return .disabled
+            case .enabledUpThrough(let detent): return .enabled(upThrough: detent)
+            }
+        }
+    }
+
+    /// The `.reportPin` sheet's background-interaction decision: interactive (up through
+    /// `.medium`, the one detent reposition mode ever forces the sheet to) exactly while
+    /// `reportRepositionModeActive`; `.disabled` — matching every pre-this-fix report sheet
+    /// presentation, byte-identical (AC-13) — otherwise.
+    static func reportSheetBackgroundInteractionMode(
+        reportRepositionModeActive: Bool
+    ) -> ReportSheetBackgroundInteractionMode {
+        reportRepositionModeActive ? .enabledUpThrough(.medium) : .disabled
     }
 
     /// AC-R2: finds the loaded segment describing the opposite curb of the same physical

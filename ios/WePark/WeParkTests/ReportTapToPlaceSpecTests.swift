@@ -71,6 +71,15 @@
 //      36. testDetentAfterRepositionTapLands_restoresSavedMedium
 //      37. testDetentAfterRepositionTapLands_nilSaved_fallsBackToMedium
 //
+//  Kevin's live gate on PR #118, ROUND 2 (F1 regression — tapping the map while repositioning
+//  dismissed the whole sheet instead of placing the pin; root cause: the sheet's dimming
+//  scrim was never made interactive, so the tap never reached the map). Fix added
+//  `.presentationBackgroundInteraction`, gated by a new testable
+//  `ContentView.reportSheetBackgroundInteractionMode(reportRepositionModeActive:)`:
+//      38. testReportSheetBackgroundInteractionMode_repositionActive_enabledUpThroughMedium
+//      39. testReportSheetBackgroundInteractionMode_repositionInactive_disabled
+//      40. testReportSheetBackgroundInteractionMode_resolved_doesNotCrash
+//
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — never compiled
 //  or run. A Mac `xcodebuild test` pass is a required gate before merge.
 //
@@ -545,5 +554,44 @@ final class ReportSheetDetentTransitionTests: XCTestCase {
     /// concrete detent, never leave the sheet in an undefined state.
     func testDetentAfterRepositionTapLands_nilSaved_fallsBackToMedium() {
         XCTAssertEqual(ContentView.detentAfterRepositionTapLands(savedDetent: nil), .medium)
+    }
+}
+
+// MARK: - ContentView.reportSheetBackgroundInteractionMode(reportRepositionModeActive:)
+// Kevin's live gate on PR #118, ROUND 2 (F1 regression — the map tap dismissed the sheet
+// instead of placing the pin, because the background was never made interactive). This
+// pins the EXACT `.presentationBackgroundInteraction` decision the round-2 fix depends on.
+
+final class ReportSheetBackgroundInteractionModeTests: XCTestCase {
+
+    /// THE fix: while reposition mode is active, background interaction must be enabled up
+    /// through `.medium` — the one detent reposition mode ever forces the sheet to — so a
+    /// tap on the exposed map reaches the map's own gesture recognizer instead of the
+    /// dismiss-on-tap scrim.
+    func testReportSheetBackgroundInteractionMode_repositionActive_enabledUpThroughMedium() {
+        XCTAssertEqual(
+            ContentView.reportSheetBackgroundInteractionMode(reportRepositionModeActive: true),
+            .enabledUpThrough(.medium)
+        )
+    }
+
+    /// AC-13 / fast path: outside reposition mode, background interaction must stay
+    /// `.disabled` — byte-identical to every report sheet presentation before this fix (and
+    /// to every OTHER sheet in this app that doesn't deliberately opt into `.browseNav`'s
+    /// "interactive map behind the sheet" pattern).
+    func testReportSheetBackgroundInteractionMode_repositionInactive_disabled() {
+        XCTAssertEqual(
+            ContentView.reportSheetBackgroundInteractionMode(reportRepositionModeActive: false),
+            .disabled
+        )
+    }
+
+    /// `.resolved` must translate each case to the matching real SwiftUI value — the one
+    /// hop that can't be fully pinned by equality alone (`PresentationBackgroundInteraction`
+    /// isn't `Equatable`), but can at least be proven non-crashing and exhaustive here.
+    func testReportSheetBackgroundInteractionMode_resolved_doesNotCrash() {
+        _ = ContentView.ReportSheetBackgroundInteractionMode.disabled.resolved
+        _ = ContentView.ReportSheetBackgroundInteractionMode.enabledUpThrough(.medium).resolved
+        _ = ContentView.ReportSheetBackgroundInteractionMode.enabledUpThrough(.large).resolved
     }
 }
