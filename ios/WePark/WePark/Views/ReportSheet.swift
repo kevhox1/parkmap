@@ -123,6 +123,32 @@ struct ReportSheet: View {
     /// instance directly.
     var onRequestSpotPlacement: (() -> Void)? = nil
 
+    /// Long-press universal-plant model, Stage 1 (`docs/longpress-universal-plant-spec.md`
+    /// §3.1/§4 Stream 1) — plumbing-only. Called when the user taps the (not-yet-rendered)
+    /// "Park my car" tile/destination. The spec requires this to reuse `ContentView`'s
+    /// existing `confirmLongPressPark(at:)` VERBATIM (the same candidate-search +
+    /// `PinDropIntent` logic `LongPressParkConfirmCard`'s "Park here" button already invokes)
+    /// rather than duplicating that logic here — so this stays a plain hand-off closure, same
+    /// shape as `onRequestStreetClosure`/`onRequestSpotPlacement` above, NOT a reimplementation.
+    /// `nil` by default and **not yet wired by any production call site** — Stage 1 is pure
+    /// routing plumbing (`ReportGridTile.parkMyCar` → `ReportGridDestination.parkMyCarHandoff`
+    /// → this closure), fully unit-testable in isolation. Binding this to
+    /// `{ confirmLongPressPark(at: coord) }` at `ContentView`'s `.reportPin` call site, and
+    /// passing `showsParkMyCarTile: true` from the two resting entry points, is Stage 2's job
+    /// (the entry-point rewire) — out of scope here by the spec's own staging (OD-6/§4).
+    var onRequestParkMyCar: (() -> Void)? = nil
+
+    /// Long-press universal-plant model, Stage 1 — whether the (not-yet-rendered) "Park my
+    /// car" tile/destination participates in this sheet's grid at all. Defaults to `false`,
+    /// and every CURRENT production call site (`ContentView`'s single `ReportSheet(...)`
+    /// construction for the pill, in-drive Report button, and legacy dialog's "Report"
+    /// button) leaves it at that default — so this PR changes zero observable behavior.
+    /// Flipping it to `true` from the two resting entry points (long-press, pill) is Stage
+    /// 2's job; see `ReportSheet.visibleGridTiles(showsParkMyCarTile:communityEnabled:)` for
+    /// the pure, already-tested gating this param will drive once Stage 2 wires it into
+    /// `reportGridSection`/the flag-off collapse (OD-5).
+    var showsParkMyCarTile: Bool = false
+
     // MARK: - QA STOP-AND-INSTRUMENT (PR #95) — plain data, DEBUG-only consumer
 
     /// Human-readable description of where `coordinate` came from — "long-press (resting)"
@@ -216,7 +242,8 @@ struct ReportSheet: View {
     /// Custom init only to seed `confirmedSegment` from `segment` — every other property
     /// keeps its declared default, so existing call sites that don't pass
     /// `confirmCandidates`/`onRequestStreetClosure`/`onRequestSpotPlacement`/
-    /// `coordinateSource`/`candidateSearchRadiusMeters` are unaffected.
+    /// `onRequestParkMyCar`/`showsParkMyCarTile`/`coordinateSource`/
+    /// `candidateSearchRadiusMeters` are unaffected.
     init(
         coordinate: CLLocationCoordinate2D,
         pinService: CommunityPinService,
@@ -226,6 +253,8 @@ struct ReportSheet: View {
         confirmCandidates: [Segment] = [],
         onRequestStreetClosure: (() -> Void)? = nil,
         onRequestSpotPlacement: (() -> Void)? = nil,
+        onRequestParkMyCar: (() -> Void)? = nil,
+        showsParkMyCarTile: Bool = false,
         coordinateSource: String = "unknown",
         candidateSearchRadiusMeters: Double = 35.0
     ) {
@@ -237,6 +266,8 @@ struct ReportSheet: View {
         self.confirmCandidates = confirmCandidates
         self.onRequestStreetClosure = onRequestStreetClosure
         self.onRequestSpotPlacement = onRequestSpotPlacement
+        self.onRequestParkMyCar = onRequestParkMyCar
+        self.showsParkMyCarTile = showsParkMyCarTile
         self.coordinateSource = coordinateSource
         self.candidateSearchRadiusMeters = candidateSearchRadiusMeters
         _confirmedSegment = State(initialValue: segment)
@@ -1242,6 +1273,13 @@ struct ReportSheet: View {
             onRequestStreetClosure?()
         case .spotPlacementHandoff:
             onRequestSpotPlacement?()
+        case .parkMyCarHandoff:
+            // Long-press universal-plant model, Stage 1: generic hand-off plumbing, same
+            // shape as the two cases above. `onRequestParkMyCar` is `nil` at every current
+            // production call site (no tile renders to tap in the first place — see
+            // `showsParkMyCarTile`'s doc comment), so this arm is unreachable in production
+            // today; Stage 2 wires both the tile's visibility and this closure together.
+            onRequestParkMyCar?()
         }
     }
 
@@ -1487,7 +1525,7 @@ struct ReportSheet: View {
     // MARK: - Report grid tap routing (static, for test access — QA pass 2 / PR #95 Mac-gate
     // blocker fix, build 20 S6)
 
-    /// One of the report grid's four tiles — the tap TARGET, not the resulting state.
+    /// One of the report grid's tiles — the tap TARGET, not the resulting state.
     enum ReportGridTile: Equatable {
         case type(ReportType)
         case streetClosure
@@ -1497,6 +1535,14 @@ struct ReportSheet: View {
         /// is its own flow, entirely separate from the select-a-type-then-submit path the
         /// other 3 tiles share).
         case spotOpen
+        /// Long-press universal-plant model, Stage 1 (`docs/longpress-universal-plant-spec.md`
+        /// §3.1) — "Park my car here." Additive, NOT YET RENDERED by `reportGridSection`
+        /// (see `showsParkMyCarTile`'s doc comment) — this case exists so the ROUTING model
+        /// (`destination(forTapping:)`) and its tests can land ahead of Stage 2's entry-point
+        /// rewire, per the spec's own staged-PR recommendation (OD-6). Like `.spotOpen` and
+        /// `.streetClosure`, routes to a hand-off, never into `selectedType` — Park has no
+        /// `ReportType` case and never did.
+        case parkMyCar
     }
 
     /// What tapping a given grid tile leads to.
@@ -1534,6 +1580,14 @@ struct ReportSheet: View {
         /// `.streetClosureHandoff`: this sheet dismisses entirely, `selectedType` is never
         /// touched, and by construction this case carries no `ReportType` payload either.
         case spotPlacementHandoff
+        /// Long-press universal-plant model, Stage 1: the "Park my car" tile tap — hands off
+        /// to `onRequestParkMyCar`, same shape as `.streetClosureHandoff`/
+        /// `.spotPlacementHandoff`: this sheet dismisses entirely, `selectedType` is never
+        /// touched, no `ReportType` payload. Unlike the other two hand-offs, this one is
+        /// ALWAYS available regardless of `communityEnabled` (spec §2: "Park my car —
+        /// always available, not flag-gated") — see `destination(forTapping:)`'s `.parkMyCar`
+        /// arm below, which ignores the `communityEnabled` parameter entirely for this case.
+        case parkMyCarHandoff
     }
 
     /// Resolves the destination for tapping `tile`, given the current flag/candidate state.
@@ -1556,7 +1610,37 @@ struct ReportSheet: View {
             return .streetClosureHandoff
         case .spotOpen:
             return .spotPlacementHandoff
+        case .parkMyCar:
+            return .parkMyCarHandoff
         }
+    }
+
+    /// Long-press universal-plant model, Stage 1 (`docs/longpress-universal-plant-spec.md`
+    /// §3.5 flag/gating matrix + OD-5). Pure, static, directly testable — same "test the
+    /// static helper, not a live view instance" convention this file already uses for
+    /// `destination(forTapping:)` above. **Not yet called by `reportGridSection`/`body`** —
+    /// Stage 1 is routing + gating plumbing only; wiring `body` to actually render this set
+    /// (and the OD-5 single-tile collapse layout) is Stage 2's job, once the two resting
+    /// entry points start passing `showsParkMyCarTile: true`.
+    ///
+    /// - `showsParkMyCarTile == false`: Park is never offered — today's existing 4-tile-or-
+    ///   nothing behavior, entirely independent of this function (every current production
+    ///   call site is in this branch, so nothing observable changes yet).
+    /// - `showsParkMyCarTile == true, communityEnabled == false`: OD-5's collapse — Park is
+    ///   the ONLY tile, matching `LongPressParkConfirmCard`'s single-purpose shape.
+    /// - `showsParkMyCarTile == true, communityEnabled == true`: Park is a peer of the 4
+    ///   existing community tiles (5 total), per spec §3.5's gating matrix.
+    static func visibleGridTiles(
+        showsParkMyCarTile: Bool,
+        communityEnabled: Bool
+    ) -> [ReportGridTile] {
+        guard showsParkMyCarTile else {
+            return communityEnabled
+                ? [.type(.enforcementActive), .type(.sweeper), .spotOpen, .streetClosure]
+                : []
+        }
+        guard communityEnabled else { return [.parkMyCar] }
+        return [.parkMyCar, .type(.enforcementActive), .type(.sweeper), .spotOpen, .streetClosure]
     }
 
     // MARK: - sideDisplayName (static, for test access)
