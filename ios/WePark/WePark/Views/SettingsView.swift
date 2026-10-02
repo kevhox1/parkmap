@@ -52,6 +52,13 @@ struct SettingsView: View {
     /// FT-6: The five preset toggles bind directly to this value's fields.
     @Binding var offsets: ReminderOffsets
 
+    /// Regulars network (S7, docs/regulars-network-spec.md §3.1) — injected from `ContentView`
+    /// (same shared instance `WeParkApp` also uses for invite redemption, AC-A5-style
+    /// singleton). Threaded to `RegularsSettingsView` when the gated "Regulars" row below is
+    /// tapped. `ContentView` never observes this instance itself, so a plain `let` (not
+    /// `@State`/`@Bindable`) is enough — same posture as `authService` on `ContentView`.
+    let regularsService: RegularsService
+
     /// Called when the toggle flips from OFF → ON (unmute).
     /// ContentView uses this to reschedule notifications for the current pin (if any)
     /// and fire the "Reminders re-enabled" toast.
@@ -87,6 +94,25 @@ struct SettingsView: View {
                         FAQHelpView()
                     } label: {
                         Label("Help & FAQ", systemImage: "questionmark.circle")
+                    }
+                }
+
+                // MARK: Section 1.5 — Regulars (S7, docs/regulars-network-spec.md §3.1)
+
+                // FULLY gated on AppConstants.regularsSettingsRowVisible() (which reads
+                // AppConstants.regularsEnabled, dark-shipped `false` — S5/S14) — nothing in this
+                // section renders, and RegularsSettingsView is never even constructed
+                // (NavigationLink destinations are lazy), while the flag is off. This is the row
+                // `testRegularsSettingsRow_hidden_whenDisabled` exists to guard
+                // (`WeParkTests/RegularsModelServiceTests.swift`) — that test asserts the pure
+                // gating function; this `if` is what actually wires it into the live view.
+                if AppConstants.regularsSettingsRowVisible() {
+                    Section("Regulars") {
+                        NavigationLink {
+                            RegularsSettingsView(service: regularsService)
+                        } label: {
+                            Label("Regulars", systemImage: "person.2.fill")
+                        }
                     }
                 }
 
@@ -155,6 +181,7 @@ struct SettingsView: View {
     SettingsView(
         notificationsMuted: .constant(false),
         offsets: .constant(ReminderOffsets.default),
+        regularsService: RegularsService(),
         onUnmute: {},
         onOffsetsChange: {},
         appVersion: "1.0",

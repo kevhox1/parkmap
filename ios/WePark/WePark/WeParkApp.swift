@@ -294,6 +294,25 @@ struct WeParkApp: App {
     /// alive for the full app lifetime.
     @State private var authService: SupabaseAuthService
 
+    // MARK: - Regulars network (S7, docs/regulars-network-spec.md §3.2)
+
+    /// Single `RegularsService` instance for the app lifetime, wrapping the SAME `authService`
+    /// instance above (AC-A5-style singleton — mirrors `pinService`/`zoneMessageService` in
+    /// `ContentView.init`, which all share the one `authService` rather than each calling
+    /// `clients.makeAuthService()` again and getting a second, independent wrapper object).
+    /// Passed into `ContentView` → `SettingsView` → `RegularsSettingsView` for the Regulars
+    /// list/invite surfaces, and into `ContentView`'s own `.onOpenURL`-driven
+    /// `ActiveSheet.regularsInviteRedemption` case (see that case's own doc comment in
+    /// `ContentView.swift` for why the redemption sheet is NOT presented from this file — a
+    /// LIVE-GATE bug found it never appeared: this file used to attach a second, independent
+    /// `.sheet(isPresented:)` directly to `ContentView(...)`, which silently never presents
+    /// while `ContentView`'s own single `.sheet(item: $activeSheet)` host is already showing
+    /// something (which it always is at rest — `.browseNav`), exactly the class of bug PR #96's
+    /// `identityPrompt` fix closed for the same reason. `.onOpenURL` and the sheet presentation
+    /// both moved into `ContentView`, which owns the one legitimate sheet host). Zero live
+    /// effect while `AppConstants.regularsEnabled == false` (today's shipped default).
+    @State private var regularsService: RegularsService
+
     /// Explicit init required because `authService` (a `@State` property) depends on
     /// `supabaseClients.authClient` — Swift stored properties can't reference sibling stored
     /// properties in their default-expression form (same reasoning as `ContentView.init`'s own
@@ -302,12 +321,22 @@ struct WeParkApp: App {
     init() {
         let clients = SupabaseClients()
         _supabaseClients = State(initialValue: clients)
-        _authService = State(initialValue: clients.makeAuthService())
+        let sharedAuthService = clients.makeAuthService()
+        _authService = State(initialValue: sharedAuthService)
+        // S7: reuses `sharedAuthService` (NOT a second `clients.makeAuthService()` call) — see
+        // `regularsService`'s own doc comment for why a second call would violate the AC-A5
+        // singleton invariant.
+        _regularsService = State(initialValue: RegularsService(authService: sharedAuthService))
     }
 
     var body: some Scene {
         WindowGroup {
-            ContentView(appDelegate: appDelegate, authService: authService, supabaseClients: supabaseClients)
+            ContentView(
+                appDelegate: appDelegate,
+                authService: authService,
+                supabaseClients: supabaseClients,
+                regularsService: regularsService
+            )
                 .task {
                     // Non-blocking: the map loads while auth completes in the background.
                     // ensureSession() fails silently if the network is unavailable (AC-A4).
