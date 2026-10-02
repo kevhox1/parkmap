@@ -195,7 +195,18 @@ enum CandidateSegmentSearch {
     /// Finds the nearest point on a multi-vertex polyline to `point`, returning its
     /// distance, its coordinate, and its fraction [0,1] along the ENTIRE polyline (start →
     /// end) via cumulative-length interpolation across every vertex.
-    private static func nearestPointOnPolyline(
+    ///
+    /// #22 (docs/report-tap-to-place-spec.md §2.3): promoted from `private` to `internal` —
+    /// the curb-snap-on-display projection (`CommunityPinAnnotation.resolveDisplayCoordinate`,
+    /// `Views/PinMarkerAnnotation.swift`) reuses this SAME cumulative-length math for its own
+    /// "no positionFraction, project the raw lat/lng onto the known-correct line" branch,
+    /// rather than duplicating it a fourth time — this file's own stated "extract the shared
+    /// helper" mandate (header comment above). Marked `nonisolated` for consistency with its
+    /// new sibling (`coordinate(atFraction:along:)`) — every function in this `enum` is
+    /// already effectively nonisolated (no actor/SwiftUI/instance state anywhere in the
+    /// file, per the header comment), so this is a no-op for behavior, purely a
+    /// readability/consistency fix.
+    nonisolated static func nearestPointOnPolyline(
         from point: CLLocationCoordinate2D,
         polyline: [CLLocationCoordinate2D]
     ) -> (distanceMeters: Double, fraction: Double, coordinate: CLLocationCoordinate2D)? {
@@ -223,6 +234,51 @@ enum CandidateSegmentSearch {
             }
         }
         return (bestDistance, min(1, max(0, bestFraction)), bestCoordinate)
+    }
+
+    // MARK: - #22 (docs/report-tap-to-place-spec.md §2.3): curb-snap-on-display, fraction-walk
+
+    /// Given a fraction `[0,1]` along a multi-vertex polyline's cumulative length (the SAME
+    /// directional convention as `positionFraction`/`meta.heading_toward`), returns the
+    /// coordinate AT that point.
+    ///
+    /// Companion to `nearestPointOnPolyline` above: that function projects an arbitrary
+    /// point ONTO the line (nearest-point search); this one walks TO an already-known
+    /// fraction along it (no search — used when a pin already carries a `positionFraction`).
+    /// `fraction` is clamped to `[0,1]` before use — a stored value should already be in
+    /// range (write paths clamp too), but display-time must never crash or extrapolate past
+    /// either endpoint on a malformed row.
+    ///
+    /// Returns `nil` only for a degenerate polyline (`< 2` vertices) — same "nothing to
+    /// project onto" contract as `nearestPointOnPolyline`.
+    nonisolated static func coordinate(
+        atFraction fraction: Double,
+        along polyline: [CLLocationCoordinate2D]
+    ) -> CLLocationCoordinate2D? {
+        guard polyline.count >= 2 else { return nil }
+        let clamped = min(1, max(0, fraction))
+
+        var cumulative: [Double] = [0]
+        for i in 1..<polyline.count {
+            cumulative.append(cumulative[i - 1] + haversine(from: polyline[i - 1], to: polyline[i]))
+        }
+        let totalLength = cumulative.last ?? 0
+        guard totalLength > 0 else { return polyline[0] }
+
+        let targetLength = clamped * totalLength
+        for i in 0..<(polyline.count - 1) {
+            guard cumulative[i + 1] >= targetLength else { continue }
+            let segLength = cumulative[i + 1] - cumulative[i]
+            let t = segLength > 0 ? (targetLength - cumulative[i]) / segLength : 0
+            let a = polyline[i], b = polyline[i + 1]
+            return CLLocationCoordinate2D(
+                latitude: a.latitude + t * (b.latitude - a.latitude),
+                longitude: a.longitude + t * (b.longitude - a.longitude)
+            )
+        }
+        // Floating-point edge case only (targetLength fractionally exceeds the last
+        // cumulative entry) — the last vertex is the correct answer for fraction == 1.
+        return polyline.last
     }
 
     // MARK: - Geometry helpers (duplicated from ContentView — see file header)

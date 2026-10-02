@@ -1448,7 +1448,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         // W5: Sync car pin annotation state.
-        context.coordinator.syncCarPin(carPin, on: mapView)
+        // #22 (Kevin's live gate F2): segments passed through so the marker can be
+        // projected onto the parked car's resolved segment at display time — see
+        // syncCarPin's own doc comment.
+        context.coordinator.syncCarPin(carPin, segments: segments, on: mapView)
 
         // W8.5b: Sync route polyline and destination pin.
         context.coordinator.syncRoutePolyline(activeRoute, on: mapView)
@@ -1764,7 +1767,17 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         /// Syncs the car-pin annotation to match the current ParkedCar state.
         /// Called from updateUIView on every SwiftUI render cycle.
-        func syncCarPin(_ car: ParkedCar?, on mapView: MKMapView) {
+        ///
+        /// #22 (Kevin's live gate F2): `segments` added so the marker's DISPLAY position can
+        /// be curb-snapped via `CommunityPinAnnotation.resolveDisplayCoordinate` — the SAME
+        /// projection community pins use, reused rather than duplicated (spec §2's own
+        /// "fix it once, at display time" framing extends to any annotation carrying a
+        /// resolved segment id, not narrowly community pins). `ParkedCar.latitude`/`.longitude`
+        /// themselves are NEVER touched — this only changes where `CarPinAnnotation.coordinate`
+        /// renders (see `Models/ParkedCar.swift`'s own updated doc comment). The dict build
+        /// below only runs on the (rare) car-changed path, gated by the fast-path check just
+        /// above it — not per frame, matching this fix's own "precompute once" requirement.
+        func syncCarPin(_ car: ParkedCar?, segments: [Segment], on mapView: MKMapView) {
             let newID = car?.id
 
             // Fast path: nothing changed.
@@ -1779,9 +1792,16 @@ struct MapViewRepresentable: UIViewRepresentable {
             // Add new annotation if a car pin is set.
             if let car = car {
                 let annotation = CarPinAnnotation()
-                annotation.coordinate = CLLocationCoordinate2D(
-                    latitude: car.latitude,
-                    longitude: car.longitude
+                let segmentByID = Dictionary(uniqueKeysWithValues: segments.map { ($0.id, $0) })
+                annotation.coordinate = CommunityPinAnnotation.resolveDisplayCoordinate(
+                    lat: car.latitude,
+                    lng: car.longitude,
+                    segmentId: car.detectedSegmentID,
+                    // Parked cars are never fraction-placed — nearest-point projection (or
+                    // raw fallback if detectedSegmentID is nil/unresolved) is the only
+                    // reachable branch for this caller.
+                    positionFraction: nil,
+                    segmentByID: segmentByID
                 )
                 annotation.accessibilityLabel = "My parked car. Tap for parking details."
                 carPinAnnotation = annotation
@@ -1963,7 +1983,15 @@ struct MapViewRepresentable: UIViewRepresentable {
                 guard let pin = desiredByID[id] else { continue }
                 // FT-11: compute bearing when the pin carries a heading_toward value.
                 let bearing = Self.resolveBearing(for: pin, segmentByID: segmentByID)
-                let annotation = CommunityPinAnnotation(pin: pin, bearing: bearing)
+                // #22 (docs/report-tap-to-place-spec.md §2.3): compute the curb-snapped
+                // display position ONCE here, same precomputation shape as `bearing` above —
+                // never resolved lazily inside `CommunityPinAnnotation.coordinate`'s getter.
+                let displayCoordinate = CommunityPinAnnotation.resolveDisplayCoordinate(
+                    for: pin, segmentByID: segmentByID
+                )
+                let annotation = CommunityPinAnnotation(
+                    pin: pin, bearing: bearing, displayCoordinate: displayCoordinate
+                )
                 communityPinAnnotations[id] = annotation
                 mapView.addAnnotation(annotation)
             }
