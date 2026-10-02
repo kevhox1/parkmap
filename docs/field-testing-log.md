@@ -71,7 +71,25 @@ Newest items at top. Each item: status, area, what was seen, proposed fix, and w
   They appear in the middle of the road."* Observed while driving, not just from a static screenshot —
   so this is real-world confirmed, not a rendering artifact of a zoomed screenshot. Combined with the
   Houston×Bowery screenshot, the diagnosis holds: **wide/divided streets specifically.**
-- **Lands in:** `build/preprocess.js` curb-offset geometry + a regen.
+- **🟢 OPTION A IMPLEMENTED — Manhattan, `@backend-data`, FT-21 Option A PR (per B0/B0b of
+  `docs/brooklyn-expansion-spec.md`).** `build/preprocess.js` now derives a per-block-face carriageway
+  match (proximity + address-parity heuristic against live CSCL `inkn-q76z` data, per
+  `docs/ft21-carriageway-investigation.md`'s mechanism sketch) and offsets the curb from the matched
+  near carriageway's OWN centerline instead of the shared OSM centerline, for blocks where the match is
+  confident. **118 of 10,616 geometry-successful Manhattan blocks matched (1.1%)** — Houston, Bowery,
+  Allen, Delancey, Park Ave (not previously handled at all), Broadway, Riverside Dr, Lenox Ave, ACP Jr
+  Blvd, and 14 more streets. Every unmatched block (98.9%) keeps byte-identical pre-PR geometry — proven,
+  not assumed, via a same-input-data before/after regen diff (`scripts/compare-tilesets.js`): zero
+  rule-content drift, zero segment-count drift, 355 segments moved geometrically (mean ~11m), all
+  attributable to Option A alone. Bundled the #9 (duplicate-vertex) and #10 (359 lost rows,
+  re-measured only) riders per the standing plan. Forsyth St did **not** get a confident match this pass
+  (its CSCL rows don't pair the way Houston's do — it's genuinely a one-way couplet with Allen, not a
+  single divided street) — conservative fallback held, no regression there. Full numbers, carriageway
+  match confidence stats, and the rule-drift proof are in the PR description.
+  ⏳ **Kevin's visual gate**: Houston, Bowery, Allen, Delancey, Park Ave on a sim build off the branch,
+  before merge.
+- **Lands in:** `build/preprocess.js` curb-offset geometry + a regen (Manhattan-only this pass; Brooklyn
+  is `docs/brooklyn-expansion-spec.md` Stream B1+).
 
 ### FT-20 🟡 ACTIVE — dark mode default + Apple-Maps bottom-sheet navigation (backburner LIFTED 2026-08-19)
 - **✅ BACKBURNER LIFTED 2026-08-19.** The board cleared, build 16 shipped, and Kevin had the design

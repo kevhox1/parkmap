@@ -17,7 +17,15 @@ const OSM_ONEWAY_PATH = path.join(ROOT, 'osm_oneway.json');
 // TF2-14: CSCL real-street-width artifact (built by scripts/build-street-widths.js).
 // Optional — if absent, falls back to name-tier offsets (getStreetCurbOffset).
 const STREET_WIDTHS_PATH = path.join(ROOT, 'street_widths.json');
-const TILES_DIR = path.join(ROOT, 'tiles');
+// FT-21 Option A validation harness (docs/ft21-carriageway-investigation.md
+// item 5 — the compare-tilesets.js rule-drift proof needs a genuine before/after
+// pair built from IDENTICAL input sign data). TILES_OUTPUT_DIR, when set,
+// redirects tile output to a scratch directory and SKIPS the iOS Resources
+// sync entirely (comparison runs must never touch the real tiles/ or iOS
+// bundle). Unset in every real regen.
+const TILES_DIR = process.env.TILES_OUTPUT_DIR
+  ? path.resolve(process.env.TILES_OUTPUT_DIR)
+  : path.join(ROOT, 'tiles');
 // iOS app bundle reads tiles from this Resources path (see HANDOFF.md
 // "iOS app: Resources land flat at app bundle root at build time").
 // Build must keep this in sync with TILES_DIR or the iOS app will run
@@ -691,7 +699,12 @@ function trimIntersectionSetback(blockGeo) {
     blockLenM: trimmedBlockLenM,
     blockLenFt: trimmedBlockLenM * 3.28084,
     setbackFt,
-    rawBlockLenFt: blockLenFt
+    rawBlockLenFt: blockLenFt,
+    // FT-21 Option A: carry the block's real (untrimmed) intersection points
+    // through the setback trim — pickCarriagewayForBlock() needs them to snap
+    // a matched CSCL carriageway's own polyline to this same block extent.
+    // Additive only; no existing consumer reads these fields.
+    ...(blockGeo.ptFrom ? { ptFrom: blockGeo.ptFrom, ptTo: blockGeo.ptTo } : {}),
   };
 }
 
@@ -714,7 +727,7 @@ function getBlockPolyline(block) {
   const blockLenM = totalLen[totalLen.length - 1];
   const blockLenFt = blockLenM * 3.28084;
 
-  const rawBlockGeo = { line, totalLen, blockLenM, blockLenFt };
+  const rawBlockGeo = { line, totalLen, blockLenM, blockLenFt, ptFrom, ptTo };
   return trimIntersectionSetback(rawBlockGeo);
 }
 
@@ -769,13 +782,27 @@ function extractSubSegment(blockGeo, startRawFt, endRawFt) {
   const endPt = interpolateOnBlockLine(blockGeo, endFt);
   if (!startPt || !endPt) return null;
 
+  // #9 (docs/open-items.md — "duplicate-adjacent-vertex tech debt", 12.4%→22.7%
+  // side effect of the FT-14/FT-19 fix): skip pushing a point that is
+  // coordinate-identical to the last point already in the result. Cheap,
+  // mechanical, and this regen is its validation vehicle — see
+  // docs/ft21-carriageway-investigation.md's implementation note. Applied to
+  // both the mid-loop pushes and the final endPt push (still "the result
+  // loop"); rule/zone semantics are untouched, this only removes redundant
+  // vertices from the emitted polyline.
   const result = [startPt];
   for (let i = 0; i < line.length; i++) {
     if (totalLen[i] > startM && totalLen[i] < endM) {
-      result.push(line[i]);
+      const last = result[result.length - 1];
+      if (last[0] !== line[i][0] || last[1] !== line[i][1]) {
+        result.push(line[i]);
+      }
     }
   }
-  result.push(endPt);
+  const lastPushed = result[result.length - 1];
+  if (lastPushed[0] !== endPt[0] || lastPushed[1] !== endPt[1]) {
+    result.push(endPt);
+  }
   if (result.length < 2) return [startPt, endPt];
   return result;
 }
@@ -1356,6 +1383,20 @@ async function main() {
     const widthStreetCount = Object.keys(OSM_WIDTHS).length;
     const widthWayCount = Object.values(OSM_WIDTHS).reduce((n, arr) => n + arr.length, 0);
     console.log(`   Loaded ${widthStreetCount} streets (${widthWayCount} ways) from street_widths.json (TF2-14)\n`);
+
+    // FT-21 Option A: build the carriageway-pairing index from the same data.
+    // NOTE: this file does NOT call initWidths(OSM_WIDTHS) here (see the long
+    // comment above pickCarriagewayForBlock()) — that's a separate, pre-existing
+    // gap left untouched by this PR. buildCarriagewayPairs() is new, independent
+    // machinery and is always run when street_widths.json is present.
+    if (process.env.OPTION_A_DISABLED) {
+      console.log('   FT-21 Option A: DISABLED via OPTION_A_DISABLED env var (comparison-harness mode)\n');
+    } else {
+      buildCarriagewayPairs(OSM_WIDTHS);
+      const pairedStreets = Object.keys(_carriagewayPairs).length;
+      const pairedTotal = Object.values(_carriagewayPairs).reduce((n, arr) => n + arr.length, 0);
+      console.log(`   FT-21 Option A: found ${pairedTotal} candidate carriageway pairs across ${pairedStreets} streets\n`);
+    }
   } else {
     console.warn('   WARNING: street_widths.json not found — curb offsets will use name-tier fallback only\n');
     console.warn('   Run: node scripts/build-street-widths.js\n');
@@ -1528,15 +1569,33 @@ async function main() {
     return signs;
   }
 
-  // Fetch main signs dataset
-  const mainSigns = await fetchSocrataDataset(SOCRATA_MAIN, 'Main Signs (nfid-uabd)');
-  allSigns.push(...mainSigns);
-  
-  // Fetch ASP-specific dataset
-  const aspSigns = await fetchSocrataDataset(SOCRATA_ASP, 'ASP Signs (2x64-6f34)');
-  allSigns.push(...aspSigns);
-  
-  console.log(`   Total signs fetched: ${allSigns.length} (${mainSigns.length} main + ${aspSigns.length} ASP)\n`);
+  // FT-21 Option A validation harness: SIGNS_CACHE_PATH lets two builds run
+  // against IDENTICAL sign data without hitting Socrata twice (once with
+  // OPTION_A_DISABLED=1 for the "before" comparison build, once normally for
+  // the real "after" regen) — a live dataset can genuinely change between two
+  // separate fetches, which would contaminate the rule-composition diff item 5
+  // needs. Unset in every real regen (normal live-fetch-only path).
+  const signsCachePath = process.env.SIGNS_CACHE_PATH ? path.resolve(process.env.SIGNS_CACHE_PATH) : null;
+  if (signsCachePath && fs.existsSync(signsCachePath)) {
+    console.log(`   SIGNS_CACHE_PATH set — loading cached signs from ${signsCachePath} (skipping live fetch)`);
+    allSigns.push(...JSON.parse(fs.readFileSync(signsCachePath, 'utf8')));
+    console.log(`   Loaded ${allSigns.length} cached signs\n`);
+  } else {
+    // Fetch main signs dataset
+    const mainSigns = await fetchSocrataDataset(SOCRATA_MAIN, 'Main Signs (nfid-uabd)');
+    allSigns.push(...mainSigns);
+
+    // Fetch ASP-specific dataset
+    const aspSigns = await fetchSocrataDataset(SOCRATA_ASP, 'ASP Signs (2x64-6f34)');
+    allSigns.push(...aspSigns);
+
+    console.log(`   Total signs fetched: ${allSigns.length} (${mainSigns.length} main + ${aspSigns.length} ASP)\n`);
+
+    if (signsCachePath) {
+      fs.writeFileSync(signsCachePath, JSON.stringify(allSigns));
+      console.log(`   Cached ${allSigns.length} signs to ${signsCachePath} for a comparison re-run\n`);
+    }
+  }
 
   // 3. Filter to Manhattan area using State Plane bounds
   console.log('🔍 Filtering signs to Manhattan area...');
@@ -1633,15 +1692,75 @@ async function main() {
       const blockMid = Math.floor(blockGeo.line.length / 2);
       const blockMidLat = blockGeo.line[blockMid][0];
       const blockMidLng = blockGeo.line[blockMid][1];
-      const blockCurbOffset = getCurbOffsetFromWidth(block.street, blockMidLat, blockMidLng);
+
+      // FT-21 Option A: try a per-carriageway match FIRST, atomically for the
+      // whole block face (never per-zone — a block either uses Option A
+      // geometry for all its zones, or the existing behavior for all of them).
+      // pickCarriagewayForBlock() returns null on any low-confidence signal,
+      // in which case effectiveBlockGeo/blockCurbOffset are byte-identical to
+      // what this block would have produced before this PR.
+      const carriagewayCanonKey = canonicalNameForOneway(block.street);
+      const carriagewayMatch = pickCarriagewayForBlock(carriagewayCanonKey, block, blockGeo);
+      const effectiveBlockGeo = carriagewayMatch ? carriagewayMatch.blockGeo : blockGeo;
+      const blockCurbOffset = carriagewayMatch
+        ? carriagewayMatch.offsetM
+        : getCurbOffsetFromWidth(block.street, blockMidLat, blockMidLng);
+
+      // FT-21 Option A "never a worse guess" per-zone safety net: a block-level
+      // carriageway match can still fail for one specific zone (e.g. a short
+      // stub near the matched carriageway's own snap boundary) even though the
+      // block-level match itself was confident. When that happens, retry that
+      // ONE zone against the pre-existing legacy geometry/offset before
+      // dropping it — a zone that would have survived before this PR must
+      // still survive after it. Legacy offset is computed lazily (only if
+      // actually needed) to avoid the extra lookup on the common path.
+      let _legacyCurbOffsetCache;
+      function legacyCurbOffsetForBlock() {
+        if (_legacyCurbOffsetCache === undefined) {
+          _legacyCurbOffsetCache = getCurbOffsetFromWidth(block.street, blockMidLat, blockMidLng);
+        }
+        return _legacyCurbOffsetCache;
+      }
+      function computeOffsetLineForZone(distStart, distEnd, wholeBlock) {
+        try {
+          const line = wholeBlock ? effectiveBlockGeo.line : extractSubSegment(effectiveBlockGeo, distStart, distEnd);
+          if (line && line.length >= 2) {
+            const offsetLine = offsetPolyline(line, block.side, blockCurbOffset);
+            if (offsetLine && offsetLine.length >= 2 &&
+                offsetLine.every(p => isFinite(p[0]) && isFinite(p[1])) &&
+                !isDegenerateLine(offsetLine)) {
+              return offsetLine;
+            }
+          }
+        } catch (e) { /* fall through to legacy retry below */ }
+
+        if (carriagewayMatch) {
+          try {
+            const legacyLine = wholeBlock ? blockGeo.line : extractSubSegment(blockGeo, distStart, distEnd);
+            if (legacyLine && legacyLine.length >= 2) {
+              const legacyOffsetLine = offsetPolyline(legacyLine, block.side, legacyCurbOffsetForBlock());
+              if (legacyOffsetLine && legacyOffsetLine.length >= 2 &&
+                  legacyOffsetLine.every(p => isFinite(p[0]) && isFinite(p[1])) &&
+                  !isDegenerateLine(legacyOffsetLine)) {
+                CARRIAGEWAY_STATS.zonesFellBackPerZone++;
+                return legacyOffsetLine;
+              }
+            }
+          } catch (e) { /* genuinely no usable geometry either way */ }
+        }
+        return null;
+      }
 
       if (subSegments.length === 0) {
         // Whole block as unknown
-        const offsetLine = offsetPolyline(blockGeo.line, block.side, blockCurbOffset);
-        if (!offsetLine || offsetLine.length < 2) continue;
-        if (isDegenerateLine(offsetLine)) continue;  // TF2-12: drop zero-length stubs
+        const offsetLine = computeOffsetLineForZone(null, null, true);
+        if (!offsetLine) continue;
 
         const segId = `${block.street}_${block.from}_${block.to}_${block.side}`.replace(/\s+/g, '_');
+        // Oneway direction is computed from the ORIGINAL OSM blockGeo, not
+        // effectiveBlockGeo — oneway detection matches against OSM_ONEWAY
+        // geometry and is unrelated to Option A's curb-offset source; keeping
+        // it on the OSM line avoids any unintended side effect on that lookup.
         const onewayFields0 = getOnewayFields(block, blockGeo);
         allSegments.push({
           id: segId,
@@ -1667,16 +1786,8 @@ async function main() {
         zonesAttempted++;
         zone.rules.forEach(r => rowsEntering.add(r.sign));
 
-        let line;
-        try {
-          line = extractSubSegment(blockGeo, zone.distStart, zone.distEnd);
-        } catch(e) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
-        if (!line || line.length < 2) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
-
-        const offsetLine = offsetPolyline(line, block.side, blockCurbOffset);
-        if (!offsetLine || offsetLine.length < 2) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
-        if (!offsetLine.every(p => isFinite(p[0]) && isFinite(p[1]))) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
-        if (isDegenerateLine(offsetLine)) { zonesDroppedDegenerate++; blockHadDrop = true; return; }  // TF2-12: drop zero-length stubs
+        const offsetLine = computeOffsetLineForZone(zone.distStart, zone.distEnd, false);
+        if (!offsetLine) { zonesDroppedDegenerate++; blockHadDrop = true; return; }
 
         zone.rules.forEach(r => rowsSurviving.add(r.sign));
 
@@ -1722,6 +1833,30 @@ async function main() {
     console.log(`   Zones attempted: ${zonesAttempted}, dropped (degenerate/invalid): ${zonesDroppedDegenerate}`);
     console.log(`   Geometry-successful blocks with >=1 zone drop: ${blocksWithADrop} / ${osmHits}`);
     console.log(`   Rows entering geometry-successful blocks: ${rowsEntering.size}, surviving: ${rowsSurviving.size}, lost: ${rowsLost}\n`);
+  }
+
+  // FT-21 Option A confidence stats.
+  {
+    const s = CARRIAGEWAY_STATS;
+    console.log('🛣️  FT-21 Option A — per-carriageway offset stats:');
+    console.log(`   Blocks considered: ${s.blocksConsidered}`);
+    console.log(`   Blocks MATCHED (used Option A geometry): ${s.blocksMatched}`);
+    console.log(`   Fallback — no candidate pair on this street: ${s.blocksNoPairsOnStreet}`);
+    console.log(`   Fallback — no OSM intersection points for this block: ${s.blocksNoIntersectionPts}`);
+    console.log(`   Fallback — no pair within ${CARRIAGEWAY_MATCH_RADIUS_M}m of block: ${s.blocksNoPairInRange}`);
+    console.log(`   Fallback — ambiguous pair (two equally-close candidates): ${s.blocksAmbiguousPair}`);
+    console.log(`   Fallback — ambiguous side (couldn't tell near/far carriageway): ${s.blocksAmbiguousSide}`);
+    console.log(`   Fallback — carriageway snap to block extent failed: ${s.blocksSnapFailed}`);
+    console.log(`   Fallback — matched geometry length implausible vs OSM block: ${s.blocksLengthMismatch}`);
+    console.log(`   Per-zone safety-net triggers (block matched, one zone fell back): ${s.zonesFellBackPerZone}`);
+    console.log(`   Streets with >=1 matched block: ${CARRIAGEWAY_MATCHED_STREETS.size}`);
+    if (CARRIAGEWAY_MATCHED_STREETS.size) {
+      console.log(`   Matched streets: ${[...CARRIAGEWAY_MATCHED_STREETS].sort().join(', ')}`);
+    }
+    if (process.env.DUMP_CARRIAGEWAY_SAMPLES) {
+      console.log('   Matched samples: ' + JSON.stringify(CARRIAGEWAY_MATCHED_SAMPLES));
+    }
+    console.log('');
   }
 
   // 6. Assign segments to tiles
@@ -1788,16 +1923,22 @@ async function main() {
   // 7b. Sync to iOS Resources path. The iOS app bundles tiles from
   // ios/WePark/WePark/Resources/tiles/ at build time. Keep it in lock-step
   // with TILES_DIR so the iOS app sees the same data as the PWA.
-  console.log('🔁 Syncing tiles to iOS Resources path...');
-  if (fs.existsSync(IOS_TILES_DIR)) {
-    for (const f of fs.readdirSync(IOS_TILES_DIR)) {
-      fs.unlinkSync(path.join(IOS_TILES_DIR, f));
-    }
+  // Skipped entirely when TILES_OUTPUT_DIR redirects output to a scratch
+  // comparison directory — a validation run must never touch the real bundle.
+  if (process.env.TILES_OUTPUT_DIR) {
+    console.log('🔁 Skipping iOS Resources sync (TILES_OUTPUT_DIR set — comparison-harness mode)');
   } else {
-    fs.mkdirSync(IOS_TILES_DIR, { recursive: true });
-  }
-  for (const f of fs.readdirSync(TILES_DIR)) {
-    fs.copyFileSync(path.join(TILES_DIR, f), path.join(IOS_TILES_DIR, f));
+    console.log('🔁 Syncing tiles to iOS Resources path...');
+    if (fs.existsSync(IOS_TILES_DIR)) {
+      for (const f of fs.readdirSync(IOS_TILES_DIR)) {
+        fs.unlinkSync(path.join(IOS_TILES_DIR, f));
+      }
+    } else {
+      fs.mkdirSync(IOS_TILES_DIR, { recursive: true });
+    }
+    for (const f of fs.readdirSync(TILES_DIR)) {
+      fs.copyFileSync(path.join(TILES_DIR, f), path.join(IOS_TILES_DIR, f));
+    }
   }
 
   // 8. Summary
@@ -1883,6 +2024,340 @@ function initWidths(data) {
   }
 }
 
+// ==== FT-21 Option A: per-carriageway curb offset ====
+//
+// docs/ft21-carriageway-investigation.md + docs/ft21-option-a-feasibility.md.
+// Replaces the DIVIDED_STREET_ALLOW_LIST fudge (a single flat distance added to
+// the shared OSM centerline) with real per-block carriageway geometry, for
+// blocks where a confident carriageway pair can be identified. CSCL carries no
+// join key between a divided street's two carriageway rows (`joinid`/`bphys_id`
+// null on every row checked) — pairing is a proximity + address-parity
+// heuristic, exactly as both investigations describe. Guard rule, honored
+// throughout: **no confident match → fall through to the existing,
+// byte-identical getCurbOffsetFromWidth()/blockGeo path. Never a worse guess.**
+//
+// NOTE ON SCOPE: this file's own getCurbOffsetFromWidth() has never actually
+// applied CSCL-derived offsets in production — main() loads street_widths.json
+// into OSM_WIDTHS but never calls initWidths() to populate _perStreetOffset
+// (confirmed by reading the file; the only call site is scripts/validate-widths.js,
+// a standalone diagnostic). So "today's behavior," in every real regen since
+// TF2-14 (commit a1761476), is pure name-tier (getStreetCurbOffset()) for every
+// street, DIVIDED_STREET_ALLOW_LIST included — that branch has been dead code.
+// This PR does NOT fix that (fixing it would silently move ~every Manhattan
+// segment's geometry, far outside this PR's Option A / #9 / #10 scope) — flagged
+// as its own open item in docs/open-items.md instead. Option A's fallback path
+// is therefore genuinely "whatever getCurbOffsetFromWidth() already does today,"
+// unchanged, for every block without a confident carriageway match.
+
+// Separation window for pairing two one-sided CSCL rows as the two carriageways
+// of one divided block. Calibrated against the one measured, verified real-world
+// number in either investigation doc: East Houston St @ Bowery, 19.2 m
+// (docs/ft21-carriageway-investigation.md §1.2). Floor excludes ways that are
+// really the same carriageway digitized twice / simple noise; ceiling excludes
+// pairing across unrelated, distant rows. Both ends generous relative to the one
+// confirmed data point so genuine matches aren't rejected on a narrow guess;
+// the ambiguity ratio below is the primary false-positive guard.
+const CARRIAGEWAY_MIN_SEP_M = 6;
+const CARRIAGEWAY_MAX_SEP_M = 45;
+// Address-range overlap tolerance (house numbers) for the adjacency sanity
+// check — the two rows of one physical block carry near-identical (often
+// off-by-one, e.g. 33-39 / 34-40) ranges; a generous grace band absorbs normal
+// odd/even offset without accepting a match across two different blocks.
+const CARRIAGEWAY_ADDR_GRACE = 15;
+// How far a block's OSM-centerline midpoint may be from the nearest matched
+// pair before that pair is considered "for this block" at all.
+const CARRIAGEWAY_MATCH_RADIUS_M = 45;
+// A pair (or a pairing candidate) is accepted only when it is this much closer
+// than the next-best alternative — protects against ambiguous pairing/matching
+// silently picking an arbitrary winner. >1 means "meaningfully closer," not just
+// "closer."
+const CARRIAGEWAY_AMBIGUITY_RATIO = 1.25;
+// Max distance a block's real (OSM) intersection point may sit from the matched
+// carriageway's own polyline before the snap is rejected — guards the
+// block-boundary-mismatch problem the investigation flagged (CSCL's own
+// carriageway splits don't reliably land at the same intersections the
+// OSM-derived block geometry uses).
+const CARRIAGEWAY_SNAP_MAX_M = 45;
+
+// canonKey -> [{ a: {way, range, midLat, midLng}, b: {...}, sepM }]
+let _carriagewayPairs = {};
+
+// A CSCL way is a carriageway-pairing candidate only when it carries house
+// numbers for exactly one side (the "one-sided addressing" signature both
+// investigations use to distinguish a genuine divided-street carriageway row
+// from an ordinary both-sided/TW undivided row). Both-sided rows are excluded
+// from pairing entirely — this is also what naturally excludes a parkway's
+// wide center through-road were one ever encountered (Brooklyn feasibility §3);
+// not exercised by Manhattan data in this PR, but the exclusion is structural,
+// not city-specific.
+function _wayAddrRange(w) {
+  const hasL = (w.lHigh || 0) > 0;
+  const hasR = (w.rHigh || 0) > 0;
+  if (hasL && !hasR) return { low: w.lLow || w.lHigh, high: w.lHigh, sideCode: 'left' };
+  if (hasR && !hasL) return { low: w.rLow || w.rHigh, high: w.rHigh, sideCode: 'right' };
+  return null;
+}
+
+// Builds _carriagewayPairs from the raw street_widths.json data (same shape
+// loaded into OSM_WIDTHS). Mutual-nearest-neighbor + address-adjacency +
+// ambiguity-ratio gated, per the module header comment above.
+function buildCarriagewayPairs(widthsData) {
+  _carriagewayPairs = {};
+  for (const [canonKey, ways] of Object.entries(widthsData || {})) {
+    const candidates = [];
+    for (const w of ways) {
+      if (!w.polyline || w.polyline.length < 2) continue;
+      const range = _wayAddrRange(w);
+      if (!range) continue;
+      const mid = w.polyline[Math.floor(w.polyline.length / 2)];
+      candidates.push({ way: w, range, midLat: mid[0], midLng: mid[1] });
+    }
+    if (candidates.length < 2) continue;
+
+    const best = candidates.map((c, i) => {
+      let bestJ = -1, bestDist = Infinity, secondDist = Infinity;
+      for (let j = 0; j < candidates.length; j++) {
+        if (i === j) continue;
+        const o = candidates[j];
+        if (o.range.sideCode === c.range.sideCode) continue; // need opposite sidedness
+        const overlap = Math.max(c.range.low, o.range.low) <= Math.min(c.range.high, o.range.high) + CARRIAGEWAY_ADDR_GRACE;
+        if (!overlap) continue;
+        const dist = polylineCentroidDist(o.way.polyline, c.midLat, c.midLng);
+        if (dist < CARRIAGEWAY_MIN_SEP_M || dist > CARRIAGEWAY_MAX_SEP_M) continue;
+        if (dist < bestDist) { secondDist = bestDist; bestDist = dist; bestJ = j; }
+        else if (dist < secondDist) secondDist = dist;
+      }
+      if (bestJ === -1) return null;
+      if (secondDist < bestDist * CARRIAGEWAY_AMBIGUITY_RATIO) return null; // ambiguous
+      return { j: bestJ, dist: bestDist };
+    });
+
+    const pairs = [];
+    const usedKeys = new Set();
+    for (let i = 0; i < candidates.length; i++) {
+      const b = best[i];
+      if (!b) continue;
+      const rb = best[b.j];
+      if (!rb || rb.j !== i) continue; // mutual nearest neighbor only
+      const key = [i, b.j].sort((x, y) => x - y).join('|');
+      if (usedKeys.has(key)) continue;
+      usedKeys.add(key);
+      pairs.push({ a: candidates[i], b: candidates[b.j], sepM: b.dist });
+    }
+    if (pairs.length) _carriagewayPairs[canonKey] = pairs;
+  }
+}
+
+// Closest point on a single polyline (not a multi-chain street lookup) to a
+// reference lat/lng. Mirrors closestPointOnStreet() but operates directly on
+// one CSCL carriageway's own polyline array.
+function closestPointOnPolyline(poly, lat, lng) {
+  let best = null;
+  for (let i = 0; i < poly.length - 1; i++) {
+    const [aLat, aLng] = poly[i];
+    const [bLat, bLng] = poly[i + 1];
+    const abLat = bLat - aLat, abLng = bLng - aLng;
+    const apLat = lat - aLat, apLng = lng - aLng;
+    const ab2 = abLat * abLat + abLng * abLng;
+    let t = ab2 > 0 ? (apLat * abLat + apLng * abLng) / ab2 : 0;
+    t = Math.max(0, Math.min(1, t));
+    const pLat = aLat + t * abLat, pLng = aLng + t * abLng;
+    const d = geoDist(lat, lng, pLat, pLng);
+    if (!best || d < best.dist) best = { segIdx: i, frac: t, pt: [pLat, pLng], dist: d };
+  }
+  return best;
+}
+
+// Snap ptA/ptB (the block's real OSM intersection points) onto a CSCL
+// carriageway polyline and slice the portion between them. Returns null if
+// either snap lands farther than maxSnapDistM from the carriageway line — the
+// block-boundary-mismatch case the investigation flagged (§2: CSCL carriageway
+// splits don't reliably land at the same intersections OSM-derived block
+// geometry uses).
+function extractChainBetween(poly, ptA, ptB, maxSnapDistM) {
+  if (!poly || poly.length < 2) return null;
+  const locA = closestPointOnPolyline(poly, ptA[0], ptA[1]);
+  const locB = closestPointOnPolyline(poly, ptB[0], ptB[1]);
+  if (!locA || !locB) return null;
+  if (locA.dist > maxSnapDistM || locB.dist > maxSnapDistM) return null;
+
+  let startLoc, endLoc;
+  if (locA.segIdx < locB.segIdx || (locA.segIdx === locB.segIdx && locA.frac <= locB.frac)) {
+    startLoc = locA; endLoc = locB;
+  } else {
+    startLoc = locB; endLoc = locA;
+  }
+
+  const result = [startLoc.pt];
+  for (let i = startLoc.segIdx + 1; i <= endLoc.segIdx; i++) result.push(poly[i]);
+  result.push(endLoc.pt);
+  return result.length >= 2 ? result : null;
+}
+
+// Builds a blockGeo-shaped object (same shape getBlockPolyline() produces,
+// including the same trimIntersectionSetback() pass) sourced from a matched
+// CSCL carriageway's own polyline instead of the shared OSM centerline.
+//
+// origLineStart (the ORIGINAL, OSM-based blockGeo.line[0]) is required to fix
+// a real direction-ambiguity bug: extractChainBetween() — like the
+// pre-existing extractPolylineBetween() it mirrors — orders its sliced output
+// by whichever of ptFrom/ptTo comes first along the SOURCE polyline's own
+// internal digitization direction, which can differ between OSM and CSCL for
+// the identical physical street (two independently-digitized datasets, no
+// shared convention). Raw sign distances (createSubSegments()) are always
+// interpreted starting at blockGeo.line[0] (extractSubSegment()'s contract);
+// if the carriageway line's start landed on the opposite physical end from
+// the original OSM line's start, every zone on the block would be assigned
+// mirrored along the block face. Found empirically during this PR's own
+// before/after regen comparison (a Bowery block's zones visibly reordered) —
+// forcing agreement here, rather than trusting it, is the fix.
+function buildCarriagewayBlockGeo(poly, ptFrom, ptTo, origLineStart) {
+  let line = extractChainBetween(poly, ptFrom, ptTo, CARRIAGEWAY_SNAP_MAX_M);
+  if (!line || line.length < 2) return null;
+
+  if (origLineStart) {
+    const origStartIsFrom =
+      geoDist(origLineStart[0], origLineStart[1], ptFrom[0], ptFrom[1]) <=
+      geoDist(origLineStart[0], origLineStart[1], ptTo[0], ptTo[1]);
+    const newStartIsFrom =
+      geoDist(line[0][0], line[0][1], ptFrom[0], ptFrom[1]) <=
+      geoDist(line[0][0], line[0][1], ptTo[0], ptTo[1]);
+    if (origStartIsFrom !== newStartIsFrom) {
+      line = line.slice().reverse();
+    }
+  }
+
+  const totalLen = cumulativeDists(line);
+  const blockLenM = totalLen[totalLen.length - 1];
+  const blockLenFt = blockLenM * 3.28084;
+  if (!(blockLenFt > 0) || !isFinite(blockLenFt)) return null;
+  return trimIntersectionSetback({ line, totalLen, blockLenM, blockLenFt });
+}
+
+// Which lateral hemisphere (relative to the block's OSM centerline) a given
+// compass side (N/S/E/W) points toward, in the same projected (x=lng*cosLat,
+// y=lat) plane and using the same block-level overall-direction signChoice
+// approach as offsetPolyline()'s TF2-12 P1 fix. Deliberately NOT shared code
+// with offsetPolyline() — duplicated so this newer, less-proven path can never
+// perturb offsetPolyline's own tuning; kept mathematically identical on
+// purpose so the two functions never disagree about which side is which.
+function outwardNormalProj(line, side) {
+  const valid = (line || []).filter(p => Array.isArray(p) && p.length >= 2 && isFinite(p[0]) && isFinite(p[1]));
+  if (valid.length < 2) return null;
+  const meanLat = valid.reduce((sum, p) => sum + p[0], 0) / valid.length;
+  const cosLat = Math.cos(meanLat * DEG_TO_RAD);
+  const proj = valid.map(([lat, lng]) => [lng * cosLat, lat]);
+  const overallDx = proj[proj.length - 1][0] - proj[0][0];
+  const overallDy = proj[proj.length - 1][1] - proj[0][1];
+  const overallLen = Math.sqrt(overallDx * overallDx + overallDy * overallDy);
+  const odx = overallLen > 1e-10 ? overallDx / overallLen : 1;
+  const ody = overallLen > 1e-10 ? overallDy / overallLen : 0;
+  const n1x = ody, n1y = -odx;
+  const n2x = -ody, n2y = odx;
+  const sv = SIDE_COMPASS[side] || { x: 0, y: 1 };
+  const dot1 = n1x * sv.x + n1y * sv.y;
+  const dot2 = n2x * sv.x + n2y * sv.y;
+  return dot1 >= dot2 ? { nx: n1x, ny: n1y, cosLat } : { nx: n2x, ny: n2y, cosLat };
+}
+
+function signedLateralOffset(outward, refLat, refLng, ptLat, ptLng) {
+  const dx = (ptLng - refLng) * outward.cosLat;
+  const dy = (ptLat - refLat);
+  return dx * outward.nx + dy * outward.ny;
+}
+
+// FT-21 Option A confidence stats — printed in main()'s summary, mirrors the
+// SETBACK_STATS precedent already established for FT-19.
+const CARRIAGEWAY_STATS = {
+  blocksConsidered: 0,
+  blocksMatched: 0,
+  blocksNoPairsOnStreet: 0,
+  blocksNoIntersectionPts: 0,
+  blocksNoPairInRange: 0,
+  blocksAmbiguousPair: 0,
+  blocksAmbiguousSide: 0,
+  blocksSnapFailed: 0,
+  blocksLengthMismatch: 0,
+  // Per-zone "never a worse guess" safety-net trigger count — see the main
+  // loop's computeOffsetLineForZone(). A matched block whose Option A geometry
+  // failed for one specific zone, recovered via the legacy geometry for that
+  // zone only.
+  zonesFellBackPerZone: 0,
+};
+const CARRIAGEWAY_MATCHED_STREETS = new Set();
+const CARRIAGEWAY_MATCHED_SAMPLES = [];
+
+// Main lookup: given a block (with its already-computed OSM-centerline
+// blockGeo, INCLUDING blockGeo.ptFrom/ptTo — see getBlockPolyline()), try to
+// find a confidently-matched carriageway for block.side. Returns
+// { blockGeo, offsetM } on a confident match, or null — callers MUST fall back
+// to the existing getCurbOffsetFromWidth()/blockGeo path on null. This is the
+// single chokepoint for the "never a worse guess" guarantee: every early
+// return below is a deliberate, logged fallback, never a partial/best-effort
+// application of Option A geometry.
+function pickCarriagewayForBlock(canonKey, block, blockGeo) {
+  CARRIAGEWAY_STATS.blocksConsidered++;
+  if (process.env.OPTION_A_DISABLED) return null; // comparison-harness / kill switch
+  if (!canonKey) return null;
+
+  const pairs = _carriagewayPairs[canonKey];
+  if (!pairs || !pairs.length) { CARRIAGEWAY_STATS.blocksNoPairsOnStreet++; return null; }
+  if (!blockGeo || !blockGeo.ptFrom || !blockGeo.ptTo) { CARRIAGEWAY_STATS.blocksNoIntersectionPts++; return null; }
+
+  const line = blockGeo.line;
+  const mid = Math.floor(line.length / 2);
+  const midLat = line[mid][0], midLng = line[mid][1];
+
+  let bestPair = null, bestDist = Infinity, secondDist = Infinity;
+  for (const p of pairs) {
+    const dA = polylineCentroidDist(p.a.way.polyline, midLat, midLng);
+    const dB = polylineCentroidDist(p.b.way.polyline, midLat, midLng);
+    const d = Math.min(dA, dB);
+    if (d < bestDist) { secondDist = bestDist; bestDist = d; bestPair = p; }
+    else if (d < secondDist) secondDist = d;
+  }
+  if (!bestPair || bestDist > CARRIAGEWAY_MATCH_RADIUS_M) { CARRIAGEWAY_STATS.blocksNoPairInRange++; return null; }
+  if (secondDist < bestDist * CARRIAGEWAY_AMBIGUITY_RATIO) { CARRIAGEWAY_STATS.blocksAmbiguousPair++; return null; }
+
+  const outward = outwardNormalProj(line, block.side);
+  if (!outward) { CARRIAGEWAY_STATS.blocksAmbiguousSide++; return null; }
+  const dotA = signedLateralOffset(outward, midLat, midLng, bestPair.a.midLat, bestPair.a.midLng);
+  const dotB = signedLateralOffset(outward, midLat, midLng, bestPair.b.midLat, bestPair.b.midLng);
+  let matched;
+  if (dotA > 0 && dotB <= 0) matched = bestPair.a;
+  else if (dotB > 0 && dotA <= 0) matched = bestPair.b;
+  else { CARRIAGEWAY_STATS.blocksAmbiguousSide++; return null; }
+
+  const carriagewayGeo = buildCarriagewayBlockGeo(matched.way.polyline, blockGeo.ptFrom, blockGeo.ptTo, blockGeo.line[0]);
+  if (!carriagewayGeo) { CARRIAGEWAY_STATS.blocksSnapFailed++; return null; }
+
+  const origLenFt = blockGeo.rawBlockLenFt || blockGeo.blockLenFt;
+  const newLenFt = carriagewayGeo.rawBlockLenFt || carriagewayGeo.blockLenFt;
+  if (!(origLenFt > 0) || !(newLenFt > origLenFt * 0.4 && newLenFt < origLenFt * 1.8)) {
+    CARRIAGEWAY_STATS.blocksLengthMismatch++;
+    return null;
+  }
+
+  // Offset from the matched carriageway's OWN centerline to its outer curb —
+  // an order of magnitude smaller than the old shared-centerline fudge, per
+  // the investigation's §3 sizing note. Falls back to the plain default-tier
+  // distance when this specific way has no CSCL width value.
+  const offsetM = matched.way.stWidthFt
+    ? Math.min(Math.max((matched.way.stWidthFt * 0.3048 / 2) * CSCL_OFFSET_FRACTION, CSCL_OFFSET_MIN_M), CSCL_OFFSET_MAX_M)
+    : CURB_OFFSET_DEFAULT_METERS;
+
+  CARRIAGEWAY_STATS.blocksMatched++;
+  CARRIAGEWAY_MATCHED_STREETS.add(block.street);
+  if (CARRIAGEWAY_MATCHED_SAMPLES.length < 60) {
+    CARRIAGEWAY_MATCHED_SAMPLES.push({
+      street: block.street, from: block.from, to: block.to, side: block.side,
+      sepM: Math.round(bestPair.sepM * 10) / 10, offsetM: Math.round(offsetM * 10) / 10,
+    });
+  }
+
+  return { blockGeo: carriagewayGeo, offsetM };
+}
+
 if (require.main !== module) {
   // Required as a module (by validate-widths.js or tests) — export the probe surface.
   module.exports = {
@@ -1900,6 +2375,20 @@ if (require.main !== module) {
     _DIVIDED_STREET_ALLOW_LIST:     DIVIDED_STREET_ALLOW_LIST,
     // Expose pre-computed map for diagnostics (read-only after initWidths())
     get _perStreetOffset() { return _perStreetOffset; },
+    // FT-21 Option A probe surface
+    buildCarriagewayPairs,
+    pickCarriagewayForBlock,
+    closestPointOnPolyline,
+    extractChainBetween,
+    buildCarriagewayBlockGeo,
+    outwardNormalProj,
+    signedLateralOffset,
+    extractSubSegment,
+    trimIntersectionSetback,
+    get _carriagewayPairs() { return _carriagewayPairs; },
+    get _CARRIAGEWAY_STATS() { return CARRIAGEWAY_STATS; },
+    get _CARRIAGEWAY_MATCHED_STREETS() { return CARRIAGEWAY_MATCHED_STREETS; },
+    get _CARRIAGEWAY_MATCHED_SAMPLES() { return CARRIAGEWAY_MATCHED_SAMPLES; },
   };
 } else {
   main().catch(err => {
