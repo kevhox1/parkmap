@@ -1095,6 +1095,47 @@ function getStreetCurbOffset(streetName) {
   return CURB_OFFSET_DEFAULT_METERS;
 }
 
+// FT-21 width-offset resurrection fix #2 (docs/ft21-width-offset-investigation.md
+// §3) — canonical-key-aware variants of WIDE_NS_NAMES/WIDE_CROSSTOWN_NAMES, built
+// by running each full NYC name through the EXACT SAME canonicalization
+// initWidths() uses for its own street_widths.json keys (canonicalNameForOneway()).
+//
+// Bug this fixes: initWidths()'s two internal tier-floor lookups
+// (getStreetCurbOffset(canonKey)) pass the ABBREVIATED canonical key (e.g.
+// "W 125 ST", "CANAL ST", "ADAM CLAYTON POWELL JR BLVD" — street_widths.json's own
+// key format) into getStreetCurbOffset(), but that function's WIDE_NS_NAMES/
+// WIDE_CROSSTOWN_NAMES Set.has() checks (and the PARKWAY/BOULEVARD regex) expect
+// FULL, un-abbreviated NYC names ("WEST 125TH STREET", "CANAL STREET", "ADAM
+// CLAYTON POWELL JR BOULEVARD"). Set.has() requires an exact match, so every one
+// of these wide crosstown/boulevard streets silently missed its own tier floor
+// and fell through to the 6m default — a real, citywide regression on ~24 major
+// streets once initWidths() actually runs (WIDE_AVENUE_RE is immune: it's a
+// format-agnostic regex that happens to match both "AVENUE" and "AVE").
+//
+// Used ONLY at initWidths()'s two internal call sites below — getStreetCurbOffset()
+// itself is untouched, since every other caller in this file passes a real,
+// un-abbreviated NYC name (block.street) and already classifies correctly.
+const WIDE_NS_NAMES_CANONICAL = new Set(
+  Array.from(WIDE_NS_NAMES, canonicalNameForOneway)
+);
+const WIDE_CROSSTOWN_NAMES_CANONICAL = new Set(
+  Array.from(WIDE_CROSSTOWN_NAMES, canonicalNameForOneway)
+);
+
+function getStreetCurbOffsetForCanonKey(canonKey) {
+  if (!canonKey) return CURB_OFFSET_DEFAULT_METERS;
+  const upper = canonKey.toUpperCase().trim();
+
+  if (WIDE_AVENUE_RE.test(upper)) return CURB_OFFSET_WIDE_METERS;
+  if (WIDE_NS_NAMES_CANONICAL.has(upper)) return CURB_OFFSET_WIDE_METERS;
+  if (WIDE_CROSSTOWN_NAMES_CANONICAL.has(upper)) return CURB_OFFSET_WIDE_METERS;
+  // Canonical form abbreviates PARKWAY/BOULEVARD to PKWY/BLVD (see
+  // ONEWAY_SUFFIX_NORMALIZE) — check the abbreviated forms, not the full words.
+  if (/\bPKWY\b|\bBLVD\b/.test(upper)) return CURB_OFFSET_WIDE_METERS;
+
+  return CURB_OFFSET_DEFAULT_METERS;
+}
+
 // ==== TF2-14 regen-6: CSCL real-street-width offset (REDESIGNED) ====
 //
 // REDESIGN RATIONALE (replaces the per-segment divided-carriageway detection from regen-5):
@@ -1153,12 +1194,25 @@ const DIVIDED_MEDIAN_ALLOWANCE_M  =  7.0;
 // Keep this list small and explicit.  Adding a street here means its CSCL
 // median st_width is treated as a single-carriageway width, and
 // DIVIDED_MEDIAN_ALLOWANCE_M is added to reach the far curb.
+//
+// FT-21 width-offset resurrection fix #1 (docs/ft21-width-offset-investigation.md
+// §2): Forsyth St REMOVED 2026-10 — docs/ft21-carriageway-investigation.md §1.3
+// ground-truthed it against live CSCL one-sided-addressing data and found it's a
+// genuinely undivided one-way couplet paired with Allen St, not two carriageways
+// of one divided street. Left on this list, it would incorrectly get the divided-
+// median formula (DIVIDED_MEDIAN_ALLOWANCE_M + half-width) and jump from the
+// correct 6.00m to a wrong 12.33m. Treated correctly (single-carriageway), its
+// resurrected offset is 6.00m — unchanged from today, since its median CSCL
+// width (35ft) doesn't clear the 6m tier floor even at the full single-
+// carriageway fraction. (Park Ave is the mirror-image miss — genuinely divided
+// but NOT on this list — tracked as a separate follow-up, not fixed here; see
+// the investigation doc §2 for the full allow-list audit this resurrection
+// deliberately scoped down from.)
 const DIVIDED_STREET_ALLOW_LIST = new Set([
   'E HOUSTON ST',   // East Houston Street (divided east of 6th Ave; also OK for single section)
   'W HOUSTON ST',   // West Houston Street (same physical road)
   'BOWERY',         // Bowery south of Canal: median strip
   'ALLEN ST',       // Allen Street: wide median
-  'FORSYTH ST',     // Forsyth Street: paired one-way with Allen
   'DELANCEY ST',    // Delancey: divided around bridge approach
 ]);
 
@@ -1848,11 +1902,29 @@ async function main() {
     const widthWayCount = Object.values(OSM_WIDTHS).reduce((n, arr) => n + arr.length, 0);
     console.log(`   Loaded ${widthStreetCount} streets (${widthWayCount} ways) from street_widths.json (TF2-14)\n`);
 
+    // FT-21 width-offset resurrection (open item #25, docs/ft21-width-offset-
+    // investigation.md): initWidths() was loaded into OSM_WIDTHS but never
+    // actually CALLED in every production regen since TF2-14 — _perStreetOffset
+    // stayed permanently empty, so getCurbOffsetFromWidth() always fell straight
+    // through to pure name-tier getStreetCurbOffset() (flat 10m/6m), and the
+    // DIVIDED_STREET_ALLOW_LIST's Houston/Bowery/Allen/Delancey fudge branch
+    // never ran in a shipped tile. Wiring it in here makes real per-street CSCL
+    // median-width offsets apply, now that both prerequisite bugs the
+    // investigation found are fixed: Forsyth removed from the allow-list (it's a
+    // genuinely undivided one-way couplet with Allen, not a divided street) and
+    // initWidths()'s own two tier-floor lookups made canonical-key-aware (see
+    // getStreetCurbOffsetForCanonKey() — the un-fixed version silently regressed
+    // ~24 major crosstown/boulevard streets from 10m down to as low as 6.00m).
+    // Must run BEFORE buildCarriagewayPairs()/pickCarriagewayForBlock() are
+    // consulted per-block below — those are a separate, independent geometry
+    // path (FT-21 Option A, per-carriageway matching) that takes priority over
+    // _perStreetOffset on a confident per-block match; this call only affects
+    // the (still large) set of blocks Option A does NOT confidently match.
+    initWidths(OSM_WIDTHS);
+
     // FT-21 Option A: build the carriageway-pairing index from the same data.
-    // NOTE: this file does NOT call initWidths(OSM_WIDTHS) here (see the long
-    // comment above pickCarriagewayForBlock()) — that's a separate, pre-existing
-    // gap left untouched by this PR. buildCarriagewayPairs() is new, independent
-    // machinery and is always run when street_widths.json is present.
+    // buildCarriagewayPairs() is new, independent machinery and is always run
+    // when street_widths.json is present.
     if (process.env.OPTION_A_DISABLED) {
       console.log('   FT-21 Option A: DISABLED via OPTION_A_DISABLED env var (comparison-harness mode)\n');
     } else {
@@ -2445,15 +2517,13 @@ function initWidths(data) {
   for (const [canonKey, ways] of Object.entries(data)) {
     const widths = ways.map(w => w.stWidthFt).filter(v => v !== null && v > 0);
     if (widths.length === 0) {
-      // No usable width data: store name-tier fallback.
-      // We need to reverse-map the canonical key to a NYC name for getStreetCurbOffset.
-      // The simplest approach: call getStreetCurbOffset with the canonical key itself
-      // (it uses .toUpperCase() which matches the WIDE_NS_NAMES / WIDE_CROSSTOWN_NAMES
-      // sets that hold full NYC names).  For the common case (avenues, Bowery) both
-      // the canonical key and the NYC name contain "AVE" / "BOWERY" / etc., so this
-      // is correct.  For streets that don't match any tier (e.g. "E 2 ST") the
-      // function returns CURB_OFFSET_DEFAULT_METERS, which is also correct.
-      _perStreetOffset[canonKey] = getStreetCurbOffset(canonKey);
+      // No usable width data: store name-tier fallback. Uses the canonical-key-
+      // aware variant (getStreetCurbOffsetForCanonKey) — canonKey is the
+      // ABBREVIATED street_widths.json key form ("W 125 ST"), not the full NYC
+      // name getStreetCurbOffset() itself expects (see that function's own
+      // callers for the full-name case). See the long comment above
+      // getStreetCurbOffsetForCanonKey() for the bug this avoids.
+      _perStreetOffset[canonKey] = getStreetCurbOffsetForCanonKey(canonKey);
       continue;
     }
 
@@ -2471,10 +2541,11 @@ function initWidths(data) {
     } else {
       // Single carriageway: offset = half-width × fraction, floored by name-tier.
       const csclOffset = (medianWidthM / 2) * CSCL_OFFSET_FRACTION;
-      // Name-tier floor: CSCL can raise but never lower below the validated tier offset.
-      // Use canonKey as the streetName arg — getStreetCurbOffset checks for AVENUE,
-      // BOWERY, BROADWAY etc. patterns which are present in the canonical key.
-      const tierOffset = getStreetCurbOffset(canonKey);
+      // Name-tier floor: CSCL can raise but never lower below the validated tier
+      // offset. Canonical-key-aware lookup (getStreetCurbOffsetForCanonKey) —
+      // see the long comment above that function for why the plain
+      // getStreetCurbOffset(canonKey) call this replaced was a real bug.
+      const tierOffset = getStreetCurbOffsetForCanonKey(canonKey);
       rawOffset = Math.max(csclOffset, tierOffset);
     }
 
@@ -2494,18 +2565,24 @@ function initWidths(data) {
 // throughout: **no confident match → fall through to the existing,
 // byte-identical getCurbOffsetFromWidth()/blockGeo path. Never a worse guess.**
 //
-// NOTE ON SCOPE: this file's own getCurbOffsetFromWidth() has never actually
-// applied CSCL-derived offsets in production — main() loads street_widths.json
-// into OSM_WIDTHS but never calls initWidths() to populate _perStreetOffset
-// (confirmed by reading the file; the only call site is scripts/validate-widths.js,
-// a standalone diagnostic). So "today's behavior," in every real regen since
-// TF2-14 (commit a1761476), is pure name-tier (getStreetCurbOffset()) for every
-// street, DIVIDED_STREET_ALLOW_LIST included — that branch has been dead code.
-// This PR does NOT fix that (fixing it would silently move ~every Manhattan
-// segment's geometry, far outside this PR's Option A / #9 / #10 scope) — flagged
-// as its own open item in docs/open-items.md instead. Option A's fallback path
-// is therefore genuinely "whatever getCurbOffsetFromWidth() already does today,"
-// unchanged, for every block without a confident carriageway match.
+// HISTORICAL NOTE ON SCOPE (Option A's original PR): at the time Option A shipped,
+// getCurbOffsetFromWidth() had never actually applied CSCL-derived offsets in
+// production — main() loaded street_widths.json into OSM_WIDTHS but never called
+// initWidths() to populate _perStreetOffset (the only call site was
+// scripts/validate-widths.js, a standalone diagnostic). So "today's behavior" at
+// that time, in every real regen since TF2-14 (commit a1761476), was pure
+// name-tier (getStreetCurbOffset()) for every street, DIVIDED_STREET_ALLOW_LIST
+// included — that branch was dead code. Option A deliberately did NOT fix that
+// (fixing it would have silently moved ~every Manhattan segment's geometry, far
+// outside that PR's Option A / #9 / #10 scope) — flagged as open item #25 instead.
+//
+// ✅ RESOLVED by the FT-21 width-offset resurrection (docs/ft21-width-offset-
+// investigation.md): main() now calls initWidths(OSM_WIDTHS), so
+// getCurbOffsetFromWidth() genuinely applies real per-street CSCL median-width
+// offsets for every block Option A does NOT confidently match (Option A's own
+// matched-block path is untouched — it computes its offset directly from the
+// matched carriageway's own stWidthFt, never through _perStreetOffset; see this
+// section's own "Interaction with Option A" analysis in the investigation doc).
 
 // Separation window for pairing two one-sided CSCL rows as the two carriageways
 // of one divided block. Calibrated against the one measured, verified real-world
