@@ -1,9 +1,40 @@
 # FT-21 — Real Half-Width Curb Offsets (open item #25 resurrection) — Investigation
 
-**Status:** Investigation only, per instruction. No pipeline code touched, no regen run. Read + small
-data samples only, all reproduced live against the actual `street_widths.json` / `build/preprocess.js`
-on the `data/ft21-option-a-manhattan` (PR #116) branch, using `initWidths()`/`_perStreetOffset` via
-`require()` (the module's own diagnostic export surface) rather than eyeballing the diff.
+**Status: ✅ RESURRECTED 2026-10 (`data/ft21-width-offset-resurrection`).** This section records what
+actually shipped, ahead of the rest of the doc (left in place below as the investigation record that
+justified it). `initWidths(OSM_WIDTHS)` is now wired into `main()`. The two prerequisite bugs this
+doc's §2/§3 identified were fixed first, exactly as recommended, and **nothing beyond those two** —
+the broader allow-list audit this doc's §2/§5 flagged (Park Ave addition, Riverside Dr/Canal St/ACP Jr
+Blvd/Lenox Ave/Madison St/St Nicholas Ave/Cooper Sq/Pike St verification) is deliberately deferred to a
+future session, not bundled in:
+
+1. **Forsyth St removed from `DIVIDED_STREET_ALLOW_LIST`** (§2's ground-truthed finding — it's a
+   genuinely undivided one-way couplet with Allen St).
+2. **`getStreetCurbOffsetForCanonKey()` added** — a canonical-key-aware variant of
+   `getStreetCurbOffset()`, used only at `initWidths()`'s own two internal tier-floor lookups, fixing
+   the exact-match miss §3 found (abbreviated `street_widths.json` keys vs. the full NYC names
+   `WIDE_NS_NAMES`/`WIDE_CROSSTOWN_NAMES` expect).
+
+**Verified** (`scripts/test-width-offset-resurrection.js`, 41/41 passing, driving the real
+`initWidths()`/`_perStreetOffset` surface against the committed `street_widths.json`, not a
+reimplementation): Houston +6.79/+6.49m, Allen +7.40m, Delancey +8.00m (clamp ceiling), Bowery
++2.49m, Forsyth +0.00m control. All 32/33 of the 24-major-streets group present in CSCL width data
+resolve to exactly the correct 10.00m floor — **zero regression** to 6m. The 33rd (`W 110 ST`) simply
+has no CSCL width row under that exact key, so it falls back to `getStreetCurbOffset()` with the real
+NYC name (unaffected by either bug, byte-identical to today). `scripts/test-pipeline-determinism.js`
+and `scripts/test-arrow-direction-fix.js` (the two other axes sharing this pipeline) both still pass
+unmodified — confirms §4's own "the code paths do not overlap" claim empirically, not just by reading.
+**No tiles/ regen shipped in this change** — rides the next combined regen alongside #116/#120/#26 per
+this doc's own §5 sequencing call (fold into the still-open #116 regen, not a separate pass, not
+Brooklyn).
+
+---
+
+**Original investigation status (below), for the record:** Investigation only, per instruction at the
+time. No pipeline code touched, no regen run. Read + small data samples only, all reproduced live
+against the actual `street_widths.json` / `build/preprocess.js` on the `data/ft21-option-a-manhattan`
+(PR #116) branch, using `initWidths()`/`_perStreetOffset` via `require()` (the module's own diagnostic
+export surface) rather than eyeballing the diff.
 
 **Date:** 2026-09-29
 **Author:** @backend-data
