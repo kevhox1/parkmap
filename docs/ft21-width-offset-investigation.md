@@ -1,3 +1,7 @@
+
+
+> **CORRECTION (PR #126 QA, 2026-10-06):** the per-street "today" baselines below for E/W Houston and Delancey were computed via the abbreviated canonical key and are WRONG — ground-truthed against shipped tiles, those three are ALREADY at the 10m wide tier today. Real resurrection deltas: **E Houston +2.79m, W Houston +2.49m, Delancey +4.00m** (not +6.79/+6.49/+8.00). Allen +7.40m / Bowery +2.49m / Forsyth +0.00m stand. Implication: Houston's real ~2.8m move ≈ Bowery's already-insufficient +2.5m, so a regen may NOT visually resolve the Houston complaint — likely needs FT-21 Option B (planimetric curb geometry).
+
 # FT-21 — Real Half-Width Curb Offsets (open item #25 resurrection) — Investigation
 
 **Status: ✅ RESURRECTED 2026-10 (`data/ft21-width-offset-resurrection`).** This section records what
