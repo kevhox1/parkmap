@@ -15,6 +15,17 @@
 //  from the long-press (Path A) or the segment midpoint (Path B).
 //  detectedSegmentID is used for rules re-lookup only, never to reposition the pin.
 //
+//  #22 (docs/report-tap-to-place-spec.md, Kevin's live gate finding F2): AC-W5.3's "no
+//  snap" invariant above is about THIS STORED MODEL — latitude/longitude are never
+//  rewritten, and remain the exact original coordinate used for My Car's own segment
+//  re-lookup. The MAP MARKER for the parked car is a separate, display-only concern:
+//  `MapViewRepresentable.Coordinator.syncCarPin` now projects the car annotation onto
+//  `detectedSegmentID`'s polyline at display time (same
+//  `CommunityPinAnnotation.resolveDisplayCoordinate` projection community pins use), so the
+//  marker renders on the curb rather than wherever the raw tap/GPS coordinate happened to
+//  land (a parked car rendering inside a building was the live bug this closed). This file
+//  itself is untouched by that fix — no new field, no write-path change.
+//
 //  W7: Added notifyOnRestriction — per-pin reminder opt-in (§4.A).
 //  Custom CodingKeys + init(from:) so pre-W7 persisted pins decode safely:
 //  missing key → default true (notification active). This handles the existing

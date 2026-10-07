@@ -251,9 +251,18 @@ final class CommunityPinAnnotation: NSObject, MKAnnotation {
     ///   - The segment is no longer in the loaded tile set.
     let bearing: Double?
 
-    var coordinate: CLLocationCoordinate2D {
-        CLLocationCoordinate2D(latitude: pin.lat, longitude: pin.lng)
-    }
+    /// #22 (docs/report-tap-to-place-spec.md §2): curb-snap-on-display — the position this
+    /// annotation actually renders at. Pre-computed ONCE at construction time (mirrors the
+    /// `bearing` precedent above exactly — `MapViewRepresentable.syncCommunityPinAnnotations`'s
+    /// `toAdd` loop calls `resolveDisplayCoordinate(for:segmentByID:)` before constructing
+    /// this annotation) rather than resolved lazily inside `coordinate`'s getter, which
+    /// MapKit may read on every layout pass (§2.3's performance note).
+    ///
+    /// Defaults to the pin's raw `lat`/`lng` for the two-arg convenience inits below (no
+    /// segment data available at that call site — matches AC-3's fallback exactly).
+    let displayCoordinate: CLLocationCoordinate2D
+
+    var coordinate: CLLocationCoordinate2D { displayCoordinate }
 
     var title: String? { pin.displayTitle }
 
@@ -277,12 +286,21 @@ final class CommunityPinAnnotation: NSObject, MKAnnotation {
     }
 
     /// Initialise with the pin only (no direction data — legacy / off-segment path).
+    ///
+    /// #22: no `segments` available at this call site, so `displayCoordinate` falls back to
+    /// the pin's raw `lat`/`lng` — AC-3's exact fallback contract. Existing test call sites
+    /// (`Tier3PinFeedbackTests.swift`) use this init and are unaffected.
     init(pin: CommunityPin) {
         self.pin = pin
         self.bearing = nil
+        self.displayCoordinate = CLLocationCoordinate2D(latitude: pin.lat, longitude: pin.lng)
     }
 
     /// FT-11: Initialise with pin + pre-computed bearing for directional chevron rendering.
+    ///
+    /// #22: same raw-lat/lng fallback as the `init(pin:)` convenience above — no `segments`
+    /// available at this call site either. Production code that HAS a `[Segment]` to
+    /// project against should use `init(pin:bearing:displayCoordinate:)` below instead.
     ///
     /// - Parameters:
     ///   - pin: The community pin to display.
@@ -290,6 +308,167 @@ final class CommunityPinAnnotation: NSObject, MKAnnotation {
     init(pin: CommunityPin, bearing: Double?) {
         self.pin = pin
         self.bearing = bearing
+        self.displayCoordinate = CLLocationCoordinate2D(latitude: pin.lat, longitude: pin.lng)
+    }
+
+    /// #22 (docs/report-tap-to-place-spec.md §2.3): production initialiser used by
+    /// `MapViewRepresentable.syncCommunityPinAnnotations`, which has already computed
+    /// `displayCoordinate` via `resolveDisplayCoordinate(for:segmentByID:)` once per new pin,
+    /// mirroring the existing `bearing` precomputation precedent in that same loop.
+    ///
+    /// - Parameters:
+    ///   - pin: The community pin to display.
+    ///   - bearing: Compass bearing [0, 360) toward the stored heading endpoint. Nil = no chevron.
+    ///   - displayCoordinate: The curb-snapped (or raw-fallback) render position.
+    init(pin: CommunityPin, bearing: Double?, displayCoordinate: CLLocationCoordinate2D) {
+        self.pin = pin
+        self.bearing = bearing
+        self.displayCoordinate = displayCoordinate
+    }
+
+    // MARK: - #22: curb-snap-on-display projection (pure, MKMapView-independent)
+
+    /// Resolves the position `CommunityPinAnnotation.coordinate` should render at
+    /// (docs/report-tap-to-place-spec.md §2). Given the pin and the currently-loaded
+    /// segments (keyed by `Segment.id`, built once per sync pass — same `segmentByID` dict
+    /// `resolveBearing(for:segmentByID:)` already uses):
+    ///   - `positionFraction` present + `segmentId` resolves → interpolated point along the
+    ///     segment's polyline at that fraction (AC-2).
+    ///   - `positionFraction` absent + `segmentId` resolves → nearest-point projection of the
+    ///     raw `lat`/`lng` onto that segment's polyline, t-clamped, distance-agnostic (AC-1).
+    ///   - `segmentId` is nil, or doesn't resolve against the currently-loaded segments (OD-1
+    ///     / stale tile boundary), or the resolved segment's polyline has fewer than 2
+    ///     vertices → the pin's raw `lat`/`lng`, unchanged (AC-3).
+    ///
+    /// Pure function of `(pin, segmentByID)` → coordinate — no `MKMapView` dependency,
+    /// directly unit-testable (AC-6). Callers MUST precompute this once per pin (see
+    /// `displayCoordinate`'s own doc comment) rather than calling it from inside a
+    /// `coordinate` getter MapKit may invoke on every layout pass.
+    ///
+    /// Thin wrapper over the primitive `resolveDisplayCoordinate(lat:lng:segmentId:
+    /// positionFraction:segmentByID:)` below — unpacks the four `CommunityPin` fields the
+    /// projection actually needs. Kept as its own named overload (rather than requiring
+    /// every call site to unpack the pin manually) since `CommunityPinAnnotation`'s own
+    /// production call site (`MapViewRepresentable.syncCommunityPinAnnotations`) already has
+    /// a `CommunityPin` in hand.
+    static func resolveDisplayCoordinate(
+        for pin: CommunityPin,
+        segmentByID: [String: Segment]
+    ) -> CLLocationCoordinate2D {
+        resolveDisplayCoordinate(
+            lat: pin.lat,
+            lng: pin.lng,
+            segmentId: pin.segmentId,
+            positionFraction: pin.positionFraction,
+            segmentByID: segmentByID
+        )
+    }
+
+    /// Kevin's live gate on PR #118, finding F2: the primitive curb-snap-on-display
+    /// projection, generalized beyond `CommunityPin` — the parked-car marker
+    /// (`MapViewRepresentable.Coordinator.syncCarPin`) carries a resolved
+    /// `ParkedCar.detectedSegmentID` but is a completely different model type (not a
+    /// `CommunityPin`), and rendered inside a building at its raw, un-snapped coordinate
+    /// before this fix (the exact bug Kevin found live). Rather than duplicating the
+    /// fraction/nearest-point/raw fallback chain a second time for that one extra caller,
+    /// the pin-shaped overload above now delegates HERE — this is the single source of
+    /// truth for "given a raw lat/lng, an optional resolved segment id, and an optional
+    /// position fraction, where should the marker actually render."
+    ///
+    /// - `positionFraction` present + `segmentId` resolves → interpolated point along the
+    ///   segment's polyline at that fraction (AC-2). Always `nil` for a parked car — cars
+    ///   are never fraction-placed, so this branch is unreachable for that caller in
+    ///   practice, but the parameter stays generic rather than special-cased away.
+    /// - `positionFraction` absent + `segmentId` resolves → nearest-point projection of the
+    ///   raw `lat`/`lng` onto that segment's polyline, t-clamped, distance-agnostic (AC-1).
+    ///   This is the branch that fixes the parked-car-inside-a-building bug.
+    /// - `segmentId` is nil, or doesn't resolve against the currently-loaded segments (OD-1
+    ///   / stale tile boundary), or the resolved segment's polyline has fewer than 2
+    ///   vertices → the raw `lat`/`lng`, unchanged (AC-3). For a COMMUNITY PIN this really is
+    ///   the final word — every pin carries (or lacks) its own confirmed segment, and there
+    ///   is no "search nearby" story for a report that genuinely has no segment. For a
+    ///   PARKED CAR, this raw fallback is NOT the final word: live-gate repro (Bowery btwn
+    ///   Houston/Stanton, mid-block, car rendering inside a building) proved
+    ///   `detectedSegmentID == nil` is the COMMON case for arrival-path cars
+    ///   (`ContentView.swift`'s `onParkHere` literally passes `detectedSegmentID: nil`
+    ///   — "arrival-path: no tap-segment detection" — not a rare edge case), so this branch
+    ///   alone reproduces the original in-building bug for that path. `syncCarPin` therefore
+    ///   calls `resolveCarDisplayCoordinate` below instead of this function directly — that
+    ///   wrapper adds a nearest-LOADED-segment fallback on top of this one for cars only.
+    ///   Display-only either way — the STORED `ParkedCar.latitude`/`.longitude` are never
+    ///   touched by this function, `resolveCarDisplayCoordinate`, or either of their callers
+    ///   (AC-W5.3's own "no snap" invariant is about the persisted model, unaffected).
+    ///
+    /// Pure function — no `MKMapView` dependency, directly unit-testable.
+    static func resolveDisplayCoordinate(
+        lat: Double,
+        lng: Double,
+        segmentId: String?,
+        positionFraction: Double?,
+        segmentByID: [String: Segment]
+    ) -> CLLocationCoordinate2D {
+        let raw = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        guard let segmentId, let segment = segmentByID[segmentId] else { return raw }
+        let polyline = segment.coordinates
+        guard polyline.count >= 2 else { return raw }
+
+        if let fraction = positionFraction {
+            return CandidateSegmentSearch.coordinate(atFraction: fraction, along: polyline) ?? raw
+        }
+        if let nearest = CandidateSegmentSearch.nearestPointOnPolyline(from: raw, polyline: polyline) {
+            return nearest.coordinate
+        }
+        return raw
+    }
+
+    /// Follow-up to the live-gate F2 fix above: `resolveDisplayCoordinate`'s raw fallback
+    /// (nil/unresolved `segmentId`) reproduced the SAME in-building bug it was meant to fix,
+    /// because arrival-path parked cars (`ContentView.swift`'s `onParkHere`) never populate
+    /// `detectedSegmentID` at all — that's not a rare edge case, it's the common path for
+    /// anyone using Drive Mode's arrival prompt rather than a manual long-press.
+    ///
+    /// PARKED-CAR-ONLY fallback chain (community pins are NOT affected — they keep calling
+    /// `resolveDisplayCoordinate` directly, byte-identical to before):
+    ///   1. `segmentId` resolves against `segmentByID` (a stored/detected segment, same
+    ///      guard as `resolveDisplayCoordinate`'s own: present, found, ≥2-vertex polyline)
+    ///      → delegate to `resolveDisplayCoordinate` and use its projection. A real detected
+    ///      segment always wins over a nearest-search guess.
+    ///   2. Otherwise → `CandidateSegmentSearch.nearestSegmentSnap` searches EVERY currently-
+    ///      loaded segment (not just one) for the closest point within `nearestSegmentRadius`
+    ///      meters. Cars park at curbs, so "nearest loaded curb" is a meaningful display
+    ///      position even with no stored segment — unlike a community pin, which has no
+    ///      "search nearby" story for a report that genuinely carries no segment.
+    ///   3. Nothing within radius (sparse tile coverage, no tiles loaded) → the raw `lat`/
+    ///      `lng`, unchanged — same AC-3 "never silently snap across the map" contract.
+    ///
+    /// `nearestSegmentRadius` is a caller-supplied parameter (not hardcoded here) so the
+    /// single source of truth for the value stays at the call site
+    /// (`MapViewRepresentable.syncCarPin`, which documents why it matches
+    /// `ContentView.pinDropRadiusMeters`) rather than being duplicated as a second magic
+    /// number inside this file.
+    ///
+    /// Pure function — no `MKMapView` dependency, directly unit-testable.
+    static func resolveCarDisplayCoordinate(
+        lat: Double,
+        lng: Double,
+        segmentId: String?,
+        segmentByID: [String: Segment],
+        segments: [Segment],
+        nearestSegmentRadius: Double
+    ) -> CLLocationCoordinate2D {
+        if let segmentId, let segment = segmentByID[segmentId], segment.coordinates.count >= 2 {
+            return resolveDisplayCoordinate(
+                lat: lat, lng: lng, segmentId: segmentId, positionFraction: nil,
+                segmentByID: segmentByID
+            )
+        }
+        let raw = CLLocationCoordinate2D(latitude: lat, longitude: lng)
+        guard let snap = CandidateSegmentSearch.nearestSegmentSnap(
+            lat: lat, lng: lng, in: segments, radius: nearestSegmentRadius
+        ) else {
+            return raw
+        }
+        return snap.snappedCoordinate
     }
 }
 
