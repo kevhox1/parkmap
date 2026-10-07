@@ -697,6 +697,12 @@ struct ReportSheet: View {
                 // Community 2.0 Phase 2b (build 20 S7): this row always taps `.type(type)`,
                 // never `.spotOpen`. Defensive no-op.
                 break
+            case .parkMyCarHandoff:
+                // Unreachable for the same reason as `.streetClosureHandoff`/
+                // `.spotPlacementHandoff` above — long-press universal-plant model,
+                // Stage 1: this row always taps `.type(type)`, never `.parkMyCar`.
+                // Defensive no-op.
+                break
             }
         } label: {
             HStack(spacing: 14) {
@@ -1114,6 +1120,11 @@ struct ReportSheet: View {
                 // Unreachable for the same reason as `.selectType` above — Community 2.0
                 // Phase 2b (build 20 S7): this row always taps `.streetClosure`, never
                 // `.spotOpen`. Defensive no-op.
+                break
+            case .parkMyCarHandoff:
+                // Unreachable for the same reason as `.selectType`/`.spotPlacementHandoff`
+                // above — long-press universal-plant model, Stage 1: this row always taps
+                // `.streetClosure`, never `.parkMyCar`. Defensive no-op.
                 break
             }
         } label: {
