@@ -840,13 +840,53 @@ function trimIntersectionSetback(blockGeo) {
 // an arbitrary one — and it degrades to exactly today's single-candidate behavior
 // whenever there's no real ambiguity (the overwhelming majority of blocks), since the
 // double loop below is then just 1x1.
-function pickClosestCandidatePair(candsA, candsB) {
+//
+// #31 fix (open item #31's "provable-but-unobserved blind spot," OBSERVED LIVE in the
+// build-24 regen — docs/qa/pr127-build24-regen.md Finding #1, root-caused in the
+// follow-up session that added this fix): "smallest distance wins" has a failure mode
+// #31 predicted but hadn't seen yet — when the SAME exact point appears as an
+// exact-tied candidate for BOTH cross streets (a real artifact of complex multi-way
+// intersections, e.g. Washington Square South near NYU, where Thompson Street's and
+// LaGuardia Place's own tied-candidate sets each separately contain the identical
+// coordinate), the global minimum is EXACTLY 0m — ptFrom === ptTo. That can never be
+// correct for two DIFFERENTLY-NAMED cross streets (a real block's two ends are not the
+// same point), yet nothing stopped the naive rule from picking it, silently producing a
+// zero-length block whose signs all vanish downstream (extractSubSegment()/
+// isDegenerateLine() correctly reject a 2-point, 0-length line, so this failed SILENTLY
+// here, not loudly). Confirmed live: Morningside Avenue, Washington Square South,
+// Avenue C, Fulton Street, 7th Avenue South, and West 142nd Street all lost 100% of
+// their real curb rules on a real-street, non-self-referential block face this way.
+//
+// Root-cause session swept every ambiguous, non-self-referential block city-wide: after
+// an exact-zero coincidence, the NEXT-smallest candidate-pair distance is never below
+// ~6m — there is no legitimate real NYC block whose two cross-street intersection points
+// are within a few meters of each other. MIN_PLAUSIBLE_PAIR_DIST_M sits well inside that
+// gap. The fix: prefer the smallest distance that clears this floor, and only fall back
+// to the raw global minimum (today's behavior, unchanged) when NO candidate pair clears
+// it — which is exactly the genuinely self-referential family (open item #32: DOT's own
+// from_street/to_street occasionally repeats the on_street's own name, e.g. "RIVERSIDE
+// DRIVE (RIVERSIDE DRIVE to BROADWAY)"). Those blocks have no principled correct
+// cross-street point to prefer in the first place — getBlockPolyline() explicitly
+// exempts them via `skipPlausibilityFloor` so their resolution is byte-identical to
+// before this fix, keeping this change scoped to the real-named-street family it was
+// built for and out of the separately-tracked #32 territory.
+const MIN_PLAUSIBLE_PAIR_DIST_M = 2;
+
+function pickClosestCandidatePair(candsA, candsB, opts) {
+  const skipPlausibilityFloor = !!(opts && opts.skipPlausibilityFloor);
   let bestA = candsA[0], bestB = candsB[0], bestDist = Infinity;
+  let bestFloorA = null, bestFloorB = null, bestFloorDist = Infinity;
   for (const a of candsA) {
     for (const b of candsB) {
       const d = geoDist(a[0], a[1], b[0], b[1]);
       if (d < bestDist) { bestDist = d; bestA = a; bestB = b; }
+      if (d >= MIN_PLAUSIBLE_PAIR_DIST_M && d < bestFloorDist) {
+        bestFloorDist = d; bestFloorA = a; bestFloorB = b;
+      }
     }
+  }
+  if (!skipPlausibilityFloor && bestFloorA !== null) {
+    return { a: bestFloorA, b: bestFloorB, dist: bestFloorDist };
   }
   return { a: bestA, b: bestB, dist: bestDist };
 }
@@ -862,7 +902,13 @@ function getBlockPolyline(block) {
   const candsTo = (toOsm && OSM_STREETS[toOsm]) ? findIntersectionCandidates(streetOsm, toOsm) : [];
   if (candsFrom.length === 0 || candsTo.length === 0) return null;
 
-  const { a: ptFrom, b: ptTo } = pickClosestCandidatePair(candsFrom, candsTo);
+  // #32: genuinely self-referential blocks (DOT's own from_street/to_street
+  // occasionally repeats the on_street's own name) have no principled correct
+  // cross-street point to prefer — #31's plausibility floor (see
+  // pickClosestCandidatePair()'s comment) is skipped for them so their resolution
+  // stays byte-identical to before that fix, out of this fix's scope.
+  const isSelfReferential = block.from === block.street || block.to === block.street || block.from === block.to;
+  const { a: ptFrom, b: ptTo } = pickClosestCandidatePair(candsFrom, candsTo, { skipPlausibilityFloor: isSelfReferential });
 
   const line = extractPolylineBetween(streetOsm, ptFrom, ptTo);
   if (!line || line.length < 2) return null;
@@ -2935,6 +2981,11 @@ if (require.main !== module) {
     closestPointOnStreet,
     extractPolylineBetween,
     osmName,
+    // #31 fix (docs/qa/pr127-build24-regen.md): exported so
+    // scripts/test-pipeline-determinism.js's hard gate can brute-force the SAME
+    // floor-aware contract pickClosestCandidatePair() now implements, instead of
+    // drifting out of sync with a hardcoded duplicate of this number.
+    _MIN_PLAUSIBLE_PAIR_DIST_M: MIN_PLAUSIBLE_PAIR_DIST_M,
     // Constants exposed for diagnostic printing in the probe
     _CSCL_OFFSET_FRACTION:          CSCL_OFFSET_FRACTION,
     _CSCL_OFFSET_MIN_M:             CSCL_OFFSET_MIN_M,

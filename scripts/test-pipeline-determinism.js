@@ -39,15 +39,36 @@
  * committed osm_data.json, so it can run cheaply and offline as a standing regression
  * gate.
  *
+ * ROUND 3 (open item #31, OBSERVED LIVE in the build-24 regen — see
+ * docs/qa/pr127-build24-regen.md Finding #1 and build/preprocess.js's
+ * pickClosestCandidatePair() comment): round 2's "closest pair wins" is itself
+ * geography-grounded, but has its own blind spot — when the SAME exact point happens to
+ * be an exact-tied candidate for BOTH cross streets (a real artifact of complex
+ * multi-way intersections, e.g. Washington Square South near NYU), the global minimum is
+ * EXACTLY 0m, which can never be correct for two differently-named cross streets. The
+ * fix adds a plausibility floor (`MIN_PLAUSIBLE_PAIR_DIST_M`, exported as
+ * `_MIN_PLAUSIBLE_PAIR_DIST_M`): prefer the smallest pairwise distance that clears the
+ * floor, falling back to the raw global minimum only when every candidate pair is below
+ * it (the genuinely self-referential #32 family, which getBlockPolyline() exempts from
+ * the floor explicitly, by name comparison, rather than by accident). This harness's
+ * hard gate (section 2a below) was updated to brute-force THIS floor-aware contract,
+ * not the old uncapped one — see its own comment for why that's not a weakening.
+ *
  * WHAT IT PROVES:
- *   1. Three pinned, independently ground-truthed (live OSM Nominatim reverse-geocode)
- *      real Manhattan blocks resolve to the geographically CORRECT answer:
+ *   1. Four pinned, independently ground-truthed (live OSM Nominatim reverse-geocode,
+ *      or verified-live-sign-data for the newest case) real Manhattan blocks resolve to
+ *      the geographically CORRECT answer:
  *        - Delancey St (Ludlow to Essex) [S] — the original round-1 repro.
  *        - Park Avenue (E 135th St to E 132nd St) [W] — QA's round-1 counterexample
  *          (round-1-fixed code resolves this to the Bronx; must resolve to Manhattan).
  *        - John St (Pearl St to Water St) — QA's second multi-chain example
  *          (Financial District Manhattan, not the identically-named streets in Dumbo,
  *          Brooklyn).
+ *        - Washington Square South (Thompson St to LaGuardia Place) [S] — round 3's
+ *          repro (docs/qa/pr127-build24-regen.md): pre-fix, this block's candidate pair
+ *          collapses to a single, identical, zero-distance point and the block silently
+ *          loses all 3 of its real curb-rule signs; post-fix it resolves to a real,
+ *          short (well under one block length), non-zero block face.
  *      Each pinned case also re-runs the round-1 "does processing order matter"
  *      consistency check — correctness AND determinism, not either alone.
  *   2. A plausibility sweep (QA Finding #3): for every block in the fuzz pool, flag any
@@ -74,7 +95,7 @@ const ROOT = path.resolve(__dirname, '..');
 const OSM_DATA_PATH = path.join(ROOT, 'osm_data.json');
 
 const pp = require(path.join(ROOT, 'build', 'preprocess.js'));
-const { initStreets, clearGeometryCaches, getBlockPolyline, findIntersectionCandidates, maxCandidateSpreadM, osmName, pickClosestCandidatePair } = pp;
+const { initStreets, clearGeometryCaches, getBlockPolyline, findIntersectionCandidates, maxCandidateSpreadM, osmName, pickClosestCandidatePair, _MIN_PLAUSIBLE_PAIR_DIST_M: MIN_PLAUSIBLE_PAIR_DIST_M } = pp;
 
 if (!fs.existsSync(OSM_DATA_PATH)) {
   console.error(`ERROR: ${OSM_DATA_PATH} not found — cannot run the determinism harness.`);
@@ -180,6 +201,29 @@ const PINNED_CASES = [
     referenceEndpoint: [40.70685, -74.00502],
     maxLenFt: 300,
   },
+  {
+    name: 'Washington Square South (Thompson St to LaGuardia Pl) [S] — round 3 (#31) repro',
+    block: makeBlock('Washington Square South', 'Thompson Street', 'LaGuardia Place'),
+    // Round 3's bug (docs/qa/pr127-build24-regen.md Finding #1): Thompson Street's and
+    // LaGuardia Place's own exact-tied candidate sets both separately contain the
+    // identical point (40.73021, -73.99806) — a real artifact of the complex multi-way
+    // geometry near NYU. Pre-fix, pickClosestCandidatePair()'s raw global minimum
+    // collapses to that shared point (ptFrom === ptTo, 0.00m), producing a zero-length
+    // block whose 3 real curb-rule signs silently vanish. Reference point
+    // (40.73024, -73.99812) — one of the two post-fix floor-passing candidates —
+    // reverse-geocodes live to "Washington Square South, Greenwich Village, Manhattan"
+    // (confirmed). No poisoner needed: the bug is order-independent (it's the raw
+    // global minimum, not a cache/argument-order artifact), so the correctness check
+    // alone is what catches it.
+    referenceEndpoint: [40.73024, -73.99812],
+    maxLenFt: 150,
+    // Round 3's specific failure mode is COLLAPSE, not mislocation — the pre-fix
+    // answer is a real, nearby point (it's the correct intersection cluster, just
+    // paired with itself), so a pure distance-to-reference-endpoint check alone
+    // would NOT have caught this regression. minLenFt makes degeneracy itself the
+    // gate: pre-fix this resolves to 0.00ft (ptFrom === ptTo); post-fix, ~10ft.
+    minLenFt: 2,
+  },
 ];
 
 function runPinnedCases() {
@@ -230,6 +274,16 @@ function runPinnedCases() {
     // Plausibility: a single block face shouldn't be absurdly long.
     if (afterGeo.blockLenFt > tc.maxLenFt) {
       console.error(`  FAIL: block length ${afterGeo.blockLenFt.toFixed(1)}ft exceeds plausibility ceiling ${tc.maxLenFt}ft for this case.`);
+      allOk = false;
+      continue;
+    }
+
+    // Round 3 (#31): a case can be "near a plausible point" AND still be a collapsed,
+    // degenerate block — the pre-fix bug's wrong answer is often geographically close
+    // to the right neighborhood (it's a real nearby intersection point, just paired
+    // with itself), so only cases that opt in to a minLenFt get this extra gate.
+    if (tc.minLenFt !== undefined && afterGeo.blockLenFt < tc.minLenFt) {
+      console.error(`  FAIL: block length ${afterGeo.blockLenFt.toFixed(2)}ft is below the minimum plausible length ${tc.minLenFt}ft for this case — looks like a collapsed/degenerate pair (ptFrom === ptTo), not a real block face.`);
       allOk = false;
       continue;
     }
@@ -433,16 +487,35 @@ function runPlausibilitySweep(pool) {
     }
     ambiguousCount++;
 
-    // 1. HARD GATE: brute-force the true minimum ourselves, independent of the
+    // 1. HARD GATE: brute-force the TRUE expected answer ourselves, independent of the
     // function under test, and confirm it agrees.
+    //
+    // Round 3 (#31, docs/qa/pr127-build24-regen.md): this used to brute-force the raw,
+    // uncapped global minimum across all candsFrom x candsTo combinations. That was
+    // itself the bug this round fixes — a global minimum can be an implausible
+    // exact-zero coincidence (the SAME point tied as a candidate for both cross
+    // streets), which is never the geographically correct answer for two differently-
+    // named streets. The brute force below now mirrors pickClosestCandidatePair()'s
+    // OWN corrected contract (prefer the smallest distance that clears
+    // MIN_PLAUSIBLE_PAIR_DIST_M; fall back to the raw global minimum only when nothing
+    // clears it) — this is not a weaker check, it's the same floor the production code
+    // applies, re-derived independently so a regression in the floor logic itself still
+    // fails loud. (This sweep's pool is built from pairs of DIFFERENT street names —
+    // see buildFuzzPool()'s `if (t !== s)` — so none of it is the genuinely
+    // self-referential #32 family getBlockPolyline() exempts from the floor; testing
+    // with the floor unconditionally applied here is the correct mirror of production
+    // behavior for every block this sweep actually contains.)
     let bruteForceMinFt = Infinity;
+    let bruteForceFloorMinFt = Infinity;
     for (const cf of candsFrom) for (const ct of candsTo) {
       const d = geoDistFt(cf, ct);
       if (d < bruteForceMinFt) bruteForceMinFt = d;
+      if (d >= MIN_PLAUSIBLE_PAIR_DIST_M * FT_PER_M && d < bruteForceFloorMinFt) bruteForceFloorMinFt = d;
     }
+    const expectedFt = Number.isFinite(bruteForceFloorMinFt) ? bruteForceFloorMinFt : bruteForceMinFt;
     const picked = pickClosestCandidatePair(candsFrom, candsTo);
     const pickedDistFt = picked.dist * FT_PER_M;
-    const algorithmOk = Math.abs(pickedDistFt - bruteForceMinFt) < 0.5; // sub-foot float slop only
+    const algorithmOk = Math.abs(pickedDistFt - expectedFt) < 0.5; // sub-foot float slop only
     if (!algorithmOk) algorithmFailCount++;
 
     // 2. INFORMATIONAL: is the best-achievable result itself short enough to look like
