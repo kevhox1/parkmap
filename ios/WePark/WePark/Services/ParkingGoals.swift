@@ -196,44 +196,96 @@ enum ParkingGoals {
 
     // MARK: - Ranking / labeling (§0.8.3a)
 
-    /// The actual next move-forcing restriction date for a segment, ignoring metered
-    /// payment and honoring ASP suspensions — exactly the predicate the overnight
-    /// family of goals uses (§0.8.4), just carried forward to find a real calendar
-    /// date instead of a yes/no answer at one fixed checkpoint.
+    /// The actual next move-forcing restriction date for a segment, honoring
+    /// `goal`'s own metered tolerance (§0.8.4 — `ignoringMeteredPayment: true` for
+    /// the overnight family, `false` for Free a Few Hours). Returns the ET midnight
+    /// of the first calendar day carrying a move-forcing restriction — day-level
+    /// precision only; §0.8.3a's "Good through <day>" label only ever needs the
+    /// day, never a clock time.
     ///
-    /// Reuses `ParkingRulesEngine.nextRestriction(for:at:)` verbatim — it already
-    /// (a) skips METERED rules entirely ("not a move-your-car restriction",
-    /// `ParkingRulesEngine.swift` — the METERED case in `nextRestriction`'s rule
-    /// loop) and (b) skips ASP-suspended dates inside its own 14-day walk
-    /// (`computeHoursUntilASP`). **No new suspension-handling code is needed here**
-    /// — this is the "no new code needed for this edge case" claim from §0.8.3a's
-    /// ASP-suspension-honesty paragraph, verified by this project's AC-26 tests.
+    /// `goal` is a REQUIRED parameter, not defaulted — this closes a QA-flagged trap
+    /// (pass 1, Finding #2): an earlier draft of this function hardcoded the
+    /// overnight family's `ignoringMeteredPayment: true` with no way for a future
+    /// caller evaluating Free a Few Hours to get the strict semantics that goal
+    /// actually requires. Requiring `goal` here means the metered tolerance can
+    /// never drift from `ignoresMeteredPayment(for:)`, for any caller.
     ///
-    /// Returns `nil` when `nextRestriction` hits its own sentinel (168h / no
-    /// restriction found within its search horizon) — i.e. this segment has no
-    /// weekly move-forcing rule at all. A `nil` result means "clear indefinitely, as
-    /// far as this function can see" — callers should treat it as the best possible
-    /// outcome, not an error.
+    /// **Does NOT compose `ParkingRulesEngine.nextRestriction(for:at:)`** (QA pass 1,
+    /// Finding #1, blocking). That function has a real, pre-existing asymmetry:
+    /// `NO_PARKING`/`TRUCK_LOADING` rules get a full forward walk even when not
+    /// active right now, but `NO_STANDING`/`SPECIAL` rules only check "is this
+    /// active RIGHT NOW" — a scheduled (non-`anytime`) `NO_STANDING`/`SPECIAL` rule
+    /// that isn't active at the exact instant `nextRestriction` is called is
+    /// invisible to it, and it silently falls through with zero contribution (no
+    /// forward walk, no sentinel update). That's a real, mainstream restriction
+    /// shape in the shipped tile data (QA's 400-tile sample: 100% of `SPECIAL`
+    /// rules, ~41% of `NO_STANDING` rules are this scheduled shape) — composing
+    /// `nextRestriction` here silently reported "no restriction found" for those
+    /// segments, which this function's ranking consumer then read as "indefinitely
+    /// clear," ranking a bottom-rung segment ABOVE a top-rung one. See
+    /// `ParkingGoalsTests.swift`'s `testNextMoveForcingDate_scheduled...` tests for
+    /// the exact reproduction.
+    ///
+    /// Instead, this walks calendar days directly via `isFree(..., until:)` — the
+    /// SAME day-walk `match(...)` already uses for the ladder. `isFree`'s day-walk
+    /// evaluates `NO_STANDING`/`SPECIAL`/`NO_PARKING`/`TRUCK_LOADING` schedules
+    /// identically on ANY future calendar day (not just "right now"), and already
+    /// skips suspended ASP dates — so suspension-skip honesty (§0.8.3a's "no new
+    /// code needed" claim) still holds, just via a different composition than the
+    /// original draft. One `isFree` call per calendar day up to `searchHorizonDays`
+    /// — cheap, since each call's own internal day-walk only spans the single day
+    /// passed in.
+    ///
+    /// Returns `nil` when no restriction is found within `searchHorizonDays` — i.e.
+    /// this segment has no weekly move-forcing rule at all (or none within the
+    /// horizon). A `nil` result means "clear indefinitely, as far as this function
+    /// can see" — callers should treat it as the best possible outcome, not an error.
     nonisolated static func nextMoveForcingDate(
         for segment: Segment,
+        goal: ParkingGoal,
         from: Date = .nowET,
-        engine: ParkingRulesEngine
+        engine: ParkingRulesEngine,
+        searchHorizonDays: Int = 14
     ) -> Date? {
-        let restriction = engine.nextRestriction(for: segment, at: from)
-        guard restriction.hours < 168 else { return nil }
-        return from.addingTimeInterval(restriction.hours * 3600)
+        let ignoringMetered = ignoresMeteredPayment(for: goal)
+
+        for dayOffset in 0..<searchHorizonDays {
+            let windowStart = dayOffset == 0 ? from : from.startOfDayET(offsetDays: dayOffset)
+            let windowEnd = from.startOfDayET(offsetDays: dayOffset + 1)
+            guard windowEnd > windowStart else { continue }
+
+            let clearThisDay = engine.isFree(
+                segment: segment,
+                from: windowStart,
+                until: windowEnd,
+                ignoringMeteredPayment: ignoringMetered
+            )
+            if !clearThisDay {
+                return from.startOfDayET(offsetDays: dayOffset)
+            }
+        }
+        return nil
     }
 
     /// "Good through <day>" ranking label for a matching segment (§0.8.3a). `nil`
     /// when `nextMoveForcingDate` is `nil` (no restriction found — see that
     /// function's doc comment). Callers (DM-2's UI) decide what to show in that
     /// case; this function doesn't invent a fallback string.
+    ///
+    /// `goal` is required for the same reason it's required on
+    /// `nextMoveForcingDate` (QA pass 1, Finding #2) — this label must never
+    /// silently use the overnight family's loose metered tolerance for a goal that
+    /// doesn't want it. Note for a future DM-2 caller: ranking has no real value
+    /// for `.freeFewHours` (every match clears an identical flat 3-hour bar, so
+    /// there's nothing to distinguish) — this function will still behave correctly
+    /// if called for that goal, but DM-2's UI likely has no reason to call it there.
     nonisolated static func goodThroughLabel(
         for segment: Segment,
+        goal: ParkingGoal,
         from: Date = .nowET,
         engine: ParkingRulesEngine
     ) -> String? {
-        guard let date = nextMoveForcingDate(for: segment, from: from, engine: engine) else {
+        guard let date = nextMoveForcingDate(for: segment, goal: goal, from: from, engine: engine) else {
             return nil
         }
         return "Good through \(relativeDayLabel(for: date, from: from))"

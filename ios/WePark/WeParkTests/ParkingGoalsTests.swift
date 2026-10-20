@@ -23,6 +23,12 @@
 //      - testMatch_parkAndForget_clearsBottomRungOnly
 //      - testMatch_parkAndForget_failsEvenBottomRung_nonMatching
 //      - testMatch_parkAndForget_topRungRanksAboveBottomRung
+//    QA pass 1, Finding #1 (blocking) regression — nextMoveForcingDate must NOT
+//    compose ParkingRulesEngine.nextRestriction (no forward walk for scheduled
+//    NO_STANDING/SPECIAL — see ParkingGoals.swift's nextMoveForcingDate doc comment):
+//      - testNextMoveForcingDate_scheduledNoStandingNotAnytime_findsRealRestriction_notNil
+//      - testNextMoveForcingDate_scheduledSpecialNotAnytime_findsRealRestriction_notNil
+//      - testMatch_parkAndForget_scheduledNoStandingBottomRung_doesNotOutrankTopRung
 //    AC-26 (suspended ASP day is a non-event):
 //      - testMatch_freeOvernight_suspendedAspDayTomorrow_matching
 //      - testGoodThroughLabel_suspendedAspDaySkipped_resolvesToNextRealRestriction
@@ -262,8 +268,79 @@ final class ParkingGoalsTests: XCTestCase {
         // The ranking label corroborates: the top-rung (no weekly rule) segment is
         // "indefinitely clear" (nextMoveForcingDate == nil), the bottom-rung segment
         // resolves to a real, bounded date — nil unambiguously outranks a bounded date.
-        XCTAssertNil(ParkingGoals.nextMoveForcingDate(for: topSegment, from: topFrom, engine: engine))
-        XCTAssertNotNil(ParkingGoals.nextMoveForcingDate(for: bottomSegment, from: bottomFrom, engine: engine))
+        XCTAssertNil(ParkingGoals.nextMoveForcingDate(for: topSegment, goal: .parkAndForget, from: topFrom, engine: engine))
+        XCTAssertNotNil(ParkingGoals.nextMoveForcingDate(for: bottomSegment, goal: .parkAndForget, from: bottomFrom, engine: engine))
+    }
+
+    // MARK: - QA pass 1, Finding #1 (blocking) regression tests
+    //
+    // nextMoveForcingDate/goodThroughLabel must NOT compose
+    // ParkingRulesEngine.nextRestriction(for:at:) — that function has no forward
+    // walk for scheduled (non-anytime) NO_STANDING/SPECIAL rules, so it silently
+    // reports "no restriction" (the 168h sentinel) for them. The fix instead walks
+    // calendar days directly via isFree(...), the same day-walk match() already
+    // uses for the ladder. These tests reproduce QA's exact hand-traced scenario
+    // (NO_STANDING, Wednesday-only, from Monday) plus a SPECIAL-category variant.
+
+    func testNextMoveForcingDate_scheduledNoStandingNotAnytime_findsRealRestriction_notNil() {
+        // NO_STANDING, Wednesday only, all day (empty timeRanges), anytime: false.
+        // QA's exact repro: `from` = Monday 10am. The OLD (nextRestriction-composing)
+        // implementation returned nil here — "indefinitely clear" — which is wrong:
+        // there IS a real restriction, three days out, on Wednesday.
+        let from = et(2026, 5, 11, 10, 0)  // Monday
+        let segment = seg(rules: [r(category: .noStanding, days: [3])])
+
+        // Confirms QA's trace: this segment only clears Park & Forget's BOTTOM rung.
+        let matchResult = ParkingGoals.match(segment: segment, goal: .parkAndForget, from: from, engine: engine)
+        XCTAssertTrue(matchResult.matches)
+        XCTAssertEqual(matchResult.clearedRungOffsetDays, 2,
+                       "Scheduled Wednesday NO_STANDING must only clear the bottom rung (offsetDays: 2)")
+
+        // The core regression assertion: must resolve to the REAL Wednesday
+        // restriction, not nil.
+        let date = ParkingGoals.nextMoveForcingDate(for: segment, goal: .parkAndForget, from: from, engine: engine)
+        XCTAssertEqual(date, et(2026, 5, 13, 0, 0),
+                       "Must find the real Wednesday NO_STANDING restriction, not report nil/'indefinitely clear'")
+
+        let label = ParkingGoals.goodThroughLabel(for: segment, goal: .parkAndForget, from: from, engine: engine)
+        XCTAssertEqual(label, "Good through Wed")
+    }
+
+    func testNextMoveForcingDate_scheduledSpecialNotAnytime_findsRealRestriction_notNil() {
+        // SPECIAL, Friday only, 10am-noon, anytime: false — QA's sample found 100%
+        // of SPECIAL rules in the shipped tiles are this scheduled (non-anytime)
+        // shape, so this category is at least as exposed to Finding #1 as NO_STANDING.
+        let from = et(2026, 5, 11, 10, 0)  // Monday
+        let segment = seg(rules: [r(category: .special, days: [5], timeRanges: [(600, 720)])])
+
+        let date = ParkingGoals.nextMoveForcingDate(for: segment, goal: .parkAndForget, from: from, engine: engine)
+        XCTAssertEqual(date, et(2026, 5, 15, 0, 0),
+                       "Must find the real Friday SPECIAL restriction, not report nil/'indefinitely clear'")
+    }
+
+    func testMatch_parkAndForget_scheduledNoStandingBottomRung_doesNotOutrankTopRung() {
+        // The exact failure mode QA caught: a bottom-rung segment (scheduled
+        // NO_STANDING) must not be ranked ABOVE a top-rung segment (metered-only,
+        // no weekly move-forcing rule at all). Before the fix, the NO_STANDING
+        // segment's nextMoveForcingDate was nil — "indefinitely clear" — which
+        // incorrectly outranked the genuinely-top-rung metered-only segment.
+        let bottomSegment = seg(rules: [r(category: .noStanding, days: [3])])
+        let topSegment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let from = et(2026, 5, 11, 10, 0)  // Monday
+
+        let bottomResult = ParkingGoals.match(segment: bottomSegment, goal: .parkAndForget, from: from, engine: engine)
+        let topResult = ParkingGoals.match(segment: topSegment, goal: .parkAndForget, from: from, engine: engine)
+        XCTAssertEqual(bottomResult.clearedRungOffsetDays, 2)
+        XCTAssertEqual(topResult.clearedRungOffsetDays, 8)
+
+        let bottomDate = ParkingGoals.nextMoveForcingDate(for: bottomSegment, goal: .parkAndForget, from: from, engine: engine)
+        let topDate = ParkingGoals.nextMoveForcingDate(for: topSegment, goal: .parkAndForget, from: from, engine: engine)
+
+        // The bottom-rung segment must resolve to a REAL, bounded date (not nil) —
+        // this is what makes it correctly rank BELOW the top-rung segment's nil
+        // ("indefinitely clear"), rather than incorrectly outranking it.
+        XCTAssertNotNil(bottomDate, "Bottom-rung NO_STANDING segment must NOT report nil — it has a real restriction")
+        XCTAssertNil(topDate, "Top-rung metered-only segment correctly has no weekly move-forcing rule — nil")
     }
 
     // MARK: - AC-26: a suspended ASP day inside the window is a non-event
@@ -280,18 +357,22 @@ final class ParkingGoalsTests: XCTestCase {
 
     func testGoodThroughLabel_suspendedAspDaySkipped_resolvesToNextRealRestriction() {
         // Same segment/window as above. The ranking label must skip past the suspended
-        // Thursday (05-14) and resolve to the next REAL restriction: Monday 05-18 7am —
-        // not the suspended Thursday. No new suspension-handling code is required for
-        // this (§0.8.3a) — nextRestriction's own 14-day ASP walker already skips
-        // suspended dates; this test is the proof.
+        // Thursday (05-14) and resolve to the next REAL restriction day: Monday 05-18 —
+        // not the suspended Thursday. nextMoveForcingDate resolves to day-level
+        // precision (ET midnight of the restriction's calendar day, not its exact
+        // start time) — see that function's doc comment (QA pass 1, Finding #1 fix:
+        // it now walks isFree(...) day-by-day rather than composing
+        // nextRestriction(for:at:), which only returns exact clock times). The
+        // day-walk's own suspension-skip (inside isFree's ASP branch) is what makes
+        // this test pass; no separate suspension-handling code was added for it.
         let from = et(2026, 5, 13, 10, 0)  // Wednesday
         let segment = seg(rules: [r(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])])
 
-        let date = ParkingGoals.nextMoveForcingDate(for: segment, from: from, engine: engine)
-        XCTAssertEqual(date, et(2026, 5, 18, 7, 0),
-                       "Must resolve to Monday 05-18 7am, skipping the suspended Thursday 05-14 entirely")
+        let date = ParkingGoals.nextMoveForcingDate(for: segment, goal: .freeOvernight, from: from, engine: engine)
+        XCTAssertEqual(date, et(2026, 5, 18, 0, 0),
+                       "Must resolve to Monday 05-18, skipping the suspended Thursday 05-14 entirely")
 
-        let label = ParkingGoals.goodThroughLabel(for: segment, from: from, engine: engine)
+        let label = ParkingGoals.goodThroughLabel(for: segment, goal: .freeOvernight, from: from, engine: engine)
         XCTAssertEqual(label, "Good through Mon",
                        "Label must reflect the next REAL restriction day (Mon), not the suspended Thursday")
     }
@@ -330,7 +411,7 @@ final class ParkingGoalsTests: XCTestCase {
 
     func testGoodThroughLabel_noRulesAtAll_returnsNil() {
         let segment = seg(rules: [])
-        let label = ParkingGoals.goodThroughLabel(for: segment, from: et(2026, 5, 11, 9, 0), engine: engine)
-        XCTAssertNil(label, "No rules at all → nextRestriction's sentinel → goodThroughLabel must be nil, not a fabricated string")
+        let label = ParkingGoals.goodThroughLabel(for: segment, goal: .parkAndForget, from: et(2026, 5, 11, 9, 0), engine: engine)
+        XCTAssertNil(label, "No rules at all → every day-window clears → goodThroughLabel must be nil, not a fabricated string")
     }
 }
