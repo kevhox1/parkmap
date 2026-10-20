@@ -98,6 +98,18 @@ struct BlockDetailView: View {
     /// those two properties.
     var zoneStore: ZoneStore? = nil
 
+    /// DM-2 (`docs/drive-mode-default-spec.md` §0.8.3a, `docs/design/goal-first-ambient-
+    /// design.md` §3.1): overrides the safety-label line's TEXT (never its color/severity)
+    /// with "Good through <relative day>" when a goal filter is active and this segment is
+    /// in the matching (green) bucket. `nil` — the default — in every other case: flag off,
+    /// full-palette mode, or this segment isn't currently matching. `ContentView` computes
+    /// this; `BlockDetailView` never reaches into `ParkingGoals`/`AppConstants` itself,
+    /// keeping this view's existing "just render what I'm handed" shape unchanged. `var`
+    /// (not `let`) for the same synthesized-memberwise-initializer reason as `pinService`/
+    /// `zoneMessageService`/`zoneStore` above — declared last to match ContentView's own
+    /// call-site argument order.
+    var goalGoodThroughLabel: String? = nil
+
     // Evaluate once at sheet-open time (stable reference time for the whole sheet).
     private let now: Date = .nowET
 
@@ -280,8 +292,11 @@ struct BlockDetailView: View {
     // MARK: - Safety label
 
     private var safetyLabelView: some View {
+        // DM-2 (§0.8.3a, design doc §3.1): the goal-driven "Good through <day>" override
+        // replaces only the TEXT below — the severity band above still reads straight off
+        // `engine.currentStateColor(...)`, untouched (never a new color, §0.8.6).
         let label = engine.safetyLabel(for: segment, at: now)
-        return Text(label.text)
+        return Text(goalGoodThroughLabel ?? label.text)
             .font(.title.bold())
             .foregroundStyle(.primary)
             .fixedSize(horizontal: false, vertical: true)
