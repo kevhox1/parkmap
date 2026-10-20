@@ -61,19 +61,34 @@ curb unrestricted AND unpaid" (today's strict semantics, correct for "Free a few
 the overnight family). This is the one real new piece of engine surface this amendment requires —
 call it out honestly in sizing (§4), it is not a free client-side relabeling exercise.
 
-**Open decisions for Kevin, before engineering starts on this amendment (everything else in §0.8
-below is locked):**
-1. **Park & Forget's ladder rungs (7d → 4d → 2d, §0.8.3)** — proposed, not yet Kevin-confirmed.
-   Fine as-is, or does he want different checkpoints?
-2. **"Free a few hours" = +3h (§0.8.5)** — a new preset value, splitting the existing 2hr/4hr
-   presets. Confirm +3h, or just reuse the existing 2hr or 4hr preset verbatim (zero new code)?
-3. **Single flag vs two (§0.6)** — recommended: both ride `driveModeDefaultEnabled` together.
-   Confirm, or does Kevin want the bare ambient-default screen shippable independently of
-   goal-first for risk-reduction?
-4. **Icons/copy (🌙/⏱/🅿️, exact button labels)** — proposed, @designer's to refine; flag now if
-   Kevin has a strong preference either way before @designer spends a pass on it.
-5. **"Free a few hours" and metered tolerance** — stays strict (metered disqualifies) per §0.8.5;
-   see §6's new follow-up for the alternate framing this punts on. Confirm this is fine for v1.
+**Kevin's rulings on the five open decisions (2026-10-20 session — 4 of 5 LOCKED):**
+1. **Park & Forget ladder — RULED, confirmed with corrected labels.** Kevin's instinct ("no such
+   thing in NYC as >2 days unless over the weekend") was checked against the shipped tiles (all
+   46,925 segments): among parkable segments WITH a weekly move-forcing rule, 45.6% max out at
+   exactly 3 consecutive clear days (the Thu→Mon weekend gap on Mon/Thu-style sides), 45.3% at
+   1–2 days (Mon–Sat/Mon–Fri commercial), and — the part Kevin's neighborhood doesn't have —
+   9.2% (2,888 segments) are genuine once-a-week sweep sides clearing ~6 days, plus another 9.2%
+   of parkable curb has NO weekly move-forcing rule at all (metered-only/unregulated — clears any
+   window once meters are ignored). So the top rung is real (~17% of parkable curb), and the
+   middle rung IS the weekend gap. **Rungs locked as `offsetDays: 8 → 4 → 2`, which in full clear
+   days is 7 → 3 → 1** — the original draft's "7d → 4d → 2d" labels were sloppy offsetDays
+   shorthand; implement to the offsets, describe to users in "Good through <day>" terms only
+   (§0.8.3a), never rung numbers. Kevin, ruling: "Okay fine go for it," reaffirming that
+   **overnight-into-next-day is the flagship use case** — consistent with Free Overnight being the
+   pre-selected default (§0.8.1, unchanged).
+2. **"Free a few hours" = +3h — RULED, confirmed** ("sure good idea"). §0.8.5 as written.
+3. **Single flag vs two — PENDING, the one still-open ruling.** Kevin asked for a clearer
+   explanation (given 2026-10-20); recommendation stands: one flag, both halves ride
+   `driveModeDefaultEnabled` together. **DM-1 does not dispatch until this is ruled.** (DM-2e is
+   flag-structure-independent and may proceed.)
+4. **Icons/copy — RULED: @designer owns it**, with a NEW LOCKED CONSTRAINT from Kevin: *the goal
+   buttons must be huge and unmistakable — "anyone who boots it up should get it. Maybe not the
+   ASP rules but at least get the buttons."* First-time comprehension with zero NYC-parking
+   jargon is the design bar; these are the biggest tap targets in the app (extends Kevin's
+   standing bigger-touch-targets preference, PR #110). AC-31's no-evasion-language constraint
+   unchanged.
+5. **"Free a few hours" metered tolerance — RULED: strict confirmed** (Kevin: "it's a meter so
+   that's not free"). §0.8.5 unchanged; the §6 metered-tolerant variant stays punted.
 
 ---
 
@@ -517,7 +532,7 @@ the single biggest new risk this amendment introduces, bigger than Free Overnigh
 risk (both have a much lower bar and will realistically paint plenty of green in ordinary use).
 
 **Mitigation — the step-down ladder (§0.8.3) is not optional polish, it's the guardrail:** Park &
-Forget's ladder (7d → 4d → 2d) means the map never needs to show "zero matches" unless a block
+Forget's ladder (offsetDays 8 → 4 → 2; 7 → 3 → 1 full clear days) means the map never needs to show "zero matches" unless a block
 fails even the 2-day Free-Overnight-equivalent checkpoint, which should be rare. When the ladder
 has to step down for most/all visible segments, the UI must say so honestly — e.g. a small inline
 banner: **"Nothing clear for a full week nearby — showing the best available."** The per-segment
@@ -672,7 +687,8 @@ RPCs, or migrations. This is a client-side state/presentation rework plus one ne
 | `ios/WePark/WePark/Views/BrowseNavigationSheet.swift` | Presentation-configuration rework: from permanent/non-dismissible to normal on-demand sheet. Content (search field, "Find a Spot" button, "New to parking?" link) unchanged. | Medium — real behavior change to how the sheet is hosted, even though its content doesn't change. |
 | `ios/WePark/WePark/Views/ParkUntilSheet.swift` | **Reused verbatim, zero changes.** The power-user/custom path (§0.8.9) is reached from full-palette mode exactly as it is today — `ParkUntilSheet`, `ParkUntilPill`, and `ParkUntilSheet.formatTime` are all unmodified by this amendment; the goal-first front door is new, the sheet behind it is not. | None — included for completeness/reuse-tracking, not touched. |
 | `ios/WePark/WePark/Services/LocationService.swift` | No internal change required — `requestAndFetchLocation()` is reused as-is. (The fix in §0.2 lives in `ContentView.swift`'s `enterCruiseMode()`, not here.) | None — included for completeness, not touched. |
-| New: `ios/WePark/WePark/Views/GoalSelectorView.swift` (name TBD, AMENDED 2026-10-20) | The three large goal buttons + full-palette toggle + goal-resolution helper functions (§0.8.1–§0.8.5, §0.8.8) — a new view file, mirrors `ParkUntilSheet.swift`'s own self-contained-helpers pattern (time math as static funcs on the view, Calendar.easternTime only). | Medium — new file, but isolated; no existing call sites to regress, only new ones added to `ContentView.swift`. |
+| New: `ios/WePark/WePark/Views/GoalSelectorView.swift` (name TBD, AMENDED 2026-10-20) | The three large goal buttons + full-palette toggle (§0.8.1, §0.8.8). **RE-SCOPED 2026-10-20 (work-stream disjointness):** the goal-resolution helpers do NOT live here — they live in the new `Services/ParkingGoals.swift` below (DM-2e's file), so DM-2e and DM-2 never touch the same file; this view only consumes them. | Medium — new file, but isolated; no existing call sites to regress, only new ones added to `ContentView.swift`. |
+| New: `ios/WePark/WePark/Services/ParkingGoals.swift` (ADDED 2026-10-20, DM-2e) | Pure-Foundation goal-resolution layer (no SwiftUI import, per AC-14's service-file rule): a goal enum, per-goal target resolution (§0.8.2/§0.8.5), Park & Forget's offsetDays 8→4→2 ladder walk, and the per-segment "Good through <day>" date computation + relative-day label formatting (§0.8.3/§0.8.3a). Calendar.easternTime only. | Medium — new pure logic, fully unit-testable without UI; the one file where the amendment's genuinely new behavior lives alongside the `isFree()` parameter. |
 | New: `ios/WePark/WePark/Views/LocationPrimingCard.swift` (or similar) | One-shot card, `BackgroundNoteGate`-style persistence. | Low — new, additive, no existing call sites. |
 | New: `ios/WePark/WePark/Services/Constants.swift` | Add `driveModeDefaultEnabled` flag constant. | Low — mechanical, follows `communityEnabled`/`regularsEnabled` precedent exactly. |
 
@@ -829,9 +845,11 @@ maintenance mode, untouched.
 - [ ] **AC-24:** Free Overnight's target resolves to `.nowET.startOfDayET(offsetDays: 2)` — a
   segment with an ASP day tomorrow (any start hour) is classified non-matching (red); a segment
   with its next ASP day the day after tomorrow or later is classified matching (green) (§0.8.2).
-- [ ] **AC-25:** Park & Forget's step-down ladder (7d → 4d → 2d) is verified per-segment: a block
-  that clears 7 days is labeled/ranked above one that only clears 2 (§0.8.3a) — tested with at
-  least one real or synthetic case at each rung.
+- [ ] **AC-25:** Park & Forget's step-down ladder (offsetDays 8 → 4 → 2, i.e. 7 → 3 → 1 full
+  clear days — rungs locked by Kevin's 2026-10-20 ruling + tile-data analysis, see the rulings
+  block in the amendment banner) is verified per-segment: a block that clears the top rung is
+  labeled/ranked above one that only clears the bottom (§0.8.3a) — tested with at least one real
+  or synthetic case at each rung.
 - [ ] **AC-26:** A suspended ASP day inside a goal's window is correctly treated as a non-event —
   the segment's matching status and ranking label both reflect the suspension (i.e., resolve to
   the next REAL restriction date, not the suspended one) (§0.8.3a).
@@ -852,6 +870,15 @@ maintenance mode, untouched.
   the map already filtered; tapping each of the other two goals; the full-palette toggle both
   directions; the empty-map guard state; and Kevin's manual confirmation that the copy never uses
   "avoid/ticket/fine/evasion/dodge" anywhere in the goal buttons, ranking labels, or guard banner.
+- [ ] **AC-32 (ADDED 2026-10-20, Kevin: "the chevron sign and heads-up facing is crucial to the
+  experience"):** Kevin's Phase-1 drive smoke explicitly verifies the escalated session's chevron
+  puck + heading-up camera feel spot-on **when entered via the new ambient screen's demoted
+  escalation affordance** — the new entry path must produce zero regression vs today's Cruise
+  entry. **TF2-16** (heading behavior at intersection approaches — still never deliberately
+  watched on any drive) is folded into this same gate as a named watch item. Related but
+  separate: open item **#36** (heading-EMA convergence tune + the designer's puck/compass audit,
+  `docs/design/drive-puck-chevron-review.md`) — if its fix rides the same build, this gate also
+  judges it.
 
 ---
 
