@@ -157,3 +157,185 @@ What I did run/verify:
 
 ---
 *QA by @qa-verifier, cold read, no prior authorship context on this branch.*
+
+---
+
+# Pass 2 addendum — 2026-10-20
+
+**Reviewed:** branch `feature/dm2e-goal-engine` at `0d7c8ca4` (fix commit on top of pass 1's
+`20d30f10`), re-verified adversarially against the Pass 1 findings above.
+
+**Verdict:** ✅ **MERGE**
+
+## Summary
+
+Both findings from Pass 1 are genuinely fixed, not just claimed-fixed. I re-ran my original
+Finding #1 hand-trace against the new code **before** reading the new tests' assertions, to avoid
+confirming my own trace against itself — the new `nextMoveForcingDate` walks calendar days directly
+via `isFree(..., ignoringMeteredPayment:)` instead of composing `nextRestriction`, and my independent
+trace produced the exact same dates the new tests assert (Wed 2026-05-13 for the NO_STANDING repro,
+Fri 2026-05-15 for the new SPECIAL variant, Mon 2026-05-18 for the AC-26 suspension case) before I
+looked at what the test file expected. `nextRestriction()` itself has zero diff across the entire PR
+(verified via `git diff 20d30f10..HEAD -- ParkingRulesEngine.swift`, including the fix commit — empty
+output). Finding #2 is closed cleanly: `goal:` is now a required (non-defaulted) parameter on both
+ranking functions, threaded correctly through `ignoresMeteredPayment(for:)`, and every one of the 10
+call sites across the test file was updated consistently. One new 🟢 nit (missing direct test for
+`.freeFewHours` metered-strictness in the new ranking path) and the walk's own explicit 14-day
+horizon cap are the only things I'd still note — neither blocks merge.
+
+## Re-verification checklist (adversarial, per the coordinator's 6 items)
+
+1. **Finding #1 re-trace against the NEW code** — ✅ confirmed fixed. I reconstructed my original
+   Pass-1 repro (NO_STANDING, `days: [3]` only, `timeRanges: []`, `from` = Monday 10:00am) and walked
+   the new `nextMoveForcingDate` by hand:
+   - `dayOffset=0`: window `[Mon 10am, Tue 00:00)` — Wed not in range → clear.
+   - `dayOffset=1`: window `[Tue 00:00, Wed 00:00)` — Wed excluded (half-open) → clear.
+   - `dayOffset=2`: window `[Wed 00:00, Thu 00:00)` — Wed (day 3) ∈ rule.days, empty `timeRanges` → all-day conflict → `isFree` returns `false` → function returns `from.startOfDayET(offsetDays: 2)` = **Wed 2026-05-13 00:00**.
+   This is non-nil and resolves to the real restriction day — the exact fix the finding asked for. It
+   matches `testNextMoveForcingDate_scheduledNoStandingNotAnytime_findsRealRestriction_notNil`'s
+   asserted `et(2026, 5, 13, 0, 0)` exactly — I derived this independently, then confirmed against the
+   test, not the reverse.
+   - Ranking check: `testMatch_parkAndForget_scheduledNoStandingBottomRung_doesNotOutrankTopRung` now
+     correctly gets `bottomDate` = non-nil (the scheduled NO_STANDING segment) and `topDate` = nil (the
+     metered-only segment) — under the established "`nil` outranks any bounded date" convention, the
+     bottom-rung segment (real date) now correctly ranks **below** the top-rung segment (nil), which is
+     the inverse of Pass 1's observed bug. Confirmed by hand, not by trusting the test name.
+   - I additionally hand-verified the new SPECIAL-category test
+     (`testNextMoveForcingDate_scheduledSpecialNotAnytime_findsRealRestriction_notNil`: `SPECIAL`,
+     `days: [5]`, `timeRanges: [(600,720)]`, from Monday) — walking day-by-day lands on Friday
+     2026-05-15 00:00, matching the test's assertion exactly.
+2. **New day-walk's own edge cases:**
+   - **Walk bound/cap:** `searchHorizonDays: Int = 14` (default), explicit named parameter, not a
+     magic number. A no-rules segment: `isFree()` returns `true` immediately for empty rules
+     (`guard !rules.isEmpty else { return true }`), so every one of the 14 iterations reports
+     `clearThisDay = true`, the loop completes without ever returning early, and the function falls
+     through to `return nil` — clean termination, verified by reading `isFree`'s own early-return
+     path, not assumed.
+   - **ET-midnight boundary / off-by-one:** `dayOffset == 0` uses `from` itself (not `from`'s midnight)
+     as `windowStart`, so "today" only covers the time remaining from `from` onward — correct, it
+     shouldn't flag a restriction earlier today that's already passed. All other days use
+     `from.startOfDayET(offsetDays:)` for both window edges, so each subsequent day's window is a
+     clean `[midnight, nextMidnight)` half-open interval with no double-counting or gap at the
+     boundary. The `guard windowEnd > windowStart else { continue }` defensive check never actually
+     triggers in practice (`startOfDayET(offsetDays:)` is monotonically increasing by construction),
+     confirmed by inspection, not just taken on faith.
+   - **DST transition days:** `startOfDayET(offsetDays:)` uses `Calendar.easternTime`'s
+     `date(byAdding: .day, value:, to:)` (confirmed in `Date+ET.swift:83-88`, unchanged by this PR) —
+     this is the DST-safe calendar-day idiom already used by `ParkUntilSheet.tonightMidnight()` and
+     the ladder itself, not raw `addingTimeInterval(24*3600)` arithmetic. Calling `isFree()` once per
+     narrow 1-day window doesn't introduce any new DST exposure beyond what the ladder's wider-window
+     calls already had — `isFree()`'s own internal day-count math (`cal.dateComponents([.day], ...)`)
+     is Calendar-based regardless of window width. No new DST risk from this refactor.
+   - **Day-level precision vs. AC-26's honesty requirement:** re-verified by hand (see item 1's
+     methodology) that the suspension test's updated expectation —
+     `et(2026, 5, 18, 0, 0)` instead of the old `et(2026, 5, 18, 7, 0)` — is correct: the function now
+     returns the ET midnight of the restriction's calendar day, not the rule's exact clock start time,
+     and `relativeDayLabel`'s day-diff math only ever consumed the date portion anyway (confirmed by
+     re-reading `relativeDayLabel`, unchanged by this fix) — so day-level precision loses no
+     information the label actually used, and the suspension-skip (Thursday 05-14 correctly skipped,
+     landing on Monday 05-18) still holds, now via `isFree`'s own ASP-suspension branch (`isSuspended`
+     check) rather than `nextRestriction`'s. Same honesty guarantee, different (and now correct)
+     plumbing.
+3. **`goal:` parameter threading** — ✅ confirmed. Both `nextMoveForcingDate` and `goodThroughLabel`
+   now require `goal: ParkingGoal` (non-defaulted — a caller cannot omit it), and internally call
+   `ignoresMeteredPayment(for: goal)` — the same, unchanged, already-tested function `match()` uses,
+   so there is exactly one source of truth for per-goal metered tolerance, not two that could drift.
+   `ignoresMeteredPayment` itself is untouched: `.freeOvernight`/`.parkAndForget` → `true`,
+   `.freeFewHours` → `false`. I grepped every `nextMoveForcingDate(`/`goodThroughLabel(` call site in
+   the test file (10 total) — all pass `goal:` explicitly and in the correct label position; no stale
+   call site was left without it (which would be a compile error, not a silent bug, but worth
+   confirming directly rather than trusting the compiler would have caught it before I looked).
+   **Minor gap (see 🟢 below):** no test directly exercises `nextMoveForcingDate(goal: .freeFewHours, ...)`
+   against a metered-active segment to prove the strict path end-to-end through this specific
+   function — the only direct proof is that it delegates to the already-tested
+   `ignoresMeteredPayment`, which is a reasonable inference but not a direct assertion.
+4. **`nextRestriction()` zero diff** — ✅ confirmed twice: once against the original DM-2e commit
+   (`git diff 20d30f10..origin/... -- ParkingRulesEngine.swift` → empty) and now again including the
+   fix commit (`git diff 20d30f10..0d7c8ca4 -- ParkingRulesEngine.swift` → empty). The entire PR,
+   fix included, has made zero changes to `ParkingRulesEngine.swift` beyond the original `isFree`
+   parameter addition reviewed in Pass 1. `safetyLabel`/`currentState`/My Car sheet labels (all
+   downstream of `nextRestriction`) are provably unaffected by this fix.
+5. **Blind-build compile-failure classes, re-scanned on the fix diff:**
+   - Literal-receiver contextual types: `for dayOffset in 0..<searchHorizonDays` — `searchHorizonDays`
+     is a typed `Int` parameter, no literal ambiguity.
+   - Labeled-arg order vs. declaration: all 10 updated call sites (`for:goal:from:engine:[searchHorizonDays:]`)
+     match declared order exactly — checked each one, not sampled.
+   - Memberwise-init order: no new structs introduced in the fix diff.
+   - XCTest extension helper shadowing: no shared helpers added; the three new test methods reuse the
+     existing private `et`/`seg`/`r` helpers already scoped to this one test class.
+   - Missing `nonisolated` on pure statics used in sync XCTests: both functions remain
+     `nonisolated static func`, unchanged in that respect.
+   - Bare `Category`/`Protocol`/`Method`/`Ivar`: re-grepped the full updated test file — zero bare
+     occurrences, all `WePark.Category`.
+   - `Calendar.current` / `import SwiftUI`: re-grepped the fix diff specifically (not just the whole
+     file) — clean.
+6. **Report location** — this Pass 2 addendum is appended to the same file,
+   `docs/qa/pr129-dm2e-goal-engine.md`, below the original Pass 1 report, per the repo's addendum
+   convention (matching `docs/qa/w8.5d-pass-2-2026-06-01.md`'s relationship to its pass-1 sibling, and
+   this project's established "amend in place with a dated addendum section" pattern for the same
+   report file rather than a separate pass-2 file for this particular PR).
+
+## Findings (Pass 2)
+
+### 🟢 Minor / nit
+
+- **#6 (new):** No test directly proves `nextMoveForcingDate`/`goodThroughLabel` thread strict
+  metered semantics end-to-end for `.freeFewHours` (e.g., a metered-active-in-window segment against
+  `goal: .freeFewHours` asserting a non-nil/near-term date rather than skipping past the meter). The
+  implementation correctly delegates to the shared, already-tested `ignoresMeteredPayment(for:)`, so
+  the risk of this actually being wrong is low — but it's a one-line gap in otherwise-thorough
+  coverage, and it's exactly the function this PR's own Finding #2 fix was about. Not blocking;
+  recommend adding before DM-2 starts calling this for real.
+- **#7 (carried forward, unchanged):** 🟢 Findings #3 (pre-existing `import SwiftUI` in
+  `ParkingRulesEngine.swift`) and #5 (`target(for: .parkAndForget)` top-rung-only footgun) from Pass 1
+  are untouched by this fix, as expected — re-confirmed still present, still non-blocking, still
+  correctly out of this PR's actual scope to fix.
+- **#8 (Pass 1 Finding #4, now effectively moot):** the stale "14-day window" doc-comment confusion
+  flagged in Pass 1 no longer applies to `ParkingGoals.swift` — the rewritten `nextMoveForcingDate`
+  doc comment no longer references `nextRestriction`'s 14-day/168h sentinel at all, since it no longer
+  composes that function. The underlying `NextRestriction.swift` comment is still stale, but that's
+  squarely in the 💡 out-of-scope bucket from Pass 1, untouched by (and irrelevant to) this fix.
+
+### 💡 Out of scope (unchanged from Pass 1)
+
+- `nextRestriction`'s own `NO_STANDING`/`SPECIAL` forward-walk gap (Pass 1 Finding #1's root cause)
+  remains unfixed at the source — correctly so, since this fix's whole point was to stop depending on
+  it rather than touch already-shipped, higher-blast-radius code. Still worth a dedicated follow-up
+  for `safetyLabel`/`currentState`'s own (lower-stakes, pre-existing) exposure to the same gap, same
+  as noted in Pass 1.
+
+## Smoke tests run (Pass 2 additions)
+
+- Re-derived the exact restriction dates for 3 scenarios (NO_STANDING/Wed, SPECIAL/Fri, ASP suspension/Mon)
+  against the new day-walk algorithm **before** reading the corresponding test assertions, specifically
+  to avoid rubber-stamping the builder's own stated fix.
+- `git diff 20d30f10..0d7c8ca4 -- ParkingRulesEngine.swift` and the full-PR equivalent — both empty,
+  confirming zero changes to `nextRestriction`/`isFree`/`computeHoursUntilASP` since Pass 1.
+- `git diff 22361c93..origin/feature/dm2e-goal-engine -- ParkingGoals.swift ParkingGoalsTests.swift` —
+  read in full, not just skimmed, for both the implementation and every updated/new test.
+- Grepped all 10 `nextMoveForcingDate(`/`goodThroughLabel(` call sites in the test file individually
+  for correct `goal:` threading and argument order.
+- Re-ran the `Calendar.current`/`import SwiftUI`/bare-`Category` sweeps against the fix diff
+  specifically.
+- **Not run (same caveat as Pass 1):** `xcodebuild build`/`test` — no Swift toolchain in this sandbox.
+  Static/algorithmic verification only; deferred to the Mac gate.
+
+## What's working (Pass 2 additions)
+
+- The fix doesn't patch around the symptom — it removes the dependency on the buggy composition
+  entirely and reuses the SAME day-walk (`isFree`) that the ladder already trusted, rather than
+  touching the higher-blast-radius, already-shipped `nextRestriction`. That's the right shape of fix
+  for this finding.
+- The builder clearly re-derived my exact repro (same segment shape, same `from` date) for the new
+  regression tests rather than inventing a different, easier-to-pass scenario — `et(2026, 5, 11, 10, 0)`
+  Monday, `NO_STANDING`/`days: [3]` is byte-for-byte my Pass 1 trace.
+- The required (non-defaulted) `goal:` parameter is the right API shape for Finding #2 — it makes the
+  old implicit-overnight-tolerance bug structurally impossible to reintroduce, not just documented
+  against.
+- Doc comments were rewritten, not just patched — the new `nextMoveForcingDate` doc comment explains
+  both why it doesn't compose `nextRestriction` and cites the exact QA finding, which will save the
+  next engineer who touches this file from rediscovering the same trap.
+
+---
+*QA Pass 2 by @qa-verifier, same reviewer as Pass 1, re-verified adversarially per the coordinator's
+explicit instruction not to take the fix claims on faith.*
