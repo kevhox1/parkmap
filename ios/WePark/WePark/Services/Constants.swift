@@ -260,6 +260,15 @@ enum AppConstants {
     /// — the same retro lesson Community 2.0's own guard tests taught this project (PR #109,
     /// "4 dark-ship guard tests transformed into launched-world assertions").
     static let driveModeDefaultEnabled = false
+
+    // MARK: - DM-3: First-launch location priming card
+
+    /// UserDefaults key: set to true after `LocationPrimingCard` has been shown/dismissed
+    /// once per install, regardless of whether the user chose "Allow" or "Not now"
+    /// (`docs/drive-mode-default-spec.md` §0.2, AC-9). Naming mirrors
+    /// `driveModeBackgroundNoteShownKey`/`parkingGuidePromptShownKey`'s existing
+    /// `wepark_<feature>_shown` convention.
+    static let locationPrimingCardShownKey = "wepark_location_priming_shown"
 }
 
 // MARK: - MoneyMathConstants (FT-12 §6)
@@ -398,6 +407,46 @@ struct BackgroundNoteGate {
     }
 
     /// Persists that the alert has been shown. Subsequent `shouldShow()` calls return `false`.
+    func markShown() {
+        defaults.set(true, forKey: key)
+    }
+}
+
+// MARK: - LocationPrimingCardGate
+
+/// One-time gate for `LocationPrimingCard`, the DM-3 first-launch location-priming card
+/// (`docs/drive-mode-default-spec.md` §0.2, AC-9).
+///
+/// Byte-for-byte the same shape as `BackgroundNoteGate` above (injectable `UserDefaults` for
+/// testability, `shouldShow()`/`markShown()` pair) — deliberately, per DM-3's explicit
+/// instruction to follow that convention exactly rather than invent a new one. `markShown()`
+/// is called on EITHER "Allow" or "Not now" — both count as "shown" (spec: "shown once ever
+/// regardless of choice").
+///
+/// Usage:
+///   let gate = LocationPrimingCardGate()  // uses UserDefaults.standard
+///   if gate.shouldShow() {
+///       // present the card
+///       gate.markShown()
+///   }
+struct LocationPrimingCardGate {
+    private let defaults: UserDefaults
+    private let key: String
+
+    /// Designated init — accepts any `UserDefaults` instance so tests can inject an
+    /// ephemeral suite instead of polluting `UserDefaults.standard`.
+    init(defaults: UserDefaults = .standard,
+         key: String = AppConstants.locationPrimingCardShownKey) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    /// Returns `true` if the card has never been shown on this device.
+    func shouldShow() -> Bool {
+        !defaults.bool(forKey: key)
+    }
+
+    /// Persists that the card has been shown. Subsequent `shouldShow()` calls return `false`.
     func markShown() {
         defaults.set(true, forKey: key)
     }

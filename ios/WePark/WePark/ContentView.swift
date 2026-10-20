@@ -672,6 +672,26 @@ struct ContentView: View {
     /// The gate itself is evaluated via BackgroundNoteGate; this bool drives the .alert.
     @State private var showDriveModeBackgroundNote: Bool = false
 
+    // MARK: - DM-3: First-launch location priming card
+
+    /// DM-3 (`docs/drive-mode-default-spec.md` §0.2): controls visibility of
+    /// `LocationPrimingCard` via `locationPrimingCardOverlay`. Set once at launch
+    /// (`performLaunchSetup`) via the pure `locationPrimingCardShouldShow(...)` — true only
+    /// when `driveModeDefaultEnabled`, `LocationPrimingCardGate` has never fired, AND
+    /// `locationService.authorizationStatus == .notDetermined`. Set back to false — and the
+    /// gate marked shown — by `dismissLocationPrimingCard(allowed:)` on EITHER "Allow" or
+    /// "Not now" (both count as "shown", mirroring `BackgroundNoteGate`'s own contract).
+    @State private var showLocationPrimingCard: Bool = false
+
+    /// DM-3 (`docs/drive-mode-default-spec.md` §0.2): drives the denied/restricted-state
+    /// alert fired from `enterCruiseMode()`'s auth-request fix. Same name as
+    /// `BrowseSearchAreaView.showLocationDeniedAlert` (a different view, same pattern) —
+    /// `BrowseSearchAreaView.handleGoTap()`'s existing switch over
+    /// `.notDetermined`/`.denied`/`.restricted`/authorized is the precedent
+    /// `cruiseEntryAuthAction(for:)` below mirrors for Cruise's own entry point, which had no
+    /// equivalent gate before this fix.
+    @State private var showLocationDeniedAlert: Bool = false
+
     // MARK: - FT-12: Parking 101 first-launch banner
 
     /// Controls visibility of `ParkingGuidePromptBanner`, rendered via
@@ -1118,6 +1138,18 @@ struct ContentView: View {
                 Button("Got It", role: .cancel) {}
             } message: {
                 Text("Parking commentary will pause if you background WePark during your drive. Keep the app in front for continuous guidance.")
+            }
+            // DM-3 (`docs/drive-mode-default-spec.md` §0.2, AC-11b): fired from
+            // `enterCruiseMode()` when `locationService.authorizationStatus` is
+            // `.denied`/`.restricted` — surfaces the denied-state copy + a real Settings
+            // deep link (`openLocationSettingsForCruiseEntry()`), rather than
+            // `BrowseSearchAreaView`'s own "Location Required" precedent (OK-only, no deep
+            // link) — the spec explicitly asks for a tap-through to Settings here.
+            .alert("Location Access Needed", isPresented: $showLocationDeniedAlert) {
+                Button("Open Settings") { openLocationSettingsForCruiseEntry() }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("WePark needs location access to show parking near you. Enable it in Settings.")
             }
             // Tier 3 sub-PR #2: Resting long-press action menu.
             // Fires when handleLongPress(at:) sets showRestingActionMenu = true
@@ -2125,6 +2157,11 @@ struct ContentView: View {
             // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.
             // See `communityMapChromeOverlay`'s own doc comment.
             communityMapChromeOverlay
+            // DM-3 (`docs/drive-mode-default-spec.md` §0.2): the one-shot first-launch
+            // location-priming card — same floating-overlay pattern as the cards above, not
+            // a new positioning mechanism. See `locationPrimingCardOverlay`'s own doc
+            // comment for its gating.
+            locationPrimingCardOverlay
         }
     }
 
@@ -2331,6 +2368,37 @@ struct ContentView: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.bottom, browseSheetPeekHeight + 12)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    /// DM-3 (`docs/drive-mode-default-spec.md` §0.2): the one-shot, dismissible first-launch
+    /// `LocationPrimingCard` — NOT a blocking alert, floats above the map so it's always
+    /// dismissible and never competes with a system permission dialog for modality.
+    ///
+    /// Gated on `driveModeDefaultEnabled` (this card is part of the ambient/goal-first
+    /// experience — it has no reason to render while the FT-20 browse sheet is still the
+    /// default, AC-2's "no priming card render anywhere" while the flag is off) AND
+    /// `showLocationPrimingCard` (set once at launch by `locationPrimingCardShouldShow(...)`,
+    /// cleared by `dismissLocationPrimingCard(allowed:)`). Also excluded during Drive Mode,
+    /// block-select, and spot-placement — same "don't layer a first-launch card over a
+    /// focused task" reasoning `communityMapChromeOverlay`'s own gate documents above.
+    ///
+    /// Positioned below the status bar/ASP banner — same `.padding(.top, 100)` convention
+    /// `spotPlacementHintOverlay` already uses to clear that same chrome, rather than
+    /// inventing a new offset.
+    @ViewBuilder
+    private var locationPrimingCardOverlay: some View {
+        if AppConstants.driveModeDefaultEnabled && showLocationPrimingCard
+            && !driveModeActive && !blockSelectModeActive && !spotPlacementActive {
+            VStack(spacing: 0) {
+                LocationPrimingCard(
+                    onAllow: { dismissLocationPrimingCard(allowed: true) },
+                    onNotNow: { dismissLocationPrimingCard(allowed: false) }
+                )
+                .padding(.top, 100)
+                Spacer()
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -3062,8 +3130,36 @@ struct ContentView: View {
     /// user taps it. A bare `== nil` check would silently no-op every tap, failing AC-18.
     /// `noBlockingSheetPresented` treats `.browseNav` the same as `nil` here; any other
     /// case (a real modal actually blocking entry, e.g. `ParkConfirmView`) still guards out.
+    ///
+    /// DM-3 (`docs/drive-mode-default-spec.md` §0.2 — "a real gap this spec must fix, not
+    /// just work around"): before this fix, this function had NO authorization check at
+    /// all — a tap while `.notDetermined` fell straight through into
+    /// `driveModeActive = true`, which `handleDriveModeChange(true)` → `startDriveMode()`
+    /// turns into a silent no-op (that function calls `startUpdatingLocation()` directly,
+    /// never `requestWhenInUseAuthorization()`): no system prompt, no error, no visible
+    /// cause. `cruiseEntryAuthAction(for:)` below closes that gap, flag-independent (this
+    /// function's only call site today is reachable whether `driveModeDefaultEnabled` is on
+    /// or off — see `noBlockingSheetPresented`'s own doc comment) — never widening when the
+    /// escalation itself fires, only gating entry on an authorization check that was
+    /// previously entirely absent.
     private func enterCruiseMode() {
         guard noBlockingSheetPresented else { return }
+        switch cruiseEntryAuthAction(for: locationService.authorizationStatus) {
+        case .requestFirst:
+            // Fires the real system permission prompt instead of silently escalating into
+            // a continuous-GPS session with no permission. `requestAndFetchLocation()`'s
+            // own delegate callback resolves authorization asynchronously — this tap does
+            // NOT auto-continue into escalation; the user taps again once resolved, the
+            // same two-tap shape `BrowseSearchAreaView.handleGoTap()` already uses for
+            // destination-mode Drive's own `.notDetermined` branch.
+            locationService.requestAndFetchLocation()
+            return
+        case .showDeniedAlert:
+            showLocationDeniedAlert = true
+            return
+        case .proceed:
+            break
+        }
         driveModeStyle = .cruise
         // activeRoute stays nil — no route polyline in Cruise Mode (AC-CM.14).
         // driveDestinationCoordinate stays nil — no destination pin (AC-CM.14).
@@ -3071,6 +3167,32 @@ struct ContentView: View {
         driveModeActive = true
         // setCruiseMode(true) is called inside handleDriveModeChange(true) below,
         // triggered by the .onChange(of: driveModeActive) observer.
+    }
+
+    // MARK: - DM-3: Cruise-entry denied-state Settings deep link
+
+    /// Opens iOS Settings for this app — fired from the "Open Settings" button on
+    /// `enterCruiseMode()`'s denied-state alert (spec §0.2 AC-11b). Same shape as
+    /// `NotificationRationaleView.openSettings()`; duplicated rather than shared because
+    /// that function is `private` to a different view file and this is a two-line call.
+    private func openLocationSettingsForCruiseEntry() {
+        guard let url = URL(string: UIApplication.openSettingsURLString) else { return }
+        UIApplication.shared.open(url)
+    }
+
+    // MARK: - DM-3: Location-priming card dismissal
+
+    /// Dismisses `LocationPrimingCard` and marks its one-shot gate shown — both "Allow" and
+    /// "Not now" count as shown (spec §0.2: "shown once, never again, regardless of the
+    /// user's choice"). `allowed == true` additionally fires the real system prompt via
+    /// `requestAndFetchLocation()`; `allowed == false` has zero other side effects.
+    private func dismissLocationPrimingCard(allowed: Bool) {
+        guard showLocationPrimingCard else { return }
+        LocationPrimingCardGate().markShown()
+        showLocationPrimingCard = false
+        if allowed {
+            locationService.requestAndFetchLocation()
+        }
     }
 
     // MARK: - W8.5b/c: End Drive Mode
@@ -3703,6 +3825,17 @@ struct ContentView: View {
 
         // FT-12: Show the Parking 101 first-launch prompt banner at most once per install.
         showParkingGuideBanner = ParkingGuidePromptGate().shouldShow()
+
+        // DM-3 (`docs/drive-mode-default-spec.md` §0.2, AC-9): show the one-shot
+        // location-priming card at most once per install, and only while location
+        // authorization is still undecided — `locationService`'s own `init()` has already
+        // read the real `CLLocationManager.authorizationStatus` by this point (it's
+        // populated synchronously in `LocationService.init()`, not fetched here).
+        showLocationPrimingCard = locationPrimingCardShouldShow(
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            gateShouldShow: LocationPrimingCardGate().shouldShow(),
+            authorizationStatus: locationService.authorizationStatus
+        )
 
         // Community 2.0 S14: fetches (or refreshes from cache) the zones table.
         // ⚠️ UNCONDITIONAL — deliberately NOT gated behind `AppConstants.communityEnabled`,
@@ -5118,6 +5251,68 @@ nonisolated func driveModeDefaultRestStateSheet(
     driveModeDefaultEnabled: Bool = AppConstants.driveModeDefaultEnabled
 ) -> ActiveSheet? {
     driveModeDefaultEnabled ? nil : .browseNav
+}
+
+// MARK: - DM-3: Location-priming card gating
+
+/// Whether to show `LocationPrimingCard` on the ambient home screen's first-ever render
+/// (`docs/drive-mode-default-spec.md` §0.2, AC-9). True only when all three hold:
+///   1. `driveModeDefaultEnabled` — the card is part of the ambient/goal-first experience;
+///      it has no reason to render while the FT-20 browse sheet is still the default (AC-2).
+///   2. `gateShouldShow` — the one-shot `LocationPrimingCardGate` has never fired on this
+///      device. Injected as a plain `Bool` (not the gate itself) so this function stays pure
+///      and `UserDefaults`-free — same shape as `driveModeDefaultRestStateSheet` above and
+///      `AppConstants`'s `nonisolated static func` flag-gating helpers
+///      (`communityPhase1PinTypes`, `regularsSettingsRowVisible`, etc.).
+///   3. `authorizationStatus == .notDetermined` — an already-authorized or already-denied
+///      user has nothing left to be "primed" for; the card only ever targets the undecided
+///      case (spec §0.2: "shown only when `locationService.authorizationStatus ==
+///      .notDetermined`").
+///
+/// `nonisolated` for the same reason `driveModeDefaultRestStateSheet` is: this file compiles
+/// under `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor`, and `DM3PrimingAuthTests` calls this
+/// synchronously from plain (non-async, non-`@MainActor`) XCTestCase methods.
+nonisolated func locationPrimingCardShouldShow(
+    driveModeDefaultEnabled: Bool,
+    gateShouldShow: Bool,
+    authorizationStatus: CLAuthorizationStatus
+) -> Bool {
+    driveModeDefaultEnabled && gateShouldShow && authorizationStatus == .notDetermined
+}
+
+// MARK: - DM-3: Cruise-entry authorization routing
+
+/// The action `enterCruiseMode()` must take for a given authorization status, evaluated
+/// BEFORE any `driveModeActive = true` escalation (`docs/drive-mode-default-spec.md` §0.2,
+/// AC-11). Mirrors `BrowseSearchAreaView.handleGoTap()`'s existing switch over the same three
+/// outcomes for destination-mode Drive's own auth gate (`BrowseSearchAreaView.swift:651-664`)
+/// — Cruise entry had no equivalent gate at all before this fix (the exact gap §0.2
+/// describes: tapping while `.notDetermined` silently did nothing — no prompt, no error, no
+/// visible cause).
+enum CruiseEntryAuthAction: Equatable {
+    /// Already authorized — proceed into the escalation exactly as today (regression guard).
+    case proceed
+    /// `.notDetermined` — fire the real system prompt first; do NOT escalate this tap.
+    case requestFirst
+    /// `.denied`/`.restricted` — surface the denied-state alert; do NOT escalate.
+    case showDeniedAlert
+}
+
+/// `nonisolated` for the same reason `driveModeDefaultRestStateSheet`/
+/// `locationPrimingCardShouldShow` above are.
+nonisolated func cruiseEntryAuthAction(for status: CLAuthorizationStatus) -> CruiseEntryAuthAction {
+    switch status {
+    case .notDetermined:
+        return .requestFirst
+    case .denied, .restricted:
+        return .showDeniedAlert
+    case .authorizedWhenInUse, .authorizedAlways:
+        return .proceed
+    @unknown default:
+        // Matches `BrowseSearchAreaView.handleGoTap()`'s own `@unknown default` precedent:
+        // treat an unrecognized future case as the authorized path rather than blocking entry.
+        return .proceed
+    }
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance
