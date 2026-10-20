@@ -239,6 +239,13 @@ reused unchanged. What changes is presentation state, not content:
   into the full `.browseNav` sheet, a jarring inconsistency between "how I arrived" and "how I land
   after any interaction." Both the initial `@State` and this rest-state target must flip together,
   or this ships half-converted.
+  **DM-1 shipped this (PR #130, merged) via a shared pure `driveModeDefaultRestStateSheet()` —
+  but its QA (`docs/qa/pr130-dm1-flag-scaffold.md`, 🟡 finding) found TWO MORE pre-existing
+  literal `.browseNav` restore sites that bypass it: the generic `.sheet(onDismiss:)` catch-all
+  (`ContentView.swift:1114`-ish) and the `.onChange(of: driveModeActive)` drive-exit handler
+  (`:4467`-ish). Harmless while the flag is dark; both violate AC-6/AC-30 at flip time. DM-2 MUST
+  route both through the shared function — this is in DM-2's scope as of 2026-10-20, not
+  optional.**
 - A nice simplification this unlocks: `enterCruiseMode()`'s `noBlockingSheetPresented` guard
   currently special-cases `.browseNav` as equivalent to `nil` (`ContentView.swift:3029-3035`,
   comment explains this exists only because `.browseNav` WAS the rest state). Once the rest state
