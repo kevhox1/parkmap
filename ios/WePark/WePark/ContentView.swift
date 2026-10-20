@@ -571,6 +571,49 @@ struct ContentView: View {
     /// Drives the binary green/red map rendering branch in rebuildOverlays.
     @State private var parkUntilMode: Bool = false
 
+    /// §0.8.4: whether the CURRENT `parkUntilTarget`'s `isFree()` evaluation (in
+    /// `rebuildOverlays`) should ignore metered payment. Default `false` preserves the
+    /// power-user `ParkUntilSheet`'s existing strict semantics byte-for-byte (§0.8.9's
+    /// "unmodified" guarantee) — only the goal-driven recompute block below ever sets this
+    /// `true` (Free Overnight / Park & Forget, §0.8.4), and only while
+    /// `AppConstants.driveModeDefaultEnabled && !fullPaletteMode`. Explicitly reset to
+    /// `false` by `clearParkUntilFilter()` and the custom `ParkUntilSheet.onConfirm` handler
+    /// so a prior goal selection's `true` can never silently leak into a later custom-time
+    /// filter (the one real correctness trap this flag introduces — see those two call
+    /// sites' own comments).
+    @State private var parkUntilIgnoresMeteredPayment: Bool = false
+
+    // MARK: - DM-2: Goal-first ambient dock state (docs/drive-mode-default-spec.md §0.8)
+
+    /// The goal currently shown as "selected" on the ambient dock (§0.8.1). Always holds a
+    /// concrete value — "no goal selected" isn't a state this dock represents, matching
+    /// `fullPaletteMode`'s orthogonal on/off semantics below. Defaults to `.freeOvernight`
+    /// so a flag-on cold launch is already pre-selected (AC-21) with zero extra wiring: the
+    /// very first `rebuildOverlays()` call (segment load, 60s tick, whatever fires first)
+    /// reads this default and renders the filtered answer immediately.
+    ///
+    /// Only READ by `rebuildOverlays`/the dock itself while
+    /// `AppConstants.driveModeDefaultEnabled && !fullPaletteMode` — while the flag is off, or
+    /// the user has toggled to full-palette, this value just sits here unread (harmless;
+    /// AC-2's "no goal-filtered overlay render anywhere" holds because the READER is gated,
+    /// not because this default is somehow flag-aware itself).
+    @State private var selectedGoal: ParkingGoal = .freeOvernight
+
+    /// True once the user has toggled OUT of goal-first (§0.8.8) — functionally identical to
+    /// today's `clearParkUntilFilter()` plus "don't let the goal-recompute block in
+    /// `rebuildOverlays` touch `parkUntilMode`/`parkUntilTarget` anymore," so the power-user
+    /// `ParkUntilSheet` path (§0.8.9) stays the sole owner of the filter while this is `true`.
+    /// Always `false` while `AppConstants.driveModeDefaultEnabled == false` (nothing ever
+    /// flips it — the toggle row only exists on the ambient dock, itself flag-gated).
+    @State private var fullPaletteMode: Bool = false
+
+    /// Non-nil only when `selectedGoal == .parkAndForget` and the viewport-wide ladder walk
+    /// (`resolveParkAndForgetViewport`, §0.8.9/§0.8.10) had to step down from the top rung, or
+    /// came up empty even at the bottom rung. Drives `GoalSelectorView`'s empty-map-guard
+    /// banner. `nil` for every other goal, and for Park & Forget whenever the top rung clears
+    /// cleanly in the current viewport.
+    @State private var parkAndForgetGuardState: ParkAndForgetViewportResolution? = nil
+
     // MARK: - W8.5c-polish PR-1: Distance-to-destination state
 
     /// Distance from the user's current location to driveDestinationCoordinate, in meters.
@@ -691,6 +734,15 @@ struct ContentView: View {
     /// `cruiseEntryAuthAction(for:)` below mirrors for Cruise's own entry point, which had no
     /// equivalent gate before this fix.
     @State private var showLocationDeniedAlert: Bool = false
+
+    /// DM-2 fast-follow (`docs/qa/pr131-dm3-priming-authfix.md` 🟡 Finding #1): true from the
+    /// moment `enterCruiseMode()`'s `.requestFirst` branch fires the real system prompt until
+    /// `locationService.isAuthorized` changes — mirrors `BrowseSearchAreaView
+    /// .isRequestingAuth` exactly, closing the gap that PR's QA flagged (the Cruise-entry fix
+    /// shipped WITHOUT the `.onChange`-driven auto-continue destination-mode Drive already
+    /// has, despite a code comment that incorrectly claimed parity). See the
+    /// `.onChange(of: locationService.isAuthorized)` handler in `body` below.
+    @State private var isRequestingCruiseEntryAuth: Bool = false
 
     // MARK: - FT-12: Parking 101 first-launch banner
 
@@ -1129,9 +1181,18 @@ struct ContentView: View {
                 // (`enterSpotPlacementMode()`'s `activeSheet = nil`) for exactly this
                 // "nothing else should compete with placement mode's own chrome" reason —
                 // this guard just extends that same rule across the identity-prompt detour.
+                // DM-2 (`docs/drive-mode-default-spec.md` §0.4, QA pass 1 on PR #130 — the
+                // "two more literal `.browseNav` restore sites" finding): routes through the
+                // SAME `driveModeDefaultRestStateSheet()` the initial `@State` and
+                // `dismissTargetOutsideBrowseNav` already read, instead of hardcoding
+                // `.browseNav`. Flag off: identical to before (`.browseNav`). Flag on: `nil`
+                // — a swipe-to-dismiss (now legal on `.browseNav` itself, see
+                // `browseNavigationSheetContent`'s `.interactiveDismissDisabled` rework) or any
+                // other no-explicit-dismiss-closure case lands on the genuinely sheet-free
+                // ambient home screen (AC-6), not back into `.browseNav`.
                 if Self.ft20BrowseSheetEnabled, activeSheet == nil, !driveModeActive,
                    !blockSelectModeActive, !spotPlacementActive {
-                    activeSheet = .browseNav
+                    activeSheet = driveModeDefaultRestStateSheet()
                 }
             }) { sheet in sheetContent(sheet) }
             .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
@@ -1150,6 +1211,25 @@ struct ContentView: View {
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("WePark needs location access to show parking near you. Enable it in Settings.")
+            }
+            // DM-2 fast-follow (`docs/qa/pr131-dm3-priming-authfix.md` 🟡 Finding #1): once
+            // the system permission prompt resolves, auto-continue straight into
+            // `enterCruiseMode()`'s escalation — verbatim shape of `BrowseSearchAreaView
+            // .handleGoTap()`'s own `.onChange(of: locationService.isAuthorized)` handler.
+            // Gated on `isRequestingCruiseEntryAuth` (only ever set `true` by
+            // `enterCruiseMode()`'s `.requestFirst` branch, immediately above) so this NEVER
+            // fires for any other reason authorization might change.
+            .onChange(of: locationService.isAuthorized) { _, isAuthorized in
+                guard isRequestingCruiseEntryAuth else { return }
+                isRequestingCruiseEntryAuth = false
+                if isAuthorized {
+                    enterCruiseMode()
+                } else {
+                    let status = locationService.authorizationStatus
+                    if status == .denied || status == .restricted {
+                        showLocationDeniedAlert = true
+                    }
+                }
             }
             // Tier 3 sub-PR #2: Resting long-press action menu.
             // Fires when handleLongPress(at:) sets showRestingActionMenu = true
@@ -1316,8 +1396,19 @@ struct ContentView: View {
     /// or off, because DM-2 (not this stream) is what moves that trigger out to a standalone
     /// ambient-screen affordance per spec §0.8.7. Dropping the `.browseNav` case here before
     /// DM-2 lands would make this guard — and the identical guard on the "Park here" button,
-    /// below — silently no-op on every tap. Revisit once DM-2 ships the demoted "start
-    /// driving" affordance outside `.browseNav`.
+    /// below — silently no-op on every tap.
+    ///
+    /// DM-2 RE-EVALUATION (verified, not assumed, per the above note's own instruction): the
+    /// demoted "Start Driving" affordance now DOES exist outside `.browseNav` (the ambient
+    /// goal dock's own row, `GoalSelectorView.startDrivingRow`, visible only while
+    /// `activeSheet == nil`) — but `BrowseNavigationSheet`'s own "Find a Spot" button is
+    /// STILL reachable, in BOTH flag states, via the persistent Search icon
+    /// (`presentBrowseNavSearch()`) presenting `.browseNav` at `.medium`. A tap on "Find a
+    /// Spot" from inside that sheet still fires `enterCruiseMode()` while `activeSheet ==
+    /// .browseNav`, so the `.browseNav` case here must stay — simplifying it away (as the
+    /// DM-1 note speculated might become possible) would silently break that one remaining
+    /// call path. Conclusion: no logic change; this is a verified "must stay," not a
+    /// drive-by simplification.
     private var noBlockingSheetPresented: Bool {
         switch activeSheet {
         case nil, .browseNav: return true
@@ -1477,6 +1568,13 @@ struct ContentView: View {
                     activeSheet = dismissTargetOutsideBrowseNav
                     parkUntilTarget = targetDate
                     parkUntilMode = true
+                    // DM-2 (§0.8.9): this power-user path is reachable only from
+                    // full-palette mode, but reset explicitly anyway rather than relying
+                    // on that invariant — a stale `true` left over from a PRIOR goal
+                    // selection must never silently leak into this custom-time filter's
+                    // own `isFree()` call. Today's strict, already-shipped semantics.
+                    parkUntilIgnoresMeteredPayment = false
+                    parkAndForgetGuardState = nil
                     rebuildOverlays(at: .nowET)
                     let timeStr = ParkUntilSheet.formatTime(targetDate)
                     ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
@@ -1861,9 +1959,19 @@ struct ContentView: View {
         // 12 ActiveSheet cases with no explicit .presentationCornerRadius at all — see
         // browseSheetOuterCornerRadius's doc comment for the derivation.
         .presentationCornerRadius(Self.browseSheetOuterCornerRadius)
-        // Apple Maps' sheet is never fully dismissible, only collapsible (spec §4.1) — the
-        // rest state is always at least a peek, never "nothing."
-        .interactiveDismissDisabled(true)
+        // Flag off: Apple Maps' sheet is never fully dismissible, only collapsible (spec
+        // §4.1) — the rest state is always at least a peek, never "nothing." Byte-identical
+        // to pre-DM-2 behavior (AC-8).
+        //
+        // DM-2 (`docs/drive-mode-default-spec.md` §0.4's last bullet, §2.1 item 4): flag on,
+        // `.browseNav` is no longer the permanent rest state (that's the whole point of this
+        // spec) — it's a normal, dismissible, on-demand sheet reached via the persistent
+        // Search icon (AC-7's "Dismissing it returns to the ambient home screen"). Swipe-to-
+        // dismiss now sets `activeSheet = nil` directly via SwiftUI's own binding, caught by
+        // the `.sheet(item:, onDismiss:)` backstop above, which (post-DM-2) restores
+        // `driveModeDefaultRestStateSheet()` — `nil` while the flag is on, so this correctly
+        // lands on the ambient screen rather than snapping back open.
+        .interactiveDismissDisabled(!AppConstants.driveModeDefaultEnabled)
     }
 
     /// Corner-radius fix (Kevin, on-device smoke): *"Change the corner radius on the text
@@ -1952,12 +2060,48 @@ struct ContentView: View {
             // (the "BLOCK CHATTER" compose bar's zone derivation). Declared last to match
             // `BlockDetailView`'s own property declaration order, same convention as
             // `zoneMessageService` immediately above.
-            zoneStore: zoneStore
+            zoneStore: zoneStore,
+            // DM-2 (design doc §3.1): "Good through <day>" overrides the normal safety-label
+            // TEXT only — never a new color, never a new overlay bucket. `nil` (the default)
+            // whenever no goal is active, flag off, full-palette mode, or this segment isn't
+            // in the active goal's matching bucket — `BlockDetailView` falls back to its
+            // existing `engine.safetyLabel(...)` text in every one of those cases, so this is
+            // additive and flag-off byte-identical. Declared very last to match
+            // `BlockDetailView`'s own property declaration order (memberwise-init order).
+            goalGoodThroughLabel: goalGoodThroughLabel(for: segment)
         )
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(.regularMaterial)
         .presentationCornerRadius(20)
+    }
+
+    /// DM-2 (design doc §3.1, "Good through <day>" per-segment ranking label — §0.8.3a). Not
+    /// listed in `docs/drive-mode-default-spec.md` §3.3's original file table (which predates
+    /// the design doc's own explicit placement instruction) — flagged in this PR's
+    /// description as a one-property, additive addition to `BlockDetailView.swift`, required
+    /// to implement the design doc faithfully rather than silently skip the label it specs.
+    ///
+    /// Non-nil only when ALL of: the flag is on, the user hasn't toggled to full-palette, and
+    /// `segment` is in `selectedGoal`'s matching (green) bucket right now. Composes
+    /// `ParkingGoals.match`/`goodThroughLabel` directly — no new engine surface, a pure label
+    /// lookup over the already-shipped DM-2e functions.
+    ///
+    /// Defensive floor (design doc §3.1: "Never render 'Good through today'"): if the
+    /// ladder/checkpoint ever resolves to a same-day result (shouldn't happen given every
+    /// goal's 2-day-or-wider floor, but defensively), this falls back to "Good through
+    /// tomorrow" rather than a same-day-sounding label that reads like it's already expired.
+    private func goalGoodThroughLabel(for segment: Segment) -> String? {
+        guard AppConstants.driveModeDefaultEnabled, !fullPaletteMode else { return nil }
+        let now: Date = .nowET
+        let result = ParkingGoals.match(segment: segment, goal: selectedGoal, from: now, engine: engine)
+        guard result.matches else { return nil }
+        guard let label = ParkingGoals.goodThroughLabel(
+            for: segment, goal: selectedGoal, from: now, engine: engine
+        ) else {
+            return nil
+        }
+        return label == "Good through Today" ? "Good through tomorrow" : label
     }
 
     // MARK: - Overlay rebuild
@@ -1977,6 +2121,56 @@ struct ContentView: View {
             overlayGeneration += 1
             overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
             return
+        }
+
+        // DM-2 (`docs/drive-mode-default-spec.md` §0.8.6/§0.8.9): when the goal-first
+        // ambient dock owns the filter (flag on, not toggled to full-palette), (re)resolve
+        // the active goal's target FRESH on every single rebuild — Free Overnight/Few
+        // Hours' one checkpoint drifts as `now` advances across the 60s timer tick; Park &
+        // Forget's viewport-dependent ladder rung can drift as the loaded segment set
+        // changes (new tiles, pan/zoom). This keeps `parkUntilTarget`/
+        // `parkUntilIgnoresMeteredPayment` in lockstep with whichever goal is selected
+        // WITHOUT changing the binary `isFree()` classification loop below AT ALL — §0.8.6's
+        // byte-identical-reuse promise. Skipped entirely while `fullPaletteMode` is true or
+        // the flag is off: in both of those states, `parkUntilTarget`/`parkUntilMode` are
+        // whatever the power-user `ParkUntilSheet` (§0.8.9) or `clearParkUntilFilter()` last
+        // set, and this block must not touch them.
+        //
+        // §0.8.9's per-segment-vs-global nuance, resolved here: Park & Forget's MATCHING
+        // bucket uses ONE global `parkUntilTarget` (the highest rung the viewport
+        // collectively clears, from `resolveParkAndForgetViewport` below) applied uniformly
+        // to every segment via the SAME single-target `isFree()` loop every other goal
+        // uses — never a per-segment ladder inside the overlay itself. The per-segment
+        // ladder walk (`ParkingGoals.match`/`goodThroughLabel`) only ever powers the
+        // "Good through <day>" ranking LABEL in the block-detail sheet, a label concern
+        // layered on top of this already-decided green bucket, never a second overlay color.
+        if AppConstants.driveModeDefaultEnabled, !fullPaletteMode {
+            parkUntilIgnoresMeteredPayment = ParkingGoals.ignoresMeteredPayment(for: selectedGoal)
+            switch selectedGoal {
+            case .freeOvernight, .freeFewHours:
+                parkUntilTarget = ParkingGoals.target(for: selectedGoal, from: now)
+                parkAndForgetGuardState = nil
+            case .parkAndForget:
+                let resolution = resolveParkAndForgetViewport(
+                    segments: tileLoader.segments,
+                    from: now,
+                    engine: engine
+                )
+                parkAndForgetGuardState = resolution
+                switch resolution {
+                case .resolved(let offsetDays, _):
+                    parkUntilTarget = now.startOfDayET(offsetDays: offsetDays)
+                case .empty:
+                    // §0.8.10 true-empty: still render the bottom (easiest) rung's target so
+                    // the map shows an honest all-red result for every segment — the explicit
+                    // empty-map-guard banner (not a silent all-red map) is what keeps this
+                    // from reading as broken, not a fabricated green anywhere.
+                    parkUntilTarget = now.startOfDayET(
+                        offsetDays: ParkingGoals.parkAndForgetLadderOffsetDays.last ?? 2
+                    )
+                }
+            }
+            parkUntilMode = true
         }
 
         // W7.5: Park Until mode — classify segments by interval-free status (binary green/red).
@@ -1999,7 +2193,10 @@ struct ContentView: View {
                 let coords = segment.coordinates
                 guard coords.count >= 2 else { continue }
                 if segment.id == selectedSegmentID { continue }
-                if engine.isFree(segment: segment, from: now, until: target) {
+                if engine.isFree(
+                    segment: segment, from: now, until: target,
+                    ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
+                ) {
                     freeCoords.append(coords)
                 } else {
                     notFreeCoords.append(coords)
@@ -2014,8 +2211,10 @@ struct ContentView: View {
                 if coords.count >= 2 {
                     selectedCoords = coords
                     // Color selected block by its Park Until result.
-                    selectedState = engine.isFree(segment: seg, from: now, until: target)
-                        ? .freeComfortably : .restrictedNow
+                    selectedState = engine.isFree(
+                        segment: seg, from: now, until: target,
+                        ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
+                    ) ? .freeComfortably : .restrictedNow
                 }
             }
 
@@ -2730,6 +2929,24 @@ struct ContentView: View {
     /// in ContentView.body (W8.5c-polish PR-1 fix for "unable to type-check" error).
     @ViewBuilder
     private var bottomSafeAreaContent: some View {
+        // DM-2 (`docs/drive-mode-default-spec.md` §0.8.7, design doc §2.1/§6 flag #4):
+        // computed once per render so the goal-dock row AND the ParkUntilPill-suppression
+        // check below can never disagree about whether the dock/tile row is showing.
+        let goalDockVisible = goalSelectorDockVisible(
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            activeSheetIsNil: activeSheet == nil,
+            driveModeActive: driveModeActive,
+            blockSelectModeActive: blockSelectModeActive,
+            spotPlacementActive: spotPlacementActive
+        )
+        let goalTilesVisible = goalTileRowVisible(
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            activeSheetIsNil: activeSheet == nil,
+            fullPaletteMode: fullPaletteMode,
+            driveModeActive: driveModeActive,
+            blockSelectModeActive: blockSelectModeActive,
+            spotPlacementActive: spotPlacementActive
+        )
         VStack(spacing: 8) {
             // FT-18 row 1: Recenter — only when the custom Drive Mode follow camera is
             // paused by a user gesture (FT-17: pan OR pinch).
@@ -2747,10 +2964,35 @@ struct ContentView: View {
             if blockSelectModeActive {
                 blockSelectBar
             }
+            // DM-2 (§0.8, design doc §2.1): the ambient goal-first dock — mutually
+            // exclusive with every row above/below by construction (`goalSelectorDockVisible`
+            // already excludes Drive Mode/block-select/spot-placement/any-sheet-presented).
+            // Ambient-only (§0.8.7) — never rebuilt inside the escalated Cruise session.
+            if goalDockVisible {
+                GoalSelectorView(
+                    selectedGoal: selectedGoal,
+                    fullPaletteMode: fullPaletteMode,
+                    emptyMapGuardKind: emptyMapGuardKind,
+                    onSelectGoal: { goal in selectGoal(goal) },
+                    onToggleFullPalette: { toggleFullPaletteMode() },
+                    onStartDriving: { enterCruiseMode() }
+                )
+            }
             // W7.5 row 3: Park Until pill — carried over from browsing if already active;
             // cannot be entered mid-drive (recenterButtonStack, its only entry point, is
             // hidden while driveModeActive == true).
-            if parkUntilMode, let target = parkUntilTarget {
+            //
+            // DM-2 (design doc §6 flag #1 — the "legacy ParkUntilPill double-render bug"):
+            // suppressed whenever the goal-first dock's own tile row is showing
+            // (`goalTilesVisible`) — once Overnight is pre-selected by default,
+            // `parkUntilMode` is true at rest 100% of the time, and without this guard the
+            // old pill would render simultaneously with the new dock, duplicating "a filter
+            // is active" in two different UI languages at once. Reappears in its existing,
+            // unchanged form once the user toggles to full-palette AND sets a target via the
+            // power-user `ParkUntilSheet` (§0.8.9) — its original job, untouched. Flag off:
+            // `goalTilesVisible` is always `false`, so this is byte-identical to pre-DM-2
+            // behavior.
+            if parkUntilMode, let target = parkUntilTarget, !goalTilesVisible {
                 ParkUntilPill(targetDate: target) {
                     clearParkUntilFilter()
                 }
@@ -2775,6 +3017,46 @@ struct ContentView: View {
         }
     }
 
+    /// DM-2: maps `parkAndForgetGuardState` (`ParkAndForgetViewportResolution?`) to the
+    /// presentation-layer `EmptyMapGuardKind?` `GoalSelectorView` consumes — `nil` unless the
+    /// active goal is Park & Forget AND the ladder had to step down or came up empty
+    /// (§0.8.10). Kept as a tiny mapping step (rather than handing the resolution type
+    /// straight to the view) so `GoalSelectorView` never needs to import/know about
+    /// `ParkingGoals`'s ladder offsets at all — pure presentation, per that file's own header.
+    private var emptyMapGuardKind: EmptyMapGuardKind? {
+        switch parkAndForgetGuardState {
+        case .resolved(_, let steppedDown):
+            return steppedDown ? .steppedDown : nil
+        case .empty:
+            return .empty
+        case nil:
+            return nil
+        }
+    }
+
+    /// DM-2: applies a tapped goal tile — sets `selectedGoal` and re-runs the EXISTING
+    /// `rebuildOverlays()` path (§0.8.6). No sheet, no confirm (AC-22); never touches
+    /// `driveModeActive` (AC-30).
+    private func selectGoal(_ goal: ParkingGoal) {
+        selectedGoal = goal
+        rebuildOverlays(at: .nowET)
+    }
+
+    /// DM-2 (§0.8.8): flips `fullPaletteMode`. Turning it ON is functionally identical to
+    /// today's already-shipped `clearParkUntilFilter()` (AC-27) — same function, called
+    /// directly, so the toast/state-clear behavior can never drift from that existing path.
+    /// Turning it OFF re-applies `selectedGoal` via the normal `rebuildOverlays()` path
+    /// (the goal-recompute block at the top of `rebuildOverlays` picks it straight back up).
+    private func toggleFullPaletteMode() {
+        if fullPaletteMode {
+            fullPaletteMode = false
+            rebuildOverlays(at: .nowET)
+        } else {
+            fullPaletteMode = true
+            clearParkUntilFilter()
+        }
+    }
+
     /// Marks the FT-12 first-launch banner as shown (one-shot gate) and hides it.
     /// Optionally opens `ParkingGuideView` via `ActiveSheet.parkingGuide`.
     private func dismissParkingGuideBanner(openGuide: Bool) {
@@ -2794,20 +3076,25 @@ struct ContentView: View {
     ///
     /// Button order (top to bottom):
     ///   1. "Find me"        — location.fill, always shown
-    ///   2. "Find my car"    — car.fill, only when a pin exists
-    ///   3. Park Until       — clock.fill, always shown (OQ-2: "a third floating map
-    ///                         control beside Locate and Find-my-car" — its own filter
-    ///                         behavior, framing, and toolbar position are all unchanged by
-    ///                         FT-20; it's simply the last button once the 4th one is gone).
+    ///   2. Search            — magnifyingglass, shown only while
+    ///                         `AppConstants.driveModeDefaultEnabled` (DM-2, §0.4/§0.4a's
+    ///                         Job B mitigation, design doc §2.6: "the stack's 2nd button —
+    ///                         after 'Find me,' before the conditional 'Find my car'").
+    ///                         Presents `.browseNav` at `.medium`. AC-2: absent entirely
+    ///                         while the flag is off (`.browseNav` is still the persistent
+    ///                         default sheet in that state — no mitigation needed).
+    ///   3. "Find my car"    — car.fill, only when a pin exists
+    ///   4. Park Until       — clock.fill, shown unless the goal-first dock owns the filter
+    ///                         (DM-2, §0.8.9/design doc §2.6 — `parkUntilClockButtonVisible`).
+    ///                         When visible, its own filter behavior/framing/toolbar position
+    ///                         are all unchanged by FT-20 or DM-2.
     ///
     /// FT-20 Stream C: the former 4th button — the combined Drive/Cruise entry `Menu`
     /// (`driveEntryButton`) — is DELETED. Its two former options are now reached via search
     /// (`BrowseSearchAreaView`'s place state → Go, destination path) and the sheet's
     /// primary "Find a Spot" button (`enterCruiseMode()`, no destination path — labeled
     /// "Cruise" until spec §0f Ruling 2 renamed it) — no menu, per Kevin's terminology
-    /// ruling (spec §3.1, superseded on naming by §0f). This is a net reduction from FOUR buttons to
-    /// THREE (design-review "what's working": Locate/Find-my-car/Park Until were already
-    /// the only three that needed to stay outside the sheet — decision 5).
+    /// ruling (spec §3.1, superseded on naming by §0f).
     @ViewBuilder
     private var recenterButtonStack: some View {
         VStack(spacing: 8) {
@@ -2824,7 +3111,31 @@ struct ContentView: View {
             .accessibilityLabel("Recenter on my location")
             .accessibilityHint("Moves the map to show your current GPS position.")
 
-            // Button 2: "Find my car" — shown only when a parked-car pin exists.
+            // Button 2: Search — DM-2 (`docs/drive-mode-default-spec.md` §0.4/§0.4a,
+            // design doc §2.6). Presents `.browseNav` at its `.medium` detent — the
+            // mitigation for the "no persistent sheet means Job B costs +1 tap" regression
+            // §0.4a flags honestly. Gated on `AppConstants.driveModeDefaultEnabled`: AC-2
+            // ("no persistent Search icon render anywhere" while the flag is off) and this
+            // stream's own dispatch are explicit that this is flag-gated, NOT unconditional
+            // — the regression it mitigates (losing the always-open `.browseNav` sheet as a
+            // search entry point) only exists once the flag flips the rest state to `nil` in
+            // the first place. Flag off: `.browseNav` is still the persistent default sheet,
+            // so this icon would be a redundant, un-speced second way to reach it.
+            if AppConstants.driveModeDefaultEnabled {
+                Button {
+                    presentBrowseNavSearch()
+                } label: {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityLabel("Search for a destination")
+                .accessibilityHint("Opens search to navigate somewhere, or find a spot nearby.")
+            }
+
+            // Button 3: "Find my car" — shown only when a parked-car pin exists.
             if parkPinService.parkedCar != nil {
                 Button {
                     recenterOnCar()
@@ -2839,20 +3150,38 @@ struct ContentView: View {
                 .accessibilityHint("Moves the map to show where you parked.")
             }
 
-            // Button 3: Park Until filter — standalone trigger (filter-first UX).
-            // Always visible. Tapping while filter is active re-opens the sheet to change the time.
-            Button {
-                activeSheet = .parkUntil
-            } label: {
-                Image(systemName: "clock.fill")
-                    .font(.system(size: 17, weight: .medium))
-                    .frame(width: 44, height: 44)
-                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                    .foregroundStyle(parkUntilMode ? Color.green : Color.accentColor)
+            // Button 4: Park Until filter — standalone trigger (filter-first UX).
+            // DM-2 (§0.8.9, design doc §2.6): hidden while the goal-first dock owns the
+            // filter — "not reachable directly from the goal-first home screen" is made
+            // literal here. Reappears once the user toggles to full-palette mode, or
+            // always when the flag is off (byte-identical to pre-DM-2 behavior).
+            if parkUntilClockButtonVisible(
+                driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+                fullPaletteMode: fullPaletteMode
+            ) {
+                Button {
+                    activeSheet = .parkUntil
+                } label: {
+                    Image(systemName: "clock.fill")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(parkUntilMode ? Color.green : Color.accentColor)
+                }
+                .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
+                .accessibilityHint("Shows only blocks where you can park until a chosen time.")
             }
-            .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
-            .accessibilityHint("Shows only blocks where you can park until a chosen time.")
         }
+    }
+
+    /// DM-2 (§0.4a's Job B mitigation): presents `.browseNav` at its `.medium` detent — the
+    /// Search icon's tap action. Setting `browseSheetDetentKind` and `activeSheet` together,
+    /// in the same synchronous transaction, means the sheet mounts ALREADY at medium rather
+    /// than animating up from peek (same idiom `handleDriveModeAndCamera` already uses to
+    /// force `browseSheetDetentKind = .peek` before restoring `.browseNav`).
+    private func presentBrowseNavSearch() {
+        browseSheetDetentKind = .medium
+        activeSheet = .browseNav
     }
 
     // MARK: - FT-18: Isolated "End Drive" control (top-trailing)
@@ -3148,10 +3477,17 @@ struct ContentView: View {
         case .requestFirst:
             // Fires the real system permission prompt instead of silently escalating into
             // a continuous-GPS session with no permission. `requestAndFetchLocation()`'s
-            // own delegate callback resolves authorization asynchronously — this tap does
-            // NOT auto-continue into escalation; the user taps again once resolved, the
-            // same two-tap shape `BrowseSearchAreaView.handleGoTap()` already uses for
-            // destination-mode Drive's own `.notDetermined` branch.
+            // own delegate callback resolves authorization asynchronously.
+            //
+            // DM-2 fast-follow (`docs/qa/pr131-dm3-priming-authfix.md` 🟡 Finding #1,
+            // corrected): this tap DOES auto-continue into escalation once authorization
+            // resolves — `isRequestingCruiseEntryAuth = true` here, read by the
+            // `.onChange(of: locationService.isAuthorized)` handler in `body`, which calls
+            // this function again once `isAuthorized` flips. This is now the SAME one-tap
+            // shape `BrowseSearchAreaView.handleGoTap()` already uses for destination-mode
+            // Drive's own `.notDetermined` branch (the PR #131 comment this replaces
+            // claimed that parity prematurely — this fix is what actually delivers it).
+            isRequestingCruiseEntryAuth = true
             locationService.requestAndFetchLocation()
             return
         case .showDeniedAlert:
@@ -4592,12 +4928,22 @@ struct ContentView: View {
             // synchronously — SwiftUI batches every state write within one synchronous
             // scope into a single transaction and fires `.onChange` once afterward, so by
             // the time THIS handler runs, `activeSheet` already holds `.parkUntil`. That
-            // deliberate auto-fire must win, not get silently overwritten back to
-            // `.browseNav`. Same "don't clobber an already-reassigned sheet" guard the
-            // top-level `.sheet(item:, onDismiss:)` backstop already uses for the identical
-            // reason (see that closure's own comment in `body`).
+            // deliberate auto-fire must win, not get silently overwritten back to the rest
+            // state. Same "don't clobber an already-reassigned sheet" guard the top-level
+            // `.sheet(item:, onDismiss:)` backstop already uses for the identical reason
+            // (see that closure's own comment in `body`).
+            //
+            // DM-2 (`docs/drive-mode-default-spec.md` §0.4, QA pass 1 on PR #130 — the
+            // "two more literal `.browseNav` restore sites" finding, second of two): routes
+            // through `driveModeDefaultRestStateSheet()` instead of hardcoding `.browseNav`,
+            // same fix as the `.sheet(item:, onDismiss:)` backstop above. Flag off:
+            // unchanged (`.browseNav`). Flag on: exiting Drive Mode lands on the genuinely
+            // sheet-free ambient home screen (AC-6), not back into `.browseNav` — even
+            // though this case is literally named `.browseNavAtPeek` (kept as-is; renaming
+            // it would be a drive-by refactor of `browseSheetBoundaryTarget`'s enum, not
+            // required by any AC).
             if activeSheet == nil {
-                activeSheet = .browseNav
+                activeSheet = driveModeDefaultRestStateSheet()
             }
         }
 
@@ -4858,10 +5204,18 @@ struct ContentView: View {
     // MARK: - W7.5: Park Until filter helpers
 
     /// Clears the Park Until filter, rebuilds overlays in normal 5-state mode, and shows a toast.
-    /// Called from the filter-active pill's "x" button and from the skip handler.
+    /// Called from the filter-active pill's "x" button, the skip handler, and — DM-2 (§0.8.8,
+    /// AC-27) — `toggleFullPaletteMode()`'s "turn full-palette ON" branch, for which this
+    /// function's existing behavior IS the spec'd behavior verbatim ("functionally identical
+    /// to today's already-shipped clearParkUntilFilter()").
     private func clearParkUntilFilter() {
         parkUntilMode = false
         parkUntilTarget = nil
+        // DM-2: reset both goal-driven fields so a stale value can never leak into whatever
+        // sets `parkUntilMode`/`parkUntilTarget` next (the custom `ParkUntilSheet`, or a
+        // later goal re-selection, which overwrites them fresh anyway).
+        parkUntilIgnoresMeteredPayment = false
+        parkAndForgetGuardState = nil
         rebuildOverlays(at: .nowET)
         ToastService.shared.show(message: "Park Until filter cleared")
     }
@@ -5313,6 +5667,172 @@ nonisolated func cruiseEntryAuthAction(for status: CLAuthorizationStatus) -> Cru
         // treat an unrecognized future case as the authorized path rather than blocking entry.
         return .proceed
     }
+}
+
+// MARK: - DM-2: Goal-first ambient dock visibility
+
+/// Whether the ambient goal-first dock (full-palette toggle + "Start Driving" + goal tiles,
+/// `GoalSelectorView`) mounts at ALL (`docs/drive-mode-default-spec.md` §0.8.7, design doc
+/// §2.1/§6 flag #4) — independent of which of its own rows end up rendering. Ambient-only:
+/// excludes Drive Mode, FT-15 block-select, and spot-placement mode, the SAME exclusion list
+/// `recenterButtonStackVisible`/`communityMapChromeVisible` already use. Also excludes any
+/// OTHER sheet being presented (`activeSheetIsNil`) — the dock lives inside
+/// `bottomSafeAreaContent`, a `.safeAreaInset` that renders BEHIND a modally-presented sheet
+/// (see `communityMapChromeOverlay`'s own doc comment on that same z-order fact); hiding the
+/// dock whenever ANY sheet is up (including `.browseNav`, reachable via the persistent
+/// Search icon) avoids it being spatially obscured by, or tap-colliding with, that sheet's
+/// own background-interactive region at peek/medium — the exact "collide with the FT-20
+/// detent machinery" risk the dispatch for this stream calls out by name.
+///
+/// `nonisolated` for the same sync-XCTest reason every other pure decision function in this
+/// file is (`recenterButtonStackVisible`, `communityMapChromeVisible`, etc.).
+nonisolated func goalSelectorDockVisible(
+    driveModeDefaultEnabled: Bool,
+    activeSheetIsNil: Bool,
+    driveModeActive: Bool,
+    blockSelectModeActive: Bool,
+    spotPlacementActive: Bool
+) -> Bool {
+    driveModeDefaultEnabled && activeSheetIsNil && !driveModeActive
+        && !blockSelectModeActive && !spotPlacementActive
+}
+
+/// Whether the goal-TILE row specifically is showing (design doc §2.2/§2.4) — the dock
+/// container is mounted (`goalSelectorDockVisible`) AND the user hasn't toggled to
+/// full-palette. This is ALSO exactly the condition under which the legacy `ParkUntilPill`
+/// row must be suppressed (design doc §6 flag #1 — the double-render bug: once Overnight is
+/// pre-selected by default, `parkUntilMode` is true at rest 100% of the time, so the old pill
+/// would otherwise render simultaneously with the new goal-tile dock, duplicating "a filter
+/// is active" in two different UI languages at once).
+nonisolated func goalTileRowVisible(
+    driveModeDefaultEnabled: Bool,
+    activeSheetIsNil: Bool,
+    fullPaletteMode: Bool,
+    driveModeActive: Bool,
+    blockSelectModeActive: Bool,
+    spotPlacementActive: Bool
+) -> Bool {
+    goalSelectorDockVisible(
+        driveModeDefaultEnabled: driveModeDefaultEnabled,
+        activeSheetIsNil: activeSheetIsNil,
+        driveModeActive: driveModeActive,
+        blockSelectModeActive: blockSelectModeActive,
+        spotPlacementActive: spotPlacementActive
+    ) && !fullPaletteMode
+}
+
+/// Whether `recenterButtonStack`'s power-user clock-icon button (§0.8.9) should render.
+/// Hidden while the goal-first dock owns the filter (`driveModeDefaultEnabled &&
+/// !fullPaletteMode`) — design doc §2.6's "Concrete gating note for the clock-icon button":
+/// §0.8.9 says that sheet "is not reachable directly from the goal-first home screen," and
+/// this is the literal code edit that makes that true. Visible in every other combination:
+/// flag off (today's shipped behavior, unchanged), or flag on + the user has toggled to
+/// full-palette mode (§0.8.9's power-user path reappears exactly as described).
+nonisolated func parkUntilClockButtonVisible(
+    driveModeDefaultEnabled: Bool,
+    fullPaletteMode: Bool
+) -> Bool {
+    !driveModeDefaultEnabled || fullPaletteMode
+}
+
+// MARK: - DM-2: Park & Forget viewport resolution (§0.8.9/§0.8.10)
+
+/// Result of resolving Park & Forget's single GLOBAL rung from the viewport's currently
+/// loaded segments. `offsetDays` is always one of `ParkingGoals.parkAndForgetLadderOffsetDays`
+/// (8, 4, or 2) — the COLOR BUCKET's own target, unaffected by this fix (QA pass 1 on PR
+/// #133 confirmed the monotonic top-down "first rung anyone clears" walk is sound and
+/// should stay as-is). `steppedDown == true` means the "showing the best available" banner
+/// (§0.8.10) must show — see `resolveParkAndForgetViewport`'s doc comment for how this is
+/// now computed (density-aware, not purely positional). `.empty` is the true worst case:
+/// even the bottom (easiest) rung has zero matches anywhere in the viewport.
+enum ParkAndForgetViewportResolution: Equatable {
+    case resolved(offsetDays: Int, steppedDown: Bool)
+    case empty
+
+    /// §0.8.10 fast-follow (QA pass 1 on PR #133, Finding #1 — promoted to FIX-THEN-MERGE
+    /// by the orchestrator, since §0.8.10 names this banner "not optional polish, it's the
+    /// guardrail"): the minimum fraction of the viewport's BOTTOM-rung (easiest) match
+    /// count the PICKED rung must also clear before the banner is suppressed. Below this,
+    /// the banner fires even when the picked rung is technically the TOP rung — without
+    /// this, a single lonely metered-only/unregulated segment (§0.8.2's own cited 9.2% of
+    /// parkable curb, present in nearly every real viewport) could silently "clear the top
+    /// rung" and suppress the banner for an otherwise almost-entirely-red map, exactly the
+    /// "reads as broken" failure mode §0.8.10 calls this amendment's single biggest new
+    /// risk.
+    ///
+    /// Tunable, not derived — 0.25 is a starting knob (QA's own suggested ballpark), not
+    /// backed by tile-data analysis the way the ladder's own `offsetDays` rungs are.
+    /// Revisit with real usage data once this ships live. Exposed as
+    /// `resolveParkAndForgetViewport`'s own defaulted parameter (not hardcoded inline) so
+    /// tests can probe the boundary directly.
+    ///
+    /// Namespaced as a `static let` on this enum (matching `ParkingGoals`'s own convention
+    /// for its tunable constants, e.g. `freeOvernightOffsetDays`) rather than a bare
+    /// top-level constant — this file has no existing precedent for a module-scope `let`
+    /// under its `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` build setting, so this avoids
+    /// introducing an untested isolation shape.
+    nonisolated static let defaultBannerDensityThreshold: Double = 0.25
+}
+
+/// Walks `ladderOffsetDays` top rung (widest/hardest) first, returning the FIRST rung at
+/// which AT LEAST ONE loaded segment clears (§0.8.9: "the date of the highest rung the
+/// overall viewport's segments collectively clear") — this picks the COLOR BUCKET's target,
+/// unchanged by the Finding #1 fix below. This is monotonic by construction — a segment
+/// that clears the 8-day window necessarily also clears the narrower 4-day and 2-day
+/// sub-windows starting at the same `from` (the move-forcing predicate only ever accumulates
+/// restrictions as the window widens, never sheds them) — so match-counts are
+/// non-decreasing as the rung narrows, and this simple top-down "does ANYONE clear this rung
+/// yet" walk is a valid simplification of "highest rung collectively cleared."
+///
+/// **`steppedDown` (the BANNER trigger, §0.8.10) is density-aware, not purely positional**
+/// (QA pass 1 on PR #133, Finding #1 fix): fires whenever EITHER (a) the picked rung
+/// literally isn't the top rung (unchanged, pre-existing, QA-confirmed-correct — a real
+/// step-down always shows the banner), OR (b) the picked rung IS the top rung but the
+/// fraction of the viewport clearing it, relative to the bottom (easiest) rung's own match
+/// count, falls below `bannerDensityThreshold` — i.e. "technically someone clears the top
+/// rung, but almost nobody else does" no longer silently suppresses the banner. Every
+/// rung's match COUNT is computed up front (not just a boolean) specifically to make this
+/// density comparison possible.
+///
+/// `ignoringMeteredPayment: true` always — Park & Forget shares Free Overnight's
+/// metered-tolerant predicate (§0.8.4) regardless of caller, same as
+/// `ParkingGoals.ignoresMeteredPayment(for: .parkAndForget)`.
+///
+/// `nonisolated` — same sync-XCTest reason as every other pure function in this file;
+/// `segments`/`engine` are passed in explicitly so this is directly testable with a small
+/// synthetic segment array, no live `ContentView`/`TileLoader` needed.
+nonisolated func resolveParkAndForgetViewport(
+    segments: [Segment],
+    from: Date,
+    engine: ParkingRulesEngine,
+    ladderOffsetDays: [Int] = ParkingGoals.parkAndForgetLadderOffsetDays,
+    bannerDensityThreshold: Double = ParkAndForgetViewportResolution.defaultBannerDensityThreshold
+) -> ParkAndForgetViewportResolution {
+    // Match COUNT at every rung (not just "did anyone clear it") — the input the density
+    // check below needs. `ladderOffsetDays` is ordered widest-first, so `counts[0]` is the
+    // top rung's count and `counts.last` is the bottom (easiest) rung's count.
+    let counts: [Int] = ladderOffsetDays.map { offsetDays in
+        let until = from.startOfDayET(offsetDays: offsetDays)
+        return segments.reduce(0) { total, segment in
+            guard segment.coordinates.count >= 2 else { return total }
+            let clears = engine.isFree(
+                segment: segment, from: from, until: until, ignoringMeteredPayment: true
+            )
+            return clears ? total + 1 : total
+        }
+    }
+
+    guard let pickedIndex = counts.firstIndex(where: { $0 > 0 }) else {
+        return .empty
+    }
+
+    let bottomCount = counts[counts.count - 1]
+    let pickedCount = counts[pickedIndex]
+    // Monotonicity guarantees bottomCount >= pickedCount, so density is always in [0, 1].
+    let density = bottomCount > 0 ? Double(pickedCount) / Double(bottomCount) : 0
+
+    let steppedDown = pickedIndex > 0 || density < bannerDensityThreshold
+    return .resolved(offsetDays: ladderOffsetDays[pickedIndex], steppedDown: steppedDown)
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance

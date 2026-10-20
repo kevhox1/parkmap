@@ -105,14 +105,47 @@ final class DriveModeDefaultFlagTests: XCTestCase {
     // MARK: - AC-2: flag off — no ambient/goal-first UI render anywhere
 
     /// AC-2 ("No ambient pill, no persistent Search icon, no priming card render anywhere")
-    /// has no production code surface yet to assert against — DM-2/DM-3 build that UI in a
-    /// later stream. This stream's own contribution to AC-2 is purely negative: DM-1 adds no
-    /// new view, no new render path, and no new call site gated on
-    /// `driveModeDefaultEnabled` other than the two rest-state sites covered above. Recorded
-    /// here, explicitly, so the PR's test inventory doesn't silently omit AC-2 — there is
-    /// nothing else to unit-test until DM-2/DM-3 land their views.
+    /// had no production code surface to assert against at DM-1 time — DM-2 now builds that
+    /// UI, so this is real-asserted here rather than left as a documented placeholder (DM-2
+    /// dispatch, 2026-10-20: "real-assert DM-1's placeholder
+    /// testFlagOff_noNewUISurfaceIntroducedByDM1"). Covers every DM-2 pure gating function
+    /// that governs whether the goal-first dock/Search icon/toggle render, with the flag held
+    /// `false` and every OTHER input varied — the goal dock, the goal-tile row, and the
+    /// Search icon's clock-button-hiding side effect must all resolve to "off"/"unchanged"
+    /// regardless of `activeSheet`/`driveModeActive`/`fullPaletteMode`, because the flag
+    /// itself is the master gate. (The Search icon's own `if AppConstants
+    /// .driveModeDefaultEnabled` gate at its call site in `recenterButtonStack` has no
+    /// separate pure function to test — see `DM2GoalSelectorTests`'s own note on why.)
     func testFlagOff_noNewUISurfaceIntroducedByDM1() {
-        // Documents intent — see doc comment above. Nothing to assert yet.
+        for activeSheetIsNil in [true, false] {
+            for driveModeActive in [true, false] {
+                for blockSelectModeActive in [true, false] {
+                    for spotPlacementActive in [true, false] {
+                        XCTAssertFalse(
+                            goalSelectorDockVisible(
+                                driveModeDefaultEnabled: false,
+                                activeSheetIsNil: activeSheetIsNil,
+                                driveModeActive: driveModeActive,
+                                blockSelectModeActive: blockSelectModeActive,
+                                spotPlacementActive: spotPlacementActive
+                            ),
+                            "AC-2: the goal-first ambient dock must never mount while " +
+                            "driveModeDefaultEnabled is false, regardless of any other state."
+                        )
+                    }
+                }
+            }
+        }
+        for fullPaletteMode in [true, false] {
+            XCTAssertTrue(
+                parkUntilClockButtonVisible(
+                    driveModeDefaultEnabled: false,
+                    fullPaletteMode: fullPaletteMode
+                ),
+                "AC-2: the power-user Park Until clock icon must stay visible (byte-identical " +
+                "to pre-DM-2 behavior) while driveModeDefaultEnabled is false."
+            )
+        }
     }
 
     // MARK: - Flag-on: the launched-world assertion this guard test becomes at flip time
