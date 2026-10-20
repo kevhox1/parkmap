@@ -656,7 +656,24 @@ final class ParkingRulesEngine {
     /// All date math uses Calendar.easternTime — zero Calendar.current references.
     ///
     /// Port of checkParkUntilSafety at index.html:4285.
-    func isFree(segment: Segment, from: Date = .nowET, until: Date) -> Bool {
+    ///
+    /// - Parameter ignoringMeteredPayment: §0.8.4 (docs/drive-mode-default-spec.md,
+    ///   2026-10-20 amendment). Additive, default `false` — every existing call site
+    ///   (Park Until's clock-icon flow) is byte-identical to pre-amendment behavior.
+    ///   When `true`, the `cat == .metered` branch below is skipped entirely in the
+    ///   day-walk: metered billing hours no longer disqualify a match, because paying a
+    ///   meter doesn't force the car to move. Every other branch (ASP incl. the
+    ///   suspension-skip, no standing, no parking, truck loading, time-range overlap) is
+    ///   untouched by this flag. Goal-first's "Free overnight" and "Park & forget"
+    ///   (`Services/ParkingGoals.swift`) call this with `true`; "Free a few hours" calls
+    ///   it with `false` (today's strict, already-shipped semantics — Kevin, 2026-10-20:
+    ///   "it's a meter so that's not free").
+    func isFree(
+        segment: Segment,
+        from: Date = .nowET,
+        until: Date,
+        ignoringMeteredPayment: Bool = false
+    ) -> Bool {
         let rules = segment.rules
         // Empty rules → always free.
         guard !rules.isEmpty else { return true }
@@ -747,6 +764,12 @@ final class ParkingRulesEngine {
                     }
 
                 } else if cat == .metered {
+                    // §0.8.4: when ignoringMeteredPayment is true, metered billing hours
+                    // are not a move-forcing restriction — paying a meter doesn't require
+                    // relocating the car. Skip this category entirely for this day/rule;
+                    // every other branch above is untouched by this flag.
+                    if ignoringMeteredPayment { continue }
+
                     // Metered billing hours count as a restriction in Park Until mode.
                     if !rule.days.isEmpty && !rule.days.contains(dayOfWeek) { continue }
 
