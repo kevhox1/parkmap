@@ -77,10 +77,13 @@ call it out honestly in sizing (§4), it is not a free client-side relabeling ex
    **overnight-into-next-day is the flagship use case** — consistent with Free Overnight being the
    pre-selected default (§0.8.1, unchanged).
 2. **"Free a few hours" = +3h — RULED, confirmed** ("sure good idea"). §0.8.5 as written.
-3. **Single flag vs two — PENDING, the one still-open ruling.** Kevin asked for a clearer
-   explanation (given 2026-10-20); recommendation stands: one flag, both halves ride
-   `driveModeDefaultEnabled` together. **DM-1 does not dispatch until this is ruled.** (DM-2e is
-   flag-structure-independent and may proceed.)
+3. **Single flag vs two — RULED: ONE FLAG** (`driveModeDefaultEnabled`, both halves together,
+   per §0.6's recommendation). Locked 2026-10-20 under Kevin's same-day autonomy directive
+   ("limit confirming steps... run autonomously, only truly vital questions") after two
+   explanations drew no objection and his "I think goal first makes sense" aligned with the
+   recommendation's rationale (an ambient screen without its goal-first payload is a pointless
+   halfway state). Veto-able by Kevin any time before the flip build — flipping is a separate,
+   later, Kevin-gated decision regardless.
 4. **Icons/copy — RULED: @designer owns it**, with a NEW LOCKED CONSTRAINT from Kevin: *the goal
    buttons must be huge and unmistakable — "anyone who boots it up should get it. Maybe not the
    ASP rules but at least get the buttons."* First-time comprehension with zero NYC-parking
