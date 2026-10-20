@@ -32,6 +32,17 @@
 //  `ContentView`'s EXISTING `parkUntilMode`/`parkUntilTarget` → `rebuildOverlays()` path via
 //  its closures (§0.8.6).
 //
+//  Live-smoke fix (Kevin, 2026-10-20, PR #133 flag-on cold launch, iPhone 17 sim): this
+//  struct's own `body` was already ONE `VStack` mounted through `ContentView`'s single
+//  `.safeAreaInset(edge: .bottom)` on `mapRepresentable` — not loose overlays — so no
+//  restructuring of ITS mounting was needed here. The real bugs were (1) `startDrivingRow`
+//  relying solely on `.buttonStyle(.bordered)`'s implicit fill, which read as unreadable text
+//  on a live map (fixed below, added an explicit `.regularMaterial` backdrop) and (2) a
+//  SEPARATE, pre-existing floating layer in `ContentView` — the persistent Report pill / "?"
+//  map-key button (`communityMapChromeOverlay`) — using a fixed clearance sized for the FT-20
+//  browse sheet's peek detent, which never accounted for THIS dock's height and drew on top
+//  of its tile row. See `communityMapChromeBottomPadding` in `ContentView.swift` for that fix.
+//
 
 import SwiftUI
 
@@ -123,11 +134,23 @@ struct GoalSelectorView: View {
 
     // MARK: - "Start Driving" row (§2.3)
 
+    /// Live-smoke fix (Kevin, 2026-10-20, PR #133 flag-on cold launch): design doc §2.3 calls
+    /// for `.buttonStyle(.bordered)` alone, no explicit background. On a live map that style's
+    /// own tinted fill read as "blue text straight on the dark map, barely readable" — not a
+    /// visible control. Adding an explicit `.regularMaterial` backdrop (same mechanism §2.4
+    /// already mandates for `fullPaletteToggleRow`, and the same family every other floating
+    /// control in this app uses per that section's own rationale) guarantees a legible
+    /// backdrop regardless of map color underneath, independent of `.bordered`'s own fill
+    /// rendering. `.buttonStyle(.bordered)` is kept — this is additive, not a style swap — so
+    /// the outline-not-filled "demoted" visual weight §2.3 specifies is unchanged, it just now
+    /// sits on a guaranteed-visible backdrop instead of a possibly-invisible one. Flagged as a
+    /// one-line deviation from the design doc's literal §2.3 text, not a silent one.
     private var startDrivingRow: some View {
         Button(action: onStartDriving) {
             Label("Start Driving", systemImage: "location.north.circle.fill")
                 .font(.subheadline.weight(.semibold))
                 .frame(maxWidth: .infinity, minHeight: 48)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.bordered)
         .clipShape(RoundedRectangle(cornerRadius: 14))

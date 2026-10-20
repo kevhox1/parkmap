@@ -1073,6 +1073,23 @@ struct ContentView: View {
         paddingForBannerState(bannerState)
     }
 
+    /// DM-2 ambient-dock fix: see `communityMapChromeBottomPadding`'s doc comment. Computed
+    /// with the SAME five inputs `bottomSafeAreaContent`'s own `goalDockVisible` local reads,
+    /// so this clearance and the dock's own mount gate can never disagree about whether the
+    /// dock is up.
+    private var communityMapChromeBottomPaddingValue: CGFloat {
+        communityMapChromeBottomPadding(
+            goalDockVisible: goalSelectorDockVisible(
+                driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+                activeSheetIsNil: activeSheet == nil,
+                driveModeActive: driveModeActive,
+                blockSelectModeActive: blockSelectModeActive,
+                spotPlacementActive: spotPlacementActive
+            ),
+            browseSheetPeekHeight: browseSheetPeekHeight
+        )
+    }
+
     private var selectedSegment: Segment? {
         guard let id = selectedSegmentID else { return nil }
         return tileLoader.segments.first { $0.id == id }
@@ -2541,14 +2558,20 @@ struct ContentView: View {
     /// duration; layering a second, competing Report/legend affordance over a focused task
     /// would clutter it, the same reasoning `parkingGuideBannerOverlay`'s gate documents.
     ///
-    /// Positioned as its own floating row — same "VStack + Spacer(), padded to
-    /// `browseSheetPeekHeight + 12`" convention `spotPlacementConfirmOverlay`/
-    /// `confirmPromptOverlay`/`parkingGuideBannerOverlay` above already use — rather than a
-    /// `bottomSafeAreaContent` row: this is BROWSE mode's persistent chrome, not a
-    /// Drive-Mode Bottom-Dock row, and (like those three floating cards) must float ABOVE
-    /// the modally-presented `.browseNav` sheet, which a `.safeAreaInset` row cannot do
-    /// (see `parkingGuideBannerOverlay`'s own doc comment for why `.safeAreaInset` content
-    /// renders BEHIND the sheet).
+    /// Positioned as its own floating row — same "VStack + Spacer(), padded to clear
+    /// whatever's below it" convention `spotPlacementConfirmOverlay`/`confirmPromptOverlay`/
+    /// `parkingGuideBannerOverlay` above already use — rather than a `bottomSafeAreaContent`
+    /// row: this is BROWSE mode's persistent chrome, not a Drive-Mode Bottom-Dock row, and
+    /// (like those three floating cards) must float ABOVE the modally-presented `.browseNav`
+    /// sheet, which a `.safeAreaInset` row cannot do (see `parkingGuideBannerOverlay`'s own
+    /// doc comment for why `.safeAreaInset` content renders BEHIND the sheet).
+    ///
+    /// DM-2 ambient-dock fix (Kevin's live smoke, 2026-10-20): the clearance below used to be
+    /// the flat `browseSheetPeekHeight + 12`, correct for the FT-20 sheet but blind to the
+    /// goal-first ambient dock, which lives in a completely different presentation layer
+    /// (`mapRepresentable`'s own `.safeAreaInset`) that this sibling overlay has no structural
+    /// visibility into. See `communityMapChromeBottomPadding`'s doc comment for the fix and
+    /// why a dock-aware offset is now threaded through explicitly instead.
     @ViewBuilder
     private var communityMapChromeOverlay: some View {
         if Self.communityMapChromeVisible(
@@ -2566,7 +2589,7 @@ struct ContentView: View {
                     mapKeyButton
                 }
                 .padding(.horizontal, 16)
-                .padding(.bottom, browseSheetPeekHeight + 12)
+                .padding(.bottom, communityMapChromeBottomPaddingValue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -5863,6 +5886,60 @@ func recenterPillBottomPadding(showApproachStrip: Bool, parkUntilVisible: Bool) 
     if showApproachStrip { height += 30 }
     if parkUntilVisible { height += 58 }
     return height + 8
+}
+
+// MARK: - DM-2 ambient-dock fix: community chrome clearance (Kevin's live smoke, 2026-10-20)
+
+/// Returns the bottom padding (in points) the persistent Report pill / "?" map-key button
+/// (`communityMapChromeOverlay`) need so they clear the goal-first ambient dock
+/// (`GoalSelectorView`, mounted via `bottomSafeAreaContent`'s `.safeAreaInset(edge: .bottom)`)
+/// instead of drawing over its tile row — Kevin's live-smoke screenshot on PR #133's merge
+/// (flag ON, cold launch, iPhone 17 sim): the Report pill sat directly over the Overnight
+/// tile's top edge, and the "?" button overlapped Park & Forget's top-right corner.
+///
+/// Root cause: `communityMapChromeOverlay` is a SEPARATE floating layer in `mapZStack`'s
+/// outer `ZStack` (the same "`VStack` + `Spacer()`, pinned to one edge" convention every
+/// other floating card in this file uses — see that property's own doc comment), not a
+/// child of `mapRepresentable`'s `.safeAreaInset`, so it has no structural awareness of the
+/// dock's height. Its old clearance, `browseSheetPeekHeight + 12`, was sized for the FT-20
+/// browse sheet's peek detent — which never mounts in ambient mode at all (cold launch with
+/// `driveModeDefaultEnabled == true` starts `activeSheet == nil`; `browseSheetPeekHeight`
+/// sits frozen at its unmeasured `BrowseSheetDetentMath.minimumPeekHeight` default, 64pt, the
+/// entire time the dock is showing) — nowhere near the dock's real ~230–300pt height.
+///
+/// Mirrors `recenterPillBottomPadding`'s pattern (TF2-18): hardcode the known component
+/// heights, verify the sum via live-UI smoke, rather than measuring at runtime with
+/// `GeometryReader` (same update-cycle-safety reasoning that function's own doc comment
+/// gives — mutating layout state from inside the map's update cycle is the exact class of
+/// bug that reverted W8.5c-polish). Component heights (approximate, system fonts;
+/// `GoalSelectorView`'s own `VStack(spacing: 10)` + `.padding(.bottom, 8)`):
+///   - Full-palette toggle row: 44pt (`.frame(minHeight: 44)`).
+///   - Empty-map-guard banner, included unconditionally at its worst-case height (~60pt —
+///     up to two wrapped lines of `.subheadline` text + 10pt vertical padding × 2) rather
+///     than threading `emptyMapGuardKind` through this call site, so the pill/button never
+///     clip the banner on the one goal (Park & Forget) where it can appear.
+///   - "Start Driving" row: 48pt (`.frame(minHeight: 48)`).
+///   - Goal tile row: 112pt (`.frame(minHeight: 112)`).
+///   - 3 inter-row gaps × 10pt (`VStack(spacing: 10)`, worst case with the banner present).
+///   - Dock's own bottom padding: 8pt.
+///   - `+ 24pt` breathing-room gap above the dock's top edge — the fix's own requirement
+///     that these controls sit "clearly above the dock," not flush against it.
+/// Sum: 326pt. Kevin's immediate re-smoke is what confirms or corrects this exact number,
+/// same precedent `paddingForBannerState`'s own doc comment sets.
+///
+/// Extracted as a pure function so tests can assert both branches (dock visible / not)
+/// directly without instantiating a full `ContentView`.
+func communityMapChromeBottomPadding(goalDockVisible: Bool, browseSheetPeekHeight: CGFloat) -> CGFloat {
+    guard goalDockVisible else { return browseSheetPeekHeight + 12 }
+    let toggleRow: CGFloat = 44
+    let guardBannerWorstCase: CGFloat = 60
+    let startDrivingRow: CGFloat = 48
+    let tileRow: CGFloat = 112
+    let interRowGaps: CGFloat = 10 * 3
+    let dockBottomPadding: CGFloat = 8
+    let breathingRoom: CGFloat = 24
+    return toggleRow + guardBannerWorstCase + startDrivingRow + tileRow
+        + interRowGaps + dockBottomPadding + breathingRoom
 }
 
 #Preview {
