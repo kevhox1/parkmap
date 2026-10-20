@@ -235,6 +235,31 @@ enum AppConstants {
     /// minutes haha." Locked so it can't silently drift back toward the spec's original
     /// 2-minute recommendation (`testAppConstants_regularsHeadStartDefault_is15Minutes`).
     static let regularsHeadStartDefaultSeconds: Int = 15 * 60
+
+    // MARK: - Drive-mode-default (DM-1, `docs/drive-mode-default-spec.md`, build TBD)
+
+    /// DARK-SHIPS `false` — direct copy of `communityEnabled`/`regularsEnabled`'s own playbook
+    /// (see those flags' doc comments above for the full "why a compile-time flag, why guard
+    /// tests" rationale), not a new pattern. Gates the ambient, destination-less-Cruise home
+    /// screen (map at rest, no default-mounted `.browseNav` sheet) AND its goal-first
+    /// centerpiece (three preset "what do I need" buttons feeding the existing Park Until
+    /// engine) TOGETHER — per `docs/drive-mode-default-spec.md` §0.6 ruling 3, LOCKED
+    /// 2026-10-20: "ONE FLAG... both halves together." The two halves are deliberately not
+    /// split into separate flags, because Kevin's own framing is that an ambient home screen
+    /// without the goal-first payload is a "pointless" halfway state shipped alone.
+    ///
+    /// Flips to `true` only after a drive-test gate records clean in `HANDOFF.md` — the same
+    /// gate discipline `communityEnabled`'s build 20→22 flip used
+    /// (`docs/drive-mode-default-spec.md` §0.6).
+    ///
+    /// Named guard tests (`DriveModeDefaultFlagTests`,
+    /// `WeParkTests/DriveModeDefaultFlagTests.swift`) pin the flag-off byte-identical claim
+    /// (spec §5 AC-1/AC-2: `activeSheet` still defaults to `.browseNav`,
+    /// `dismissTargetOutsideBrowseNav` still resolves to `.browseNav`, no ambient/goal-first UI
+    /// renders anywhere) so flip time inherits a known checklist rather than a discovery pass
+    /// — the same retro lesson Community 2.0's own guard tests taught this project (PR #109,
+    /// "4 dark-ship guard tests transformed into launched-world assertions").
+    static let driveModeDefaultEnabled = false
 }
 
 // MARK: - MoneyMathConstants (FT-12 §6)

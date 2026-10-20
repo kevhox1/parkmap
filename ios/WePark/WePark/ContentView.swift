@@ -480,7 +480,16 @@ struct ContentView: View {
     /// would have traded one bug (QA Finding #1's trapped sheet) for another (the browse
     /// sheet fighting Drive Mode's Bottom Dock on the very first launch). Both are wired
     /// now, in this same change, so the default flips safely.
-    @State private var activeSheet: ActiveSheet? = .browseNav
+    ///
+    /// DM-1 (`docs/drive-mode-default-spec.md` §0.4/§3.3): while
+    /// `AppConstants.driveModeDefaultEnabled == false` (today's shipped default), this is
+    /// unchanged — `.browseNav`, byte-identical to pre-DM-1 behavior (spec AC-1). Once flipped
+    /// `true`, cold launch is genuinely sheet-free (`nil`) — see
+    /// `driveModeDefaultRestStateSheet(driveModeDefaultEnabled:)` below, the shared pure
+    /// function this and `dismissTargetOutsideBrowseNav` both read, so the two rest-state
+    /// sites can never drift apart (spec §0.4: "Both the initial `@State` and this rest-state
+    /// target must flip together, or this ships half-converted").
+    @State private var activeSheet: ActiveSheet? = driveModeDefaultRestStateSheet()
 
     /// FT-20 Stream A (spec §4.1, design-review finding B1/B2): the two CUSTOM
     /// `.presentationDetents` heights for `.browseNav`, measured from the sheet's own
@@ -1245,9 +1254,18 @@ struct ContentView: View {
     ///
     /// Gated on `ft20BrowseSheetEnabled` (above) — while `false`, always resolves to `nil`,
     /// so this behaves exactly as it did before this PR's dismiss-target sweep.
+    ///
+    /// DM-1 (`docs/drive-mode-default-spec.md` §0.4): when Drive Mode/block-select aren't
+    /// forcing a hide, the actual rest-state target now routes through
+    /// `driveModeDefaultRestStateSheet(driveModeDefaultEnabled:)` instead of hardcoding
+    /// `.browseNav` — `AppConstants.driveModeDefaultEnabled == false` resolves that function
+    /// to `.browseNav`, unchanged (spec AC-1); `true` resolves it to `nil`, so dismissing any
+    /// sheet lands on the ambient home screen rather than snapping back into `.browseNav`
+    /// (spec §0.4: "Both the initial `@State` and this rest-state target must flip together").
     private var dismissTargetOutsideBrowseNav: ActiveSheet? {
         guard Self.ft20BrowseSheetEnabled else { return nil }
-        return (driveModeActive || blockSelectModeActive) ? nil : .browseNav
+        guard !(driveModeActive || blockSelectModeActive) else { return nil }
+        return driveModeDefaultRestStateSheet()
     }
 
     /// True when no sheet is blocking a NEW sheet/mode-entry presentation — i.e.
@@ -1257,6 +1275,17 @@ struct ContentView: View {
     /// `.browseNav` exists and is non-nil while browse mode is at rest — a bare `== nil`
     /// check would incorrectly treat "the browse sheet is showing its own action list,
     /// which the user just tapped a row in" as "a sheet is blocking this."
+    ///
+    /// DM-1 note (`docs/drive-mode-default-spec.md` §0.4's "nice simplification" suggestion,
+    /// verified rather than assumed): the `.browseNav` special-case here is NOT deleted by
+    /// DM-1, under either flag state. `enterCruiseMode()`'s only call site today is
+    /// `BrowseNavigationSheet`'s "Find a Spot" button (`onCruiseTapped`) — i.e. the tap that
+    /// triggers it happens WHILE `activeSheet == .browseNav` is the presented sheet, flag on
+    /// or off, because DM-2 (not this stream) is what moves that trigger out to a standalone
+    /// ambient-screen affordance per spec §0.8.7. Dropping the `.browseNav` case here before
+    /// DM-2 lands would make this guard — and the identical guard on the "Park here" button,
+    /// below — silently no-op on every tap. Revisit once DM-2 ships the demoted "start
+    /// driving" affordance outside `.browseNav`.
     private var noBlockingSheetPresented: Bool {
         switch activeSheet {
         case nil, .browseNav: return true
@@ -5056,6 +5085,39 @@ enum BrowseSheetDriveBoundaryTarget: Equatable {
 /// applies it.
 func browseSheetBoundaryTarget(driveModeBecameActive: Bool) -> BrowseSheetDriveBoundaryTarget {
     driveModeBecameActive ? .hidden : .browseNavAtPeek
+}
+
+// MARK: - DM-1: Drive-mode-default rest-state sheet target
+
+/// The rest-state `ActiveSheet` target when neither Drive Mode nor FT-15 block-select is
+/// forcing a hide — i.e. what `activeSheet` defaults to at cold launch, and what
+/// `dismissTargetOutsideBrowseNav` resolves to once those two force-hide cases are ruled
+/// out. Both call sites read this SAME function so they can never drift apart (spec §0.4:
+/// "Both the initial `@State` and this rest-state target must flip together, or this ships
+/// half-converted").
+///
+/// `driveModeDefaultEnabled == false` (today's shipped default): `.browseNav`,
+/// byte-identical to pre-DM-1 behavior (`docs/drive-mode-default-spec.md` §5 AC-1).
+/// `== true`: `nil` — the ambient home screen's genuinely sheet-free rest state (§0.4).
+///
+/// Extracted as a pure function — `ActiveSheet` isn't `Equatable` (several cases carry
+/// non-Equatable associated payloads), so tests pattern-match the `.browseNav` case or
+/// `XCTAssertNil` directly rather than `==` — same discipline as `browseSheetBoundaryTarget`
+/// above. This is a dark-ship guard today (`DriveModeDefaultFlagTests`); at flip time its
+/// `true`-branch assertion becomes the launched-world assertion per the PR #109 playbook
+/// (`docs/community-2.0-roadmap.md`'s "4 dark-ship guard tests transformed into
+/// launched-world assertions").
+///
+/// `nonisolated` explicitly: this file compiles under `SWIFT_DEFAULT_ACTOR_ISOLATION =
+/// MainActor`, which would otherwise implicitly main-actor-isolate this top-level func; the
+/// guard tests in `DriveModeDefaultFlagTests` call it synchronously from plain (non-async,
+/// non-`@MainActor`) XCTestCase methods, so it needs to stay callable off the main actor —
+/// same reasoning as `AppConstants`'s own `nonisolated static func` flag-gating helpers
+/// (`communityPhase1PinTypes`, `regularsSettingsRowVisible`, etc., `Services/Constants.swift`).
+nonisolated func driveModeDefaultRestStateSheet(
+    driveModeDefaultEnabled: Bool = AppConstants.driveModeDefaultEnabled
+) -> ActiveSheet? {
+    driveModeDefaultEnabled ? nil : .browseNav
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance
