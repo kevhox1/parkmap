@@ -5739,22 +5739,60 @@ nonisolated func parkUntilClockButtonVisible(
 
 /// Result of resolving Park & Forget's single GLOBAL rung from the viewport's currently
 /// loaded segments. `offsetDays` is always one of `ParkingGoals.parkAndForgetLadderOffsetDays`
-/// (8, 4, or 2). `steppedDown == true` whenever `offsetDays` is NOT the top (widest) rung —
-/// i.e. the "showing the best available" banner (§0.8.10) must show. `.empty` is the true
-/// worst case: even the bottom (easiest) rung has zero matches anywhere in the viewport.
+/// (8, 4, or 2) — the COLOR BUCKET's own target, unaffected by this fix (QA pass 1 on PR
+/// #133 confirmed the monotonic top-down "first rung anyone clears" walk is sound and
+/// should stay as-is). `steppedDown == true` means the "showing the best available" banner
+/// (§0.8.10) must show — see `resolveParkAndForgetViewport`'s doc comment for how this is
+/// now computed (density-aware, not purely positional). `.empty` is the true worst case:
+/// even the bottom (easiest) rung has zero matches anywhere in the viewport.
 enum ParkAndForgetViewportResolution: Equatable {
     case resolved(offsetDays: Int, steppedDown: Bool)
     case empty
+
+    /// §0.8.10 fast-follow (QA pass 1 on PR #133, Finding #1 — promoted to FIX-THEN-MERGE
+    /// by the orchestrator, since §0.8.10 names this banner "not optional polish, it's the
+    /// guardrail"): the minimum fraction of the viewport's BOTTOM-rung (easiest) match
+    /// count the PICKED rung must also clear before the banner is suppressed. Below this,
+    /// the banner fires even when the picked rung is technically the TOP rung — without
+    /// this, a single lonely metered-only/unregulated segment (§0.8.2's own cited 9.2% of
+    /// parkable curb, present in nearly every real viewport) could silently "clear the top
+    /// rung" and suppress the banner for an otherwise almost-entirely-red map, exactly the
+    /// "reads as broken" failure mode §0.8.10 calls this amendment's single biggest new
+    /// risk.
+    ///
+    /// Tunable, not derived — 0.25 is a starting knob (QA's own suggested ballpark), not
+    /// backed by tile-data analysis the way the ladder's own `offsetDays` rungs are.
+    /// Revisit with real usage data once this ships live. Exposed as
+    /// `resolveParkAndForgetViewport`'s own defaulted parameter (not hardcoded inline) so
+    /// tests can probe the boundary directly.
+    ///
+    /// Namespaced as a `static let` on this enum (matching `ParkingGoals`'s own convention
+    /// for its tunable constants, e.g. `freeOvernightOffsetDays`) rather than a bare
+    /// top-level constant — this file has no existing precedent for a module-scope `let`
+    /// under its `SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor` build setting, so this avoids
+    /// introducing an untested isolation shape.
+    nonisolated static let defaultBannerDensityThreshold: Double = 0.25
 }
 
 /// Walks `ladderOffsetDays` top rung (widest/hardest) first, returning the FIRST rung at
 /// which AT LEAST ONE loaded segment clears (§0.8.9: "the date of the highest rung the
-/// overall viewport's segments collectively clear"). This is monotonic by construction — a
-/// segment that clears the 8-day window necessarily also clears the narrower 4-day and 2-day
+/// overall viewport's segments collectively clear") — this picks the COLOR BUCKET's target,
+/// unchanged by the Finding #1 fix below. This is monotonic by construction — a segment
+/// that clears the 8-day window necessarily also clears the narrower 4-day and 2-day
 /// sub-windows starting at the same `from` (the move-forcing predicate only ever accumulates
 /// restrictions as the window widens, never sheds them) — so match-counts are
 /// non-decreasing as the rung narrows, and this simple top-down "does ANYONE clear this rung
-/// yet" walk is sufficient; it never needs to compare counts across rungs.
+/// yet" walk is a valid simplification of "highest rung collectively cleared."
+///
+/// **`steppedDown` (the BANNER trigger, §0.8.10) is density-aware, not purely positional**
+/// (QA pass 1 on PR #133, Finding #1 fix): fires whenever EITHER (a) the picked rung
+/// literally isn't the top rung (unchanged, pre-existing, QA-confirmed-correct — a real
+/// step-down always shows the banner), OR (b) the picked rung IS the top rung but the
+/// fraction of the viewport clearing it, relative to the bottom (easiest) rung's own match
+/// count, falls below `bannerDensityThreshold` — i.e. "technically someone clears the top
+/// rung, but almost nobody else does" no longer silently suppresses the banner. Every
+/// rung's match COUNT is computed up front (not just a boolean) specifically to make this
+/// density comparison possible.
 ///
 /// `ignoringMeteredPayment: true` always — Park & Forget shares Free Overnight's
 /// metered-tolerant predicate (§0.8.4) regardless of caller, same as
@@ -5767,19 +5805,34 @@ nonisolated func resolveParkAndForgetViewport(
     segments: [Segment],
     from: Date,
     engine: ParkingRulesEngine,
-    ladderOffsetDays: [Int] = ParkingGoals.parkAndForgetLadderOffsetDays
+    ladderOffsetDays: [Int] = ParkingGoals.parkAndForgetLadderOffsetDays,
+    bannerDensityThreshold: Double = ParkAndForgetViewportResolution.defaultBannerDensityThreshold
 ) -> ParkAndForgetViewportResolution {
-    for (index, offsetDays) in ladderOffsetDays.enumerated() {
+    // Match COUNT at every rung (not just "did anyone clear it") — the input the density
+    // check below needs. `ladderOffsetDays` is ordered widest-first, so `counts[0]` is the
+    // top rung's count and `counts.last` is the bottom (easiest) rung's count.
+    let counts: [Int] = ladderOffsetDays.map { offsetDays in
         let until = from.startOfDayET(offsetDays: offsetDays)
-        let anyMatches = segments.contains { segment in
-            segment.coordinates.count >= 2 &&
-                engine.isFree(segment: segment, from: from, until: until, ignoringMeteredPayment: true)
-        }
-        if anyMatches {
-            return .resolved(offsetDays: offsetDays, steppedDown: index > 0)
+        return segments.reduce(0) { total, segment in
+            guard segment.coordinates.count >= 2 else { return total }
+            let clears = engine.isFree(
+                segment: segment, from: from, until: until, ignoringMeteredPayment: true
+            )
+            return clears ? total + 1 : total
         }
     }
-    return .empty
+
+    guard let pickedIndex = counts.firstIndex(where: { $0 > 0 }) else {
+        return .empty
+    }
+
+    let bottomCount = counts[counts.count - 1]
+    let pickedCount = counts[pickedIndex]
+    // Monotonicity guarantees bottomCount >= pickedCount, so density is always in [0, 1].
+    let density = bottomCount > 0 ? Double(pickedCount) / Double(bottomCount) : 0
+
+    let steppedDown = pickedIndex > 0 || density < bannerDensityThreshold
+    return .resolved(offsetDays: ladderOffsetDays[pickedIndex], steppedDown: steppedDown)
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance

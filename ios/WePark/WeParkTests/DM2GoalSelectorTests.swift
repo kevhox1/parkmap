@@ -10,7 +10,12 @@
 //    - `parkUntilClockButtonVisible` — the power-user clock icon's new conditional
 //      visibility (§0.8.9, design doc §2.6).
 //    - `resolveParkAndForgetViewport` — the viewport-wide ladder-rung resolution + the
-//      empty-map guard's two states (§0.8.9/§0.8.10, AC-29).
+//      empty-map guard's two states (§0.8.9/§0.8.10, AC-29). QA PASS 1 FIX (Finding #1,
+//      promoted FIX-THEN-MERGE): `steppedDown` (the BANNER trigger) is now density-aware,
+//      not purely positional — see `testResolveParkAndForgetViewport_bannerFires_
+//      whenPickedRungIsALonelyOutlier` plus the healthy-viewport / threshold-boundary /
+//      custom-threshold tests added alongside it. The picked rung (color bucket) itself is
+//      UNCHANGED — QA confirmed that half was already sound.
 //    - The legacy `ParkUntilPill` suppression condition (design doc §6 flag #1) —
 //      `ContentView.bottomSafeAreaContent` gates that row on `!goalTileRowVisible(...)`
 //      directly, so its tests below exercise `goalTileRowVisible` itself, not a separate
@@ -227,13 +232,83 @@ final class DM2GoalSelectorTests: XCTestCase {
 
     func testResolveParkAndForgetViewport_collectivelyClears_oneGoodSegmentAmongBadOnes() {
         // §0.8.9: "the highest rung the OVERALL VIEWPORT'S segments collectively clear" —
-        // one segment clearing the top rung is enough to resolve the whole viewport to the
-        // top rung, even if every OTHER loaded segment fails outright.
+        // one segment clearing the top rung is enough to resolve the COLOR BUCKET to the
+        // top rung, even if every OTHER loaded segment fails outright (this half is
+        // UNCHANGED by the Finding #1 fix — QA pass 1 on PR #133 confirmed the bucket logic
+        // is sound). A segment that clears NOTHING at any rung (NO_PARKING anytime:true)
+        // contributes zero to every rung's count, including the bottom — it doesn't move
+        // the density needle at all, so pairing one good segment with ONLY this kind of
+        // "clears nothing anywhere" bad segment keeps density at 1.0 and the banner correctly
+        // stays silent. (See `_bannerFires_whenPickedRungIsALonelyOutlier` immediately below
+        // for Finding #1's actual realistic repro — segments that clear SOME rungs but not
+        // the top one, which is what creates a density mismatch.)
         let from = et(2026, 6, 4, 10, 0)
         let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let badSegment = seg(id: "BAD", rules: [r(category: .noParking, days: [], anytime: true)])
         let result = resolveParkAndForgetViewport(segments: [badSegment, goodSegment], from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false))
+        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+                       "the top rung is still picked, and the banner correctly stays silent here — this fixture's 'bad' segment clears nothing at ANY rung, so it can't create a density mismatch")
+    }
+
+    /// QA pass 1 on PR #133, Finding #1 (promoted FIX-THEN-MERGE): the realistic repro —
+    /// one metered-only/unregulated segment (§0.8.2's own cited 9.2% of parkable curb,
+    /// present in nearly every real viewport) clears the TOP rung, but several OTHER
+    /// segments only clear the BOTTOM (easiest) rung. Before this fix, the lonely top-rung
+    /// clearer would silently suppress the banner (`steppedDown: false`) even though the
+    /// map renders mostly red against an 8-day bar almost nothing else can clear. After the
+    /// fix: picked rung (the color bucket) is UNCHANGED — still the top rung, one segment is
+    /// enough — but the banner now fires because only 1 of 5 loaded segments (20%) clear it,
+    /// below the default 25% density threshold.
+    func testResolveParkAndForgetViewport_bannerFires_whenPickedRungIsALonelyOutlier() {
+        let from = et(2026, 6, 7, 10, 0)  // Sunday — matches ParkingGoalsTests' bottomRungOnly fixture
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
+        let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 4)  // 1 of 5 clears top → density 0.2
+        let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)
+        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: true),
+                       "the picked rung stays the top rung (color bucket unchanged), but the banner must fire — only 1/5 (20%) of the viewport clears it, below the 25% density threshold")
+    }
+
+    /// Healthy-viewport counterpart to the lonely-outlier case above: when MOST (here, all)
+    /// loaded segments clear the top rung, density is high and the banner must stay silent
+    /// — the fix must not make the banner fire more often than it should in the common,
+    /// genuinely-good case.
+    func testResolveParkAndForgetViewport_healthyViewport_mostSegmentsClearTopRung_noBanner() {
+        let from = et(2026, 6, 4, 10, 0)  // Thursday
+        let goodSegment1 = seg(id: "GOOD1", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let goodSegment2 = seg(id: "GOOD2", rules: [])  // no rules at all — always free, clears every rung
+        let result = resolveParkAndForgetViewport(segments: [goodSegment1, goodSegment2], from: from, engine: engine)
+        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+                       "both loaded segments clear the top rung (density 1.0) — the banner must not fire in the genuinely healthy case")
+    }
+
+    /// Threshold-boundary test: density EXACTLY at
+    /// `ParkAndForgetViewportResolution.defaultBannerDensityThreshold` (0.25) must NOT fire
+    /// the banner — the fire condition is strictly `density < threshold`, not `<=`, so
+    /// landing exactly on the boundary is the "still fine" side.
+    func testResolveParkAndForgetViewport_densityExactlyAtThreshold_bannerDoesNotFire() {
+        let from = et(2026, 6, 7, 10, 0)
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
+        let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 3)  // 1 of 4 clears top → density exactly 0.25
+        let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)
+        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+                       "density exactly at the threshold (1/4 = 0.25) must NOT fire — only density strictly BELOW the threshold does")
+    }
+
+    /// Confirms `bannerDensityThreshold` is a genuinely wired, injectable parameter (not a
+    /// hardcoded inline literal) — the SAME fixture that fires the banner at the default
+    /// threshold (0.25) must NOT fire it under a looser, explicitly-passed threshold (0.1).
+    func testResolveParkAndForgetViewport_customThreshold_isRespected() {
+        let from = et(2026, 6, 7, 10, 0)
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
+        let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 4)  // density 0.2
+        let result = resolveParkAndForgetViewport(
+            segments: segments, from: from, engine: engine, bannerDensityThreshold: 0.1
+        )
+        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+                       "density 0.2 is below the default 0.25 threshold (fires, see the lonely-outlier test above) but ABOVE an explicitly-passed 0.1 threshold — must not fire here, proving the parameter is actually read")
     }
 
     func testResolveParkAndForgetViewport_emptySegmentsArray_resolvesEmpty() {
