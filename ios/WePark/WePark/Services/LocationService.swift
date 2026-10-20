@@ -19,7 +19,11 @@
 //      freezing prematurely and compounding the double-rotation bug (TF2-3 #2).
 //      On-device-tunable: if the heading jitters while stopped, raise toward 1.0.
 //      Magnetometer is intentionally NOT reintroduced — FT-7 fix preserved.)
-//    DRIVING_HEADING_EMA_ALPHA = 0.35 (same as PWA, index.html constant)
+//    Open item #36 (Kevin, field feedback 2026-10-20): the flat DRIVING_HEADING_EMA_ALPHA
+//      = 0.35 (same as PWA, index.html constant) made post-turn heading convergence take
+//      ~3-4s (35%/tick). Replaced with a speed-scaled alpha (see driveHeadingEMAAlpha
+//      below) — smooth at crawl/parking speed, snappier at clear driving speed where GPS
+//      course is trustworthy. See that function's doc comment for the tuning knobs.
 //
 //  No import SwiftUI (QA invariant — pure service).
 //  No Calendar.current.
@@ -43,7 +47,58 @@ import UIKit
 ///
 /// Course-only policy preserved (magnetometer NOT reintroduced — FT-7 fix).
 private let DRIVING_HEADING_MIN_SPEED_MPS: Double = 0.5
-private let DRIVING_HEADING_EMA_ALPHA: Double = 0.35
+
+// MARK: - Open item #36: Speed-scaled EMA alpha tuning knobs
+//
+// REAL-ROAD TUNING KNOBS — pending Kevin's drive test (same playbook as the voice-gap/
+// arrival-threshold tuning): these four values are the surface to adjust after an
+// on-device drive, not configuration anyone should treat as final.
+//
+//   DRIVING_HEADING_EMA_ALPHA_LOW       — alpha at/below the low speed knee (crawl/parking:
+//                                         smooth, avoids jitter). Unchanged from the prior
+//                                         flat constant.
+//   DRIVING_HEADING_EMA_ALPHA_HIGH      — alpha at/above the high speed knee (clear driving:
+//                                         GPS course is trustworthy, converge in ~1-2 ticks).
+//   DRIVING_HEADING_EMA_LOW_SPEED_MPS   — speed (m/s) at/below which DRIVING_HEADING_EMA_ALPHA_LOW
+//                                         applies.
+//   DRIVING_HEADING_EMA_HIGH_SPEED_MPS  — speed (m/s) at/above which DRIVING_HEADING_EMA_ALPHA_HIGH
+//                                         applies. Linear interpolation between the two knees.
+private let DRIVING_HEADING_EMA_ALPHA_LOW: Double = 0.35
+private let DRIVING_HEADING_EMA_ALPHA_HIGH: Double = 0.65
+private let DRIVING_HEADING_EMA_LOW_SPEED_MPS: Double = 2.0
+private let DRIVING_HEADING_EMA_HIGH_SPEED_MPS: Double = 6.0
+
+// MARK: - Open item #36: Pure speed-scaled EMA alpha function
+
+/// Pure, `nonisolated`, directly unit-testable function: maps the current drive speed to an
+/// EMA alpha for heading convergence (open item #36, Kevin's field feedback 2026-10-20: the
+/// prior flat `alpha = 0.35` made post-turn heading convergence take ~3-4s).
+///
+/// Below `DRIVING_HEADING_EMA_LOW_SPEED_MPS` (crawl/parking speed), returns
+/// `DRIVING_HEADING_EMA_ALPHA_LOW` — smooth, avoids jitter at low speed. Above
+/// `DRIVING_HEADING_EMA_HIGH_SPEED_MPS` (clear driving speed, where GPS course is
+/// trustworthy), returns `DRIVING_HEADING_EMA_ALPHA_HIGH` — converges in ~1-2 ticks. Between
+/// the two knees, linearly interpolates.
+///
+/// This function only changes HOW FAST the EMA converges once it's running — it does not
+/// change WHEN it runs. The freeze-on-stop gate (`stabilizedHeading`'s
+/// `speed >= DRIVING_HEADING_MIN_SPEED_MPS` check, mirrored by `selectDriveHeadingSource`'s
+/// nil-below-0.5-m/s contract) is entirely unchanged; this scaling applies only to headings
+/// that already passed that gate.
+///
+/// - Parameter speed: Current speed in m/s.
+/// - Returns: EMA alpha in `[DRIVING_HEADING_EMA_ALPHA_LOW, DRIVING_HEADING_EMA_ALPHA_HIGH]`.
+nonisolated func driveHeadingEMAAlpha(speed: CLLocationSpeed) -> Double {
+    if speed <= DRIVING_HEADING_EMA_LOW_SPEED_MPS {
+        return DRIVING_HEADING_EMA_ALPHA_LOW
+    }
+    if speed >= DRIVING_HEADING_EMA_HIGH_SPEED_MPS {
+        return DRIVING_HEADING_EMA_ALPHA_HIGH
+    }
+    let span = DRIVING_HEADING_EMA_HIGH_SPEED_MPS - DRIVING_HEADING_EMA_LOW_SPEED_MPS
+    let t = (speed - DRIVING_HEADING_EMA_LOW_SPEED_MPS) / span
+    return DRIVING_HEADING_EMA_ALPHA_LOW + t * (DRIVING_HEADING_EMA_ALPHA_HIGH - DRIVING_HEADING_EMA_ALPHA_LOW)
+}
 
 // MARK: - FT-7: Pure heading-source selection function
 
@@ -282,13 +337,17 @@ final class LocationService: NSObject {
         }
 
         // EMA smoothing with circular wraparound (index.html:6560–6567).
+        // Open item #36: alpha is now speed-scaled (driveHeadingEMAAlpha) rather than the
+        // prior flat 0.35 — converges faster post-turn at clear driving speed, stays smooth
+        // at crawl/parking speed. Wraparound math itself is unchanged at either alpha.
         if headingEMA == nil {
             headingEMA = heading
         } else {
             var diff = heading - headingEMA!
             while diff > 180 { diff -= 360 }
             while diff < -180 { diff += 360 }
-            headingEMA = ((headingEMA! + DRIVING_HEADING_EMA_ALPHA * diff) + 360).truncatingRemainder(dividingBy: 360)
+            let alpha = driveHeadingEMAAlpha(speed: speed)
+            headingEMA = ((headingEMA! + alpha * diff) + 360).truncatingRemainder(dividingBy: 360)
         }
         // Store as the last good heading so the speed-gate freeze path can return it.
         // Port of `drivingLastGoodHeading = drivingHeadingEMA` (index.html:6568).

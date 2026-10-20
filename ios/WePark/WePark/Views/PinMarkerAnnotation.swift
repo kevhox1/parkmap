@@ -653,8 +653,10 @@ final class PinMarkerAnnotation: MKAnnotationView {
     ///
     /// FT-11 — Directional chevron overlay (OD-2): when `bearing` is non-nil, a small
     /// `chevron.forward` SF Symbol is drawn on top of the circle, rotated to the compass
-    /// bearing. The chevron uses a high-contrast white color and is sized at ~30% of the
-    /// circle diameter so it does not obscure the primary SF Symbol (AC-24).
+    /// bearing. The chevron uses a high-contrast white color and is sized at ~38% of the
+    /// circle diameter (open item #36: enlarged from ~30% and moved fully onto the circle's
+    /// fill — see the compositing code below) so it does not obscure the primary SF Symbol
+    /// (AC-24) while remaining crisp at drive-mode glance distance.
     /// When `bearing` is nil: identical to the pre-FT-11 output (OD-3 backward-compat).
     ///
     /// Community 2.0 Phase 1 (S4, spec §6 appendix): `.openSpot`/`.leavingSoon` use a
@@ -707,9 +709,17 @@ final class PinMarkerAnnotation: MKAnnotationView {
             // Drawn only when a bearing is provided. Uses CGContext rotation so the chevron
             // points in the compass direction of travel. The chevron is drawn at the
             // bottom-right edge of the circle (roughly 7 o'clock position when bearing = 0)
-            // at ~30% of the circle diameter to avoid obscuring the primary symbol (AC-24).
+            // at ~38% of the circle diameter to avoid obscuring the primary symbol (AC-24).
+            //
+            // Open item #36 / `docs/design/drive-puck-chevron-review.md` candidate B: at the
+            // original 9.6pt (imageSize * 0.30) size and 0.22 outward offset, the glyph
+            // straddled the circle's own edge — part sitting over the colored fill, part over
+            // the fully transparent surround — which reads as a muddy, "not clean" edge at
+            // drive-mode glance distance. Per the review's exact fix: moved fully onto the
+            // fill (offset below) and enlarged slightly for legibility. Color (.white), weight
+            // (.bold), and the bearing-rotation math are unchanged.
             if let bearing = bearing {
-                let chevronSize: CGFloat = imageSize * 0.30
+                let chevronSize: CGFloat = imageSize * 0.38
                 let chevronConfig = UIImage.SymbolConfiguration(
                     pointSize: chevronSize, weight: .bold
                 )
@@ -742,8 +752,11 @@ final class PinMarkerAnnotation: MKAnnotationView {
                 cgCtx.rotate(by: radians)
                 // Offset outward from center along the (now-rotated) +x axis,
                 // which points in the compass direction `bearing` after the -90° correction.
-                // Place at 55% of radius from center so it overlaps the circle edge.
-                let offset: CGFloat = imageSize * 0.22
+                // Open item #36 candidate B: reduced from 0.22 (straddled the circle's edge,
+                // half on the colored fill / half on the transparent surround) to 0.14 so the
+                // whole glyph sits inside the circle's colored fill (teal for
+                // `enforcement_active`, cyan for `sweeper_passed`) instead of hanging over it.
+                let offset: CGFloat = imageSize * 0.14
                 cgCtx.translateBy(x: offset, y: -chevron.size.height / 2)
                 // Draw the chevron at the offset position.
                 let chevronRect = CGRect(

@@ -1425,6 +1425,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         // on-device call — if the bare compass reads as a "foreign element" against the
         // toolbar's frosted-glass buttons once he sees it live, wrapping it in a
         // show/hide-synced `.regularMaterial` backdrop is a scoped follow-up.
+        //
+        // UPDATE (open item #36, 2026-10-20): that flag was the right call. Kevin's "black
+        // triangle that isn't clean" field complaint traced (per the designer's audit,
+        // `docs/design/drive-puck-chevron-review.md` candidate A) to this bare, near-
+        // continuously-visible compass needle during heading-up Drive Mode. Rather than add a
+        // backdrop, we force-hide the button entirely while `driveModeActive` — matching Apple
+        // Maps' own turn-by-turn chrome, which shows no compass dial at all. `compassVisibility`
+        // stays `.adaptive` below (browse-mode behavior unchanged); the Coordinator's
+        // `regionWillChangeAnimated` applies the additional drive-mode force-hide.
         let compassButton = MKCompassButton(mapView: mapView)
         compassButton.compassVisibility = .adaptive
         compassButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1434,6 +1443,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 equalTo: mapView.safeAreaLayoutGuide.topAnchor, constant: 56),
             compassButton.leadingAnchor.constraint(equalTo: mapView.leadingAnchor, constant: 12),
         ])
+        context.coordinator.compassButton = compassButton
 
         return mapView
     }
@@ -1527,6 +1537,14 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         var parent: MapViewRepresentable
         weak var mapView: MKMapView?
+
+        /// Open item #36 / `docs/design/drive-puck-chevron-review.md` candidate A: reference
+        /// to the repositioned `MKCompassButton` created in `makeUIView`, captured there so
+        /// this Coordinator can force-hide it while `driveModeActive` (see
+        /// `regionWillChangeAnimated` below for the actual toggle). `weak` because `mapView`
+        /// already owns it via `addSubview` — same ownership pattern as `panGesture`/
+        /// `pinchGesture` above.
+        weak var compassButton: MKCompassButton?
 
         // MARK: - FT-17a: Observer-only pan/pinch gesture recognizers
 
@@ -2643,6 +2661,28 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MARK: - MKMapViewDelegate: camera
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            // Open item #36 / `docs/design/drive-puck-chevron-review.md` candidate A: hide the
+            // compass while `driveModeActive`, restore it on exit — matching Apple Maps' own
+            // turn-by-turn chrome (no compass dial; heading-up rotation already tells the
+            // driver which way they're facing). `compassVisibility` stays `.adaptive` above
+            // (unchanged browse-mode behavior); this is an additional force-hide layered on
+            // top of it.
+            //
+            // Wiring note (deviation from the designer review's proposed call site): the
+            // review proposes a new `CoordinatorActions.setCompassHidden` closure fired from
+            // ContentView's `.onChange(of: driveModeActive)` handler (the same pattern as
+            // `setShowsBuildings`). This task is explicitly scoped to live entirely inside
+            // `MapViewRepresentable.swift` (ContentView.swift is owned by PR #131, in flight),
+            // so instead this reads `parent.driveModeActive` directly in this existing
+            // MKMapViewDelegate callback — which already reads the same flag for the FT-17a
+            // gesture-pause logic just below. `regionWillChangeAnimated` fires at the START of
+            // every camera transition, including the Drive-Mode-entry/exit `setCamera` call
+            // `applyDrivePitch` issues from ContentView, so the compass hides/shows in lockstep
+            // with that same transition with no new cross-file wiring. Plain UIKit property
+            // set inside a MapKit delegate callback (not inside `updateUIView`'s synchronous
+            // body) — carries no #31-class risk.
+            compassButton?.isHidden = parent.driveModeActive
+
             // FT-5: Detect user-initiated gestures regardless of Drive Mode state.
             // Check gesture recognizers FIRST, outside the Drive Mode guard, so that
             // free-browse pans also set the interaction flag.
