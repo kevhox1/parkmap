@@ -445,13 +445,11 @@ struct ContentView: View {
 
     /// Current map region — kept in @State so ContentView owns the camera.
     /// Passed to MapViewRepresentable as a Binding; updated by the regionChanged callback.
-    @State private var region: MKCoordinateRegion = MKCoordinateRegion(
-        center: CLLocationCoordinate2D(
-            latitude: AppConstants.manhattanCenter.latitude,
-            longitude: AppConstants.manhattanCenter.longitude
-        ),
-        span: MKCoordinateSpan(latitudeDelta: 0.07, longitudeDelta: 0.05)
-    )
+    ///
+    /// Part A fix 2 (`docs/design/goal-first-ambient-design.md` Addendum 2's predecessor
+    /// diagnosis): the literal span used to be hardcoded here regardless of the flag — see
+    /// `initialLaunchRegion(driveModeDefaultEnabled:)`'s doc comment for why that was a bug.
+    @State private var region: MKCoordinateRegion = ContentView.initialLaunchRegion()
 
     @State private var tileLoader = TileLoader()
     @State private var engine = ParkingRulesEngine()
@@ -1073,21 +1071,16 @@ struct ContentView: View {
         paddingForBannerState(bannerState)
     }
 
-    /// DM-2 ambient-dock fix: see `communityMapChromeBottomPadding`'s doc comment. Computed
-    /// with the SAME five inputs `bottomSafeAreaContent`'s own `goalDockVisible` local reads,
-    /// so this clearance and the dock's own mount gate can never disagree about whether the
-    /// dock is up.
+    /// Addendum 2 (`docs/design/goal-first-ambient-design.md` A2.1) neutralized the
+    /// dock-aware branch PR #134 added here: Report pill / "?" now have PERMANENT homes
+    /// (the dock's own top row, the rail's last circle — see `communityMapChromeOverlay`'s
+    /// new third gate and `GoalSelectorView`'s new `reportPill` slot) instead of floating
+    /// alone with a hand-maintained clearance number chasing the dock's height. This
+    /// property is back to the single, flag-INDEPENDENT legacy clearance —
+    /// `browseSheetPeekHeight + 12` — the one case `communityMapChromeOverlay` still renders
+    /// this chrome in at all.
     private var communityMapChromeBottomPaddingValue: CGFloat {
-        communityMapChromeBottomPadding(
-            goalDockVisible: goalSelectorDockVisible(
-                driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
-                activeSheetIsNil: activeSheet == nil,
-                driveModeActive: driveModeActive,
-                blockSelectModeActive: blockSelectModeActive,
-                spotPlacementActive: spotPlacementActive
-            ),
-            browseSheetPeekHeight: browseSheetPeekHeight
-        )
+        communityMapChromeBottomPadding(browseSheetPeekHeight: browseSheetPeekHeight)
     }
 
     private var selectedSegment: Segment? {
@@ -1593,8 +1586,33 @@ struct ContentView: View {
                     parkUntilIgnoresMeteredPayment = false
                     parkAndForgetGuardState = nil
                     rebuildOverlays(at: .nowET)
-                    let timeStr = ParkUntilSheet.formatTime(targetDate)
-                    ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
+                    // QA pass 1 fix (🟡 #2, `activeGoalForParkUntilPill`'s own doc comment
+                    // names this closure's OTHER entry point — `ArrivalPromptSheet.onParkHere`
+                    // — as a known third reachable-while-goal-first path): the
+                    // `rebuildOverlays(at:)` call directly above can, in that one state
+                    // (flag on, goal-first, not full-palette), have just silently overwritten
+                    // `parkUntilTarget` BACK to the active goal's own value via the DM-2
+                    // recompute block — `targetDate` (what the user just picked) and
+                    // `parkUntilTarget` (what's now ACTUALLY showing) can disagree. The map/
+                    // pill display is never wrong either way (it always reads the live
+                    // `parkUntilTarget`) — but the toast, if it described `targetDate`
+                    // unconditionally, would lie about what took effect. Deriving the toast
+                    // from the SAME `activeGoalForParkUntilPill`/`goalPillContent` source of
+                    // truth the pill itself uses — rather than suppressing the toast outright
+                    // — was the smaller, safer fix: zero change to this sheet's reachability
+                    // or to any other entry point's behavior, purely a copy correction for the
+                    // one state where the generic phrasing would otherwise be false.
+                    let message = ContentView.parkUntilConfirmToastMessage(
+                        activeGoal: ContentView.activeGoalForParkUntilPill(
+                            selectedGoal: selectedGoal,
+                            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+                            fullPaletteMode: fullPaletteMode
+                        ),
+                        pickedTargetDate: targetDate,
+                        resolvedTarget: parkUntilTarget ?? targetDate,
+                        now: .nowET
+                    )
+                    ToastService.shared.show(message: message)
                 },
                 onSkip: {
                     activeSheet = dismissTargetOutsideBrowseNav
@@ -2121,6 +2139,137 @@ struct ContentView: View {
         return label == "Good through Today" ? "Good through tomorrow" : label
     }
 
+    // MARK: - DM-2 Addendum 2 (A2.2): escalated-Cruise goal-identity pill content
+
+    /// The `GoalParkUntilPill` content — icon, short name, trailing clause — for a goal's
+    /// already-resolved GLOBAL `target` (`parkUntilTarget`, set by `rebuildOverlays`'s DM-2
+    /// recompute block every rebuild). This is NOT `goalGoodThroughLabel(for:)` above — that
+    /// function ranks one SPECIFIC `Segment` for the block-detail sheet; this one summarizes
+    /// the filter's global state for the escalated-Cruise pill, so it takes a target date, not
+    /// a segment. `nonisolated static` + Foundation-only inputs (no `self`, no engine) so it's
+    /// directly unit-testable and so `GoalParkUntilPill` itself can stay pure presentation
+    /// (`Views/GoalSelectorView.swift`'s own "never touches ParkingGoals/ParkingRulesEngine
+    /// directly" convention) — this is the one place in the DM-2 Addendum-2 stream that calls
+    /// `ParkingGoals.relativeDayLabel`/`ParkUntilSheet.formatTime` to build that content.
+    ///
+    /// Per-goal trailing clause (Addendum 2, A2.2's table):
+    ///   - `.freeOvernight` / `.parkAndForget`: "Good through <day>" via
+    ///     `ParkingGoals.relativeDayLabel(for:from:)` — the SAME §3.1 three-tier formatter
+    ///     `goalGoodThroughLabel(for:)` above uses, never a re-implementation. Defensive floor:
+    ///     never renders "Good through Today" (falls back to "Good through tomorrow"), mirroring
+    ///     `goalGoodThroughLabel(for:)`'s own guard.
+    ///   - `.freeFewHours`: "until <time>" via `ParkUntilSheet.formatTime(_:)` UNCHANGED — that
+    ///     sheet's own existing clock-time formatter, not a fourth date formatter.
+    nonisolated static func goalPillContent(
+        for goal: ParkingGoal,
+        target: Date,
+        now: Date
+    ) -> (icon: String, shortName: String, trailingClause: String) {
+        let icon: String
+        let shortName: String
+        switch goal {
+        case .freeOvernight:  icon = "moon.stars.fill";          shortName = "Overnight"
+        case .freeFewHours:   icon = "hourglass";                shortName = "A Few Hours"
+        case .parkAndForget:  icon = "parkingsign.circle.fill";  shortName = "Park & Forget"
+        }
+
+        let trailingClause: String
+        switch goal {
+        case .freeOvernight, .parkAndForget:
+            let label = "Good through \(ParkingGoals.relativeDayLabel(for: target, from: now))"
+            trailingClause = label == "Good through Today" ? "Good through tomorrow" : label
+        case .freeFewHours:
+            trailingClause = "until \(ParkUntilSheet.formatTime(target))"
+        }
+        return (icon, shortName, trailingClause)
+    }
+
+    /// Whether the CURRENT `ParkUntilPill` slot content should be the named `GoalParkUntilPill`
+    /// (non-nil result) or today's generic `ParkUntilPill` (nil) — Addendum 2, A2.2. Extracted
+    /// as a `nonisolated static` pure function (rather than left as the inline ternary at the
+    /// `bottomSafeAreaContent` call site) so this decision is directly unit-testable, same
+    /// "extract the decision" convention `goalSelectorDockVisible`/`goalTileRowVisible`/
+    /// `parkUntilClockButtonVisible` already use in this file.
+    ///
+    /// **Provably correct with ZERO new stored state** (the addendum's own framing, not a
+    /// silent simplification of this PR's own dispatch, which separately suggested adding a
+    /// small piece of tracking state — flagged explicitly in this PR's description):
+    /// whenever `driveModeDefaultEnabled && !fullPaletteMode`, `rebuildOverlays`'s DM-2
+    /// recompute block runs on EVERY SINGLE call (Part A fix 4 made it unconditional, above
+    /// the zoom guard) and unconditionally overwrites `parkUntilTarget` FROM `selectedGoal` —
+    /// so in exactly the states where this function returns non-nil, `selectedGoal` is
+    /// guaranteed fresh, and `parkUntilTarget`'s VALUE can never actually diverge from the
+    /// goal's own computed target by the time anything reads it.
+    ///
+    /// **Known third entry point (QA pass 1, 🟡 #2) — `ArrivalPromptSheet`'s `onParkHere`
+    /// closure.** The power-user `ParkUntilSheet` clock icon is unreachable in that same state
+    /// via `parkUntilClockButtonVisible` — but `onParkHere` (the destination-mode Drive
+    /// "Park Here" arrival flow, W8.5d Option B, pre-existing and untouched by this PR) ALSO
+    /// sets `activeSheet = .parkUntil` directly, with no flag/`fullPaletteMode` gate at all,
+    /// auto-firing the exact same `ParkUntilSheet`. This is reachable while flag-on AND
+    /// goal-first (the user drives via Search → a destination, not "Start Driving," which
+    /// stays a `.cruise`-only, goal-first-locked path). So `ParkUntilSheet`'s `onConfirm` CAN
+    /// run while this function would return non-nil. It does NOT break this function's
+    /// correctness, because `onConfirm` calls `rebuildOverlays(at:)` in the same synchronous
+    /// closure right after setting `parkUntilTarget` — the DM-2 recompute block described
+    /// above immediately overwrites whatever `onConfirm` just set, back to the active goal's
+    /// own value, before anything else reads it. The `ParkUntilPill` slot's DISPLAYED state is
+    /// therefore never wrong. What WAS wrong (fixed by this same QA pass, see `onConfirm`'s own
+    /// comment below): the toast `onConfirm` fires describes the just-picked custom time, not
+    /// the goal value that's actually now showing — a cosmetic lie, not a state bug.
+    nonisolated static func activeGoalForParkUntilPill(
+        selectedGoal: ParkingGoal,
+        driveModeDefaultEnabled: Bool,
+        fullPaletteMode: Bool
+    ) -> ParkingGoal? {
+        (driveModeDefaultEnabled && !fullPaletteMode) ? selectedGoal : nil
+    }
+
+    /// QA pass 1 fix (🟡 #2): the toast message for `ParkUntilSheet`'s `onConfirm` closure —
+    /// extracted so the "derive from the same `activeGoalForParkUntilPill` source of truth the
+    /// pill uses" fix is directly unit-testable without a live `ContentView`/sheet.
+    ///
+    /// `activeGoal` is `ContentView.activeGoalForParkUntilPill(...)`'s result at the SAME
+    /// moment the toast fires — non-nil exactly in the one state
+    /// (`activeGoalForParkUntilPill`'s own doc comment) where `onConfirm`'s preceding
+    /// `rebuildOverlays(at:)` call can have silently overwritten `parkUntilTarget` back to the
+    /// goal's own value, making `pickedTargetDate` (what the user just chose) and
+    /// `resolvedTarget` (what's now actually live) disagree. When `activeGoal == nil`
+    /// (flag off, or full-palette mode — the normal, intended use of this sheet), this returns
+    /// EXACTLY today's pre-QA-pass-1 toast text, byte-identical, since `pickedTargetDate` and
+    /// `resolvedTarget` can never diverge in that state.
+    nonisolated static func parkUntilConfirmToastMessage(
+        activeGoal: ParkingGoal?,
+        pickedTargetDate: Date,
+        resolvedTarget: Date,
+        now: Date
+    ) -> String {
+        guard let activeGoal else {
+            return "Showing blocks free until \(ParkUntilSheet.formatTime(pickedTargetDate))"
+        }
+        let content = goalPillContent(for: activeGoal, target: resolvedTarget, now: now)
+        return "Showing \(content.shortName) blocks — \(content.trailingClause)"
+    }
+
+    /// QA pass 1 fix (🟡 #1): whether `handleRegionChanged`'s new `rebuildOverlays(at:)` call
+    /// (Part A fix 3) should fire for a given region-change event. Extracted as a
+    /// `nonisolated static` pure function — same "extract the decision" convention this file's
+    /// other gates use — purely so the gate itself is directly unit-tested, not left as an
+    /// inline `if` with no regression guard.
+    ///
+    /// `false` during Drive Mode: `handleRegionChanged` also fires continuously off Drive
+    /// Mode's own ~1Hz camera-follow loop (`handleLocationUpdate()`'s per-GPS-tick
+    /// `setDriveCamera` → `MKMapView.setCamera` → `regionDidChangeAnimated` →
+    /// `handleRegionChanged`), a completely different cadence than the "settled gesture in
+    /// browse mode" case Part A fix 3 actually targets. Gating here restores Drive Mode's PRIOR
+    /// repaint economics exactly (its own existing triggers — entry rebuild, `tileLoader
+    /// .segments.count` changes as new tiles stream in — are untouched) while leaving the fix
+    /// for the real bug (browse-mode stale repaint after a pinch past the hide threshold) fully
+    /// intact in every other state, flag on or off.
+    nonisolated static func shouldRebuildOverlaysOnRegionChange(driveModeActive: Bool) -> Bool {
+        !driveModeActive
+    }
+
     // MARK: - Overlay rebuild
 
     /// Partitions loaded segments by current state → 5 MKMultiPolyline coordinate groups
@@ -2133,13 +2282,6 @@ struct ContentView: View {
     ///   - Segment array change (tile load complete)
     ///   - Selection change
     private func rebuildOverlays(at now: Date) {
-        // Zoom-threshold gating: if zoomed out, clear all overlays.
-        guard region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold else {
-            overlayGeneration += 1
-            overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
-            return
-        }
-
         // DM-2 (`docs/drive-mode-default-spec.md` §0.8.6/§0.8.9): when the goal-first
         // ambient dock owns the filter (flag on, not toggled to full-palette), (re)resolve
         // the active goal's target FRESH on every single rebuild — Free Overnight/Few
@@ -2161,6 +2303,20 @@ struct ContentView: View {
         // ladder walk (`ParkingGoals.match`/`goodThroughLabel`) only ever powers the
         // "Good through <day>" ranking LABEL in the block-detail sheet, a label concern
         // layered on top of this already-decided green bucket, never a second overlay color.
+        //
+        // **Part A fix 4** (`docs/design/goal-first-ambient-design.md` Addendum 2's
+        // predecessor diagnosis): this block used to sit AFTER the zoom-threshold guard
+        // below, which meant `parkUntilMode`/`parkUntilTarget`/`parkAndForgetGuardState`
+        // never even got evaluated while the camera span was zoomed out past
+        // `polylineHideSpanThreshold` — a flag-on cold launch with the (pre-fix-2) wide
+        // default span landed `parkUntilMode == false` at rest, so the goal-first dock's own
+        // "which goal is active" state (and the §0.8.10 empty-map-guard banner, which reads
+        // `parkAndForgetGuardState`) were simply never true at launch, no matter which goal
+        // was pre-selected. Moving this block ABOVE the guard means it runs on every single
+        // `rebuildOverlays` call regardless of zoom — the guard below now controls ONLY the
+        // rendered polyline PAYLOAD, never the goal/filter state itself. Flag off: this block
+        // is a no-op in both positions (guarded on `AppConstants.driveModeDefaultEnabled`), so
+        // this reordering is byte-identical for flag-off builds.
         if AppConstants.driveModeDefaultEnabled, !fullPaletteMode {
             parkUntilIgnoresMeteredPayment = ParkingGoals.ignoresMeteredPayment(for: selectedGoal)
             switch selectedGoal {
@@ -2188,6 +2344,17 @@ struct ContentView: View {
                 }
             }
             parkUntilMode = true
+        }
+
+        // Zoom-threshold gating: if zoomed out, clear all overlays. Runs AFTER the DM-2
+        // goal-recompute block above (Part A fix 4) — this guard controls only the rendered
+        // polyline payload now, never `parkUntilMode`/`parkUntilTarget`/
+        // `parkAndForgetGuardState`, which must stay truthful even while the map is zoomed
+        // out too far to draw any polylines at all.
+        guard region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold else {
+            overlayGeneration += 1
+            overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
+            return
         }
 
         // W7.5: Park Until mode — classify segments by interval-free status (binary green/red).
@@ -2566,20 +2733,38 @@ struct ContentView: View {
     /// sheet, which a `.safeAreaInset` row cannot do (see `parkingGuideBannerOverlay`'s own
     /// doc comment for why `.safeAreaInset` content renders BEHIND the sheet).
     ///
-    /// DM-2 ambient-dock fix (Kevin's live smoke, 2026-10-20): the clearance below used to be
-    /// the flat `browseSheetPeekHeight + 12`, correct for the FT-20 sheet but blind to the
-    /// goal-first ambient dock, which lives in a completely different presentation layer
-    /// (`mapRepresentable`'s own `.safeAreaInset`) that this sibling overlay has no structural
-    /// visibility into. See `communityMapChromeBottomPadding`'s doc comment for the fix and
-    /// why a dock-aware offset is now threaded through explicitly instead.
+    /// Addendum 2 (A2.1): PR #134's DM-2 ambient-dock fix (a dock-aware clearance chasing the
+    /// goal dock's height from a sibling presentation layer) is superseded here, not just
+    /// patched again. Root cause of the ORIGINAL overlap bug stands as documented — the
+    /// goal-first dock lives in a different presentation layer
+    /// (`mapRepresentable`'s own `.safeAreaInset`) that this floating overlay has no
+    /// structural visibility into — but the fix is now to give Report pill and "?" PERMANENT
+    /// homes instead of computing a clearance number for them at all: Report moves into
+    /// `GoalSelectorView`'s own top row (rides the dock's real height for free), "?" moves
+    /// into `recenterButtonStack`'s rail (a completely different floating layer with no
+    /// height-tracking problem). Both moves are flag-gated — see the third condition below.
     @ViewBuilder
     private var communityMapChromeOverlay: some View {
+        // Addendum 2 (A2.1): suppress BOTH pieces entirely whenever the goal-first dock is
+        // mounted — reuses `goalSelectorDockVisible(...)` with the SAME five inputs
+        // `bottomSafeAreaContent`'s own `goalDockVisible` local reads, rather than computing a
+        // second ad hoc boolean, so the two calls can never disagree about whether the dock is
+        // up. Flag off: `goalSelectorDockVisible` is false by construction (it ANDs
+        // `driveModeDefaultEnabled` itself), so this condition reduces to exactly
+        // `communityMapChromeVisible(...)` unchanged — byte-identical to pre-Addendum-2 flag-off
+        // behavior.
         if Self.communityMapChromeVisible(
             communityEnabled: AppConstants.communityEnabled,
             driveModeActive: driveModeActive,
             blockSelectModeActive: blockSelectModeActive,
             spotPlacementActive: spotPlacementActive,
             longPressParkConfirmActive: pendingLongPressCoord != nil
+        ) && !goalSelectorDockVisible(
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            activeSheetIsNil: activeSheet == nil,
+            driveModeActive: driveModeActive,
+            blockSelectModeActive: blockSelectModeActive,
+            spotPlacementActive: spotPlacementActive
         ) {
             VStack(spacing: 0) {
                 Spacer()
@@ -2776,11 +2961,56 @@ struct ContentView: View {
     // MARK: - Map representable callbacks (extracted for type-checker budget)
 
     /// Forwards region changes to TileLoader and CommunityPinService.
+    ///
+    /// **Part A fix 3** (`docs/design/goal-first-ambient-design.md` Addendum 2's predecessor
+    /// diagnosis, flag-INDEPENDENT): previously this handler never called `rebuildOverlays`
+    /// directly — a region change only repainted the overlays as a SIDE EFFECT of
+    /// `tileLoader.loadTiles(forRegion:)` changing `tileLoader.segments.count`, which drives
+    /// `handleSegmentsChanged()` via `.onChange(of: tileLoader.segments.count)`. A pinch-out
+    /// past `polylineHideSpanThreshold` and back to the exact same street-level span (no net
+    /// segment-count change, e.g. re-entering a fully-loaded area) left the overlay payload
+    /// stale — either the empty "hidden" payload from the zoomed-out moment, or a payload
+    /// computed against the PRIOR `region.span`, neither of which `handleSegmentsChanged`
+    /// would ever correct since segment count never changed. Adding the explicit call here
+    /// closes that staleness gap directly off the real trigger (region change), rather than
+    /// relying on tile-load as a proxy for it.
+    ///
+    /// **QA pass 1 fix (🟡 #1): gated `!driveModeActive`.** This handler ALSO fires during
+    /// Drive Mode: `handleLocationUpdate()`'s per-GPS-tick `coordinatorActions.setDriveCamera`
+    /// (Option A custom follow, ~1Hz) calls `MKMapView.setCamera(animated:)`, which fires
+    /// `regionDidChangeAnimated` → async `onRegionChanged` → THIS handler, once per GPS fix,
+    /// continuously, for the entire drive — a completely different cadence than the
+    /// "once-per-settled-gesture" browse-mode case this fix actually targets. Pre-fix, Drive
+    /// Mode repainted overlays only via `DriveModeBottomCard`'s own cadence (entry rebuild +
+    /// `tileLoader.segments.count` changes as new tiles stream in) — NOT once per camera tick.
+    /// QA traced that this new call, unguarded, would roughly DOUBLE the per-tick main-thread
+    /// cost of the single highest-stakes interaction in the app (active driving), stacking on
+    /// top of `tileLoader.loadTiles(forRegion:)`'s own pre-existing unconditional per-tick
+    /// `rebuildSegments` call on the very next line. The staleness bug this fix targets is a
+    /// BROWSE-mode bug (a user pinching the resting map, not actively driving) — gating on
+    /// `!driveModeActive` restores Drive Mode's prior repaint economics EXACTLY (its own
+    /// existing triggers are untouched by this file) while leaving the actual fix, for the
+    /// actual bug, fully intact.
+    ///
+    /// **Flag-off risk considered (browse mode):** `MKMapViewDelegate.regionDidChangeAnimated`
+    /// fires once per settled gesture (per `MapViewRepresentable`'s own `regionDidChangeAnimated`
+    /// doc comment — "fires only after the deceleration animation completes," not per-frame
+    /// during an active pan/pinch), the SAME cadence `tileLoader.loadTiles(forRegion:)` on the
+    /// very next line already runs at, unconditionally, today, flag on or off, in BOTH browse
+    /// and (pre-this-fix) Drive Mode. Outside Drive Mode, adding one more
+    /// O(n)-over-loaded-segments call (`rebuildOverlays`, same cost class
+    /// `handleSegmentsChanged`/`handleSelectionChanged`/the 60s timer tick already pay on every
+    /// call) at that settled-gesture cadence is not a new order-of-magnitude cost — no
+    /// additional debounce is introduced here because none already guarded the parallel
+    /// `loadTiles` call on this same callback.
     private func handleRegionChanged(_ newRegion: MKCoordinateRegion) {
         region = newRegion
         tileLoader.loadTiles(forRegion: newRegion)
         // Community 1.0 / Tier 1: debounced fetch for community pins (800ms debounce).
         pinService.onRegionChanged(newRegion)
+        if ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive: driveModeActive) {
+            rebuildOverlays(at: lastEvaluatedAt)
+        }
     }
 
     /// Forwards community pin taps to the sheet presentation.
@@ -2970,6 +3200,16 @@ struct ContentView: View {
             blockSelectModeActive: blockSelectModeActive,
             spotPlacementActive: spotPlacementActive
         )
+        // Addendum 2 (A2.2): whether the CURRENT Park Until filter came from a goal tap —
+        // see `activeGoalForParkUntilPill`'s own doc comment for why this needs ZERO new
+        // stored state (a deliberate, disclosed deviation from this PR's own dispatch, which
+        // separately suggested adding tracking state — flagged in this PR's description; the
+        // addendum itself, the binding spec for this part, derives it this way).
+        let activeGoal = ContentView.activeGoalForParkUntilPill(
+            selectedGoal: selectedGoal,
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            fullPaletteMode: fullPaletteMode
+        )
         VStack(spacing: 8) {
             // FT-18 row 1: Recenter — only when the custom Drive Mode follow camera is
             // paused by a user gesture (FT-17: pan OR pinch).
@@ -2999,7 +3239,13 @@ struct ContentView: View {
                     onSelectGoal: { goal in selectGoal(goal) },
                     onToggleFullPalette: { toggleFullPaletteMode() },
                     onStartDriving: { enterCruiseMode() }
-                )
+                ) {
+                    // Addendum 2 (A2.1 item 2): Report pill now lives INSIDE the dock's own
+                    // top row instead of `communityMapChromeOverlay`'s floating layer — same
+                    // `reportPillButton` component, unchanged action/styling/accessibility,
+                    // just a different container.
+                    reportPillButton
+                }
             }
             // W7.5 row 3: Park Until pill — carried over from browsing if already active;
             // cannot be entered mid-drive (recenterButtonStack, its only entry point, is
@@ -3015,9 +3261,28 @@ struct ContentView: View {
             // power-user `ParkUntilSheet` (§0.8.9) — its original job, untouched. Flag off:
             // `goalTilesVisible` is always `false`, so this is byte-identical to pre-DM-2
             // behavior.
+            //
+            // Addendum 2 (A2.2): while escalated (Drive Mode active, so `goalTilesVisible`
+            // is false even though the flag is on), this slot now upgrades to the
+            // goal-identity `GoalParkUntilPill` whenever `activeGoal != nil` — i.e. whenever
+            // the live filter came from a goal tap, not a manual `ParkUntilSheet` pick.
+            // `activeGoal == nil` (flag off, or full-palette mode) renders TODAY'S generic
+            // `ParkUntilPill`, completely unchanged. Same ✕ → `clearParkUntilFilter()`, no
+            // gating, no confirm, in both branches.
             if parkUntilMode, let target = parkUntilTarget, !goalTilesVisible {
-                ParkUntilPill(targetDate: target) {
-                    clearParkUntilFilter()
+                if let activeGoal {
+                    let content = ContentView.goalPillContent(for: activeGoal, target: target, now: lastEvaluatedAt)
+                    GoalParkUntilPill(
+                        icon: content.icon,
+                        shortName: content.shortName,
+                        trailingClause: content.trailingClause
+                    ) {
+                        clearParkUntilFilter()
+                    }
+                } else {
+                    ParkUntilPill(targetDate: target) {
+                        clearParkUntilFilter()
+                    }
                 }
             }
             // W8.5c row 4: Drive Mode bottom card (AC-W85c.25) — the anchored "ground truth"
@@ -3111,6 +3376,10 @@ struct ContentView: View {
     ///                         (DM-2, §0.8.9/design doc §2.6 — `parkUntilClockButtonVisible`).
     ///                         When visible, its own filter behavior/framing/toolbar position
     ///                         are all unchanged by FT-20 or DM-2.
+    ///   5. "?" map key       — Addendum 2 (A2.1 item 1): joins this rail as its LAST circle,
+    ///                         flag-on ONLY (`AppConstants.driveModeDefaultEnabled`). Flag
+    ///                         off: absent here, unchanged — the "?" stays exactly where it
+    ///                         is today, `communityMapChromeOverlay`'s bottom-right corner.
     ///
     /// FT-20 Stream C: the former 4th button — the combined Drive/Cruise entry `Menu`
     /// (`driveEntryButton`) — is DELETED. Its two former options are now reached via search
@@ -3193,6 +3462,28 @@ struct ContentView: View {
                 }
                 .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
                 .accessibilityHint("Shows only blocks where you can park until a chosen time.")
+            }
+
+            // Button 5: "?" map key — Addendum 2 (A2.1 item 1), flag-on ONLY. Joins this rail
+            // as its LAST circle (after Find me / Search / Find my car / clock, in whichever
+            // combination is currently showing) rather than floating alone at the bottom of
+            // the screen. Same `Image(systemName:)`/font/background/foreground treatment as
+            // every other circle in this stack — deliberately NOT special-cased (the
+            // addendum's own instruction) — unlike `communityMapChromeOverlay`'s own
+            // `mapKeyButton`, which stays a bold `Text("?")` and unchanged for the flag-off
+            // bottom-right placement this button does NOT touch.
+            if AppConstants.driveModeDefaultEnabled {
+                Button {
+                    activeSheet = .mapKeyLegend
+                } label: {
+                    Image(systemName: "questionmark")
+                        .font(.system(size: 17, weight: .medium))
+                        .frame(width: 44, height: 44)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                        .foregroundStyle(Color.accentColor)
+                }
+                .accessibilityLabel("Map key")
+                .accessibilityHint("Shows what the map colors and pins mean.")
             }
         }
     }
@@ -3545,11 +3836,24 @@ struct ContentView: View {
     /// "Not now" count as shown (spec §0.2: "shown once, never again, regardless of the
     /// user's choice"). `allowed == true` additionally fires the real system prompt via
     /// `requestAndFetchLocation()`; `allowed == false` has zero other side effects.
+    ///
+    /// **Part A fix 1** (`docs/design/goal-first-ambient-design.md` Addendum 2's predecessor
+    /// diagnosis): before this fix, a granted permission here never recentered the camera —
+    /// `requestAndFetchLocation()` was fired with neither `recenterOnUserRequested` nor
+    /// `recenterOnUserAtLaunch` set, so `handleLocationUpdate()`'s two recenter branches both
+    /// no-op when the fix eventually arrives. `recenterOnUserAtLaunch` (not
+    /// `recenterOnUserRequested`) is the correct flag here, not an arbitrary pick: this is a
+    /// launch-time, best-effort recenter — same "silently stay on the fallback center if out
+    /// of coverage, no toast" posture `performLaunchSetup`'s own Priority 2b branch already
+    /// uses for the identical "authorized, no cached fix yet" case — not a user-initiated
+    /// button tap, which is what `recenterOnUserRequested`'s toast-on-out-of-coverage behavior
+    /// is for.
     private func dismissLocationPrimingCard(allowed: Bool) {
         guard showLocationPrimingCard else { return }
         LocationPrimingCardGate().markShown()
         showLocationPrimingCard = false
         if allowed {
+            recenterOnUserAtLaunch = true
             locationService.requestAndFetchLocation()
         }
     }
@@ -3770,6 +4074,52 @@ struct ContentView: View {
         recenterMap(on: coord)
     }
 
+    /// The launch-default `region`'s value — `nonisolated static` so the `@State` initializer
+    /// above can call it (property initializers can't reference `self` or other instance
+    /// state) and so this is directly unit-testable without a live `ContentView` instance,
+    /// same pattern as `communityMapChromeVisible`/`resolveHomeZoneId`.
+    ///
+    /// **Part A fix 2** (`docs/design/goal-first-ambient-design.md` Addendum 2's predecessor
+    /// diagnosis): before this fix, the launch default was ALWAYS the wide `0.07°/0.05°` span
+    /// — comfortably ABOVE `AppConstants.polylineHideSpanThreshold` (0.04°), so
+    /// `rebuildOverlays`'s zoom-threshold guard assigned an EMPTY overlay payload at every
+    /// cold launch, flag on or off, until some other event (auto-center, Find-me, Drive-entry)
+    /// narrowed the camera. Flag-off relies on exactly that — the FT-20 browse sheet's own
+    /// auto-center path reliably fires shortly after launch. Flag-on ambient mode has NO
+    /// guaranteed narrowing event with no location fix (see fix 1, `dismissLocationPrimingCard`),
+    /// so the map could rest indefinitely on a wide span with zero curb colors, reading as a
+    /// broken/empty map — the actual bug Kevin's 2026-10-20/21 smoke reported.
+    ///
+    /// **Fix, flag-gated:** while `driveModeDefaultEnabled`, start at the SAME street-level
+    /// span `recenterMap(on:)` already uses for GPS-based recentering
+    /// (`AppConstants.streetLevelRecenterMeters`, 400m) — comfortably inside the hide
+    /// threshold at any latitude in `AppConstants.manhattanCoverageBounds` (at 40.7831°N,
+    /// 400m ≈ 0.0036° latitude / 0.0048° longitude, both well under 0.04°), so a cold launch
+    /// with no location fix yet still paints curb colors around `manhattanCenter` immediately,
+    /// AND stops flooding `TileLoader`'s 200-tile LRU with a viewport-sized tile set at launch
+    /// (a secondary contributor the diagnosis also named). **Flag off: byte-identical** to the
+    /// pre-fix `0.07°/0.05°` span — see `ViewportPolishTests`/the guard test for this function
+    /// for the pinned literal values.
+    nonisolated static func initialLaunchRegion(
+        driveModeDefaultEnabled: Bool = AppConstants.driveModeDefaultEnabled
+    ) -> MKCoordinateRegion {
+        let center = CLLocationCoordinate2D(
+            latitude: AppConstants.manhattanCenter.latitude,
+            longitude: AppConstants.manhattanCenter.longitude
+        )
+        guard driveModeDefaultEnabled else {
+            return MKCoordinateRegion(
+                center: center,
+                span: MKCoordinateSpan(latitudeDelta: 0.07, longitudeDelta: 0.05)
+            )
+        }
+        return MKCoordinateRegion(
+            center: center,
+            latitudinalMeters: AppConstants.streetLevelRecenterMeters,
+            longitudinalMeters: AppConstants.streetLevelRecenterMeters
+        )
+    }
+
     /// Animates the map region to center on the given coordinate at street-level zoom.
     /// ~400m span shows the target block plus a few surrounding blocks.
     ///
@@ -3783,8 +4133,8 @@ struct ContentView: View {
     private func recenterMap(on coordinate: CLLocationCoordinate2D) {
         let newRegion = MKCoordinateRegion(
             center: coordinate,
-            latitudinalMeters: 400,
-            longitudinalMeters: 400
+            latitudinalMeters: AppConstants.streetLevelRecenterMeters,
+            longitudinalMeters: AppConstants.streetLevelRecenterMeters
         )
         region = newRegion
         coordinatorActions.setRegion?(newRegion)
@@ -5888,58 +6238,27 @@ func recenterPillBottomPadding(showApproachStrip: Bool, parkUntilVisible: Bool) 
     return height + 8
 }
 
-// MARK: - DM-2 ambient-dock fix: community chrome clearance (Kevin's live smoke, 2026-10-20)
+// MARK: - Community chrome clearance (reverted to flag-independent legacy value, Addendum 2)
 
 /// Returns the bottom padding (in points) the persistent Report pill / "?" map-key button
-/// (`communityMapChromeOverlay`) need so they clear the goal-first ambient dock
-/// (`GoalSelectorView`, mounted via `bottomSafeAreaContent`'s `.safeAreaInset(edge: .bottom)`)
-/// instead of drawing over its tile row — Kevin's live-smoke screenshot on PR #133's merge
-/// (flag ON, cold launch, iPhone 17 sim): the Report pill sat directly over the Overnight
-/// tile's top edge, and the "?" button overlapped Park & Forget's top-right corner.
+/// (`communityMapChromeOverlay`) need to clear the FT-20 browse sheet's peek detent.
 ///
-/// Root cause: `communityMapChromeOverlay` is a SEPARATE floating layer in `mapZStack`'s
-/// outer `ZStack` (the same "`VStack` + `Spacer()`, pinned to one edge" convention every
-/// other floating card in this file uses — see that property's own doc comment), not a
-/// child of `mapRepresentable`'s `.safeAreaInset`, so it has no structural awareness of the
-/// dock's height. Its old clearance, `browseSheetPeekHeight + 12`, was sized for the FT-20
-/// browse sheet's peek detent — which never mounts in ambient mode at all (cold launch with
-/// `driveModeDefaultEnabled == true` starts `activeSheet == nil`; `browseSheetPeekHeight`
-/// sits frozen at its unmeasured `BrowseSheetDetentMath.minimumPeekHeight` default, 64pt, the
-/// entire time the dock is showing) — nowhere near the dock's real ~230–300pt height.
+/// **Addendum 2 history** (`docs/design/goal-first-ambient-design.md` A2.1): PR #134 added a
+/// SECOND branch here (`goalDockVisible: true` → a hardcoded 326pt sum of the goal-first
+/// dock's own component heights) to stop this chrome drawing over the dock's tile row.
+/// Addendum 2 neutralizes that branch entirely, not by tuning its number again, but by
+/// removing the NEED for it: Report pill and "?" now have permanent homes inside layout
+/// containers that track their own height (`GoalSelectorView`'s own top row; `recenterButtonStack`'s
+/// rail) instead of floating alone and chasing a sibling's height from the outside.
+/// `communityMapChromeOverlay` no longer renders this chrome AT ALL while the goal dock is
+/// visible (see that property's own third gate), so the dock-aware branch was dead code the
+/// moment that gate landed — removed here rather than left as an unreachable `if`.
 ///
-/// Mirrors `recenterPillBottomPadding`'s pattern (TF2-18): hardcode the known component
-/// heights, verify the sum via live-UI smoke, rather than measuring at runtime with
-/// `GeometryReader` (same update-cycle-safety reasoning that function's own doc comment
-/// gives — mutating layout state from inside the map's update cycle is the exact class of
-/// bug that reverted W8.5c-polish). Component heights (approximate, system fonts;
-/// `GoalSelectorView`'s own `VStack(spacing: 10)` + `.padding(.bottom, 8)`):
-///   - Full-palette toggle row: 44pt (`.frame(minHeight: 44)`).
-///   - Empty-map-guard banner, included unconditionally at its worst-case height (~60pt —
-///     up to two wrapped lines of `.subheadline` text + 10pt vertical padding × 2) rather
-///     than threading `emptyMapGuardKind` through this call site, so the pill/button never
-///     clip the banner on the one goal (Park & Forget) where it can appear.
-///   - "Start Driving" row: 48pt (`.frame(minHeight: 48)`).
-///   - Goal tile row: 112pt (`.frame(minHeight: 112)`).
-///   - 3 inter-row gaps × 10pt (`VStack(spacing: 10)`, worst case with the banner present).
-///   - Dock's own bottom padding: 8pt.
-///   - `+ 24pt` breathing-room gap above the dock's top edge — the fix's own requirement
-///     that these controls sit "clearly above the dock," not flush against it.
-/// Sum: 326pt. Kevin's immediate re-smoke is what confirms or corrects this exact number,
-/// same precedent `paddingForBannerState`'s own doc comment sets.
-///
-/// Extracted as a pure function so tests can assert both branches (dock visible / not)
-/// directly without instantiating a full `ContentView`.
-func communityMapChromeBottomPadding(goalDockVisible: Bool, browseSheetPeekHeight: CGFloat) -> CGFloat {
-    guard goalDockVisible else { return browseSheetPeekHeight + 12 }
-    let toggleRow: CGFloat = 44
-    let guardBannerWorstCase: CGFloat = 60
-    let startDrivingRow: CGFloat = 48
-    let tileRow: CGFloat = 112
-    let interRowGaps: CGFloat = 10 * 3
-    let dockBottomPadding: CGFloat = 8
-    let breathingRoom: CGFloat = 24
-    return toggleRow + guardBannerWorstCase + startDrivingRow + tileRow
-        + interRowGaps + dockBottomPadding + breathingRoom
+/// This is now the ORIGINAL, pre-PR-#134, flag-independent clearance — kept as a named pure
+/// function (not inlined) for the same reason `recenterPillBottomPadding` stays a named
+/// function post-refactor: directly testable without a live `ContentView`.
+func communityMapChromeBottomPadding(browseSheetPeekHeight: CGFloat) -> CGFloat {
+    browseSheetPeekHeight + 12
 }
 
 #Preview {

@@ -269,6 +269,17 @@ enum AppConstants {
     /// `driveModeBackgroundNoteShownKey`/`parkingGuidePromptShownKey`'s existing
     /// `wepark_<feature>_shown` convention.
     static let locationPrimingCardShownKey = "wepark_location_priming_shown"
+
+    // MARK: - Ambient-colors fix (2026-10-21 smoke): shared street-level span magnitude
+
+    /// The street-level recenter radius, in meters, `ContentView.recenterMap(on:)` has used
+    /// since W5.1 — now ALSO the basis for `ContentView.initialLaunchRegion(...)`'s flag-on
+    /// span (`docs/design/goal-first-ambient-design.md` Addendum 2's predecessor diagnosis,
+    /// "Part A"). Named here, not re-literaled at the second call site, so the two can never
+    /// silently drift apart. 400m is comfortably inside `polylineHideSpanThreshold`'s 0.04°
+    /// hide band at any latitude in the Manhattan coverage box — see
+    /// `ContentView.initialLaunchRegion(_:)`'s own doc comment for the exact math.
+    static let streetLevelRecenterMeters: CLLocationDistance = 400
 }
 
 // MARK: - MoneyMathConstants (FT-12 §6)
