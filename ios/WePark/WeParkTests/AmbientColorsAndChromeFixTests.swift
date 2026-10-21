@@ -14,6 +14,10 @@
 //        latitude, so a cold launch with no location fix still paints curb colors.
 //      - `AppConstants.streetLevelRecenterMeters` — pinned so `recenterMap(on:)` and
 //        `initialLaunchRegion` can never silently drift apart.
+//      - `ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive:)` — QA pass 1 fix
+//        (🟡 #1): the `!driveModeActive` gate on `handleRegionChanged`'s new `rebuildOverlays(
+//        at:)` call (fix 3), restoring Drive Mode's pre-fix repaint economics on its own
+//        ~1Hz camera-follow loop while leaving the browse-mode staleness fix intact.
 //
 //    Part C (escalated-Cruise goal-identity pill, Addendum 2 A2.2):
 //      - `ContentView.goalPillContent(for:target:now:)` — icon/short-name/trailing-clause
@@ -24,6 +28,11 @@
 //        fullPaletteMode:)` — the decision behind which `ParkUntilPill` slot variant renders
 //        (named `GoalParkUntilPill` vs. today's generic pill), including the flag-off and
 //        full-palette-mode "always nil" guarantees.
+//      - `ContentView.parkUntilConfirmToastMessage(activeGoal:pickedTargetDate:resolvedTarget:
+//        now:)` — QA pass 1 fix (🟡 #2): the `ParkUntilSheet.onConfirm` toast, corrected to
+//        describe what's ACTUALLY showing (the active goal's resolved target) rather than the
+//        just-picked custom time, for the one state (flag on, goal-first, reached via the
+//        pre-existing `ArrivalPromptSheet.onParkHere` auto-fire) where the two can disagree.
 //
 //  NOT covered here (by design, not oversight, verified by code inspection + the mandatory
 //  live-UI smoke instead):
@@ -33,7 +42,9 @@
 //      different test file even under `@testable import` (Swift's `private` is lexically
 //      scoped) — same documented limitation `DM3PrimingAuthTests.swift`'s own header already
 //      establishes for this file's sibling private methods.
-//    - `handleRegionChanged`'s new `rebuildOverlays(at:)` call (fix 3) — same limitation.
+//    - `handleRegionChanged`'s own body (the `if shouldRebuildOverlaysOnRegionChange(...)`
+//      call site) — same limitation; the DECISION itself is unit-tested above, the WIRING is
+//      verified by code inspection + the live smoke.
 //    - The "?" button's new rail position in `recenterButtonStack` and the Report pill's new
 //      home inside `GoalSelectorView`'s top row are pure SwiftUI layout — their GATING
 //      booleans (`goalSelectorDockVisible`, `AppConstants.driveModeDefaultEnabled`) are
@@ -239,6 +250,127 @@ final class GoalParkUntilPillContentTests: XCTestCase {
 
     // MARK: - Helpers (private to this class — no cross-file XCTestCase extension, matching
     // this codebase's established house style, e.g. `ParkingGoalsTests.swift`'s own header).
+
+    private func et(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0, _ minute: Int = 0) -> Date {
+        var comps = DateComponents()
+        comps.year = year
+        comps.month = month
+        comps.day = day
+        comps.hour = hour
+        comps.minute = minute
+        comps.second = 0
+        comps.timeZone = .easternTime
+        return Calendar.easternTime.date(from: comps)!
+    }
+}
+
+// MARK: - QA pass 1, 🟡 #1: shouldRebuildOverlaysOnRegionChange
+
+final class ShouldRebuildOverlaysOnRegionChangeTests: XCTestCase {
+
+    /// The actual fix: Drive Mode's own ~1Hz camera-follow loop must NOT re-trigger a full
+    /// `rebuildOverlays` on every `regionDidChangeAnimated` callback — this restores Drive
+    /// Mode's pre-Part-A-fix-3 repaint economics exactly.
+    func testDriveModeActive_doesNotRebuild() {
+        XCTAssertFalse(
+            ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive: true),
+            "Drive Mode's per-tick camera-follow loop must not trigger a full overlay " +
+            "rebuild on every GPS tick — only its own existing triggers (entry rebuild, " +
+            "segment-count changes) should repaint during a drive."
+        )
+    }
+
+    /// The browse-mode staleness fix (Part A fix 3) must stay fully intact outside Drive Mode
+    /// — this is the actual bug the fix targets (pinch past the hide threshold and back with
+    /// no segment-count change), flag on or off.
+    func testDriveModeInactive_rebuilds() {
+        XCTAssertTrue(
+            ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive: false),
+            "outside Drive Mode, a region change must still trigger rebuildOverlays — this " +
+            "is the real fix for the browse-mode stale-repaint bug and must not regress."
+        )
+    }
+}
+
+// MARK: - QA pass 1, 🟡 #2: parkUntilConfirmToastMessage
+
+final class ParkUntilConfirmToastMessageTests: XCTestCase {
+
+    /// `activeGoal == nil` (flag off, or full-palette mode — the sheet's normal, intended
+    /// use) must render EXACTLY today's pre-QA-pass-1 toast text, byte-identical — this is
+    /// the regression guard for the "zero change to this sheet's normal behavior" claim.
+    func testNoActiveGoal_rendersLegacyToastText_byteIdentical() {
+        let target = et(2026, 5, 11, 14, 45)
+        let message = ContentView.parkUntilConfirmToastMessage(
+            activeGoal: nil,
+            pickedTargetDate: target,
+            resolvedTarget: target,
+            now: et(2026, 5, 11, 11, 45)
+        )
+        let expectedTimeStr = ParkUntilSheet.formatTime(target)
+        XCTAssertEqual(message, "Showing blocks free until \(expectedTimeStr)")
+    }
+
+    /// `activeGoal == nil` even when `pickedTargetDate` and `resolvedTarget` happen to
+    /// differ (shouldn't happen in practice when `activeGoal` is nil, but this confirms the
+    /// legacy branch only ever reads `pickedTargetDate`, never `resolvedTarget`).
+    func testNoActiveGoal_ignoresResolvedTarget() {
+        let picked = et(2026, 5, 11, 14, 45)
+        let resolved = et(2026, 5, 12, 9, 0)
+        let message = ContentView.parkUntilConfirmToastMessage(
+            activeGoal: nil,
+            pickedTargetDate: picked,
+            resolvedTarget: resolved,
+            now: et(2026, 5, 11, 11, 45)
+        )
+        XCTAssertEqual(message, "Showing blocks free until \(ParkUntilSheet.formatTime(picked))")
+    }
+
+    /// The actual fix: `activeGoal != nil` (the `ArrivalPromptSheet.onParkHere` auto-fire,
+    /// reachable while flag-on + goal-first) must derive the toast from `resolvedTarget` (what
+    /// `rebuildOverlays` just silently restored) via the SAME `goalPillContent` the
+    /// `GoalParkUntilPill` itself uses — never from `pickedTargetDate`, which is what the
+    /// pre-QA-pass-1 code would have shown and is the exact lie this fix corrects.
+    func testActiveGoal_ignoresPickedTargetDate_usesResolvedTargetViaGoalPillContent() {
+        let picked = et(2026, 5, 11, 20, 0)        // what the user picked in ParkUntilSheet
+        let resolved = et(2026, 5, 12, 0, 0)        // what rebuildOverlays silently restored
+        let now = et(2026, 5, 11, 18, 0)
+        let message = ContentView.parkUntilConfirmToastMessage(
+            activeGoal: .freeOvernight,
+            pickedTargetDate: picked,
+            resolvedTarget: resolved,
+            now: now
+        )
+        let expectedContent = ContentView.goalPillContent(for: .freeOvernight, target: resolved, now: now)
+        XCTAssertEqual(message, "Showing \(expectedContent.shortName) blocks — \(expectedContent.trailingClause)")
+        XCTAssertFalse(
+            message.contains(ParkUntilSheet.formatTime(picked)),
+            "the toast must never describe the just-picked time once a goal has silently " +
+            "overridden it — that's the exact bug this fix corrects."
+        )
+    }
+
+    /// Covers all three goals, confirming the icon/short-name composition flows through
+    /// correctly for each, not just the one goal exercised above.
+    func testActiveGoal_allThreeGoals_composeCorrectly() {
+        let resolved = et(2026, 5, 14, 0, 0)
+        let now = et(2026, 5, 11, 9, 0)
+        for goal: ParkingGoal in [.freeOvernight, .freeFewHours, .parkAndForget] {
+            let message = ContentView.parkUntilConfirmToastMessage(
+                activeGoal: goal,
+                pickedTargetDate: et(2026, 5, 11, 23, 0),
+                resolvedTarget: resolved,
+                now: now
+            )
+            let expectedContent = ContentView.goalPillContent(for: goal, target: resolved, now: now)
+            XCTAssertEqual(
+                message, "Showing \(expectedContent.shortName) blocks — \(expectedContent.trailingClause)",
+                "mismatch for \(goal)."
+            )
+        }
+    }
+
+    // MARK: - Helpers (private to this class — no cross-file XCTestCase extension)
 
     private func et(_ year: Int, _ month: Int, _ day: Int, _ hour: Int = 0, _ minute: Int = 0) -> Date {
         var comps = DateComponents()

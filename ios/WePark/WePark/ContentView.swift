@@ -1586,8 +1586,33 @@ struct ContentView: View {
                     parkUntilIgnoresMeteredPayment = false
                     parkAndForgetGuardState = nil
                     rebuildOverlays(at: .nowET)
-                    let timeStr = ParkUntilSheet.formatTime(targetDate)
-                    ToastService.shared.show(message: "Showing blocks free until \(timeStr)")
+                    // QA pass 1 fix (🟡 #2, `activeGoalForParkUntilPill`'s own doc comment
+                    // names this closure's OTHER entry point — `ArrivalPromptSheet.onParkHere`
+                    // — as a known third reachable-while-goal-first path): the
+                    // `rebuildOverlays(at:)` call directly above can, in that one state
+                    // (flag on, goal-first, not full-palette), have just silently overwritten
+                    // `parkUntilTarget` BACK to the active goal's own value via the DM-2
+                    // recompute block — `targetDate` (what the user just picked) and
+                    // `parkUntilTarget` (what's now ACTUALLY showing) can disagree. The map/
+                    // pill display is never wrong either way (it always reads the live
+                    // `parkUntilTarget`) — but the toast, if it described `targetDate`
+                    // unconditionally, would lie about what took effect. Deriving the toast
+                    // from the SAME `activeGoalForParkUntilPill`/`goalPillContent` source of
+                    // truth the pill itself uses — rather than suppressing the toast outright
+                    // — was the smaller, safer fix: zero change to this sheet's reachability
+                    // or to any other entry point's behavior, purely a copy correction for the
+                    // one state where the generic phrasing would otherwise be false.
+                    let message = ContentView.parkUntilConfirmToastMessage(
+                        activeGoal: ContentView.activeGoalForParkUntilPill(
+                            selectedGoal: selectedGoal,
+                            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+                            fullPaletteMode: fullPaletteMode
+                        ),
+                        pickedTargetDate: targetDate,
+                        resolvedTarget: parkUntilTarget ?? targetDate,
+                        now: .nowET
+                    )
+                    ToastService.shared.show(message: message)
                 },
                 onSkip: {
                     activeSheet = dismissTargetOutsideBrowseNav
@@ -2173,15 +2198,76 @@ struct ContentView: View {
     /// recompute block runs on EVERY SINGLE call (Part A fix 4 made it unconditional, above
     /// the zoom guard) and unconditionally overwrites `parkUntilTarget` FROM `selectedGoal` —
     /// so in exactly the states where this function returns non-nil, `selectedGoal` is
-    /// guaranteed fresh. The power-user `ParkUntilSheet` clock icon is unreachable in that
-    /// same state (`parkUntilClockButtonVisible`), so there is no other code path that could
-    /// have set a non-goal target while this reads non-nil.
+    /// guaranteed fresh, and `parkUntilTarget`'s VALUE can never actually diverge from the
+    /// goal's own computed target by the time anything reads it.
+    ///
+    /// **Known third entry point (QA pass 1, 🟡 #2) — `ArrivalPromptSheet`'s `onParkHere`
+    /// closure.** The power-user `ParkUntilSheet` clock icon is unreachable in that same state
+    /// via `parkUntilClockButtonVisible` — but `onParkHere` (the destination-mode Drive
+    /// "Park Here" arrival flow, W8.5d Option B, pre-existing and untouched by this PR) ALSO
+    /// sets `activeSheet = .parkUntil` directly, with no flag/`fullPaletteMode` gate at all,
+    /// auto-firing the exact same `ParkUntilSheet`. This is reachable while flag-on AND
+    /// goal-first (the user drives via Search → a destination, not "Start Driving," which
+    /// stays a `.cruise`-only, goal-first-locked path). So `ParkUntilSheet`'s `onConfirm` CAN
+    /// run while this function would return non-nil. It does NOT break this function's
+    /// correctness, because `onConfirm` calls `rebuildOverlays(at:)` in the same synchronous
+    /// closure right after setting `parkUntilTarget` — the DM-2 recompute block described
+    /// above immediately overwrites whatever `onConfirm` just set, back to the active goal's
+    /// own value, before anything else reads it. The `ParkUntilPill` slot's DISPLAYED state is
+    /// therefore never wrong. What WAS wrong (fixed by this same QA pass, see `onConfirm`'s own
+    /// comment below): the toast `onConfirm` fires describes the just-picked custom time, not
+    /// the goal value that's actually now showing — a cosmetic lie, not a state bug.
     nonisolated static func activeGoalForParkUntilPill(
         selectedGoal: ParkingGoal,
         driveModeDefaultEnabled: Bool,
         fullPaletteMode: Bool
     ) -> ParkingGoal? {
         (driveModeDefaultEnabled && !fullPaletteMode) ? selectedGoal : nil
+    }
+
+    /// QA pass 1 fix (🟡 #2): the toast message for `ParkUntilSheet`'s `onConfirm` closure —
+    /// extracted so the "derive from the same `activeGoalForParkUntilPill` source of truth the
+    /// pill uses" fix is directly unit-testable without a live `ContentView`/sheet.
+    ///
+    /// `activeGoal` is `ContentView.activeGoalForParkUntilPill(...)`'s result at the SAME
+    /// moment the toast fires — non-nil exactly in the one state
+    /// (`activeGoalForParkUntilPill`'s own doc comment) where `onConfirm`'s preceding
+    /// `rebuildOverlays(at:)` call can have silently overwritten `parkUntilTarget` back to the
+    /// goal's own value, making `pickedTargetDate` (what the user just chose) and
+    /// `resolvedTarget` (what's now actually live) disagree. When `activeGoal == nil`
+    /// (flag off, or full-palette mode — the normal, intended use of this sheet), this returns
+    /// EXACTLY today's pre-QA-pass-1 toast text, byte-identical, since `pickedTargetDate` and
+    /// `resolvedTarget` can never diverge in that state.
+    nonisolated static func parkUntilConfirmToastMessage(
+        activeGoal: ParkingGoal?,
+        pickedTargetDate: Date,
+        resolvedTarget: Date,
+        now: Date
+    ) -> String {
+        guard let activeGoal else {
+            return "Showing blocks free until \(ParkUntilSheet.formatTime(pickedTargetDate))"
+        }
+        let content = goalPillContent(for: activeGoal, target: resolvedTarget, now: now)
+        return "Showing \(content.shortName) blocks — \(content.trailingClause)"
+    }
+
+    /// QA pass 1 fix (🟡 #1): whether `handleRegionChanged`'s new `rebuildOverlays(at:)` call
+    /// (Part A fix 3) should fire for a given region-change event. Extracted as a
+    /// `nonisolated static` pure function — same "extract the decision" convention this file's
+    /// other gates use — purely so the gate itself is directly unit-tested, not left as an
+    /// inline `if` with no regression guard.
+    ///
+    /// `false` during Drive Mode: `handleRegionChanged` also fires continuously off Drive
+    /// Mode's own ~1Hz camera-follow loop (`handleLocationUpdate()`'s per-GPS-tick
+    /// `setDriveCamera` → `MKMapView.setCamera` → `regionDidChangeAnimated` →
+    /// `handleRegionChanged`), a completely different cadence than the "settled gesture in
+    /// browse mode" case Part A fix 3 actually targets. Gating here restores Drive Mode's PRIOR
+    /// repaint economics exactly (its own existing triggers — entry rebuild, `tileLoader
+    /// .segments.count` changes as new tiles stream in — are untouched) while leaving the fix
+    /// for the real bug (browse-mode stale repaint after a pinch past the hide threshold) fully
+    /// intact in every other state, flag on or off.
+    nonisolated static func shouldRebuildOverlaysOnRegionChange(driveModeActive: Bool) -> Bool {
+        !driveModeActive
     }
 
     // MARK: - Overlay rebuild
@@ -2889,22 +2975,42 @@ struct ContentView: View {
     /// closes that staleness gap directly off the real trigger (region change), rather than
     /// relying on tile-load as a proxy for it.
     ///
-    /// **Flag-off risk considered:** `MKMapViewDelegate.regionDidChangeAnimated` fires once
-    /// per settled gesture (per `MapViewRepresentable`'s own `regionDidChangeAnimated` doc
-    /// comment — "fires only after the deceleration animation completes," not per-frame
-    /// during an active pan/pinch), the SAME cadence `tileLoader.loadTiles(forRegion:)` on
-    /// the very next line already runs at, unconditionally, today, flag on or off. Adding one
-    /// more O(n)-over-loaded-segments call (`rebuildOverlays`, same cost class
-    /// `handleSegmentsChanged`/`handleSelectionChanged`/the 60s timer tick already pay on
-    /// every call) at that same cadence is not a new order-of-magnitude cost — no additional
-    /// debounce is introduced here because none already guarded the parallel `loadTiles` call
-    /// on this same callback.
+    /// **QA pass 1 fix (🟡 #1): gated `!driveModeActive`.** This handler ALSO fires during
+    /// Drive Mode: `handleLocationUpdate()`'s per-GPS-tick `coordinatorActions.setDriveCamera`
+    /// (Option A custom follow, ~1Hz) calls `MKMapView.setCamera(animated:)`, which fires
+    /// `regionDidChangeAnimated` → async `onRegionChanged` → THIS handler, once per GPS fix,
+    /// continuously, for the entire drive — a completely different cadence than the
+    /// "once-per-settled-gesture" browse-mode case this fix actually targets. Pre-fix, Drive
+    /// Mode repainted overlays only via `DriveModeBottomCard`'s own cadence (entry rebuild +
+    /// `tileLoader.segments.count` changes as new tiles stream in) — NOT once per camera tick.
+    /// QA traced that this new call, unguarded, would roughly DOUBLE the per-tick main-thread
+    /// cost of the single highest-stakes interaction in the app (active driving), stacking on
+    /// top of `tileLoader.loadTiles(forRegion:)`'s own pre-existing unconditional per-tick
+    /// `rebuildSegments` call on the very next line. The staleness bug this fix targets is a
+    /// BROWSE-mode bug (a user pinching the resting map, not actively driving) — gating on
+    /// `!driveModeActive` restores Drive Mode's prior repaint economics EXACTLY (its own
+    /// existing triggers are untouched by this file) while leaving the actual fix, for the
+    /// actual bug, fully intact.
+    ///
+    /// **Flag-off risk considered (browse mode):** `MKMapViewDelegate.regionDidChangeAnimated`
+    /// fires once per settled gesture (per `MapViewRepresentable`'s own `regionDidChangeAnimated`
+    /// doc comment — "fires only after the deceleration animation completes," not per-frame
+    /// during an active pan/pinch), the SAME cadence `tileLoader.loadTiles(forRegion:)` on the
+    /// very next line already runs at, unconditionally, today, flag on or off, in BOTH browse
+    /// and (pre-this-fix) Drive Mode. Outside Drive Mode, adding one more
+    /// O(n)-over-loaded-segments call (`rebuildOverlays`, same cost class
+    /// `handleSegmentsChanged`/`handleSelectionChanged`/the 60s timer tick already pay on every
+    /// call) at that settled-gesture cadence is not a new order-of-magnitude cost — no
+    /// additional debounce is introduced here because none already guarded the parallel
+    /// `loadTiles` call on this same callback.
     private func handleRegionChanged(_ newRegion: MKCoordinateRegion) {
         region = newRegion
         tileLoader.loadTiles(forRegion: newRegion)
         // Community 1.0 / Tier 1: debounced fetch for community pins (800ms debounce).
         pinService.onRegionChanged(newRegion)
-        rebuildOverlays(at: lastEvaluatedAt)
+        if ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive: driveModeActive) {
+            rebuildOverlays(at: lastEvaluatedAt)
+        }
     }
 
     /// Forwards community pin taps to the sheet presentation.
