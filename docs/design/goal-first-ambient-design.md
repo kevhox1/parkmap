@@ -326,3 +326,196 @@ along the way: the legacy `ParkUntilPill` will double up with the new dock unles
 in goal-first mode (§6.1).
 
 File: `/root/repos/parkmap/docs/design/goal-first-ambient-design.md`
+
+---
+
+## Addendum 2 — 2026-10-21 smoke revisions
+
+**Trigger:** Kevin's flag-on simulator smoke of the shipped build (PRs #133/#134). Two screenshots, two
+revision requests. PR #134 already fixed the overlap bug (Report pill / "?" button no longer draw on top
+of the goal dock) — but fixing clearance *math* left both floating alone, disconnected from any other
+chrome, which reads as broken even though nothing technically overlaps. Separately, the escalated Cruise
+session carries a goal filter with zero legible indicator of which goal is active. Both fixes below are
+scoped, implementable without new mechanisms, and keep every rule from §0–§6 above intact (5-color
+palette untouched, no new confirm steps, flag-off byte-identical).
+
+### A2.1 — Ambient chrome placement: Report pill + "?" button get permanent homes, not a new clearance constant
+
+**Root cause, stated plainly so the fix is structural, not another patch:** `communityMapChromeOverlay`
+(`ContentView.swift`, the `reportPillButton` + `mapKeyButton` row) is a floating overlay with its own
+independently-computed bottom clearance (`communityMapChromeBottomPaddingValue`), living in a different
+presentation layer than `GoalSelectorView`'s dock. PR #134 patched that clearance constant to stop
+overlapping the dock. That's the same bug class as the original overlap, one level up: a hand-maintained
+offset chasing a sibling layout it has no structural visibility into. Any future change to the dock's
+height (Dynamic Type growth, a 4th goal tile someday, the empty-map guard banner appearing/disappearing)
+can desync it again. **The fix is to stop computing a clearance number for this chrome at all** — give
+each piece a real, permanent position inside layout containers that already track their own height.
+
+**Decision — split the two pieces, because they're not the same kind of control:**
+
+1. **"?" map-key button → becomes the last circle in `recenterButtonStack`** (top-right rail), not a
+   floating bottom element at all. It is already a 44×44pt `.regularMaterial` circle — the exact same
+   family as every other button in that stack — so this is a true move, not a redesign. Rationale: a
+   "what do the colors mean" lookup is low-frequency and has nothing to do with the bottom action dock;
+   Kevin's own instinct ("join the triple ribbon on the right") is correct. Order: Find me → Search →
+   Find my car (if parked) → clock (full-palette only, §2.6) → **"?" (new, last)**. Same
+   `Image(systemName:)`/`.font(.system(size: 17, weight: .medium))`/background/foreground treatment as
+   the rest of the stack — do not special-case its styling.
+   - **Gating:** render in this rail position only when `AppConstants.driveModeDefaultEnabled` is true.
+     When the flag is off, "?" stays exactly where it is today (`communityMapChromeOverlay`, bottom-right)
+     — zero behavior change, per the flag-off-byte-identical rule.
+   - **Full-palette mode:** no special case needed — the rail already renders the clock icon when
+     `fullPaletteMode` is true (§2.6) and hides it when false; "?" simply sits below whichever of those
+     is currently showing. It never needs to move again.
+   - **Watch item, not a blocker:** flag-on + full-palette + a parked car now stacks up to 5 circles
+     (Find me, Search, Find my car, clock, "?"). §6 item 3 above already names the fallback for this
+     exact "stack getting too tall" case — moving Search to a standalone top-left circle — re-apply that
+     fallback here if 5 circles crowds the ASP banner or runs short on smaller phones (SE-class), rather
+     than inventing a second fallback.
+
+2. **Report pill → becomes a new top row inside `GoalSelectorView`, sharing a line with the full-palette
+   toggle**, not the rail (it's a labeled capsule with real text, "join the triple ribbon" doesn't fit
+   it the way it fits "?"). New top-of-dock row, same position reasoning §2.4 already gives the toggle
+   ("quietest, farthest from thumb"):
+   ```
+   HStack {
+       reportPillButton   // leading, unchanged component — same Label("Report", systemImage: "flag.fill")
+       Spacer()
+       fullPaletteToggleRow-content   // trailing, unchanged component
+   }
+   ```
+   placed as the **first** row in `GoalSelectorView`'s `VStack(spacing: 10)`, i.e. above today's
+   `fullPaletteToggleRow` (which keeps its own trailing alignment, now just sharing a line with Report
+   instead of occupying a lone `HStack { Spacer(); toggle }` row). Both controls keep their existing
+   sizes untouched (Report: `.frame(minHeight: 48)`; toggle: `.frame(minHeight: 44)`) — only their
+   container changes.
+   - **Why this kills the whole bug class:** Report is now a true sibling in the same `VStack` the dock
+     already lays out top-to-bottom. It moves up/down with the dock's actual rendered height for free —
+     Dynamic Type growth, the empty-map guard banner appearing, or the goal-tile row hiding in
+     full-palette mode all just push or pull this row the normal SwiftUI way. No clearance constant to
+     maintain, so no clearance constant to go stale.
+   - **Full-palette mode, answered directly:** does chrome "drop down"? Yes, automatically — in
+     full-palette, `goalTileRow` (§2.4) is hidden, so the dock is shorter, and the Report/toggle row
+     (now its topmost row) sits that much closer to the bottom of the screen. This is exactly the
+     behavior Kevin's question was checking for, and it falls out of the VStack for free once Report is
+     inside it.
+   - **Flag-off:** `GoalSelectorView` never mounts when `AppConstants.driveModeDefaultEnabled` is false
+     (`goalSelectorDockVisible` already requires the flag) — so Report never leaves
+     `communityMapChromeOverlay`'s current bottom-left position in a flag-off build. Byte-identical,
+     same guarantee as item 1.
+   - **`communityMapChromeOverlay` update required:** its render condition needs a third state, not just
+     on/off — suppress **both** `reportPillButton` and `mapKeyButton` from the floating overlay entirely
+     whenever `AppConstants.driveModeDefaultEnabled && goalSelectorDockVisible(...)` is true (reuse the
+     same boolean `bottomSafeAreaContent` already computes as `goalDockVisible` — don't compute a second
+     one). Outside that condition (flag off, or any of `driveModeActive`/`blockSelectModeActive`/
+     `spotPlacementActive`/a sheet being presented), `communityMapChromeOverlay` renders exactly as it
+     does today, unchanged — this is additive, not a rewrite of that function's existing gates.
+   - **Accessibility:** no label changes — `reportPillButton`'s existing `accessibilityLabel`/`Hint` and
+     the toggle's existing label both carry over untouched; only their visual container moves.
+
+**Net result Kevin should see on next smoke:** at 1:13 AM on the ambient screen, the top-right rail now
+reads "recenter / search / ? " as one coherent group (exactly his own suggestion), and the Report pill
+sits docked to the top edge of the bottom cluster, paired with the palette toggle — nothing floats alone
+in the dead middle of the map anymore, and nothing needed a new magic-number offset to get there.
+
+### A2.2 — Active-goal legibility in escalated Cruise: name the goal, don't just show its target date
+
+**Diagnosis:** today's `ParkUntilPill` in `bottomSafeAreaContent` (row 3, directly above
+`DriveModeBottomCard`, directly below `driveActionRow`'s Report/Park Here pair) renders the same generic
+"● Until Fri 12:00 AM" + clear ✕ regardless of *why* that target exists — whether it came from a goal
+tap on the ambient screen or a manual pick in the power-user `ParkUntilSheet`. Once Overnight defaults
+on every cold launch, that generic pill is now the **only** on-screen evidence a goal filter is active
+during the one posture (Cruise, windshield distance, glance-only) where legibility matters most.
+
+**Decision — upgrade the content of this exact slot; do not add a new location.** The position is
+already correct and already proven collision-free in Kevin's own screenshot (driveActionRow above it,
+DriveModeBottomCard below it, both rendering cleanly) — the fix belongs entirely in *what* renders
+there, not *where*. Inventing a new top-of-screen banner would introduce real collision risk against
+the "End" pill, the ASP banner, and (per A2.3 below) the system compass; reusing the proven slot
+introduces none.
+
+**New rendering rule for that slot**, in `ContentView`'s existing `if parkUntilMode, let target =
+parkUntilTarget, !goalTilesVisible { ParkUntilPill(...) }` call site:
+
+- Add one piece of context the pill needs: whether the active target came from a goal. Compute
+  `let activeGoal: ParkingGoal? = (AppConstants.driveModeDefaultEnabled && !fullPaletteMode) ?
+  selectedGoal : nil` once per render (same shape as the existing `goalTilesVisible`/`goalDockVisible`
+  booleans — this is a third, narrower read of the identical flag+mode state, not new state).
+- Pass it into `ParkUntilPill` as a new optional parameter, e.g. `ParkUntilPill(targetDate: target,
+  activeGoal: activeGoal) { clearParkUntilFilter() }`.
+- **When `activeGoal` is non-nil** (the Cruise-with-a-goal case, Kevin's shot 2), render the named
+  variant:
+
+  | Goal | Icon | Short name | Trailing clause |
+  |---|---|---|---|
+  | `.freeOvernight` | `moon.stars.fill` | "Overnight" | the existing "Good through <day>" formatter (§3.1) — e.g. "Overnight · Good through tomorrow" |
+  | `.freeFewHours` | `hourglass` | "A Few Hours" | reuse `ParkUntilPill`'s own existing clock-time formatter unchanged — e.g. "A Few Hours · until 2:45 AM" |
+  | `.parkAndForget` | `parkingsign.circle.fill` | "Park & Forget" | `ParkingGoals.goodThroughLabel(...)`'s resolved ladder-rung date — e.g. "Park & Forget · Good through Thu" |
+
+  One line: `[icon] "<Short name> · <trailing clause>"`, `.font(.subheadline.weight(.semibold))` — a
+  deliberate step up from whatever the pill's current caption-weight text is, because this is now
+  identity information ("which goal is live"), not just a date, and needs to clear the same
+  glance-at-a-stoplight legibility bar the rest of Cruise's chrome holds itself to. **No new color** —
+  background/material stays exactly what it is today. Per the sacred 5-color palette, green/orange/red
+  stay reserved for curb meaning only; differentiating goals by icon + text (not color) keeps this pill
+  firmly in the "text is the truth layer" lane §3.1 already establishes, and avoids any reading of "this
+  pill's color means something about my parking legality."
+  - Formatter reuse note: do not write a fourth date formatter. Overnight/Park & Forget both already
+    have `ParkingGoals.goodThroughLabel` (§3.1, already shipped); Few Hours already has whatever clock-
+    time string `ParkUntilPill` renders today for a same-day target — call it, don't duplicate it.
+- **When `activeGoal` is nil** (flag off, or `fullPaletteMode == true` with a target set via the
+  power-user `ParkUntilSheet`) — render **exactly today's pill, unchanged**, generic "● Until <date/time>"
+  + clear ✕. This is the existing, correct behavior for the power-user path and must not change.
+- **Dismiss/clear semantics — keep, don't gate.** The ✕ stays wired to the same `clearParkUntilFilter()`
+  call, ungated, no confirm step, in both the named and generic variants. Rationale: every other control
+  on this screen (goal tiles, the full-palette toggle) is already a no-confirm, instantly-reversible tap
+  (AC-22/AC-27) — adding a confirm here specifically would be the one inconsistent control on the whole
+  surface, for an action that's trivially undoable (tap a goal tile again). Accessibility label should
+  say what it now clears, e.g. "Overnight goal active, good through tomorrow. Clears the filter and
+  shows all parking rules." so VoiceOver users get the same "this is a goal, not a raw time" context
+  sighted users get from the icon/short-name.
+- **Collision check, explicit:** this pill's row does not move — same `bottomSafeAreaContent` slot,
+  same VStack position relative to `driveActionRow` (Report/Park Here, directly above) and
+  `DriveModeBottomCard` (directly below). Kevin's own screenshot already shows this slot rendering
+  cleanly between those two neighbors; upgrading its content only (never its size class, never its
+  position) carries that same proof forward rather than reopening it.
+
+**Net result Kevin should see on next smoke:** the pill that used to read only "● Until Fri 12:00 AM"
+now reads "🌙 Overnight · Good through tomorrow" (moon icon, not literal emoji — SF Symbol
+`moon.stars.fill`) in the exact same slot, same size class bump only, same ✕ behavior — answering "what
+rule is this screen enforcing right now" without requiring a trip back to the ambient screen to check.
+
+### A2.3 — Compass visibility during rotation (recommendation only, one paragraph)
+
+What Kevin saw in shot 2 (the system compass transiently visible during a turn, despite PR #132's "hide
+the compass" work) is very likely **Apple's own documented default**, not a regression: `MKCompassButton`
+defaults to `visibilityPriority = .adaptive`, which is explicitly designed to stay hidden while the map
+sits at its resting heading and fade in only while the map is actively rotating away from north, then
+fade back out once it settles — the compass is *most* useful exactly during a turn, and Apple's adaptive
+behavior surfaces it only then. If PR #132's fix set `mapView.showsCompass = false` globally, the system
+should never add a compass at all, including mid-rotation, and this would be a real regression worth
+filing. But if the fix instead hid a custom-positioned compass view while leaving MapKit's own default
+`.adaptive` system compass button untouched, the rotation-triggered appearance is MapKit doing exactly
+what `.adaptive` is documented to do, independent of app code. **Recommendation:** verify which of the
+two PR #132 actually did; if WePark's intent is "never show a compass, full stop" (reasonable here, since
+the drive chevron already communicates heading and a second indicator popping in mid-turn is redundant,
+unpredictable chrome exactly when "minimal chrome while driving" matters most), the correct fix is
+`compassButton.visibilityPriority = .hidden` (hard-hidden) rather than relying on `showsCompass`/`.adaptive`
+defaults, which are built to do precisely what was observed.
+
+---
+
+**Summary of this addendum for the orchestrator:** (1) "?" map-key button moves permanently into the
+top-right `recenterButtonStack` as its last circle, flag-on only, byte-identical flag-off; (2) the Report
+pill moves permanently into a new top row of `GoalSelectorView`, paired on one line with the existing
+full-palette toggle, so both ride the dock's own VStack height instead of a hand-maintained clearance
+constant — this also answers "what happens in full-palette mode" for free (the row just sits closer to
+the bottom once the tile row hides); (3) in escalated Cruise, the existing `ParkUntilPill` slot (position
+unchanged, already collision-proven against Report/Park-Here above and the bottom card below) gets a
+named-goal content upgrade — icon + short name + "Good through <day>"/time clause — only when the active
+filter came from a goal tap, falling back to today's generic pill otherwise, same ✕-clears-instantly
+semantics; (4) the rotating-compass sighting is flagged as likely correct `.adaptive` MapKit behavior,
+not a PR #132 regression, with a one-line fix (`visibilityPriority = .hidden`) if WePark wants it
+suppressed unconditionally.
+
+File: `/root/repos/parkmap/docs/design/goal-first-ambient-design.md`
