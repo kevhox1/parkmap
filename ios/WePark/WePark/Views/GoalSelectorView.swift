@@ -41,7 +41,35 @@
 //  SEPARATE, pre-existing floating layer in `ContentView` — the persistent Report pill / "?"
 //  map-key button (`communityMapChromeOverlay`) — using a fixed clearance sized for the FT-20
 //  browse sheet's peek detent, which never accounted for THIS dock's height and drew on top
-//  of its tile row. See `communityMapChromeBottomPadding` in `ContentView.swift` for that fix.
+//  of its tile row.
+//
+//  Addendum 2 (2026-10-21 smoke revisions, A2.1 item 2): PR #134's fix above (a hand-maintained
+//  clearance constant in `ContentView.swift`) is superseded here. The Report pill now lives
+//  INSIDE this view's own `VStack`, sharing its top row with the full-palette toggle — a true
+//  sibling the `VStack` lays out top-to-bottom same as every other row, so it rides the dock's
+//  real rendered height for free (Dynamic Type growth, the empty-map guard banner appearing,
+//  the tile row hiding in full-palette mode all just push/pull this row the normal SwiftUI
+//  way — no clearance constant to go stale). `ContentView` still owns the Report pill's
+//  button (`reportPillButton` — unchanged component, same action/styling/accessibility) and
+//  hands it to this view via the generic `reportPill` trailing-closure parameter below, same
+//  "caller owns the gate/state, this view is pure presentation" convention this file's header
+//  already commits to — `GoalSelectorView` never needs to know what Report actually DOES.
+//
+//  Addendum 2 (A2.2): also adds `GoalParkUntilPill` — a parallel, NEW view (not a change to
+//  the existing `ParkUntilPill` in `Views/ParkUntilSheet.swift`) that renders the icon +
+//  short-name + "Good through <day>"/time clause content the addendum specs for the
+//  escalated-Cruise pill slot, when the active filter came from a goal tap. Pure presentation,
+//  same as everything else in this file — it takes the already-resolved `icon`/`shortName`/
+//  `trailingClause` strings as plain input; `ContentView.goalPillContent(for:target:now:)` is
+//  the one place that actually touches `ParkingGoals.relativeDayLabel`/`ParkUntilSheet
+//  .formatTime` to produce them, keeping those engine/formatter touches in `ContentView.swift`
+//  (which already owns the parallel per-segment case, `goalGoodThroughLabel`) rather than in
+//  this file. Built as a separate view here, rather than adding a parameter to `ParkUntilPill`
+//  itself (the addendum's own literal suggestion), specifically so this change stays inside
+//  this stream's file allowlist (`ContentView.swift`/`GoalSelectorView.swift`/tests) without
+//  touching `ParkUntilSheet.swift` — flagged explicitly in this PR's description, not a silent
+//  substitution. `ContentView`'s call site picks between this view and the untouched
+//  `ParkUntilPill` based on whether the active filter came from a goal (§ "activeGoal" below).
 //
 
 import SwiftUI
@@ -63,7 +91,7 @@ enum EmptyMapGuardKind: Equatable {
 
 // MARK: - GoalSelectorView
 
-struct GoalSelectorView: View {
+struct GoalSelectorView<ReportPill: View>: View {
 
     /// The currently active goal (always has a value — "no goal" isn't a state this dock
     /// represents; `fullPaletteMode` is the orthogonal "goal-first vs. full-palette" switch).
@@ -92,12 +120,39 @@ struct GoalSelectorView: View {
     /// never escalates on its own; picking a goal never does either (AC-30, §0.8.7).
     let onStartDriving: () -> Void
 
+    /// Addendum 2 (A2.1 item 2): the persistent Report pill button — `ContentView`'s OWN
+    /// `reportPillButton`, unchanged component, handed down as a trailing `@ViewBuilder`
+    /// closure rather than rebuilt here, so this file never needs to know what tapping
+    /// Report actually does (same "caller owns the gate/state" convention every other
+    /// closure on this view already follows). Evaluated once, in `init`, matching the
+    /// standard SwiftUI "generic container + @ViewBuilder content" idiom.
+    let reportPill: ReportPill
+
+    init(
+        selectedGoal: ParkingGoal,
+        fullPaletteMode: Bool,
+        emptyMapGuardKind: EmptyMapGuardKind?,
+        onSelectGoal: @escaping (ParkingGoal) -> Void,
+        onToggleFullPalette: @escaping () -> Void,
+        onStartDriving: @escaping () -> Void,
+        @ViewBuilder reportPill: () -> ReportPill
+    ) {
+        self.selectedGoal = selectedGoal
+        self.fullPaletteMode = fullPaletteMode
+        self.emptyMapGuardKind = emptyMapGuardKind
+        self.onSelectGoal = onSelectGoal
+        self.onToggleFullPalette = onToggleFullPalette
+        self.onStartDriving = onStartDriving
+        self.reportPill = reportPill()
+    }
+
     var body: some View {
-        // Design doc §2.1: bottom-anchored VStack, top-to-bottom code order = closest-to-
-        // thumb LAST. fullPaletteToggleRow is quietest/farthest from thumb; goalTileRow is
-        // the centerpiece, closest to thumb.
+        // Design doc §2.1 (amended by Addendum 2 A2.1 item 2): bottom-anchored VStack,
+        // top-to-bottom code order = closest-to-thumb LAST. `topRow` (Report + full-palette
+        // toggle, sharing one line) is quietest/farthest from thumb; goalTileRow is the
+        // centerpiece, closest to thumb.
         VStack(spacing: 10) {
-            fullPaletteToggleRow
+            topRow
             if let kind = emptyMapGuardKind {
                 EmptyMapGuardBanner(kind: kind)
             }
@@ -110,26 +165,39 @@ struct GoalSelectorView: View {
         .padding(.bottom, 8)
     }
 
-    // MARK: - Full-palette toggle row (§2.4)
+    // MARK: - Top row: Report pill + full-palette toggle (Addendum 2, A2.1 item 2)
 
-    private var fullPaletteToggleRow: some View {
+    /// Report pill leading, full-palette toggle trailing, sharing one line — both controls
+    /// keep their existing sizes untouched (Report: `.frame(minHeight: 48)`, carried in via
+    /// `reportPillButton` itself; toggle: `.frame(minHeight: 44)`, unchanged below) — only
+    /// their CONTAINER changed, per the addendum's own framing.
+    private var topRow: some View {
         HStack {
+            reportPill
             Spacer()
-            Button(action: onToggleFullPalette) {
-                HStack(spacing: 6) {
-                    Image(systemName: "paintpalette.fill")
-                        .font(.caption)
-                    Text(fullPaletteMode ? "Back to goal picker" : "Show all parking rules")
-                        .font(.footnote.weight(.medium))
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 6)
-                .frame(minHeight: 44)
-                .background(.regularMaterial, in: Capsule())
-            }
-            .buttonStyle(.plain)
-            .accessibilityLabel(fullPaletteMode ? "Back to goal picker" : "Show all parking rules")
+            fullPaletteToggleButton
         }
+    }
+
+    /// Full-palette toggle (§2.4) — the button content itself, unchanged from the pre-Addendum-2
+    /// `fullPaletteToggleRow`. Its own `HStack { Spacer(); Button }` wrapper is gone (that
+    /// `Spacer()` was for right-aligning a LONE row; `topRow` above now supplies the shared-line
+    /// layout instead), but the button's own look/size/accessibility label are byte-identical.
+    private var fullPaletteToggleButton: some View {
+        Button(action: onToggleFullPalette) {
+            HStack(spacing: 6) {
+                Image(systemName: "paintpalette.fill")
+                    .font(.caption)
+                Text(fullPaletteMode ? "Back to goal picker" : "Show all parking rules")
+                    .font(.footnote.weight(.medium))
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 44)
+            .background(.regularMaterial, in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(fullPaletteMode ? "Back to goal picker" : "Show all parking rules")
     }
 
     // MARK: - "Start Driving" row (§2.3)
@@ -249,6 +317,75 @@ private struct GoalTile: View {
     }
 }
 
+// MARK: - GoalParkUntilPill (Addendum 2, A2.2)
+
+/// Escalated-Cruise's named-goal content upgrade for the `ParkUntilPill` slot
+/// (`ContentView.bottomSafeAreaContent`'s row 3) — rendered INSTEAD of the generic
+/// `ParkUntilPill` only when the active filter came from a goal tap (`ContentView`'s
+/// `activeGoal` derivation, non-nil exactly when `AppConstants.driveModeDefaultEnabled &&
+/// !fullPaletteMode`). Same slot, same size class, same material/background, same ✕-clears
+/// semantics as `ParkUntilPill` — content upgrade ONLY, per the addendum.
+///
+/// Pure presentation, same discipline as the rest of this file: `icon`/`shortName`/
+/// `trailingClause` arrive ALREADY RESOLVED (`ContentView.goalPillContent(for:target:now:)`,
+/// which is the one place in this stream that touches `ParkingGoals`/`ParkUntilSheet` — this
+/// view never does). A parallel view rather than a new parameter on `ParkUntilPill` itself
+/// (the addendum's own literal suggestion) — see this file's header for why: it keeps this
+/// change inside this stream's file allowlist without touching `Views/ParkUntilSheet.swift`.
+struct GoalParkUntilPill: View {
+    /// SF Symbol name identifying the active goal (`moon.stars.fill` / `hourglass` /
+    /// `parkingsign.circle.fill`).
+    let icon: String
+
+    /// The goal's short display name ("Overnight" / "A Few Hours" / "Park & Forget").
+    let shortName: String
+
+    /// The resolved trailing clause — "Good through <day>" for Overnight/Park & Forget, or
+    /// "until <time>" for A Few Hours (`ContentView.goalPillContent`'s own doc comment has
+    /// the full per-goal breakdown).
+    let trailingClause: String
+
+    let onClear: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Icon + text grouped into ONE VoiceOver element with the addendum's own richer
+            // sentence (so a VoiceOver user gets "this is a goal, not a raw time" context) —
+            // kept SEPARATE from the Clear button below, which keeps its own distinct,
+            // unchanged accessibility label/action. Grouping the whole pill (icon + text +
+            // Clear) into one combined element would make the Clear button unreachable as
+            // its own focusable VoiceOver stop — "same ✕-clear semantics" means the button
+            // stays exactly as discoverable as it is on today's `ParkUntilPill`.
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .foregroundStyle(.primary)
+                Text("\(shortName) · \(trailingClause)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(
+                "\(shortName) goal active, \(trailingClause.lowercased()). " +
+                "Clears the filter and shows all parking rules."
+            )
+            Spacer()
+            Button {
+                onClear()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+                    .font(.system(size: 18))
+            }
+            .accessibilityLabel("Clear Park Until filter")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(.regularMaterial, in: Capsule())
+        .padding(.horizontal, 16)
+        .padding(.bottom, 8)
+    }
+}
+
 // MARK: - EmptyMapGuardBanner
 
 /// The empty-map-guard inline banner (§0.8.10, design doc §3.2). Both states share identical
@@ -303,7 +440,24 @@ private struct EmptyMapGuardBanner: View {
                 onSelectGoal: { _ in },
                 onToggleFullPalette: {},
                 onStartDriving: {}
-            )
+            ) {
+                Label("Report", systemImage: "flag.fill")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+                    .frame(minHeight: 48)
+                    .background(.regularMaterial, in: Capsule())
+                    .foregroundStyle(Color.orange)
+            }
         }
     }
+}
+
+#Preview("GoalParkUntilPill") {
+    GoalParkUntilPill(
+        icon: "moon.stars.fill",
+        shortName: "Overnight",
+        trailingClause: "Good through tomorrow",
+        onClear: {}
+    )
 }
