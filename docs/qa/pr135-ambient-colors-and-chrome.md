@@ -82,3 +82,81 @@ None found.
 - Part B's "give it a permanent home instead of a clearance constant" approach is the right structural fix for the bug class PR #134 only patched — Report pill and "?" now genuinely can't desync from the dock's height again, confirmed by reading how `topRow` sits inside the same `VStack` SwiftUI already lays out top-to-bottom.
 - Part C's formatter reuse is clean — `goalPillContent` calls the real `ParkingGoals.relativeDayLabel`/`ParkUntilSheet.formatTime` rather than reinventing date math, and the "never render 'Good through Today'" defensive floor is consistent with the existing per-segment formatter's own guard.
 - Deviations from the dispatch (separate `GoalParkUntilPill` view instead of a `ParkUntilPill` parameter; zero-new-state `activeGoalForParkUntilPill`) are disclosed explicitly in the PR body rather than silently substituted — exactly the behavior this repo's process expects from a builder agent.
+
+---
+
+# Pass 2 addendum — 2026-10-21
+
+**Reviewed:** branch `fix/ambient-colors-and-chrome` at `61ed8e11` (diff from Pass 1's `874b814e`, builder fix commit `61ed8e11`).
+**Verdict:** ✅ MERGE — both Pass 1 🟡s are correctly resolved and verified by trace + new tests. No new defects introduced. The only remaining gate is the mandatory Mac build + live-UI smoke (unchanged process requirement from Pass 1, not a new code concern) — once that passes, this is ready.
+
+## Diff-scope check
+
+`git diff 874b814e..61ed8e11 --stat`: exactly 2 files (`ContentView.swift`, `AmbientColorsAndChromeFixTests.swift`), 255 insertions / 17 deletions. Confirmed nothing else drifted — no changes to `Constants.swift`, `GoalSelectorView.swift`, or `DM2AmbientDockLayoutTests.swift`. Scope matches exactly what the commit message claims: the two 🟡 fixes, their tests, and the `activeGoalForParkUntilPill` doc-comment update. No `Calendar.current` introduced.
+
+## 🟡 #1 (Drive Mode per-tick rebuild cost) — re-verified, resolved correctly
+
+New `ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive:) -> Bool { !driveModeActive }` gates only the one line added in Pass 1 (`rebuildOverlays(at: lastEvaluatedAt)` inside `handleRegionChanged`). Traced every other `rebuildOverlays` trigger to confirm none of them were touched by this gate:
+
+- `handleSegmentsChanged()` (`.onChange(of: tileLoader.segments.count)`) — completely untouched, unconditional, fires regardless of `driveModeActive`. This is Drive Mode's real pre-existing repaint mechanism as new tiles stream in while driving — confirmed still live.
+- `handleTimerTick()` (60s timer) — untouched, unconditional. Still the self-correcting backstop in every state.
+- `handleSelectionChanged()` — untouched, unconditional.
+- `tileLoader.loadTiles(forRegion:)` inside `handleRegionChanged` — untouched, still called every region change regardless of the new gate (only the `rebuildOverlays` call is conditional, not `loadTiles`).
+
+So the gate removes exactly the one thing it claims to remove (the new per-tick path from Drive Mode's own `setDriveCamera` → `regionDidChangeAnimated` loop) and nothing else. Confirmed the browse-mode staleness fix (the actual bug Part A fix 3 targets) stays fully intact in both flag states, since `shouldRebuildOverlaysOnRegionChange` reads only `driveModeActive`, never the flag — browse mode (where `driveModeActive` is always `false`) gets the unconditional repaint in every case, flag on or off, exactly as before this fix.
+
+**One edge case I traced that's worth naming explicitly (not a new regression, a disclosed trade-off):** a user who manually pinches zoom during Drive Mode's `followPaused` state (FT-17 — panning/pinching pauses the custom follow camera but does not exit Drive Mode, so `driveModeActive` stays `true`) now gets the *same* gated-off behavior as the per-tick camera path, since the gate can't distinguish "genuine user pinch while driving" from "automatic per-tick follow camera" — both just read `driveModeActive == true`. If that pinch happens to zoom out past the hide threshold and back to an already-fully-loaded area (no net `segments.count` change), the overlay would stay stale until the 60s timer self-corrects it — i.e., Drive Mode's pinch-while-paused interaction reverts to exactly the *pre-Part-A-fix-3* staleness window, not a new one. Since the fix's own stated intent is "restores Drive Mode's prior repaint economics exactly," this is consistent with that intent, not an oversight — flagging only so it's on record, not as a blocker.
+
+Tests (`testDriveModeActive_doesNotRebuild`, `testDriveModeInactive_rebuilds`) correctly pin the binary gate behavior; both pass by inspection (trivial pure-boolean function, no edge cases to miss).
+
+## 🟡 #2 (misleading toast) — re-verified, resolved correctly; one adversarial case talked through
+
+New `ContentView.parkUntilConfirmToastMessage(activeGoal:pickedTargetDate:resolvedTarget:now:)`:
+```swift
+guard let activeGoal else {
+    return "Showing blocks free until \(ParkUntilSheet.formatTime(pickedTargetDate))"
+}
+let content = goalPillContent(for: activeGoal, target: resolvedTarget, now: now)
+return "Showing \(content.shortName) blocks — \(content.trailingClause)"
+```
+
+**Byte-identical legacy string, verified char-for-char:** the pre-fix line was `ToastService.shared.show(message: "Showing blocks free until \(timeStr)")` where `timeStr = ParkUntilSheet.formatTime(targetDate)`, and the call site passes `pickedTargetDate: targetDate`. `"Showing blocks free until \(ParkUntilSheet.formatTime(pickedTargetDate))"` reduces to the identical literal — same leading text, same spacing, same trailing interpolation — for every call where `activeGoal == nil`. Confirmed identical by direct string comparison, not just "looks the same."
+
+**The adversarial question — does the goal-branch copy make sense when the user picks a custom time while a goal is active? Is it honest?** Traced the call-site ordering: `rebuildOverlays(at: .nowET)` runs as its own synchronous statement *before* `resolvedTarget: parkUntilTarget ?? targetDate` is evaluated, so by the time the toast is built, `parkUntilTarget` already reflects whatever the DM-2 recompute block (unconditional whenever `driveModeDefaultEnabled && !fullPaletteMode`) just silently overwrote it to — i.e., `resolvedTarget` is genuinely "what's now live," not a stale read. So: **yes, the toast is now honest** — it describes the state that's actually showing on the map/pill, which is exactly what QA Pass 1's finding asked for (the bug was that the old toast described the user's *input*, which never took effect). This is a correct and sufficient fix for the finding as filed.
+
+What it does *not* do — and I want to be precise that this is a UX-quality observation, not a reopened correctness bug — is explain to the user *why* their custom pick was overridden. A user who explicitly opens `ParkUntilSheet` (via the pre-existing `ArrivalPromptSheet.onParkHere` auto-fire, the one reachable path in this state), picks e.g. 3:00 PM, taps Confirm, and sees "Showing Overnight blocks — Good through tomorrow" will reasonably wonder why their 3:00 PM pick is nowhere in the toast. That confusion is real, but it is a *different* problem than the one Pass 1 filed (dishonesty) — the builder's own commit message is explicit that gating `onParkHere`'s reachability was the alternative, larger-diff fix they chose not to take, and that choice is disclosed, not silent. I'm logging the residual "confusing but true" gap as 🟢 below rather than reopening 🟡 #2, since the specific defect I filed (the toast asserting something false) is fully closed.
+
+Tests (`testNoActiveGoal_rendersLegacyToastText_byteIdentical`, `testNoActiveGoal_ignoresResolvedTarget`, `testActiveGoal_ignoresPickedTargetDate_usesResolvedTargetViaGoalPillContent`, `testActiveGoal_allThreeGoals_composeCorrectly`) correctly cover the byte-identical legacy path, the "never reads `resolvedTarget` when no goal" guard, the core "describes what's live, not what was picked" fix, and all three goals' icon/short-name composition. `testActiveGoal_ignoresPickedTargetDate_usesResolvedTargetViaGoalPillContent`'s explicit `XCTAssertFalse(message.contains(...))` assertion that the picked time string never appears in the goal-branch toast is a good regression guard for exactly the bug that was filed.
+
+## Doc comment completion
+
+`activeGoalForParkUntilPill`'s doc comment now names `ArrivalPromptSheet.onParkHere` explicitly as the known third entry point and correctly distinguishes "the function's state-correctness claim still holds" (true — `parkUntilTarget`'s *value* can never diverge from the goal's by the time anything reads it) from "there is no other code path" (which Pass 1 showed was false, and this revision no longer claims). Accurate, not overclaiming.
+
+## Compile-failure-class scan (fix diff only)
+
+1. Contextual-type-on-literal-receiver — none introduced.
+2. Labeled-argument order — `parkUntilConfirmToastMessage(activeGoal:pickedTargetDate:resolvedTarget:now:)`'s declaration order matches its one call site (`onConfirm`) and all 4 new test call sites exactly, argument-by-argument. `shouldRebuildOverlaysOnRegionChange(driveModeActive:)` is single-argument, no ordering risk.
+3. Memberwise-init argument order — no new structs in this diff, N/A.
+4. XCTestCase-extension name shadowing — `ParkUntilConfirmToastMessageTests` defines its own `private func et(...)`, duplicating the name already used privately inside `GoalParkUntilPillContentTests` earlier in the same file. Both are `private` to their own class (not `XCTestCase` extensions), so this is not the failure class in question — no collision, confirmed by Swift's type-scoped (not file-scoped) `private` semantics.
+5. MainActor default isolation — both new functions are `nonisolated static func`; `parkUntilConfirmToastMessage` calls the also-`nonisolated static` `goalPillContent` internally (bare name, same type — resolves fine without a `Self.`/`ContentView.` prefix). No isolation mismatch for the sync-XCTest call sites.
+6. ObjC-runtime name collision — no `Category`/`Protocol`/`Method`/`Ivar` touched.
+
+Clean.
+
+## 🟢 Minor (new, Pass 2)
+
+- **Residual UX gap, not a defect:** per the adversarial toast trace above, a user who reaches `ParkUntilSheet` via the `onParkHere` auto-fire while a goal is active and picks a custom time gets an honest-but-unexplained toast (names the active goal, not their pick, with no stated reason). Worth a follow-up design decision (either suppress/relabel the sheet's own Confirm button in that state, or add a one-line "a goal is already active" sub-text to the sheet itself) — not blocking this PR, since the filed defect (false toast) is fixed, and the builder's own commit message already discloses this as the explicit trade-off of choosing the smaller fix.
+
+## Smoke tests run (Pass 2)
+
+- Full diff read of `874b814e..61ed8e11` (both files, every hunk).
+- Traced all 4 `rebuildOverlays` trigger sites (`handleRegionChanged`, `handleSegmentsChanged`, `handleTimerTick`, `handleSelectionChanged`) to confirm the new gate touches exactly one of them.
+- Traced the `onConfirm` closure's statement-by-statement execution order to confirm `resolvedTarget` reads `parkUntilTarget` *after* `rebuildOverlays` has synchronously completed, not before.
+- Direct string comparison of the legacy toast branch against the pre-fix literal (not just "looks similar" — confirmed identical interpolation and surrounding text).
+- Re-ran the compile-failure-class scan against the fix diff specifically.
+- **Still not run — no Xcode/simulator in this sandbox:** the PR's `xcodebuild ... build test` command and the (now 11-step, Pass 1 added 3) live-UI smoke script. This remains the only open gate; it was never a code-correctness question, and both 🟡s from Pass 1 are now closed on the merits.
+
+## What's working (Pass 2)
+
+- The builder correctly chose the smaller, safer fix for #2 (toast copy, not reachability gating) and was explicit in the commit message and the updated doc comment about what trade-off that represents — exactly the kind of disclosed deviation this repo's process expects, not a silent judgment call.
+- Both new pure functions are directly unit-tested without needing a live `ContentView`, consistent with this file's established "extract the decision" convention, and the tests target the actual regression surface (byte-identical legacy path, binary gate correctness) rather than restating the implementation.
