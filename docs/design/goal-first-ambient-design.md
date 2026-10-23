@@ -341,6 +341,12 @@ palette untouched, no new confirm steps, flag-off byte-identical).
 
 ### A2.1 — Ambient chrome placement: Report pill + "?" button get permanent homes, not a new clearance constant
 
+> **SUPERSEDED IN PART by Addendum 3 (below), 2026-10-23.** Kevin's smoke verdict on the result of this
+> section: "too many buttons and icons. It's so messy." Moving Report and "?" into permanent homes was
+> structurally right (no more clearance constant) but the homes themselves added to the control count.
+> Addendum 3 moves both into a single "More" sheet. The *structural* lesson here (no hand-maintained
+> offsets; sit inside a container that tracks its own height) still stands and is reused.
+
 **Root cause, stated plainly so the fix is structural, not another patch:** `communityMapChromeOverlay`
 (`ContentView.swift`, the `reportPillButton` + `mapKeyButton` row) is a floating overlay with its own
 independently-computed bottom clearance (`communityMapChromeBottomPaddingValue`), living in a different
@@ -517,5 +523,349 @@ filter came from a goal tap, falling back to today's generic pill otherwise, sam
 semantics; (4) the rotating-compass sighting is flagged as likely correct `.adaptive` MapKit behavior,
 not a PR #132 regression, with a one-line fix (`visibilityPriority = .hidden`) if WePark wants it
 suppressed unconditionally.
+
+File: `/root/repos/parkmap/docs/design/goal-first-ambient-design.md`
+
+---
+
+## Addendum 3 — minimal ambient screen
+
+**Date:** 2026-10-23. **Scope:** flag-on only (`AppConstants.driveModeDefaultEnabled == true`). Flag-off
+is byte-identical: nothing below mounts, and `communityMapChromeOverlay`, `recenterButtonStack`, and the
+Browse sheet render exactly as they do today.
+
+**Locked input (Kevin, 2026-10-23): Option A.** The app opens with the *driving look* (tilted, zoomed in,
+muted map style) on the cheap location posture (coarse GPS, no wake lock). Full drive engages on sustained
+motion or one tap. Options B and C are one-line notes in A3.6 only.
+
+**Trigger:** Kevin, after seeing the Addendum 2 screen in the simulator: *"too many buttons and icons.
+It's so messy."* His standing bar: *"buttons need to be huge and obvious... anyone who boots it up should
+get it."* Both are right, and this is on me: Addendum 2 fixed where each control sat but never asked
+whether each control needed to sit on the main surface at all. Count at the Addendum 2 screen: recenter,
+search, find-my-car, "?", Report, "Show all parking rules", Start Driving, three goal tiles = **10
+controls**, plus the ASP banner. A first-time user cannot rank ten things in five seconds.
+
+**Thesis (one sentence):** the main surface answers one question, "what do you want from parking?", so
+only the answer buttons, one way to go somewhere, one door to everything else, and one "go" button may
+live there. Everything else is at most two taps away and nothing is lost.
+
+**What this supersedes:** A2.1 in full (the Report pill's dock row and the "?" rail circle; the
+`communityMapChromeOverlay` suppression stays, now because both live in More). A2.2 (named-goal pill in
+Cruise) and A2.3 (compass) stand unchanged. §0–§6 stand except where this addendum names a change (§2.1
+dock structure, §2.2 sizes, §2.3 Start Driving size, §2.4 toggle location, §2.6 rail contents).
+
+### A3.1 — The minimum always-visible set
+
+**Six controls, down from ten:**
+
+| # | Control | Where | Why it earns a place on the main surface |
+|---|---|---|---|
+| 1-3 | Three goal tiles (Overnight / A Few Hours / Park & Forget) | Bottom dock | They ARE the product's first question. Non-negotiable per Kevin's rulings. |
+| 4 | Start Driving | Bottom dock, above tiles | Under Option A it is the one obvious "go live" tap. See A3.6. |
+| 5 | Search | Top-right rail | Job B (go somewhere, then park) needs a one-tap door. Burying it in More makes Job B two taps (§0.4a). |
+| 6 | More | Top-right rail | The single door to everything else. |
+| (+) | Recenter | Top-right rail, **only after the user pans away** | Appears when needed, not before. Not counted at launch. |
+| (status) | ASP banner | Top, only on suspension days | Information, not a control. Unchanged. |
+
+**Removed from the main surface (all still reachable, see A3.5):** the Report pill, the "?" key button,
+"Show all parking rules", and the Find-my-car circle. The resting launch screen shows **6 tappable
+things**.
+
+### A3.2 — The rail: two circles, optional third
+
+Top-right, trailing margin 16pt, below the ASP banner (or top safe area + 8pt when no banner). Vertical
+`VStack(spacing: 12)`. Each button is a **56 x 56pt** circle (up from 44pt; Kevin's bigger-targets
+preference, comfortably above HIG's 44pt floor), `.regularMaterial` fill, `.foregroundStyle(.primary)`,
+icon `.font(.title3.weight(.semibold))` (scales with Dynamic Type; circle stays 56pt; cap the icon with
+`.dynamicTypeSize(...DynamicTypeSize.xxxLarge)` on the rail only).
+
+Order, top to bottom, fixed so nothing shifts when another appears:
+
+1. **Search** — `magnifyingglass`. `accessibilityLabel("Search")`, hint "Find a street or place". Presents
+   `.browseNav` at `.medium` (unchanged from §2.6).
+2. **More** — `ellipsis`. `accessibilityLabel("More")`. Presents the More sheet (A3.4).
+3. **Recenter** — `location` (`location.fill` while the map is following the user). `accessibilityLabel(
+   "Show my location")`. **Conditional:** render only when (a) location is authorized and the user's dot is
+   outside the central 50% of the visible map, or (b) authorization is `.notDetermined` (it is the route to
+   the permission prompt). Last in the stack so its appearance never moves Search or More; `.transition(
+   .opacity)`; no haptic.
+   - **Engineer fallback, if the off-center test is judged too heavy for this PR:** always render it as the
+     third circle. Acceptable, less minimal; the conditional version is the target.
+
+Not on the rail anymore: the old clock icon (moves to More, full-palette only), "?" (More), Find my car
+(More, plus the car marker). The rail never exceeds three circles in any mode.
+
+### A3.3 — The bottom dock
+
+The dock keeps §2.1's structure with two rows deleted and sizes raised. Top to bottom:
+
+```
+VStack(spacing: 10) {
+    if showsEmptyMapGuard { emptyMapGuardBanner }  // unchanged, contextual
+    startDrivingRow       // see A3.6
+    goalTileRow           // goal-first mode
+    // full-palette mode adds backToGoalsRow below startDrivingRow and hides goalTileRow
+}
+.padding(.horizontal, 16)
+.padding(.bottom, 8)
+```
+
+- **Deleted from the dock:** the Addendum 2 Report + full-palette toggle row.
+- **Goal tiles, size bump (supersedes §2.2 sizes only; colors, selection idiom, copy, a11y unchanged):**
+  `minHeight: 128` (was 112). Icon `.font(.title)` (was `.title2`). Primary `.headline` bold, up to 2 lines.
+  **Sub-label `.footnote`, up to 3 lines (was `.caption`, 12pt, too small for a glance at a stoplight).**
+  At accessibility Dynamic Type sizes (`dynamicTypeSize.isAccessibilitySize`) the row switches from `HStack`
+  to a vertical `VStack` of three full-width tiles (icon leading, text trailing) so labels never truncate.
+- **Selection haptic (the one haptic on this screen):** `.sensoryFeedback(.selection, trigger:
+  selectedGoal)`. Picking a goal is a mode change a driver may make without looking; a light tick confirms
+  it. No haptic on Start Driving, Search, or More.
+- **Full-palette mode (reached from More, A3.4).** Tiles hide. So the user is never stranded, the dock adds
+  a second full-width row **under** Start Driving: `Label("Pick a parking goal", systemImage:
+  "rectangle.split.3x1.fill")`, `.buttonStyle(.borderedProminent)`, `.tint(.blue)`, `minHeight: 56`,
+  `.font(.headline)`. Tap re-applies the last-selected goal and brings the tiles back. Accessibility label
+  "Pick a parking goal", hint "Go back to the three parking goals". This replaces the old reverse-direction
+  toggle label (§2.4). The clock power-user path lives in More (A3.4 row 5).
+- `ParkUntilPill` suppression (§6.1) and one-dock-at-a-time (§6.4) are unchanged.
+
+### A3.4 — The More sheet
+
+Opened by the rail's `ellipsis` button. Add one `ActiveSheet` case (e.g. `.moreMenu`); selecting a row
+**swaps** `activeSheet` to the destination rather than stacking sheets.
+
+**Why a sheet and not a SwiftUI `Menu`:** system `Menu` rows are about 44pt with no room for a one-line
+explanation. Kevin wants roomy targets, and Report needs a sentence of context to be discoverable. A
+medium-detent sheet gives 64pt rows with subtitles and is still a plain system `List` (native feel, Dark
+Mode and Dynamic Type for free).
+
+Structure: `NavigationStack { List { ... } .listStyle(.insetGrouped) }`, inline title **"More"**, trailing
+toolbar **Done**. `.presentationDetents([.medium])`, `.presentationDragIndicator(.visible)`. Each row:
+`minHeight: 64`, leading icon in a 44pt rounded square (`.blue.opacity(0.15)` fill, `.blue` symbol,
+`.title3`), title `.headline`, subtitle `.subheadline` `.secondary`, whole row tappable. **All icons blue**;
+no green, orange, or red here (those colors belong to curb meaning only).
+
+Rows, in priority order:
+
+| # | Title | Subtitle | SF Symbol | Action | Shown when |
+|---|---|---|---|---|---|
+| 1 | **Report** | Tell neighbors what you see | `flag.fill` | `activeSheet = .report` (same destination the old pill used) | `AppConstants.communityEnabled` |
+| 2 | **What the colors mean** | Green, red, and the rest | `questionmark.circle.fill` | Opens the existing map-key sheet (the old "?" destination) | always |
+| 3 | **Show all parking rules** | See every kind of rule, not just one goal | `paintpalette.fill` | A `Toggle` row bound to `fullPaletteMode` | always |
+| 4 | **Find my car** | Show where you parked | `car.fill` | The old Find-my-car action | only when a car is parked |
+| 5 | **Park until a set time** | Pick your own time | `clock.fill` | Opens existing `ParkUntilSheet` | only when `fullPaletteMode` |
+
+The toggle row dismisses the sheet after flipping so the user sees the result at once. Accessibility: each
+row is one element, label "<Title>, <subtitle>"; the toggle uses system `Toggle` semantics.
+
+**Report discoverability, answered directly.** Report is row 1 and has the only verb-plus-reason subtitle;
+More is a universally understood door. Two backstops so it is not a hidden feature: (1) the car marker and
+block-detail sheet stay the contextual paths. **@ios-engineer to confirm the block-detail sheet already
+offers a Report action for the tapped block, and if not, add it; "report this block" is the most natural
+moment for the action** (verify-item, not assumed). (2) No coach mark or nag (§0.1 "Must NOT"). **Escape
+hatch if Kevin wants Report visible without opening anything:** put it on the rail in place of Search and
+move Search to the first row of More. That costs Job B one tap, which is why it is not the default.
+
+### A3.5 — Where every displaced control went
+
+| Old control (Addendum 2) | New home | Taps from launch |
+|---|---|---|
+| Report pill | More, row 1 (plus block-detail sheet, verify per A3.4) | 2 |
+| "?" key | More, row 2 | 2 |
+| Show all parking rules | More, row 3 (toggle); way back is the dock's "Pick a parking goal" | 2 (1 to return) |
+| Find my car circle | More, row 4 (only when parked); the car marker on the map is also tappable | 2 (or 1 via marker) |
+| Clock / Park Until | More, row 5 (full-palette only) | 3 |
+| Recenter | Rail, appears only after panning away | 0 (or 1) |
+| Search | Rail, always | 1 |
+| Start Driving | Dock, always (A3.6) | 1 |
+
+Palette check: no green, orange, or red in any new chrome. Selected tile stays blue; More icons are blue;
+"Pick a parking goal" is blue.
+
+### A3.6 — Start Driving and the opening look under Option A (chosen)
+
+**A3.6.1 What the user sees at launch (the "driving look").**
+- **Camera:** tilted and zoomed in using the *same pitch and distance constants as the escalated Cruise
+  camera* (reuse them; do not invent new numbers), with **heading fixed at 0 (north-up)**. Heading-up
+  rotation needs a GPS course, which coarse/one-shot location does not give; rotating on a guessed heading
+  would turn the map the wrong way. North-up until motion is the honest behavior.
+- **Style:** `.mutedStandard`, the same muted style Cruise uses, which also makes the green/red goal answer
+  pop. Palette untouched.
+- **Marker:** the standard blue user dot, **not the heading chevron**. A chevron pointing the wrong way at
+  launch is worse than none. The chevron appears only when full drive engages and a real course exists.
+  Suppress the large accuracy ring in this posture (a 100m ring at zoomed-in scale swallows several blocks
+  and looks broken).
+- **Accuracy guard:** zoom to the Cruise distance only if the first fix has `horizontalAccuracy <= 65m`;
+  otherwise open one step wider (still tilted, still muted) and tighten when a better fix arrives. At
+  100m error a fully zoomed-in view would visibly put the dot on the wrong block, which for a parking app
+  is a trust problem.
+- **Gestures:** pan, pinch, and tap-a-block keep working (the couch user is still served). If the user pans
+  away, Recenter appears (A3.2).
+- **Battery invariants (restating spec §0.2, now load-bearing for A):** at launch NO continuous location
+  updates, NO `isIdleTimerDisabled`, NO voice. The look is purely camera + style; `driveModeActive` stays
+  `false`.
+
+**A3.6.2 Start Driving: decision: keep it as one obvious control in the dock; do NOT fold it into the
+rail.** Reasons: Option A's whole promise is "one tap engages full drive," so that tap must be unmissable;
+a 56pt circle with a glyph is the kind of ambiguous icon Kevin just rejected, and the rail is for
+secondary tools. It stays directly above the tiles (the extra-reach rationale in §2.1 still holds, since
+engaging has real side effects).
+- Style: full-width `.buttonStyle(.bordered)`, `.tint(.blue)`, blue label, `minHeight: 64` (up from 48),
+  `.font(.headline)`, `Label("Start Driving", systemImage: "location.north.circle.fill")`. Bordered, not
+  prominent, so it never out-shouts the filled-blue selected tile; size and position carry the emphasis.
+- **Caption (conditional, honest):** a second line inside the bar, `.footnote` `.secondary`, **"Starts on
+  its own when you move"**, shown only while `cruiseAutoEngageEnabled == true`. Before the motion service
+  ships, show no caption and use `minHeight: 56`; the copy must never promise behavior that does not exist.
+- Tap: existing `enterCruiseMode()` including the §0.2 authorization fix (route through
+  `requestAndFetchLocation()` first when `.notDetermined`).
+
+**A3.6.3 Engagement and the handoff.** On tap, or on sustained motion once `cruiseAutoEngageEnabled` is
+live (thresholds are spec §0.5's problem): the camera swings to heading-up as the first course arrives,
+the dot becomes the chevron, voice and wake lock start, and the **ambient dock is replaced** by Cruise's
+own bottom stack (one dock at a time, §6.4). The Start Driving bar therefore disappears on engage rather
+than turning into something else; "End" returns to this exact launch look. The goal filter carries over
+unchanged, and A2.2's named-goal pill is what shows it in Cruise.
+
+**A3.6.4 Phasing.** The tap path and the driving look can ship before the motion service exists (A without
+the caption). Motion auto-engage remains the separate dark flag from spec §0.5.
+
+**One-line notes on the other options (not chosen):**
+- **B (full drive at launch):** Start Driving would be deleted, but it forces the goal tiles into the drive
+  session and breaks the rest-state battery invariant (spec §0.2); not recommended.
+- **C (calm map + auto-engage):** Start Driving would be removed once `cruiseAutoEngageEnabled` is on, with
+  a manual "Start Driving" row added to More; the cleanest screen, and a one-step move later from A if
+  Kevin wants it.
+
+### A3.7 — Wireframes (393 x 852 pt iPhone, flag-on)
+
+**MAIN: Option A launch screen, Overnight selected (6 controls).** Tilted, zoomed in, muted; north-up; blue
+dot, no chevron.
+
+```
++--------------------------------------+
+| ASP banner (only on suspension days) |  status, not a control
+|                               ( Q )  |  Search     magnifyingglass   56pt
+|                               ( … )  |  More       ellipsis          56pt
+|                               ( > )  |  Recenter   only after panning away
+|        far blocks, small, muted      |
+|      =====   ====   =====   ====     |  tilted map, muted style
+|    ======   =====   ======  =====    |  green = yes, red = no
+|   =======  ======   =======  ====    |
+|  ========  =======  ========  ===    |  blocks grow toward the viewer
+|              (o)   you               |  blue dot (no ring, no chevron)
+|                                      |
+| +----------------------------------+ |
+| | > Start Driving                  | |  bordered blue, 64pt, full width
+| |   Starts on its own when you move| |  caption only if auto-engage is live
+| +----------------------------------+ |
+| +-----------+ +----------+ +--------+ |
+| | moon.stars| | hourglass| | P sign | |  icons .title
+| | OVERNIGHT | | A FEW    | | PARK & | |  headline bold
+| | (filled   | | HOURS    | | FORGET | |
+| |  blue)    | |  gray    | |  gray  | |
+| | Won't need| | No meter,| | Go days| |  footnote, up to 3 lines
+| | to move it| | no cost  | | without| |
+| |           | |          | | moving | |
+| +-----------+ +----------+ +--------+ |  128pt min height
++--------------------------------------+
+```
+
+**After Start Driving or sustained motion (existing Cruise, shown for contrast only; the ambient dock is
+gone).** Heading-up, chevron, voice; named-goal pill per A2.2.
+
+```
++--------------------------------------+
+| (End)                                |
+|        heading-up map, chevron       |
+|        [moon] Overnight · Good       |
+|        through tomorrow   (x)        |  A2.2 pill
+|        existing Cruise bottom card   |
++--------------------------------------+
+```
+
+**Full-palette mode (More, "Show all parking rules" on).** Tiles replaced by one row; map shows five
+colors; the look (tilt, muted) is unchanged.
+
+```
+|                               ( Q )  |
+|                               ( … )  |
+|        tilted map, five colors       |
+| +----------------------------------+ |
+| | > Start Driving                  | |  bordered blue
+| +----------------------------------+ |
+| +----------------------------------+ |
+| | [] Pick a parking goal           | |  filled blue, 56pt
+| +----------------------------------+ |
+```
+
+**The More sheet (medium detent).**
+
+```
++--------------------------------------+
+|              ----- (drag)            |
+|  More                          Done  |
+|  +--------------------------------+  |
+|  | [flag]  Report                 |  |  64pt rows
+|  |         Tell neighbors what    |  |
+|  |         you see                |  |
+|  | [ ? ]   What the colors mean   |  |
+|  |         Green, red, and the    |  |
+|  |         rest                   |  |
+|  | [pal]   Show all parking rules |  |
+|  |         See every kind of rule (o) |  toggle
+|  | [car]   Find my car            |  |  only when parked
+|  |         Show where you parked  |  |
+|  +--------------------------------+  |
++--------------------------------------+
+```
+
+### A3.8 — Five-second check, acceptance, and engineer flags
+
+**Re-run of the §5 walkthrough on the new screen.** 0-1s the eye lands on the three tiles (nothing else
+competes: two small circles top-right, one bordered bar). 1-2s filled blue vs gray says "one is chosen."
+2-3s "Overnight, won't need to move it" lands the value. 3-5s the other two tiles read as alternatives and
+the bar reads as "go drive." The tilted, muted map says "this is the driving screen" before any text is
+read. Zero unexplained icons, which is the failure the Addendum 2 screen had.
+
+**Acceptance checks for @qa-verifier:**
+1. Flag-on cold launch shows exactly: Search, More, Start Driving, three tiles (Recenter absent while
+   centered on the user; ASP banner only on suspension days). Count controls in the screenshot.
+2. Launch camera is tilted and zoomed, heading 0, muted style; user marker is the dot (no chevron);
+   `driveModeActive == false`, no continuous location updates, `isIdleTimerDisabled == false`.
+3. With a poor first fix (accuracy worse than 65m) the launch camera is one step wider, then tightens.
+4. Start Driving tap engages full drive; with the dark flag on, sustained motion does too; the ambient dock
+   disappears on engage and End returns to the launch look.
+5. Report, key, palette toggle, Find my car reachable from More in two taps; Report works from More with
+   the same result as the old pill.
+6. Toggling full-palette shows "Pick a parking goal" and it restores the tiles; no state lacks a way home.
+7. No tap target under 44pt; rail circles 56pt; tiles at least 128pt; Start Driving at least 56pt.
+8. Largest Dynamic Type (AX5): tiles reflow to a vertical stack, no clipped text, nothing overlaps the rail.
+9. Flag-off screenshot diff against the pre-Addendum-3 build: identical.
+10. No green, orange, or red used by any new chrome.
+
+**Flags for @ios-engineer:**
+1. `communityMapChromeOverlay`'s suppression rule from A2.1 stays (hide Report and "?" while the goal dock
+   is visible); it is now correct because both live in More.
+2. Delete (flag-on path only) the Report/toggle top row from `GoalSelectorView` and the "?" circle from
+   `recenterButtonStack`; flag-off branches stay exactly as they are.
+3. Add `.moreMenu` to `ActiveSheet`; row taps swap `activeSheet`, never stack. Dismissals must return to the
+   rest state via `driveModeDefaultRestStateSheet()` (spec §0.4 note).
+4. The driving-look camera is camera + style only; do not set `driveModeActive`. Reuse Cruise's pitch and
+   distance constants, set heading 0, and keep the #31 camera-mutation invariant called out in the PR.
+5. Recenter's off-center test belongs in a small pure function with a unit test, per this project's habit.
+6. Per the project's Swift compile-failure classes: qualify `WePark.Category` in test targets.
+
+### 💡 Out of scope (future, captured not requested)
+
+- A tiny inline green/red legend on the ambient screen would make "What the colors mean" nearly
+  unnecessary, since goal mode only ever shows two colors. Revisit after the smoke.
+- Remember the last goal across launches (already deferred, spec §0.8.8 / §6).
+
+**Summary of this addendum for the orchestrator:** Option A is the primary spec: launch looks like driving
+(tilted, zoomed, muted, north-up, blue dot instead of a guessed chevron) on coarse GPS with no wake lock,
+and Start Driving stays as one obvious 64pt bordered bar above the tiles (not folded into the rail),
+engaging full drive on tap or sustained motion, with its "Starts on its own when you move" caption only once
+auto-engage exists. Six visible controls instead of ten (Search, More, Start Driving, three huge tiles;
+Recenter only after a pan); Report, "?", the palette toggle, Find my car, and the Park Until clock all live
+in one More sheet with 64pt rows and Report first, and full-palette mode keeps a "Pick a parking goal"
+button so nobody is stranded.
 
 File: `/root/repos/parkmap/docs/design/goal-first-ambient-design.md`
