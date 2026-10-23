@@ -14,7 +14,7 @@
 //  Two-sided street used throughout: north curb "N" at y = +7.5, south curb "S" at y = -7.5
 //  (15 m apart), x in [-100, 100]. Hysteresis sims use curb "S" at y = 0 and "N" at y = 15.
 //
-//  Test inventory (35 tests, 6 classes):
+//  Test inventory (42 tests, 8 classes):
 //    CurbSnapConfigTests:
 //      1.  testConfig_defaults_matchSpec
 //      2.  testConfig_hysteresisMeters_scalesAndClamps
@@ -57,6 +57,14 @@
 //      33. testIndex_degenerateAndMalformedPolylines_neverCrash_andAreIgnored
 //      34. testIndex_zeroLengthPolyline_snapsToItsPoint
 //      35. testIndex_malformedMiddlePair_matchesCoordinatesSemantics
+//    CurbSnapCustomConfigTests (QA pass 1 fix round: non-default config, scan widening):
+//      36. testConfig_customInit_overridesEachField
+//      37. testResolve_customSmallRadii_changeAcquireAndRelease
+//      38. testHysteresis_customDeadband_movesFlipPoint
+//      39. testResolve_wideConfigRecipe_100m_findsCurbBeyondThe3x3Block
+//      40. testResolve_wideConfigRecipe_100m_boundariesAndCorners
+//      41. testResolve_scanWidening_50mRadiusUsesRingTwo
+//      42. testResolve_hugeOrNonFiniteRadius_doesNotTrap
 //
 
 import XCTest
@@ -166,7 +174,7 @@ final class CurbSnapConfigTests: XCTestCase {
         let config = CurbSnapConfig()
         XCTAssertEqual(config.acquireRadius, 24.0)
         XCTAssertEqual(config.releaseRadius, 30.0)
-        XCTAssertEqual(config.hysteresisPoints, 8.0)
+        XCTAssertEqual(config.hysteresisPoints, 14.0)
         XCTAssertEqual(config.hysteresisMinMeters, 1.5)
         XCTAssertEqual(config.hysteresisMaxMeters, 4.0)
         XCTAssertEqual(config, CurbSnapConfig.standard)
@@ -176,14 +184,14 @@ final class CurbSnapConfigTests: XCTestCase {
 
     func testConfig_hysteresisMeters_scalesAndClamps() {
         let config = CurbSnapConfig()
-        // ~entry zoom (0.28 m/pt): 8 pt = 2.24 m, inside the clamp.
-        XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 0.28), 2.24, accuracy: 1e-9)
+        // ~entry zoom (0.28 m/pt): 14 pt = 3.92 m, just inside the 4.0 ceiling.
+        XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 0.28), 3.92, accuracy: 1e-9)
         // Deep zoom-in: floor.
         XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 0.05), 1.5, accuracy: 1e-9)
         // Zoom-out: ceiling.
         XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 2.0), 4.0, accuracy: 1e-9)
         // Exactly at the boundaries.
-        XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 1.5 / 8.0), 1.5, accuracy: 1e-9)
+        XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 1.5 / 14.0), 1.5, accuracy: 1e-9)
         XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 0.5), 4.0, accuracy: 1e-9)
     }
 
@@ -422,7 +430,7 @@ final class CurbSnapRadiiTests: XCTestCase {
         let a = CurbSnapTestFixtures.eastWestCurb(id: "A", side: "S", y: 0)
         let b = CurbSnapTestFixtures.eastWestCurb(id: "B", side: "N", y: 53)
         let index = CurbSnapIndex(segments: [a, b])
-        // y=29.5 => dA=29.5 (still inside release), dB=23.5 (inside acquire), gap 6 m > H=2.24.
+        // y=29.5 => dA=29.5 (still inside release), dB=23.5 (inside acquire), gap 6 m > H=3.92.
         let outcome = index.resolve(csiPoint(0, 29.5), incumbent: csiKeyS, metersPerPoint: 0.28, config: .standard)
         XCTAssertEqual(csiSnapped(outcome)?.segment.id, "B")
     }
@@ -461,7 +469,7 @@ final class CurbSnapDedupAndTieTests: XCTestCase {
     func testResolve_incumbentDistanceIsMinAcrossBlockfaceCopies() {
         // Blockface K has a FAR copy (12 m) and a NEAR copy (2 m). Rival R is 6.5 m away.
         // If the incumbent's distance were taken from the far copy (12 m), R would beat it by
-        // more than the 2.24 m dead-band and wrongly take over.
+        // more than the 3.92 m dead-band (12 - 3.92 = 8.08 > 6.5) and wrongly take over.
         let far = CurbSnapTestFixtures.eastWestCurb(id: "KFAR", side: "N", y: 12)
         let near = CurbSnapTestFixtures.eastWestCurb(id: "KNEAR", side: "N", y: 2)
         let rival = CurbSnapTestFixtures.eastWestCurb(id: "R", street: "RIVAL ST", side: "S", y: -6.5)
@@ -510,7 +518,7 @@ final class CurbSnapHysteresisTests: XCTestCase {
 
     private let keyS = CurbSnapTestFixtures.key(side: "S")   // curb at y = 0
     private let keyN = CurbSnapTestFixtures.key(side: "N")   // curb at y = 15
-    private let mpp = 0.28                                    // H = 2.24 m
+    private let mpp = 0.28                                    // H = 14 x 0.28 = 3.92 m
 
     func testHysteresis_sweepUp_flipsExactlyOnce() {
         let index = CurbSnapIndex(segments: csiParallelCurbs())
@@ -520,8 +528,9 @@ final class CurbSnapHysteresisTests: XCTestCase {
         XCTAssertEqual(csiFlipCount(keys), 1)
         XCTAssertEqual(keys.first ?? nil, keyS)
         XCTAssertEqual(keys.last ?? nil, keyN)
-        // Flip point: dN < dS - 2.24 => y > 8.62 => first 1 m step is y = 9 (index 12).
-        XCTAssertEqual(csiFirstFlipIndex(keys), 12)
+        // Flip point: dN < dS - 3.92 => 15 - y < y - 3.92 => y > 9.46 => first 1 m step is
+        // y = 10 (index 13, since y = -3 + index).
+        XCTAssertEqual(csiFirstFlipIndex(keys), 13)
         XCTAssertFalse(keys.contains { $0 == nil }, "both curbs are within acquire radius over the whole sweep")
     }
 
@@ -532,8 +541,9 @@ final class CurbSnapHysteresisTests: XCTestCase {
         XCTAssertEqual(csiFlipCount(keys), 1)
         XCTAssertEqual(keys.first ?? nil, keyN)
         XCTAssertEqual(keys.last ?? nil, keyS)
-        // Flip point: dS < dN - 2.24 => y < 6.38 => first 1 m step down is y = 6 (index 12).
-        XCTAssertEqual(csiFirstFlipIndex(keys), 12)
+        // Flip point: dS < dN - 3.92 => y < 5.54 => first 1 m step down is y = 5
+        // (index 13, since y = 18 - index).
+        XCTAssertEqual(csiFirstFlipIndex(keys), 13)
     }
 
     func testHysteresis_noIncumbentStart_picksNearestThenSticks() {
@@ -561,12 +571,12 @@ final class CurbSnapHysteresisTests: XCTestCase {
         }
         XCTAssertEqual(flipYs.count, 2)
         guard flipYs.count == 2 else { return }
-        XCTAssertEqual(flipYs[0], 8.62, accuracy: 0.15)   // S -> N going up
-        XCTAssertEqual(flipYs[1], 6.38, accuracy: 0.15)   // N -> S coming back
-        // The two thresholds sit H/2 either side of the centreline (y = 7.5), so the band
-        // between them is H = 2.24 m wide: it does not come back inside the band.
-        XCTAssertGreaterThan(flipYs[0] - flipYs[1], 2.0)
-        XCTAssertLessThan(flipYs[0] - flipYs[1], 2.5)
+        XCTAssertEqual(flipYs[0], 9.46, accuracy: 0.15)   // S -> N going up
+        XCTAssertEqual(flipYs[1], 5.54, accuracy: 0.15)   // N -> S coming back
+        // The two thresholds sit H/2 = 1.96 m either side of the centreline (y = 7.5), so the
+        // band between them is H = 3.92 m wide (0.1 m sampling): it does not come back inside it.
+        XCTAssertGreaterThan(flipYs[0] - flipYs[1], 3.5)
+        XCTAssertLessThan(flipYs[0] - flipYs[1], 4.5)
     }
 
     func testHysteresis_jitterOnCenterline_zeroFlips() {
@@ -738,5 +748,157 @@ final class CurbSnapGridRobustnessTests: XCTestCase {
         let outcome = index.resolve(csiPoint(50, 6), incumbent: nil, metersPerPoint: 0.28, config: .standard)
         XCTAssertEqual(csiSnapped(outcome)?.distanceMeters ?? -1, 6.0, accuracy: 0.05)
         XCTAssertEqual(csiSnapped(outcome)?.positionFraction ?? -1, 0.5, accuracy: 1e-3)
+    }
+}
+
+// MARK: - Non-default config + scan widening
+
+final class CurbSnapCustomConfigTests: XCTestCase {
+
+    /// A single east-west curb at northing 0, x in [-100, 100] (key == csiKeyN).
+    private func makeCurbIndex() -> CurbSnapIndex {
+        CurbSnapIndex(segments: [CurbSnapTestFixtures.eastWestCurb(id: "W1", side: "N", y: 0)])
+    }
+
+    func testConfig_customInit_overridesEachField() {
+        let config = CurbSnapConfig(
+            acquireRadius: 10,
+            releaseRadius: 12,
+            hysteresisPoints: 20,
+            hysteresisMinMeters: 0.5,
+            hysteresisMaxMeters: 9
+        )
+        XCTAssertEqual(config.acquireRadius, 10)
+        XCTAssertEqual(config.releaseRadius, 12)
+        XCTAssertEqual(config.hysteresisPoints, 20)
+        XCTAssertEqual(config.hysteresisMinMeters, 0.5)
+        XCTAssertEqual(config.hysteresisMaxMeters, 9)
+        XCTAssertNotEqual(config, CurbSnapConfig.standard)
+        // 20 pt x 0.28 = 5.6 m, inside [0.5, 9]; 20 pt x 1.0 clamps to the 9 m ceiling.
+        XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 0.28), 5.6, accuracy: 1e-9)
+        XCTAssertEqual(config.hysteresisMeters(metersPerPoint: 1.0), 9.0, accuracy: 1e-9)
+
+        // Partial override keeps the other defaults.
+        let partial = CurbSnapConfig(acquireRadius: 50)
+        XCTAssertEqual(partial.acquireRadius, 50)
+        XCTAssertEqual(partial.releaseRadius, 30.0)
+        XCTAssertEqual(partial.hysteresisPoints, 14.0)
+    }
+
+    func testResolve_customSmallRadii_changeAcquireAndRelease() {
+        let index = makeCurbIndex()
+        let tight = CurbSnapConfig(acquireRadius: 10, releaseRadius: 12)
+        // 11 m: outside the custom acquire radius (the 24 m default would acquire it).
+        let none = index.resolve(csiPoint(0, 11), incumbent: nil, metersPerPoint: 0.28, config: tight)
+        if case .snapped = none { XCTFail("11 m is outside a 10 m acquire radius") }
+        let standard = index.resolve(csiPoint(0, 11), incumbent: nil, metersPerPoint: 0.28, config: .standard)
+        XCTAssertEqual(csiSnapped(standard)?.segment.id, "W1")
+        // Incumbent retained at 11.5 m (inside the 12 m release), dropped at 13 m.
+        let kept = index.resolve(csiPoint(0, 11.5), incumbent: csiKeyN, metersPerPoint: 0.28, config: tight)
+        XCTAssertEqual(csiSnapped(kept)?.segment.id, "W1")
+        let dropped = index.resolve(csiPoint(0, 13), incumbent: csiKeyN, metersPerPoint: 0.28, config: tight)
+        if case .snapped = dropped { XCTFail("13 m is outside a 12 m release radius") }
+    }
+
+    func testHysteresis_customDeadband_movesFlipPoint() {
+        // Pin the dead-band to exactly 6 m (min == max == 6) regardless of zoom:
+        // flip when dN < dS - 6 => 15 - y < y - 6 => y > 10.5 => first 1 m step y = 11 (index 14).
+        let index = CurbSnapIndex(segments: csiParallelCurbs())
+        let fixedSix = CurbSnapConfig(hysteresisMinMeters: 6, hysteresisMaxMeters: 6)
+        XCTAssertEqual(fixedSix.hysteresisMeters(metersPerPoint: 0.28), 6.0, accuracy: 1e-9)
+        let path = csiYPath(from: -3, to: 18, steps: 21)
+        let keys = csiRun(
+            index: index,
+            path: path,
+            startIncumbent: csiKeyS,
+            metersPerPoint: 0.28,
+            config: fixedSix
+        )
+        XCTAssertEqual(csiFlipCount(keys), 1)
+        XCTAssertEqual(csiFirstFlipIndex(keys), 14)
+    }
+
+    // The recipe documented on `CurbSnapIndex.resolve` for the nearest-curb chip.
+    func testResolve_wideConfigRecipe_100m_findsCurbBeyondThe3x3Block() {
+        let index = makeCurbIndex()
+        let wide = CurbSnapConfig(acquireRadius: 100, releaseRadius: 100)
+        let pin = csiPoint(30, -80)   // 80 m south of the curb: far outside the 3x3 block
+
+        // The default config cannot see (or acquire) it.
+        let narrow = index.resolve(pin, incumbent: nil, metersPerPoint: 0.28, config: .standard)
+        if case .snapped = narrow { XCTFail("80 m is outside the default 24 m acquire radius") }
+
+        // The wide config returns the foot point and distance for the chip.
+        let outcome = index.resolve(pin, incumbent: nil, metersPerPoint: 0.28, config: wide)
+        guard let result = csiSnapped(outcome) else { return }
+        XCTAssertEqual(result.segment.id, "W1")
+        XCTAssertEqual(result.distanceMeters, 80.0, accuracy: 0.1)
+        XCTAssertEqual(csiMetersBetween(result.snappedCoordinate, csiPoint(30, 0)), 0, accuracy: 0.05)
+        // x = 30 on [-100, 100] => 130/200 along.
+        XCTAssertEqual(result.positionFraction, 130.0 / 200.0, accuracy: 1e-4)
+    }
+
+    func testResolve_wideConfigRecipe_100m_boundariesAndCorners() {
+        let index = makeCurbIndex()
+        let wide = CurbSnapConfig(acquireRadius: 100, releaseRadius: 100)
+
+        // Just inside / just outside 100 m, with the pin at every 1 m offset within a 32 m cell
+        // (the 9x9 block must cover from any position in the cell).
+        var offset = 0.0
+        while offset < 32.0 {
+            let insideY = -(99.0 + offset / 100.0)
+            let inside = index.resolve(csiPoint(offset, insideY), incumbent: nil, metersPerPoint: 0.28, config: wide)
+            XCTAssertEqual(csiSnapped(inside)?.segment.id, "W1", "offset \(offset)")
+
+            let outsideDistance = 104.0 + offset / 100.0
+            let outside = index.resolve(csiPoint(offset, -outsideDistance), incumbent: nil, metersPerPoint: 0.28, config: wide)
+            guard case .noCurbInRange(let nearest) = outside else {
+                XCTFail("expected .noCurbInRange at ~104 m, got \(outside) (offset \(offset))")
+                return
+            }
+            // ~104 m is inside the guaranteed (>= 128 m) scan, so the probe reports it.
+            XCTAssertEqual(nearest ?? -1, outsideDistance, accuracy: 0.3, "offset \(offset)")
+            offset += 1.0
+        }
+
+        // Diagonal (corner) approach: the curb ends at x = 100; a pin 70 m past the end and
+        // 70 m south is sqrt(9800) ~ 98.99 m from the endpoint.
+        let corner = index.resolve(csiPoint(170, -70), incumbent: nil, metersPerPoint: 0.28, config: wide)
+        let snapped = csiSnapped(corner)
+        XCTAssertEqual(snapped?.distanceMeters ?? -1, sqrt(9800.0), accuracy: 0.3)
+        XCTAssertEqual(snapped?.positionFraction ?? -1, 1.0, accuracy: 1e-9)
+
+        // Far beyond the scan: nothing, and no crash.
+        let farAway = index.resolve(csiPoint(0, -400), incumbent: nil, metersPerPoint: 0.28, config: wide)
+        if case .snapped = farAway { XCTFail("400 m is outside the wide probe") }
+    }
+
+    func testResolve_scanWidening_50mRadiusUsesRingTwo() {
+        // 50 m radius => ceil(50 / 32) = 2 rings (5x5 block). A curb 45 m away is outside the
+        // 3x3 block's guaranteed reach, so it is only found by the widened scan.
+        let index = makeCurbIndex()
+        let config = CurbSnapConfig(acquireRadius: 50, releaseRadius: 50)
+        for offset in stride(from: 0.0, to: 32.0, by: 4.0) {
+            let outcome = index.resolve(csiPoint(offset, -45), incumbent: nil, metersPerPoint: 0.28, config: config)
+            XCTAssertEqual(csiSnapped(outcome)?.distanceMeters ?? -1, 45.0, accuracy: 0.1, "offset \(offset)")
+        }
+        // Same pin with the default config: not acquired.
+        let narrow = index.resolve(csiPoint(0, -45), incumbent: nil, metersPerPoint: 0.28, config: .standard)
+        if case .snapped = narrow { XCTFail("45 m is outside the default acquire radius") }
+    }
+
+    func testResolve_hugeOrNonFiniteRadius_doesNotTrap() {
+        let index = makeCurbIndex()
+        // Finite but enormous: the ring must be clamped in Double BEFORE converting to Int.
+        let huge = CurbSnapConfig(acquireRadius: 1e300, releaseRadius: 1e300)
+        let hugeOutcome = index.resolve(csiPoint(0, -5), incumbent: nil, metersPerPoint: 0.28, config: huge)
+        XCTAssertEqual(csiSnapped(hugeOutcome)?.segment.id, "W1")
+        let infinite = CurbSnapConfig(acquireRadius: .infinity, releaseRadius: .infinity)
+        let infiniteOutcome = index.resolve(csiPoint(0, -5), incumbent: nil, metersPerPoint: 0.28, config: infinite)
+        XCTAssertEqual(csiSnapped(infiniteOutcome)?.segment.id, "W1")
+        // NaN radii: nothing satisfies `<= NaN`, so no curb; the point is that it does not crash.
+        let nan = CurbSnapConfig(acquireRadius: .nan, releaseRadius: .nan)
+        let nanOutcome = index.resolve(csiPoint(0, -5), incumbent: nil, metersPerPoint: 0.28, config: nan)
+        if case .snapped = nanOutcome { XCTFail("NaN radii must not acquire anything") }
     }
 }

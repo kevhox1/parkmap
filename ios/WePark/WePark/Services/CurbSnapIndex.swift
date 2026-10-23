@@ -36,8 +36,9 @@
 //  reusing `CandidateSegmentSearch.nearestPointOnPolyline`.
 //
 //  Deliberately NOT here: any UI, any flag (`curbPinPlacementEnabled` is A3's), the
-//  generation token / detached build (A3), the CADisplayLink (A2), and the 100 m "arrow to
-//  nearest curb" probe (A.3 "No curb in range" chip — see `noCurbInRange` doc below).
+//  generation token / detached build (A3), the CADisplayLink (A2), and the "arrow to nearest
+//  curb" chip UI (A.3 "No curb in range") — its probe needs no new API, see the wide-config
+//  recipe on `resolve`.
 //
 //  COMPILE-UNVERIFIED. Written on a Linux VPS with no Xcode/Swift toolchain — first compile
 //  is the Mac gate (see PR body). `nonisolated` on TYPE declarations (SE-0449) has no
@@ -71,8 +72,8 @@ nonisolated struct CurbSnapConfig: Equatable {
     /// is ever acquired.
     let releaseRadius: Double
 
-    /// Anti-flicker dead-band, in SCREEN POINTS. Multiplied by the live metres-per-point to
-    /// get a physical dead-band that is zoom-invariant to the finger.
+    /// Anti-flicker dead-band, in SCREEN POINTS (default 14). Multiplied by the live
+    /// metres-per-point to get a physical dead-band that is zoom-invariant to the finger.
     let hysteresisPoints: Double
 
     /// Floor for the physical dead-band (metres), so deep zoom-in never collapses it to nothing.
@@ -84,7 +85,7 @@ nonisolated struct CurbSnapConfig: Equatable {
     init(
         acquireRadius: Double = 24.0,
         releaseRadius: Double = 30.0,
-        hysteresisPoints: Double = 8.0,
+        hysteresisPoints: Double = 14.0,
         hysteresisMinMeters: Double = 1.5,
         hysteresisMaxMeters: Double = 4.0
     ) {
@@ -95,7 +96,12 @@ nonisolated struct CurbSnapConfig: Equatable {
         self.hysteresisMaxMeters = hysteresisMaxMeters
     }
 
-    /// The spec's starting values (24 m / 30 m / 8 pt clamped to 1.5-4 m).
+    /// The spec's starting values (24 m / 30 m / 14 pt clamped to 1.5-4 m).
+    ///
+    /// 14 pt (orchestrator ruling on QA pass 1 of PR #137) rather than the 8 pt first
+    /// sketched: a challenger flips at H/2 past the centreline, so §A.3's "commit to a side by
+    /// moving ~2 m past the middle" needs H ~ 4 m. At the ~0.28 m/pt entry zoom 14 pt is
+    /// H = 3.92 m (flip ~1.96 m past centre), just under the 4.0 m ceiling.
     static let standard = CurbSnapConfig()
 
     /// `H = clamp(hysteresisPoints x metersPerPoint, hysteresisMinMeters, hysteresisMaxMeters)`.
@@ -117,8 +123,12 @@ nonisolated struct CurbSnapConfig: Equatable {
 /// `Equatable` is hand-written: neither `Segment` nor `CLLocationCoordinate2D` is `Equatable`
 /// (and we deliberately do NOT add a retroactive `CLLocationCoordinate2D: Equatable`, which
 /// would collide with any SDK/other-file definition). The segment compares by `id` (tile ids
-/// are unique per blockface-side polyline); the numbers compare exactly — this is for
-/// "did the outcome change" gating, not for approximate geometry.
+/// are unique per blockface-side polyline); the numbers compare exactly.
+///
+/// DO NOT gate SwiftUI state writes or `onPlacementOutcome` callbacks on `==`: the foot point
+/// and `distanceMeters` change on every frame of a pan, so `==` is "false" at ~30 Hz and
+/// gating on it writes state per frame (spec A.11 A23; FT-17a measured the jank). Gate on
+/// `blockfaceKey` and the outcome case (snapped vs noCurbInRange) instead.
 nonisolated struct CurbSnapResult: Equatable {
     /// The winning segment (the nearest one, if a blockface appears in several tiles).
     let segment: Segment
@@ -156,8 +166,9 @@ nonisolated enum CurbSnapOutcome: Equatable {
     /// `nearestMeters` is the distance to the nearest curb the query happened to examine, or
     /// nil if it examined none. The scan covers the pin's 3x3 cell neighbourhood, so a value
     /// is GUARANTEED present whenever a curb is within 32 m and best-effort out to ~64 m;
-    /// it is NOT the 100 m probe the A.3 "arrow chip" needs (that chip is a cut-first
-    /// nice-to-have — a wider probe is a follow-up, not part of this seam).
+    /// it is NOT a 100 m probe by itself. For the A.3 "nearest curb within 100 m" chip use the
+    /// wide-config recipe documented on `resolve` (it returns the foot point, which
+    /// `nearestMeters` alone cannot).
     case noCurbInRange(nearestMeters: Double?)
 }
 
@@ -364,8 +375,21 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
     ///  4. Ties break on (distance, blockfaceKey, segment id) — never on input order.
     ///
     /// Allocation-free in the candidate scan; the winner's foot point / fraction is computed
-    /// once via `CandidateSegmentSearch.nearestPointOnPolyline` (its distance is haversine, so
-    /// it can differ from the scan's flat-earth distance by ~0.1%).
+    /// once via `CandidateSegmentSearch.nearestPointOnPolyline` (that step allocates a little,
+    /// once per call). Its distance is haversine, so it can differ from the scan's flat-earth
+    /// distance by ~0.1%: callers must not assert `distanceMeters <= acquireRadius` or compare
+    /// it to other thresholds (e.g. the "> 15 m" far-curb rule) with zero tolerance.
+    ///
+    /// WIDE-CONFIG RECIPE (nearest-curb chip, A.3 "No curb in range"): to find the nearest
+    /// curb out to 100 m, call once on settle (not per frame) with no incumbent:
+    ///
+    ///     index.resolve(pin, incumbent: nil, metersPerPoint: mpp,
+    ///                   config: CurbSnapConfig(acquireRadius: 100, releaseRadius: 100))
+    ///
+    /// The scan widens automatically to a 9x9 cell block (ring 4, >= 128 m) and `.snapped`
+    /// carries `snappedCoordinate` (the tap target; bearing = from the pin to it, minus the
+    /// camera heading) and `distanceMeters`. `.noCurbInRange` means nothing within 100 m. The
+    /// scan ring is capped at 8 cells (17x17), i.e. radii beyond ~256 m are not guaranteed.
     func resolve(
         _ p: CLLocationCoordinate2D,
         incumbent: String?,
@@ -390,7 +414,8 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
         let cell = CurbSnapIndex.cellSizeMeters
         let scanRadius = max(config.acquireRadius, config.releaseRadius)
         let ringRaw = (scanRadius / cell).rounded(.up)
-        let ring = ringRaw.isFinite ? min(8, max(1, Int(ringRaw))) : 1
+        // Clamp in Double BEFORE converting: Int(1e300) traps. NaN radius => default ring.
+        let ring = ringRaw.isNaN ? 1 : Int(min(8.0, max(1.0, ringRaw)))
         let pinCellX = Int((px / cell).rounded(.down))
         let pinCellY = Int((py / cell).rounded(.down))
 
