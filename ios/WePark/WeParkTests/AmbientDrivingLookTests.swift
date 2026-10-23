@@ -456,6 +456,7 @@ final class AmbientDrivingLookLocationPostureTests: XCTestCase {
     /// It deliberately does NOT call the real `startDriveMode()` as a positive control: that
     /// starts a live `CLLocationManager` session in the Simulator, which crashed the test
     /// process on CI (and is why `LocationServiceTests` uses `setDriveModeActiveForTesting`).
+    @MainActor
     func testRestingFixes_neverTakeWakeLock() async {
         UIApplication.shared.isIdleTimerDisabled = false
         service.locationManager(Self.dummyManager, didUpdateLocations: [makeFix(horizontalAccuracy: 20)])
