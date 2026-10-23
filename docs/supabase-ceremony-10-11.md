@@ -16,6 +16,57 @@
 
 **Stop rule for the whole ceremony:** if any expected output below differs, STOP, do not apply the next file, and paste the actual output to the orchestrator.
 
+## QUICK PATH (what Kevin actually runs — the rest of this doc is reference)
+
+The SQL Editor shows only the LAST statement's result, so each check below is ONE query returning a table.
+
+**Q0 — pre-check (run BEFORE applying anything).** Expected result, line by line: A = `8`; B = `pins.pins_claimed_by_fkey` (that one only); C = `0`; D = `11`; E = `0`. Anything else: STOP and paste the table to the orchestrator.
+
+```sql
+select 'A: FKs onto auth.users outside auth (expect 8)' as check, count(*)::text as result
+  from pg_constraint where contype = 'f' and confrelid = 'auth.users'::regclass
+   and connamespace::regnamespace::text not in ('auth')
+union all
+select 'B: non-cascading FKs onto auth.users (expect only pins_claimed_by_fkey)',
+       coalesce(string_agg(conrelid::regclass::text || '.' || conname, ', '), 'none')
+  from pg_constraint where contype = 'f' and confrelid = 'auth.users'::regclass and confdeltype in ('a', 'r')
+union all
+select 'C: FKs onto public.profiles (expect 0)', count(*)::text
+  from pg_constraint where contype = 'f' and confrelid = 'public.profiles'::regclass
+union all
+select 'D: user-ish uuid columns in public (expect 11)', count(*)::text
+  from information_schema.columns
+ where table_schema = 'public' and data_type = 'uuid' and column_name ~ '(user|author|owner|_by$|sender|subject)'
+union all
+select 'E: legacy block-scoped pins without report_group_id (expect 0)', count(*)::text
+  from public.pins where source = 'crowd' and pin_type in ('filming', 'construction') and report_group_id is null;
+```
+
+**Apply, in order** — on the Mac: `cd /Users/kevinhoxha/repos/parkmap && git pull`, then for each file: `pbcopy < supabase/10-account-deletion.sql` → SQL Editor → New query → paste → Run (expect `Success. No rows returned`). Repeat for `supabase/11-coverage-requests.sql`, then `supabase/12-storage-delete-own.sql` (if 12 fails with an ownership error, use the Dashboard Policies fallback in Step 3 — it blocks nothing else).
+
+**Q1 — verify (after all three).** Expected: line 1 = `f/t/f`; line 2 = `5`; line 3 = `coverage_requests_insert_own`; line 4 = `4`; line 5 = three policies `..._delete_own:d, ..._insert_own:a, ..._select_own:r`.
+
+```sql
+select 'delete_my_account exec anon/authenticated/service_role (expect f/t/f)' as check,
+       has_function_privilege('anon', 'public.delete_my_account()', 'execute')::text || '/' ||
+       has_function_privilege('authenticated', 'public.delete_my_account()', 'execute')::text || '/' ||
+       has_function_privilege('service_role', 'public.delete_my_account()', 'execute')::text as result
+union all
+select 'supporting indexes (expect 5)', count(*)::text from pg_indexes
+ where schemaname = 'public' and indexname in ('pins_author_id_idx','pins_claimed_by_idx','votes_user_id_idx','zone_messages_author_id_idx','reputation_award_log_subject_id_idx')
+union all
+select 'coverage_requests policy (expect coverage_requests_insert_own)', coalesce(string_agg(polname, ','), 'none')
+  from pg_policy where polrelid = 'public.coverage_requests'::regclass
+union all
+select 'coverage_requests column grants (expect 4)', count(*)::text from information_schema.column_privileges
+ where table_schema = 'public' and table_name = 'coverage_requests' and grantee in ('anon', 'authenticated')
+union all
+select 'storage policies (expect delete d, insert a, select r)', coalesce(string_agg(polname || ':' || polcmd, ', ' order by polname), 'none')
+  from pg_policy where polrelid = 'storage.objects'::regclass and polname like 'pin_evidence_storage_%';
+```
+
+**Step 4's end-to-end smoke is optional for Kevin:** it writes throwaway users/pins/messages to production (a chat message briefly visible in `soho-les`). Say "run the smoke" and the orchestrator will run it with the public anon key and clean up; or run Step 4 yourself.
+
 ---
 
 ## Step 0 — PRE-CHECK against the REAL project (run BEFORE applying 10)
@@ -239,8 +290,7 @@ union all select 'storage under A (expect 0)', count(*)::text from storage.objec
 -- Standing orphan check (also usable any time later): evidence objects whose owner no longer exists. Expect 0 rows.
 select name from storage.objects
  where bucket_id = 'pin-evidence'
-   and (storage.foldername(name))[1] ~ '^[0-9a-f-]{36}$'
-   and (storage.foldername(name))[1]::uuid not in (select id from auth.users);
+   and (storage.foldername(name))[1] not in (select id::text from auth.users);
 ```
 
 Also glance at Dashboard → Storage → `pin-evidence`: the `<A>/` folder should be gone. (Metadata deleted via the API also removes the file; this is the visual confirmation.)
