@@ -90,6 +90,17 @@ call it out honestly in sizing (§4), it is not a free client-side relabeling ex
    jargon is the design bar; these are the biggest tap targets in the app (extends Kevin's
    standing bigger-touch-targets preference, PR #110). AC-31's no-evasion-language constraint
    unchanged.
+6. **Opening posture — RULED: OPTION A (Kevin, 2026-10-23), after seeing the ambient screen
+   in the simulator ("it doesn't open in drive mode?").** The app opens with the DRIVING LOOK
+   (tilted, zoomed-in camera, muted map style) but with coarse GPS and no wake lock; the expensive
+   parts (continuous navigation-grade GPS, wake lock, heading-up rotation) engage on sustained
+   motion or one tap. This supersedes the earlier "calm north-up map at rest" description in
+   §0.1/§0.3 for the opening camera ONLY; the two-posture invariant (`driveModeActive` stays
+   false until escalation; no continuous GPS at rest, AC-13) is unchanged. Also from the same
+   smoke: the ambient screen has too many controls — see `docs/design/goal-first-ambient-design.md`
+   Addendum 3 for the minimal layout. Needs a short tech-lead amendment for the driving-look-at-
+   launch camera before engineering (heading-up needs a course, so the opening look is tilted
+   but north-up until motion).
 5. **"Free a few hours" metered tolerance — RULED: strict confirmed** (Kevin: "it's a meter so
    that's not free"). §0.8.5 unchanged; the §6 metered-tolerant variant stays punted.
 
