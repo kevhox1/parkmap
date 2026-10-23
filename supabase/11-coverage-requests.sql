@@ -27,16 +27,29 @@
 --                              never the user's GPS fix — nothing precise is retained even if you do)
 --             user_id is filled by the DATABASE from the JWT (column default auth.uid()); sending it,
 --             or id / created_at, is rejected with 42501 "permission denied for table coverage_requests".
---   MUST use minimal return: do not request the inserted row back. supabase-swift's
---             `.insert(row)` defaults to returning: .minimal — correct; do NOT chain `.select()` and do
---             NOT send `Prefer: return=representation`. Clients have no SELECT access by design, and
---             (docs: supabase/05-device-push-tokens-rls-fix.sql) an INSERT ... RETURNING requires
---             SELECT access to the written row, so representation-returning inserts fail with 42501
---             even though the row would otherwise be accepted. This is expected for this table.
+--   !!! MUST use return=MINIMAL. !!!  Do not request the inserted row back.
+--             The EXISTING iOS write path (CommunityPinService and friends) sends
+--             `Prefer: return=representation` on its inserts. COPY-PASTING THAT PATTERN HERE FAILS with
+--             42501 on every insert, even a perfectly valid one. Clients have no SELECT access by
+--             design, and (docs: supabase/05-device-push-tokens-rls-fix.sql) an INSERT ... RETURNING
+--             requires SELECT access to the written row. Send `Prefer: return=minimal` (raw URLSession),
+--             or supabase-swift's `.insert(row)` WITHOUT chaining `.select()` (its default is minimal).
+--             Treat any 2xx as success; there is no body to decode.
+--   city text: stored trimmed. Leading/trailing blank AND invisible characters (tab, NBSP, zero-width
+--             space/joiner, BOM, ideographic space, ...) are stripped server-side, and the value must
+--             contain at least 2 visible characters after that; a value made only of such characters is
+--             rejected 23514 like an empty one. Any script is fine (no letter-class requirement).
 --   Errors:   23514 (check_violation)      city/note length or lat/lng range invalid -> show form error
---             42501 + message 'rate limit exceeded ...'  -> too many suggestions; show a friendly
---                                                           "You've sent a few already, thanks!"
+--             42501 + message 'rate limit exceeded: max N coverage request(s) per H hour(s)'
+--                                         -> THIS user sent too many; e.g. "You've sent a few already, thanks!"
+--             42501 + message 'rate limit exceeded: coverage requests temporarily unavailable ...'
+--                                         -> the GLOBAL backstop tripped (abuse protection, NOT this
+--                                            user's doing). Do NOT show user-blaming copy for it.
 --             42501 + 'permission denied' / RLS          -> not signed in / bad payload (client bug)
+--             Simplest robust client rule, no message-string matching: for ANY 42501 whose text begins
+--             'rate limit exceeded', show NEUTRAL copy that blames nobody, e.g. "We can't take
+--             suggestions right now — please try again a little later." Reserve the friendlier "thanks,
+--             you've already sent a few" wording for a case you can positively identify as per-user.
 --   Success toast copy suggestion: "Thanks — we'll use this to decide where to launch next."
 --
 -- ============================================================================================
@@ -45,7 +58,7 @@
 -- anon vs authenticated: AUTHENTICATED ONLY (veto-able). An anon-key insert has no identity at all, so
 --   the only rate-limit key would be an IP header that the DB cannot see reliably and a client can
 --   spoof — an open write endpoint on the public anon key is an abuse magnet (spam, storage fill).
---   It costs real users nothing: the app establishes an (anonymous or magic-link) auth session before
+--   It costs real users nothing: the app establishes an anonymous auth session (signInAnonymously) before
 --   any community write already (03's "device has an auth.uid() from anonymous auth the moment it does
 --   anything"). Per-user keying also gives a clean limiter and, via user_id, lets deletion/analytics
 --   work. user_id is nullable ONLY so account deletion can de-attribute rows (ON DELETE SET NULL);
@@ -75,8 +88,20 @@ create table if not exists public.coverage_requests (
   viewed_lng  double precision,
   user_id     uuid default auth.uid() references auth.users(id) on delete set null,
 
+  -- Stored city is already trimmed of blank/invisible characters by the BEFORE INSERT trigger below.
+  -- <=80 total characters, and >=2 VISIBLE characters (blank/invisible class removed). That class —
+  -- tab/newline/CR (U+0009-000D), space, NEL, NBSP, soft hyphen, Ogham space, Mongolian vowel
+  -- separator, U+2000-200F (en/em spaces, ZW space/joiners, LRM/RLM), U+2028-202F, U+205F-206F, ideographic
+  -- space, BOM — is spelled out explicitly instead of [[:space:]] / [[:alpha:]] because those classes
+  -- depend on the database locale and (a) miss NBSP/zero-width characters, (b) can reject non-Latin
+  -- city names. Keep this class IDENTICAL to v_blank in coverage_requests_before_insert() below.
   constraint coverage_requests_city_len_chk
-    check (char_length(btrim(city)) between 2 and 80),
+    check (
+      char_length(city) <= 80
+      and char_length(regexp_replace(city,
+        '[\u0009-\u000d\u0020\u0085\u00a0\u00ad\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]',
+        '', 'g')) >= 2
+    ),
   constraint coverage_requests_note_len_chk
     check (note is null or char_length(note) <= 500),
   constraint coverage_requests_lat_range_chk
@@ -86,6 +111,16 @@ create table if not exists public.coverage_requests (
   constraint coverage_requests_latlng_pair_chk
     check ((viewed_lat is null) = (viewed_lng is null))
 );
+
+-- Converge on the current city rule even if an earlier draft of this file created the table.
+alter table public.coverage_requests drop constraint if exists coverage_requests_city_len_chk;
+alter table public.coverage_requests add constraint coverage_requests_city_len_chk
+  check (
+    char_length(city) <= 80
+    and char_length(regexp_replace(city,
+      '[\u0009-\u000d\u0020\u0085\u00a0\u00ad\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]',
+      '', 'g')) >= 2
+  );
 
 comment on table public.coverage_requests is
   '"Suggest a neighborhood" demand signal (open item #39). INSERT-only for authenticated clients via '
@@ -137,10 +172,12 @@ declare
   v_glob_max     integer;
   v_glob_window  integer;
   v_recent       integer;
+  -- Must stay identical to the class in coverage_requests_city_len_chk above.
+  v_blank        constant text := '[\u0009-\u000d\u0020\u0085\u00a0\u00ad\u1680\u180e\u2000-\u200f\u2028-\u202f\u205f-\u206f\u3000\ufeff]';
 begin
   -- Normalize first (CHECK constraints run after BEFORE triggers, so they validate the cleaned values).
-  new.city := btrim(new.city);
-  new.note := nullif(btrim(new.note), '');
+  new.city := regexp_replace(new.city, '^' || v_blank || '+|' || v_blank || '+$', '', 'g');
+  new.note := nullif(regexp_replace(new.note, '^' || v_blank || '+|' || v_blank || '+$', '', 'g'), '');
   if new.viewed_lat is not null then new.viewed_lat := round(new.viewed_lat::numeric, 2)::double precision; end if;
   if new.viewed_lng is not null then new.viewed_lng := round(new.viewed_lng::numeric, 2)::double precision; end if;
 

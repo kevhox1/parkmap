@@ -2,7 +2,8 @@
 -- Proposed by @backend-data 2026-10-23. NOT yet applied to production.
 -- Kevin applies this via the Supabase SQL Editor — single paste, no multi-step restriction (no enum
 -- values, no extensions). Companion test: supabase/10-account-deletion-test.sh (scratch Postgres 16).
--- Idempotent: safe to re-run (create or replace function + explicit revoke/grant; no table DDL).
+-- Idempotent: safe to re-run (create index if not exists + create or replace function + explicit
+-- revoke/grant; no table DDL beyond five supporting indexes).
 -- Depends on: 01-mvp-schema.sql (profiles, zone_messages), 02-pins-schema.sql (pins, votes),
 -- 02f-block-scoped-restrictions.sql (pin_evidence, block_scoped_report_log), 03-community-2.0-schema.sql
 -- (pins.claimed_by, reputation_award_log, device_push_tokens). It deliberately does NOT reference any
@@ -15,11 +16,18 @@
 --   Arguments:    NONE. There is no user-id parameter by design: the function deletes
 --                 auth.uid() — the caller's own account, taken from the verified JWT — and nothing
 --                 else. One user can never name another user's account.
---   Returns:      void  (PostgREST answers 204 No Content / empty body on success).
---   Callable by:  role `authenticated` ONLY (this includes anonymous-auth sessions, which are
---                 `authenticated` + is_anonymous). The anon key with no user JWT is rejected twice
---                 over: no EXECUTE privilege (HTTP 401/403, SQLSTATE 42501) and an explicit
---                 auth.uid() IS NULL guard (SQLSTATE 42501, "authentication required").
+--   Returns:      void. PostgREST answers 204 or 200 (empty/`null` body) depending on version —
+--                 treat ANY 2xx as success; do not decode a body.
+--   Callable by:  role `authenticated` ONLY — EXECUTE is revoked from PUBLIC, anon, authenticated AND
+--                 service_role, then granted back to authenticated alone (ACL = {postgres, authenticated}).
+--                 service_role is revoked on purpose: it carries no user JWT, so auth.uid() is null and
+--                 the call could only ever raise; removing the privilege makes "authenticated only" literally
+--                 true and the ACL the minimum possible, rather than leaving a dead grant to explain.
+--                 Anonymous-auth sessions (the ONLY sign-in the shipped app uses: signInAnonymously; no
+--                 Sign in with Apple, no magic link, so there are no Apple tokens to revoke) are
+--                 `authenticated` + is_anonymous and CAN call it. The anon key with no user JWT is
+--                 rejected twice over: no EXECUTE privilege (HTTP 401/403, SQLSTATE 42501) and an
+--                 explicit auth.uid() IS NULL guard (SQLSTATE 42501, "authentication required").
 --   Errors:       42501 = not signed in. Any other error = the deletion rolled back atomically
 --                 (single transaction): NOTHING was deleted, show a retry affordance.
 --   Idempotent:   calling it again for an already-deleted account (a still-valid access token
@@ -28,6 +36,13 @@
 --                 user has a foreign key to auth.users, which no longer has the row.
 --
 --   Swift (supabase-swift):   try await client.rpc("delete_my_account").execute()
+--
+--   SEQUENCE — evidence photos FIRST, then this RPC (requires supabase/12-storage-delete-own.sql):
+--     a. list every object under `<uid-LOWERCASE>/` in the private `pin-evidence` bucket (two levels:
+--        report_group_id folders, then files), b. remove them via the Storage API, c. ONLY if all
+--        removals succeeded call delete_my_account(); if a or b fails, ABORT with a user-visible error
+--        and do NOT call the RPC — never delete the account while orphaning files. Retryable end to
+--        end. Full details (endpoints, paging, the UPPERCASE-uuidString trap) are in 12's header.
 --
 --   What the client MUST do after the call returns successfully (the server cannot do these):
 --     1. Sign out locally:  try? await client.auth.signOut()   — the server already destroyed the
@@ -38,9 +53,9 @@
 --        notifications), the Keychain session entry. Do NOT delete the on-device parked-car pin or
 --        reminders — those are device-local, not account data; the user may keep using the app
 --        signed-out / re-bootstrap a fresh anonymous session.
---     3. Return to the signed-out/first-run UI. The app may mint a NEW anonymous or magic-link
---        identity afterwards; that is a different, empty account (new auth.users id), NOT the old
---        one — the old identity cannot be signed back into.
+--     3. Return to the signed-out/first-run UI. The app will mint a NEW anonymous identity
+--        afterwards (signInAnonymously); that is a different, empty account (new auth.users id), NOT
+--        the old one — the old identity cannot be signed back into.
 --   Required UX before calling (Apple review expects it): a confirmation step that states the
 --   consequences — "Your profile, votes and device registrations are deleted. Your past reports and
 --   chat messages stay on the map but are no longer linked to you." Failure must be surfaced, not
@@ -48,8 +63,12 @@
 --
 --   Chat/board display for de-attributed content: a deleted user's zone_messages and pins keep a
 --   NULL author_id, so zone_messages_with_author / pins_with_author return author_username = NULL
---   and author_reputation = NULL for them. The client must render a neutral label (e.g. "Former
---   neighbor") whenever message_type = 'user' AND author_id IS NULL — do not crash or hide the row.
+--   and author_reputation = NULL for them. Use ONE label for deleted authors everywhere (chat AND
+--   pin detail): "Former neighbor". (BlockDetailView today falls back to `authorUsername ?? "Neighbor"`;
+--   change that fallback for crowd pins so the two surfaces agree.) Apply it only when the row is
+--   user-authored: message_type = 'user' for chat, source = 'crowd' for pins — open-data pins
+--   (source = 'open_data'/'hybrid') also have a NULL author_id and must NOT read "Former neighbor".
+--   Do not crash or hide the row.
 --
 -- ============================================================================================
 -- DESIGN DECISION: ANONYMIZE user content, DELETE personal data (orchestrator ruling; veto-able)
@@ -94,16 +113,16 @@
 --   voter cannot work (unique(pin_id,user_id) would collide when two deleted users voted the same
 --   pin) and keeping votes attributed would defeat the deletion.
 --
--- NOT HANDLED HERE — needs a Kevin decision, flagged in the PR:
---   (a) Storage blobs. pin_evidence rows are deleted here, but the PHOTO FILES live in the private
---       `pin-evidence` Storage bucket under `{uid}/…`. Deleting storage.objects rows via SQL does NOT
---       delete the underlying file in Supabase Storage (it only drops metadata), and storage.objects
---       is owned by supabase_storage_admin, so this migration deliberately does not touch it. If
---       evidence upload is live to real users, the blobs need removing via the Storage API (service
---       role: list prefix `{uid}/`, remove) — either by the client before calling this RPC (needs a
---       storage DELETE-own policy, not in this file) or by a small Edge Function. Until then the
---       files are orphaned but unreachable by any client (read policy is keyed on the now-nonexistent
---       auth.uid()).
+-- STORAGE PHOTOS — handled CLIENT-SIDE, by design (orchestrator ruling 2026-10-23), not in this RPC:
+--   (a) pin_evidence rows are deleted here, but the PHOTO FILES live in the private `pin-evidence`
+--       Storage bucket under `{uid}/{report_group_id}/…`. SQL cannot remove them (deleting
+--       storage.objects rows only drops metadata, and the table belongs to supabase_storage_admin), so
+--       the client removes them through the Storage API BEFORE calling this RPC, using the owner-scoped
+--       DELETE policy added by supabase/12-storage-delete-own.sql. See "SEQUENCE" in the contract above.
+--       Known limit: if the app is killed between the file removal and the RPC, the account simply still
+--       exists with no photos — harmless and retryable. If a user deletes via some path that skips the
+--       client sequence (none exists in the app), their files would be orphaned but unreachable by any
+--       client; the interim cleanup query is in docs/supabase-ceremony-10-11.md.
 --   (b) Message bodies / pin notes are user-authored free text and are retained verbatim by design.
 --       If a user wrote their own name in one, it stays; a "delete my messages too" option would be a
 --       different (destructive) ruling.
@@ -125,9 +144,27 @@
 -- and Supabase additionally grants it to anon/authenticated/service_role via default privileges, so
 -- an additive GRANT alone leaves the hole open):
 --   * SET search_path = '' and every reference is fully schema-qualified (no search-path hijack).
---   * REVOKE ALL ... FROM PUBLIC, anon, authenticated  THEN  GRANT EXECUTE ... TO authenticated.
+--   * REVOKE ALL ... FROM PUBLIC, anon, authenticated, service_role  THEN  GRANT EXECUTE ... TO authenticated.
 --   * Identity comes ONLY from auth.uid(); the function takes no arguments.
 -- ============================================================================================
+
+-- Supporting indexes (PR #139 QA #9). delete_my_account() looks rows up BY USER on columns that have
+-- no leading index (pins.author_id, pins.claimed_by, votes.user_id, zone_messages.author_id,
+-- reputation_award_log.subject_id), so each call would seq-scan those tables, and the `authenticated`
+-- role has a ~8 s statement timeout. Fine at today's sizes, but this keeps the call O(log n) as the
+-- tables grow, and also speeds the ON DELETE SET NULL / CASCADE FK actions on the final auth.users
+-- delete. Partial where the column is mostly null. Plain CREATE INDEX (not CONCURRENTLY — the SQL
+-- Editor runs in a transaction) takes a brief write lock per table; these tables are small. Idempotent.
+create index if not exists pins_author_id_idx
+  on public.pins(author_id) where author_id is not null;
+create index if not exists pins_claimed_by_idx
+  on public.pins(claimed_by) where claimed_by is not null;
+create index if not exists votes_user_id_idx
+  on public.votes(user_id);
+create index if not exists zone_messages_author_id_idx
+  on public.zone_messages(author_id) where author_id is not null;
+create index if not exists reputation_award_log_subject_id_idx
+  on public.reputation_award_log(subject_id);
 
 create or replace function public.delete_my_account()
 returns void
@@ -191,6 +228,7 @@ comment on function public.delete_my_account() is
 revoke all on function public.delete_my_account() from public;
 revoke all on function public.delete_my_account() from anon;
 revoke all on function public.delete_my_account() from authenticated;
+revoke all on function public.delete_my_account() from service_role;
 grant execute on function public.delete_my_account() to authenticated;
 
 -- Verify after applying (Kevin, SQL Editor) — expect has_exec: anon=f, authenticated=t, plus

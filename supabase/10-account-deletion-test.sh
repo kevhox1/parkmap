@@ -24,7 +24,10 @@ echo "== Test 1: function privilege + hygiene (PR #114 Finding #1 regression gua
 check "anon has EXECUTE"           "$(sql "$DB" "select has_function_privilege('anon','public.delete_my_account()','execute')")" "f"
 check "authenticated has EXECUTE"  "$(sql "$DB" "select has_function_privilege('authenticated','public.delete_my_account()','execute')")" "t"
 check "no PUBLIC (grantee 0) EXECUTE entry" "$(sql "$DB" "select count(*) from pg_proc p, aclexplode(p.proacl) a where p.oid='public.delete_my_account()'::regprocedure and a.grantee=0")" "0"
-check "SECURITY DEFINER"           "$(sql "$DB" "select prosecdef from pg_proc where oid='public.delete_my_account()'::regprocedure")" "t"
+check "service_role has no EXECUTE (QA #7: 'authenticated ONLY' is literally true)" "$(sql "$DB" "select has_function_privilege('service_role','public.delete_my_account()','execute')")" "f"
+check "ACL grantees are exactly {postgres, authenticated}" "$(sql "$DB" "select string_agg(distinct pg_get_userbyid(a.grantee), ',' order by pg_get_userbyid(a.grantee)) from pg_proc p, aclexplode(p.proacl) a where p.oid='public.delete_my_account()'::regprocedure")" "authenticated,postgres"
+check "5 supporting indexes exist (QA #9)" "$(sql "$DB" "select count(*) from pg_indexes where schemaname='public' and indexname in ('pins_author_id_idx','pins_claimed_by_idx','votes_user_id_idx','zone_messages_author_id_idx','reputation_award_log_subject_id_idx')")" "5"
+check "SECURITY DEFINER"          "$(sql "$DB" "select prosecdef from pg_proc where oid='public.delete_my_account()'::regprocedure")" "t"
 check "search_path pinned empty"   "$(sql "$DB" "select proconfig::text from pg_proc where oid='public.delete_my_account()'::regprocedure")" '{"search_path=\"\""}'
 check "takes no arguments"         "$(sql "$DB" "select pronargs from pg_proc where oid='public.delete_my_account()'::regprocedure")" "0"
 

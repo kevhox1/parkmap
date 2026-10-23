@@ -111,3 +111,5 @@ create or replace function storage.foldername(name text) returns text[] language
   select (string_to_array(name, '/'))[1:array_length(string_to_array(name, '/'), 1) - 1]
 $$;
 grant usage on schema storage to anon, authenticated, service_role;
+-- Real Supabase grants the API roles table privileges on storage.objects; RLS policies do the gating.
+grant select, insert, update, delete on storage.objects to anon, authenticated, service_role;
