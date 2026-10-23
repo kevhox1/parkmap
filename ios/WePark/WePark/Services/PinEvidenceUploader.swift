@@ -198,7 +198,9 @@ final class PinEvidenceUploader {
         // Path convention is FIXED by the schema's storage.objects RLS policies — the
         // leading segment MUST be the uploader's own auth.uid(), or both the select and
         // insert policies reject the object. See this file's header for the exact policy.
-        let objectPath = "\(userId.uuidString)/\(reportGroupId.uuidString)/\(filename)"
+        // Lowercased: Swift's UUID.uuidString is uppercase, but the policies compare against
+        // Postgres's lowercase auth.uid()::text — an uppercase prefix is rejected with 403.
+        let objectPath = "\(userId.uuidString.lowercased())/\(reportGroupId.uuidString.lowercased())/\(filename)"
 
         try await uploadObject(data: photoData, contentType: contentType, objectPath: objectPath, jwt: jwt)
 
