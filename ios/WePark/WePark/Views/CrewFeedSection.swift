@@ -240,7 +240,8 @@ enum CrewFeedMerge {
     /// relative age" rule, same wording as the map marker's own callout badge.
     static func subLine(for pin: CommunityPin, now: Date) -> String {
         let age = PinMarkerAnnotation.ageString(since: pin.createdAt, now: now)
-        let author = pin.authorUsername ?? "Neighbor"
+        // Open item #38: deleted-author crowd pins read "Former neighbor" (shared rule).
+        let author = AuthorDisplayName.name(for: pin)
         if let cross = crossStreets(for: pin) {
             return "btwn \(cross.from) & \(cross.to) · \(age) · \(author)"
         }
@@ -295,7 +296,8 @@ enum CrewFeedMerge {
     /// simplification above).
     static func subLine(for message: ZoneMessage, now: Date) -> String {
         let age = PinMarkerAnnotation.ageString(since: message.createdAt, now: now)
-        let author = message.authorUsername ?? "Neighbor"
+        // Open item #38: deleted-author user messages read "Former neighbor" (shared rule).
+        let author = AuthorDisplayName.name(for: message)
         return "\(author) · \(age)"
     }
 

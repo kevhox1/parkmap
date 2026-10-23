@@ -340,11 +340,14 @@ final class CrewFeedMergeRowFormattingTests: XCTestCase {
         XCTAssertEqual(sub, "Just now · MulberryMike")
     }
 
-    func testSubLinePin_nilAuthorUsername_fallsBackToNeighbor() {
+    /// Open item #38: the fixture is a `source: crowd` pin with a NULL author (the deleted-account
+    /// shape), so it now reads "Former neighbor" (was "Neighbor" before account deletion existed).
+    /// The open-data counterpart (must stay "Neighbor") is pinned in `AccountDeletionTests`.
+    func testSubLinePin_nilAuthorUsername_crowdPin_readsFormerNeighbor() {
         let pin = crewFeedPinFixture(segmentId: nil, authorId: nil, authorUsername: nil,
                                       createdAt: iso(kCrewFeedEpoch))
         let sub = CrewFeedMerge.subLine(for: pin, now: kCrewFeedEpoch)
-        XCTAssertEqual(sub, "Just now · Neighbor")
+        XCTAssertEqual(sub, "Just now · Former neighbor")
     }
 
     func testSubLineMessage_includesAuthorAndAge() {

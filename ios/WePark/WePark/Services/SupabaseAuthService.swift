@@ -172,6 +172,30 @@ final class SupabaseAuthService {
         return accessToken
     }
 
+    // MARK: - Account deletion (open item #38)
+
+    /// Ends the local session after `delete_my_account()` succeeded server-side, then waits for
+    /// the replacement anonymous identity.
+    ///
+    /// The server already destroyed the sessions and refresh tokens, so the SDK's own sign-out
+    /// request may come back 401/403/404 (it swallows those) or fail on the network — all of
+    /// which are ignored here (`try?`): the only goal is clearing the Keychain-cached session.
+    /// `.local` scope so no other session is touched.
+    ///
+    /// The SDK removes the stored session and emits `.signedOut` BEFORE its network call, and
+    /// `handleAuthStateChange(.signedOut)` already clears the cached state and mints a NEW
+    /// anonymous identity (a different, empty `auth.users` row — the deleted identity cannot be
+    /// signed back into). This method deliberately does NOT call `clearSession()` /
+    /// `signInAnonymously()` itself on top of that handler: doing both could create two
+    /// anonymous users (Supabase anonymous sign-up has no idempotency key). It only awaits the
+    /// handler's in-flight sign-in (`pendingSignIn`) so callers see a settled identity.
+    func endSessionAfterAccountDeletion() async {
+        _ = try? await authClient.signOut(scope: .local)
+        if let pendingSignIn {
+            await pendingSignIn.value
+        }
+    }
+
     // MARK: - Anonymous sign-in
 
     /// Coalesces concurrent `signInAnonymously()` callers onto a single in-flight sign-in.
