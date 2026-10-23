@@ -915,12 +915,106 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// auto-tightening the look - never fight a gesture the user just made.
         var onAmbientUserAdjusted: (() -> Void)?
 
+        // MARK: - A2 curb-pin placement (SEAM: self-contained block; all inert unless called)
+        //
+        // Called from ContentView `.onChange` handlers, OUTSIDE `updateUIView` (#31). The
+        // closures are installed in `makeUIView` (block marked "A2 curb-pin placement").
+
+        var onBeginPlacement: ((CLLocationCoordinate2D, String?, Bool) -> Void)?
+        var onEndPlacement: ((Bool) -> Void)?
+        var onRefreshPlacement: (() -> Void)?
+        var onCyclePlacementCurb: (() -> Void)?
+        var onSetPlacementBottomInset: ((CGFloat) -> Void)?
+        var onFocusPlacement: ((CLLocationCoordinate2D) -> Void)?
+        var onQueryPlacementActive: (() -> Bool)?
+
+        /// True while a placement session is live (installed in `makeUIView`; false before that
+        /// and flag-off). A3: read this before trusting its own state, and route EVERY reset path
+        /// (view rebuild, error path, sheet/scene reset) through `endPlacement` - while a session
+        /// is live map taps / long-presses are no-ops and nothing self-heals if A3 drops its state.
+        var isPlacementActive: Bool {
+            onQueryPlacementActive?() ?? false
+        }
+
+        /// Enters placement (or REPLACES a live session: the old one ends without restoring its
+        /// camera and the new one inherits the original pre-placement snapshot, so Cancel still
+        /// returns to the true prior state). Snapshots the camera, flattens to pitch 0 / north-up at street
+        /// level with `seed` under the pin tip (40% of the view height), tightens the zoom window,
+        /// shows the reticle and starts resolving. ONE animated `setCamera`.
+        /// - Parameters:
+        ///   - seed: the coordinate that starts under the pin.
+        ///   - incumbentBlockfaceKey: pre-selected blockface (Path B), or nil.
+        ///   - animated: false for an instant entry (the report-pill form, spec A-2).
+        func beginPlacement(
+            seed: CLLocationCoordinate2D,
+            incumbentBlockfaceKey: String? = nil,
+            animated: Bool = true
+        ) {
+            onBeginPlacement?(seed, incumbentBlockfaceKey, animated)
+        }
+
+        /// Leaves placement. `restore: true` = Cancel (exact prior centre / zoom; zoom window
+        /// restored). `restore: false` = commit (keeps the street-level zoom, centres on the
+        /// placed point). Either way pitch / heading return to the prior state - or, flag-on, the
+        /// merged A3.6 ambient driving look. Never reads or writes `driveModeActive`.
+        func endPlacement(restore: Bool) {
+            onEndPlacement?(restore)
+        }
+
+        /// Re-resolves once at the current pin. The controller reads `placementIndex` off the
+        /// representable, which only updates when `updateUIView` runs - so call this AFTER the
+        /// index swap has rendered (e.g. a following run-loop turn / next `.onChange`), NOT in
+        /// the same pass that assigned the new index, or it re-resolves against the old one.
+        func refreshPlacement() {
+            onRefreshPlacement?()
+        }
+
+        /// VoiceOver adjustable hook: moves the pin to the nearest other curb (instant).
+        func cyclePlacementCurb() {
+            onCyclePlacementCurb?()
+        }
+
+        /// Animates the camera so `coordinate` lands under the pin tip (the "Nearest curb" chip).
+        /// The settle that follows fires `onPlacementOutcome`. No-op when no session is live.
+        func focusPlacement(on coordinate: CLLocationCoordinate2D) {
+            onFocusPlacement?(coordinate)
+        }
+
+        /// Lifts the Apple logo / Legal link above the bottom card; call when the card's measured
+        /// height changes (never per frame); 0 clears it. Restored by `endPlacement`.
+        func setPlacementBottomInset(_ cardHeight: CGFloat) {
+            onSetPlacementBottomInset?(cardHeight)
+        }
+
     }
 
     /// Shared action box. Created by ContentView and passed in; populated by `makeUIView`.
     /// ContentView calls `coordinatorActions.applyDrivePitch(active, priorPitch)` from its
     /// `.onChange(of: driveModeActive)` handler (not from updateUIView).
     var coordinatorActions: CoordinatorActions
+
+    // MARK: - A2 curb-pin placement inputs (SEAM: self-contained block; all default nil = mode off)
+    //
+    // Stream A2 of docs/longpress-universal-plant-spec.md (amendment A.9 seam contract). Declared
+    // AFTER `coordinatorActions` and defaulted, so the existing memberwise-init call site compiles
+    // unchanged; ContentView (stream A3) passes them last, in this order. nil = the mode is off
+    // and NOTHING new exists on the map: no observer, no overlay, no display link, no subview
+    // (the controller is only ever created by `CoordinatorActions.beginPlacement`).
+
+    /// The snap index the 30 fps loop resolves against. A3 builds it (detached task, generation
+    /// token) and swaps it when `tileLoader.segments` changes; call
+    /// `coordinatorActions.refreshPlacement()` after a swap so an idle mode re-resolves.
+    var placementIndex: CurbSnapIndex? = nil
+
+    /// Fired (main queue) ONLY when the snapped blockface / outcome kind changes, and on every
+    /// settle - never per frame (spec A23). Gate any SwiftUI write on `blockfaceKey` / the outcome
+    /// case, never on `CurbSnapResult ==`.
+    var onPlacementOutcome: ((CurbSnapOutcome) -> Void)? = nil
+
+    /// The severity a segment is painted with right now. ADDITIVE to the seam contract (A2 needs
+    /// the engine's `CurrentState` for the highlight CORE colour and has no engine / clock of its
+    /// own); nil renders the core as `.unknown` grey.
+    var placementSeverity: ((Segment) -> CurrentState)? = nil
 
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
@@ -1442,6 +1536,34 @@ struct MapViewRepresentable: UIViewRepresentable {
             )
         }
 
+        // MARK: A2 curb-pin placement (SEAM: self-contained block)
+        //
+        // Installed unconditionally (closures are inert until ContentView calls them, which it
+        // only does flag-on). Nothing is created here: no observer, overlay, link or subview
+        // exists until `beginPlacement`. All camera work happens inside `CurbPlacementController`,
+        // reached only from ContentView's own non-`updateUIView` handlers (#31 invariant).
+        coordinatorActions.onBeginPlacement = { [weak coordinator] seed, incumbentKey, animated in
+            coordinator?.beginPlacement(seed: seed, incumbentKey: incumbentKey, animated: animated)
+        }
+        coordinatorActions.onEndPlacement = { [weak coordinator] restore in
+            coordinator?.endPlacement(restore: restore)
+        }
+        coordinatorActions.onRefreshPlacement = { [weak coordinator] in
+            coordinator?.placementController?.refresh()
+        }
+        coordinatorActions.onCyclePlacementCurb = { [weak coordinator] in
+            coordinator?.placementController?.cycleNearbyCurb()
+        }
+        coordinatorActions.onSetPlacementBottomInset = { [weak coordinator] cardHeight in
+            coordinator?.placementController?.setBottomInset(cardHeight)
+        }
+        coordinatorActions.onFocusPlacement = { [weak coordinator] coordinate in
+            coordinator?.placementController?.focus(on: coordinate)
+        }
+        coordinatorActions.onQueryPlacementActive = { [weak coordinator] in
+            coordinator?.placementController != nil
+        }
+
         // PR #89 on-device follow-up: repositioned compass (see `showsCompass = false`
         // above for the full rationale). Added directly as a subview of `mapView` — Apple's
         // own recommended usage of `MKCompassButton` — rather than as a SwiftUI overlay in
@@ -1781,6 +1903,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// or writing it repeatedly has no view-invalidation cost, unlike `followPaused`.
         var hasSignaledFollowPauseThisGesture: Bool = false
 
+        // MARK: - A2 curb-pin placement session (SEAM: nil unless `beginPlacement` ran)
+
+        /// The live placement session, or nil. nil is the only state flag-off ever sees: with no
+        /// session there is no display link, reticle, highlight overlay or extra observer.
+        var placementController: CurbPlacementController? = nil
+
         init(parent: MapViewRepresentable) {
             self.parent = parent
         }
@@ -1861,6 +1989,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                 mapView.removeOverlay(existing)
                 mapView.addOverlay(existing, level: .aboveRoads)
             }
+
+            // A2: keep the placement highlight on top of the rebuilt curb lines (no-op, nil, when
+            // there is no placement session).
+            placementController?.reinsertHighlight()
         }
 
         // MARK: - W5: Car pin annotation management
@@ -2776,6 +2908,11 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return renderer
             }
 
+            // A2: the 4-layer snapped-blockface highlight (only exists during a placement session).
+            if let highlight = overlay as? PlacementHighlightOverlay {
+                return PlacementHighlightRenderer(highlight: highlight)
+            }
+
             // Fallback for any unexpected overlay type (e.g. user location annotation).
             return MKOverlayRenderer(overlay: overlay)
         }
@@ -2783,6 +2920,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MARK: - MKMapViewDelegate: camera
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
+            // A2: placement session hook. FIRST statement on purpose - the guard below returns
+            // early for every non-drive change. nil (no session) => no-op.
+            placementController?.regionWillChange()
+
             // Open item #36 / `docs/design/drive-puck-chevron-review.md` candidate A: hide the
             // compass while `driveModeActive`, restore it on exit — matching Apple Maps' own
             // turn-by-turn chrome (no compass dial; heading-up rotation already tells the
@@ -2875,6 +3016,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            // A2: placement session hook (settle: final resolve + nudge). nil => no-op.
+            placementController?.regionDidChange()
+
             let region = mapView.region
             // FT-5: Clear the interaction flag synchronously and unconditionally, before
             // the async onRegionChanged dispatch. Clears on every call — whether the change
@@ -2942,7 +3086,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             // real pan/pinch (observer recognizers) - taps/long-presses and programmatic
             // setCamera calls never set it - so tap-a-block and the look's own animations don't
             // count. Async for the same "no state write mid-render" reason as below.
-            if AppConstants.driveModeDefaultEnabled, !parent.driveModeActive, wasUserInteracting {
+            // A2: a pan/pinch INSIDE a placement session is not the user abandoning the ambient
+            // look - without this guard it would permanently disable PR #138's auto-tighten.
+            if AppConstants.driveModeDefaultEnabled, !parent.driveModeActive, wasUserInteracting,
+               placementController == nil {
                 DispatchQueue.main.async { [weak self] in
                     self?.parent.coordinatorActions.onAmbientUserAdjusted?()
                 }
@@ -2962,6 +3109,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         @objc func handleTap(_ recognizer: UITapGestureRecognizer) {
             guard let mapView = mapView,
                   recognizer.state == .ended else { return }
+            // A2: map taps are no-ops while a placement session is live (spec A.3).
+            guard placementController == nil else { return }
             let screenPoint = recognizer.location(in: mapView)
 
             // W5: Check if the tap is on the car-pin annotation view before
@@ -3030,6 +3179,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         @objc func handleLongPress(_ recognizer: UILongPressGestureRecognizer) {
             guard let mapView = mapView,
                   recognizer.state == .ended else { return }
+            // A2: long-press is a no-op while a placement session is live (spec A.3 / A22).
+            guard placementController == nil else { return }
             let screenPoint = recognizer.location(in: mapView)
             let coordinate = mapView.convert(screenPoint, toCoordinateFrom: mapView)
             // Defer SwiftUI state mutation out of the UIKit gesture callback.
