@@ -72,6 +72,17 @@
 //  `ParkUntilPill` based on whether the active filter came from a goal (§ "activeGoal" below).
 //
 
+//  Addendum 3 (2026-10-23 minimal ambient screen, A3.3, flag-on only — this view never mounts
+//  flag-off): Kevin's smoke verdict on the Addendum 2 screen was "too many buttons and icons."
+//  The Report + full-palette top row is DELETED from this dock (Report and the "Show all
+//  parking rules" toggle now live in `MoreMenuSheet`, opened from the rail's More button), so
+//  the dock is exactly: [empty-map guard] -> Start Driving -> goal tiles. The `reportPill`
+//  generic slot Addendum 2 added is gone with it (this struct is no longer generic). Tiles grow
+//  to a 128pt minimum height with bigger type and reflow to a vertical stack at accessibility
+//  Dynamic Type sizes; a selection haptic confirms a goal pick. In full-palette mode the tile
+//  row is replaced by a "Pick a parking goal" row so the user is never stranded.
+//
+
 import SwiftUI
 
 // MARK: - EmptyMapGuardKind
@@ -91,15 +102,16 @@ enum EmptyMapGuardKind: Equatable {
 
 // MARK: - GoalSelectorView
 
-struct GoalSelectorView<ReportPill: View>: View {
+struct GoalSelectorView: View {
 
     /// The currently active goal (always has a value — "no goal" isn't a state this dock
     /// represents; `fullPaletteMode` is the orthogonal "goal-first vs. full-palette" switch).
     let selectedGoal: ParkingGoal
 
-    /// True once the user has toggled OUT of goal-first (§0.8.8). The goal-tile row hides
-    /// entirely in this state; the toggle row and "Start Driving" row stay visible and
-    /// functional (design doc §2.3's note, §2.4).
+    /// True once the user has toggled OUT of goal-first (§0.8.8, via the More sheet's
+    /// "Show all parking rules" row). The goal-tile row hides entirely in this state and is
+    /// replaced by the "Pick a parking goal" row; "Start Driving" stays visible and functional
+    /// (design doc §2.3's note; Addendum 3 A3.3).
     let fullPaletteMode: Bool
 
     /// Non-nil only when `selectedGoal == .parkAndForget` and the viewport-wide ladder walk
@@ -112,92 +124,60 @@ struct GoalSelectorView<ReportPill: View>: View {
     /// re-runs the EXISTING `rebuildOverlays()` path (§0.8.6) — no sheet, no confirm (AC-22).
     let onSelectGoal: (ParkingGoal) -> Void
 
-    /// Fired by the toggle row. Caller flips `fullPaletteMode` and either re-applies
-    /// `selectedGoal` or calls the existing `clearParkUntilFilter()` (§0.8.8/AC-27).
-    let onToggleFullPalette: () -> Void
+    /// Fired by full-palette mode's "Pick a parking goal" row (Addendum 3 A3.3). Caller
+    /// leaves full-palette mode and re-applies `selectedGoal` (`ContentView
+    /// .toggleFullPaletteMode()`'s turn-OFF branch, AC-27).
+    let onReturnToGoals: () -> Void
 
     /// Fired by "Start Driving". Caller calls the EXISTING `enterCruiseMode()` — this view
     /// never escalates on its own; picking a goal never does either (AC-30, §0.8.7).
     let onStartDriving: () -> Void
 
-    /// Addendum 2 (A2.1 item 2): the persistent Report pill button — `ContentView`'s OWN
-    /// `reportPillButton`, unchanged component, handed down as a trailing `@ViewBuilder`
-    /// closure rather than rebuilt here, so this file never needs to know what tapping
-    /// Report actually does (same "caller owns the gate/state" convention every other
-    /// closure on this view already follows). Evaluated once, in `init`, matching the
-    /// standard SwiftUI "generic container + @ViewBuilder content" idiom.
-    let reportPill: ReportPill
+    /// Addendum 3 A3.3: at accessibility Dynamic Type sizes the three tiles reflow from a
+    /// row to a vertical stack so labels never truncate.
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
+    // Explicit init (rather than the synthesized memberwise one) so the private `@Environment`
+    // property can never make the call site in `ContentView` inaccessible; parameter order =
+    // property declaration order.
     init(
         selectedGoal: ParkingGoal,
         fullPaletteMode: Bool,
         emptyMapGuardKind: EmptyMapGuardKind?,
         onSelectGoal: @escaping (ParkingGoal) -> Void,
-        onToggleFullPalette: @escaping () -> Void,
-        onStartDriving: @escaping () -> Void,
-        @ViewBuilder reportPill: () -> ReportPill
+        onReturnToGoals: @escaping () -> Void,
+        onStartDriving: @escaping () -> Void
     ) {
         self.selectedGoal = selectedGoal
         self.fullPaletteMode = fullPaletteMode
         self.emptyMapGuardKind = emptyMapGuardKind
         self.onSelectGoal = onSelectGoal
-        self.onToggleFullPalette = onToggleFullPalette
+        self.onReturnToGoals = onReturnToGoals
         self.onStartDriving = onStartDriving
-        self.reportPill = reportPill()
     }
 
     var body: some View {
-        // Design doc §2.1 (amended by Addendum 2 A2.1 item 2): bottom-anchored VStack,
-        // top-to-bottom code order = closest-to-thumb LAST. `topRow` (Report + full-palette
-        // toggle, sharing one line) is quietest/farthest from thumb; goalTileRow is the
-        // centerpiece, closest to thumb.
+        // Design doc §2.1 (as amended by Addendum 3 A3.3): bottom-anchored VStack, code order
+        // top-to-bottom = closest-to-thumb LAST. Start Driving sits above the tiles (engaging
+        // has real side effects, so it earns the extra reach); the tiles / the full-palette
+        // "Pick a parking goal" row are the centerpiece, closest to the thumb.
         VStack(spacing: 10) {
-            topRow
             if let kind = emptyMapGuardKind {
                 EmptyMapGuardBanner(kind: kind)
             }
             startDrivingRow
-            if !fullPaletteMode {
+            if fullPaletteMode {
+                pickGoalRow
+            } else {
                 goalTileRow
             }
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
-    }
-
-    // MARK: - Top row: Report pill + full-palette toggle (Addendum 2, A2.1 item 2)
-
-    /// Report pill leading, full-palette toggle trailing, sharing one line — both controls
-    /// keep their existing sizes untouched (Report: `.frame(minHeight: 48)`, carried in via
-    /// `reportPillButton` itself; toggle: `.frame(minHeight: 44)`, unchanged below) — only
-    /// their CONTAINER changed, per the addendum's own framing.
-    private var topRow: some View {
-        HStack {
-            reportPill
-            Spacer()
-            fullPaletteToggleButton
-        }
-    }
-
-    /// Full-palette toggle (§2.4) — the button content itself, unchanged from the pre-Addendum-2
-    /// `fullPaletteToggleRow`. Its own `HStack { Spacer(); Button }` wrapper is gone (that
-    /// `Spacer()` was for right-aligning a LONE row; `topRow` above now supplies the shared-line
-    /// layout instead), but the button's own look/size/accessibility label are byte-identical.
-    private var fullPaletteToggleButton: some View {
-        Button(action: onToggleFullPalette) {
-            HStack(spacing: 6) {
-                Image(systemName: "paintpalette.fill")
-                    .font(.caption)
-                Text(fullPaletteMode ? "Back to goal picker" : "Show all parking rules")
-                    .font(.footnote.weight(.medium))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(minHeight: 44)
-            .background(.regularMaterial, in: Capsule())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(fullPaletteMode ? "Back to goal picker" : "Show all parking rules")
+        // Addendum 3 A3.3: the one haptic on this screen. Picking a goal is a mode change a
+        // driver may make without looking; a light tick confirms it. None on Start Driving,
+        // Search, or More.
+        .sensoryFeedback(.selection, trigger: selectedGoal)
     }
 
     // MARK: - "Start Driving" row (§2.3)
@@ -216,11 +196,12 @@ struct GoalSelectorView<ReportPill: View>: View {
     private var startDrivingRow: some View {
         Button(action: onStartDriving) {
             Label("Start Driving", systemImage: "location.north.circle.fill")
-                .font(.subheadline.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 48)
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 56)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.bordered)
+        .tint(.blue)
         .clipShape(RoundedRectangle(cornerRadius: 14))
         .accessibilityLabel("Start Driving")
         .accessibilityHint("Enters the full heading-up driving view, lit up for whichever goal is currently selected.")
@@ -228,21 +209,52 @@ struct GoalSelectorView<ReportPill: View>: View {
 
     // MARK: - Goal tile row (§2.2)
 
+    /// Addendum 3 A3.3: HStack of three tiles normally; a vertical VStack of three full-width
+    /// tiles at accessibility Dynamic Type sizes.
+    @ViewBuilder
     private var goalTileRow: some View {
-        HStack(spacing: 10) {
-            // `id: \.rawValue` rather than `\.self` — `ParkingGoal` (`Services/ParkingGoals
-            // .swift`, DM-2e, untouched by this stream) declares `Equatable` but not
-            // `Hashable`, and `ForEach(_:id:)` only needs the KEY PATH'S VALUE type to be
-            // `Hashable`, not the element type itself. `rawValue` (`String`) is Hashable for
-            // free, so this avoids adding a conformance to a file this stream must not touch.
-            ForEach(ParkingGoal.allCases, id: \.rawValue) { goal in
-                GoalTile(
-                    goal: goal,
-                    isSelected: goal == selectedGoal,
-                    onTap: { onSelectGoal(goal) }
-                )
-            }
+        if dynamicTypeSize.isAccessibilitySize {
+            VStack(spacing: 10) { goalTiles(horizontalLayout: true) }
+        } else {
+            HStack(spacing: 10) { goalTiles(horizontalLayout: false) }
         }
+    }
+
+    /// The three tiles. `horizontalLayout` is the TILE's own internal layout (icon leading,
+    /// text trailing — used by the full-width accessibility stack), not the row's.
+    @ViewBuilder
+    private func goalTiles(horizontalLayout: Bool) -> some View {
+        // `id: \.rawValue` rather than `\.self` — `ParkingGoal` (`Services/ParkingGoals
+        // .swift`, DM-2e, untouched by this stream) declares `Equatable` but not
+        // `Hashable`, and `ForEach(_:id:)` only needs the KEY PATH'S VALUE type to be
+        // `Hashable`, not the element type itself. `rawValue` (`String`) is Hashable for
+        // free, so this avoids adding a conformance to a file this stream must not touch.
+        ForEach(ParkingGoal.allCases, id: \.rawValue) { goal in
+            GoalTile(
+                goal: goal,
+                isSelected: goal == selectedGoal,
+                horizontalLayout: horizontalLayout,
+                onTap: { onSelectGoal(goal) }
+            )
+        }
+    }
+
+    // MARK: - "Pick a parking goal" row (Addendum 3 A3.3, full-palette mode only)
+
+    /// Replaces the tile row in full-palette mode so the user is never stranded: tap
+    /// re-applies the last-selected goal and brings the tiles back. Replaces the old
+    /// reverse-direction toggle label (§2.4 "Back to goal picker"). Blue, never
+    /// green/orange/red.
+    private var pickGoalRow: some View {
+        Button(action: onReturnToGoals) {
+            Label("Pick a parking goal", systemImage: "rectangle.split.3x1.fill")
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 56)
+        }
+        .buttonStyle(.borderedProminent)
+        .tint(.blue)
+        .accessibilityLabel("Pick a parking goal")
+        .accessibilityHint("Go back to the three parking goals")
     }
 }
 
@@ -260,6 +272,9 @@ struct GoalSelectorView<ReportPill: View>: View {
 private struct GoalTile: View {
     let goal: ParkingGoal
     let isSelected: Bool
+    /// Addendum 3 A3.3: true for the accessibility-size full-width stack (icon leading, text
+    /// trailing, no line limits); false for the normal three-across square-ish tile.
+    let horizontalLayout: Bool
     let onTap: () -> Void
 
     /// Copy/icons locked by `docs/design/goal-first-ambient-design.md` §1 — "Free" is
@@ -291,29 +306,57 @@ private struct GoalTile: View {
 
     var body: some View {
         Button(action: onTap) {
-            VStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.title2)
-                Text(primary)
-                    .font(.headline.bold())
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                Text(subLabel)
-                    .font(.caption)
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
-            }
-            .frame(maxWidth: .infinity, minHeight: 112)
-            .foregroundStyle(isSelected ? Color.white : Color.secondary)
-            .background(
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(isSelected ? Color.blue : Color(.systemGray6))
-            )
+            tileContent
+                .frame(maxWidth: .infinity, minHeight: 128)
+                .foregroundStyle(isSelected ? Color.white : Color.secondary)
+                .background(
+                    RoundedRectangle(cornerRadius: 20)
+                        .fill(isSelected ? Color.blue : Color(.systemGray6))
+                )
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
         .accessibilityLabel("\(primary), \(subLabel.lowercased())")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    @ViewBuilder
+    private var tileContent: some View {
+        if horizontalLayout {
+            HStack(spacing: 16) {
+                Image(systemName: icon)
+                    .font(.title)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(primary)
+                        .font(.headline.bold())
+                        .multilineTextAlignment(.leading)
+                    Text(subLabel)
+                        .font(.footnote)
+                        .multilineTextAlignment(.leading)
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+        } else {
+            // Addendum 3 A3.3 sizes: icon `.title` (was `.title2`), primary `.headline` bold up
+            // to 2 lines, sub-label `.footnote` up to 3 lines (was `.caption` / 2 — too small
+            // for a glance at a stoplight).
+            VStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.title)
+                Text(primary)
+                    .font(.headline.bold())
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                Text(subLabel)
+                    .font(.footnote)
+                    .multilineTextAlignment(.center)
+                    .lineLimit(3)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 12)
+        }
     }
 }
 
@@ -438,17 +481,9 @@ private struct EmptyMapGuardBanner: View {
                 fullPaletteMode: false,
                 emptyMapGuardKind: nil,
                 onSelectGoal: { _ in },
-                onToggleFullPalette: {},
+                onReturnToGoals: {},
                 onStartDriving: {}
-            ) {
-                Label("Report", systemImage: "flag.fill")
-                    .font(.subheadline.weight(.semibold))
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
-                    .frame(minHeight: 48)
-                    .background(.regularMaterial, in: Capsule())
-                    .foregroundStyle(Color.orange)
-            }
+            )
         }
     }
 }

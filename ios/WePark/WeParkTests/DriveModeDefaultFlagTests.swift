@@ -148,6 +148,67 @@ final class DriveModeDefaultFlagTests: XCTestCase {
         }
     }
 
+    // MARK: - Addendum 3 (minimal ambient screen): flag-off guards
+
+    /// Addendum 3 A3.4 replaced Addendum 2's `communityMapChromeOverlay` dock-visibility gate
+    /// (`&& !goalSelectorDockVisible(...)`) with `communityMapFloatingChromeVisible`. Flag off,
+    /// the new gate must equal the pre-Addendum-3 formula for EVERY input combination (the
+    /// dock gate is false by construction flag-off, so both reduce to `chromeVisible`) —
+    /// i.e. Report + "?" keep floating exactly where they do today.
+    func testFlagOff_floatingCommunityChrome_equalsPreAddendum3Formula() {
+        for chromeVisible in [true, false] {
+            for activeSheetIsNil in [true, false] {
+                for driveModeActive in [true, false] {
+                    for blockSelectModeActive in [true, false] {
+                        for spotPlacementActive in [true, false] {
+                            let preAddendum3 = chromeVisible && !goalSelectorDockVisible(
+                                driveModeDefaultEnabled: false,
+                                activeSheetIsNil: activeSheetIsNil,
+                                driveModeActive: driveModeActive,
+                                blockSelectModeActive: blockSelectModeActive,
+                                spotPlacementActive: spotPlacementActive
+                            )
+                            let now = ContentView.communityMapFloatingChromeVisible(
+                                chromeVisible: chromeVisible,
+                                driveModeDefaultEnabled: false
+                            )
+                            XCTAssertEqual(
+                                now, preAddendum3,
+                                "flag off: the floating Report pill + \"?\" gate must be " +
+                                "byte-identical to the pre-Addendum-3 formula."
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Flag off, the rest state is still `.browseNav` — never the More sheet — and the More
+    /// sheet has no rest-state/dismiss path of its own (it is only ever assigned by the flag-on
+    /// rail's More button).
+    func testFlagOff_restStateUnchanged_notMoreMenu() {
+        switch driveModeDefaultRestStateSheet(driveModeDefaultEnabled: false) {
+        case .browseNav:
+            break
+        default:
+            XCTFail("flag off: rest state must remain .browseNav (Addendum 3 adds no flag-off sheet).")
+        }
+    }
+
+    /// The shipped (flag-off) default must keep the legacy floating Report pill + "?" layer
+    /// renderable: with the real flag value and the base gate satisfied, the layer shows.
+    func testFloatingCommunityChrome_defaultFlag_matchesShippedBehavior() {
+        XCTAssertEqual(
+            ContentView.communityMapFloatingChromeVisible(
+                chromeVisible: true,
+                driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled
+            ),
+            !AppConstants.driveModeDefaultEnabled,
+            "closes the default-parameter-binding gap for the new gate: wired to the real flag."
+        )
+    }
+
     // MARK: - Flag-on: the launched-world assertion this guard test becomes at flip time
 
     /// The flag-ON branch: once `driveModeDefaultEnabled` flips to `true`, both rest-state

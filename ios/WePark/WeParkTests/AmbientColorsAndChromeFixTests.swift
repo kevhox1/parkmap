@@ -50,6 +50,9 @@
 //      booleans (`goalSelectorDockVisible`, `AppConstants.driveModeDefaultEnabled`) are
 //      already covered by `DM2GoalSelectorTests.swift`/`DriveModeDefaultFlagTests.swift`; no
 //      new boolean combination was introduced for either move.
+//      (Superseded by Addendum 3: both controls now live in the More sheet; the rail,
+//      More-row gating, and floating-chrome suppression are covered by
+//      `MinimalAmbientLayoutTests.swift` / `DriveModeDefaultFlagTests.swift`.)
 //
 //  [COMPILE-UNVERIFIED] Written with no Xcode/simulator on this machine — Kevin verifies
 //  compile + test pass on his Mac per HANDOFF.md's environment split.

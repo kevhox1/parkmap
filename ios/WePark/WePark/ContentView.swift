@@ -355,6 +355,13 @@ enum ActiveSheet: Identifiable {
     /// as tapping a notification; whatever was open (browse sheet at any detent, block detail,
     /// My Car) is preempted, not silently dropped.
     case regularsInviteRedemption(token: UUID)
+    /// Addendum 3 A3.4 (`docs/design/goal-first-ambient-design.md`, flag-on only): the "More"
+    /// sheet opened by the ambient rail's ellipsis button — the single door to Report, the map
+    /// key, the full-palette toggle, Find my car, and the Park Until clock. No payload. A row
+    /// tap SWAPS `activeSheet` to its destination (never stacks sheets); Done and
+    /// swipe-dismiss resolve through `dismissTargetOutsideBrowseNav` / the `.sheet(item:)`
+    /// `onDismiss` catch-all back to the rest state (`driveModeDefaultRestStateSheet()`).
+    case moreMenu
 
     var id: String {
         switch self {
@@ -375,6 +382,7 @@ enum ActiveSheet: Identifiable {
         case .browseNav:                  return "browseNav"
         case .mapKeyLegend:               return "mapKeyLegend"
         case .regularsInviteRedemption(let token): return "regularsInviteRedemption-\(token.uuidString)"
+        case .moreMenu:                   return "moreMenu"
         }
     }
 }
@@ -1868,9 +1876,63 @@ struct ContentView: View {
                 .presentationBackground(.regularMaterial)
                 .presentationCornerRadius(20)
 
+        case .moreMenu:
+            moreMenuSheetContent
+
         case .browseNav:
             browseNavigationSheetContent
 
+        }
+    }
+
+    // MARK: - Addendum 3 A3.4: More sheet
+
+    /// The More sheet's content + presentation config (`Views/MoreMenuSheet.swift` is pure
+    /// presentation; every action lives here). Rows come from `moreMenuVisibleRows(...)`, the
+    /// single pure source of truth for which rows show. Each row tap SWAPS `activeSheet` to
+    /// its destination (or dismisses to the rest state for the two in-place actions) — it
+    /// never stacks a second sheet on top of this one.
+    @ViewBuilder
+    private var moreMenuSheetContent: some View {
+        MoreMenuSheet(
+            rows: moreMenuVisibleRows(
+                communityEnabled: AppConstants.communityEnabled,
+                hasParkedCar: parkPinService.parkedCar != nil,
+                fullPaletteMode: fullPaletteMode
+            ),
+            fullPaletteMode: fullPaletteMode,
+            onSelect: { row in handleMoreMenuSelection(row) },
+            onToggleFullPalette: {
+                // Addendum 3 A3.4: dismiss after flipping so the user sees the result at once.
+                activeSheet = dismissTargetOutsideBrowseNav
+                toggleFullPaletteMode()
+            },
+            onDone: { activeSheet = dismissTargetOutsideBrowseNav }
+        )
+        .presentationDetents([.medium])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(.regularMaterial)
+        .presentationCornerRadius(20)
+    }
+
+    /// Addendum 3 A3.4: the action table for a More-sheet row. Report / map key / Park Until
+    /// SWAP `activeSheet` straight to the existing destination (the same assignments the old
+    /// Report pill, "?" button, and clock icon made); Find my car dismisses first, then runs
+    /// the old rail button's `recenterOnCar()`. The "Show all parking rules" row is a `Toggle`
+    /// handled by `onToggleFullPalette` above, so it is a no-op here.
+    private func handleMoreMenuSelection(_ row: MoreMenuRow) {
+        switch row {
+        case .report:
+            handleReportPillTap()
+        case .mapKey:
+            activeSheet = .mapKeyLegend
+        case .showAllRules:
+            break
+        case .findMyCar:
+            activeSheet = dismissTargetOutsideBrowseNav
+            recenterOnCar()
+        case .parkUntil:
+            activeSheet = .parkUntil
         }
     }
 
@@ -2103,12 +2165,46 @@ struct ContentView: View {
             // existing `engine.safetyLabel(...)` text in every one of those cases, so this is
             // additive and flag-off byte-identical. Declared very last to match
             // `BlockDetailView`'s own property declaration order (memberwise-init order).
-            goalGoodThroughLabel: goalGoodThroughLabel(for: segment)
+            goalGoodThroughLabel: goalGoodThroughLabel(for: segment),
+            // Addendum 3 (A3.4 verify-item): "report this block" is the most natural moment
+            // for the action and the backstop that keeps Report discoverable now that the
+            // floating pill is gone flag-on. `nil` (no button) flag-off or community-off.
+            // Declared last to match `BlockDetailView`'s property declaration order.
+            onReportBlock: blockDetailReportAction(for: segment)
         )
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(.regularMaterial)
         .presentationCornerRadius(20)
+    }
+
+    /// Addendum 3 (A3.4): the block-detail sheet's "Report a problem on this block" action.
+    /// Gated flag-on AND `communityEnabled` (the same community gate Report is shown under
+    /// everywhere else) — `nil` otherwise, so flag-off block detail is byte-identical.
+    private func blockDetailReportAction(for segment: Segment) -> (() -> Void)? {
+        guard AppConstants.driveModeDefaultEnabled, AppConstants.communityEnabled else { return nil }
+        return { reportBlock(segment) }
+    }
+
+    /// Swaps the block-detail sheet for `ReportSheet`, pre-seeded with THIS block (its
+    /// midpoint, as the segment and the confirm-the-street candidates), mirroring
+    /// `handleReportPillTap()`'s `.reportPin` payload but with the tapped block instead of a
+    /// GPS-nearest guess. Clears the selection first, same as `initiatePathBPinDrop(from:)`,
+    /// so the block-highlight does not linger once the sheet is swapped.
+    private func reportBlock(_ segment: Segment) {
+        guard let coord = segment.midpoint ?? segment.coordinates.first else { return }
+        let confirmCandidates = CandidateSegmentSearch.confirmStreetCandidates(
+            for: segment,
+            in: tileLoader.segments
+        )
+        selectedSegmentID = nil
+        activeSheet = .reportPin(
+            coord: coord,
+            streetName: nil,
+            segment: segment,
+            confirmCandidates: confirmCandidates,
+            coordinateSource: "block detail"
+        )
     }
 
     /// DM-2 (design doc §3.1, "Good through <day>" per-segment ranking label — §0.8.3a). Not
@@ -2503,7 +2599,9 @@ struct ContentView: View {
                 ) {
                     recenterButtonStack
                         .padding(.top, 100)
-                        .padding(.trailing, 12)
+                        // Addendum 3 A3.2: flag-on rail uses a 16pt trailing margin; flag off
+                        // keeps the pre-DM-2 12pt.
+                        .padding(.trailing, AppConstants.driveModeDefaultEnabled ? 16 : 12)
                 }
             }
             // FT-20 Stream C: the gear + Parking 101 "?" buttons that used to float here
@@ -2710,6 +2808,18 @@ struct ContentView: View {
             && !longPressParkConfirmActive
     }
 
+    /// Addendum 3 (A3.4): whether the FLOATING Report pill + "?" layer
+    /// (`communityMapChromeOverlay`) renders. Flag off: exactly `chromeVisible` (the unchanged
+    /// `communityMapChromeVisible` result). Flag on: never — both controls live in the More
+    /// sheet instead. A `nonisolated static` pure function, same pattern as
+    /// `communityMapChromeVisible`, so both halves of that claim are directly unit-testable.
+    nonisolated static func communityMapFloatingChromeVisible(
+        chromeVisible: Bool,
+        driveModeDefaultEnabled: Bool
+    ) -> Bool {
+        chromeVisible && !driveModeDefaultEnabled
+    }
+
     /// Community 2.0 S13a (WP1, build 20): the persistent Report pill (bottom-left) + "?"
     /// map-key button (bottom-right) — `design/screenshots/01-home-collapsed.png`,
     /// `design/prototype.html:76-83`, gap-inventory work package WP1.
@@ -2743,28 +2853,29 @@ struct ContentView: View {
     /// `GoalSelectorView`'s own top row (rides the dock's real height for free), "?" moves
     /// into `recenterButtonStack`'s rail (a completely different floating layer with no
     /// height-tracking problem). Both moves are flag-gated — see the third condition below.
+    ///
+    /// Addendum 3 (A3.4) supersedes those two homes: Report and "?" both now live in the More
+    /// sheet (`MoreMenuSheet`) flag-on, so this floating layer is suppressed outright flag-on
+    /// (`communityMapFloatingChromeVisible`) and renders exactly as before flag-off.
     @ViewBuilder
     private var communityMapChromeOverlay: some View {
-        // Addendum 2 (A2.1): suppress BOTH pieces entirely whenever the goal-first dock is
-        // mounted — reuses `goalSelectorDockVisible(...)` with the SAME five inputs
-        // `bottomSafeAreaContent`'s own `goalDockVisible` local reads, rather than computing a
-        // second ad hoc boolean, so the two calls can never disagree about whether the dock is
-        // up. Flag off: `goalSelectorDockVisible` is false by construction (it ANDs
-        // `driveModeDefaultEnabled` itself), so this condition reduces to exactly
-        // `communityMapChromeVisible(...)` unchanged — byte-identical to pre-Addendum-2 flag-off
-        // behavior.
-        if Self.communityMapChromeVisible(
-            communityEnabled: AppConstants.communityEnabled,
-            driveModeActive: driveModeActive,
-            blockSelectModeActive: blockSelectModeActive,
-            spotPlacementActive: spotPlacementActive,
-            longPressParkConfirmActive: pendingLongPressCoord != nil
-        ) && !goalSelectorDockVisible(
-            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
-            activeSheetIsNil: activeSheet == nil,
-            driveModeActive: driveModeActive,
-            blockSelectModeActive: blockSelectModeActive,
-            spotPlacementActive: spotPlacementActive
+        // Addendum 3 (A3.4, flag-on only): suppress BOTH pieces entirely whenever
+        // `driveModeDefaultEnabled` — Report and "?" now live in the More sheet
+        // (`MoreMenuSheet`, rows 1 and 2), so this floating layer must not render them over
+        // the goal dock OR over any sheet (Addendum 2's dock-visibility gate let them
+        // reappear whenever a sheet was up, because `goalSelectorDockVisible` goes false
+        // then). The decision is the pure `communityMapFloatingChromeVisible` below. Flag off:
+        // reduces to exactly `communityMapChromeVisible(...)` unchanged — byte-identical to
+        // pre-Addendum-2 flag-off behavior.
+        if Self.communityMapFloatingChromeVisible(
+            chromeVisible: Self.communityMapChromeVisible(
+                communityEnabled: AppConstants.communityEnabled,
+                driveModeActive: driveModeActive,
+                blockSelectModeActive: blockSelectModeActive,
+                spotPlacementActive: spotPlacementActive,
+                longPressParkConfirmActive: pendingLongPressCoord != nil
+            ),
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled
         ) {
             VStack(spacing: 0) {
                 Spacer()
@@ -3237,15 +3348,13 @@ struct ContentView: View {
                     fullPaletteMode: fullPaletteMode,
                     emptyMapGuardKind: emptyMapGuardKind,
                     onSelectGoal: { goal in selectGoal(goal) },
-                    onToggleFullPalette: { toggleFullPaletteMode() },
+                    // Addendum 3 (A3.3): the Report pill + full-palette toggle row is gone from
+                    // the dock (both live in the More sheet now). In full-palette mode the
+                    // dock's "Pick a parking goal" row calls this — `toggleFullPaletteMode()`'s
+                    // turn-OFF branch (re-applies `selectedGoal`, brings the tiles back).
+                    onReturnToGoals: { toggleFullPaletteMode() },
                     onStartDriving: { enterCruiseMode() }
-                ) {
-                    // Addendum 2 (A2.1 item 2): Report pill now lives INSIDE the dock's own
-                    // top row instead of `communityMapChromeOverlay`'s floating layer — same
-                    // `reportPillButton` component, unchanged action/styling/accessibility,
-                    // just a different container.
-                    reportPillButton
-                }
+                )
             }
             // W7.5 row 3: Park Until pill — carried over from browsing if already active;
             // cannot be entered mid-drive (recenterButtonStack, its only entry point, is
@@ -3387,8 +3496,100 @@ struct ContentView: View {
     /// primary "Find a Spot" button (`enterCruiseMode()`, no destination path — labeled
     /// "Cruise" until spec §0f Ruling 2 renamed it) — no menu, per Kevin's terminology
     /// ruling (spec §3.1, superseded on naming by §0f).
+    ///
+    /// **Addendum 3 (A3.2, minimal ambient screen):** the flag-ON rail is now a completely
+    /// different, smaller stack — `ambientRail` (Search + More + a conditional Recenter, 56pt
+    /// circles). The old Find me / Find my car / clock circles and Addendum 2's "?" circle are
+    /// NOT part of it (Find my car, the clock, and "?" moved into the More sheet). Flag OFF:
+    /// `legacyRecenterButtonStack`, the pre-DM-2 rail verbatim (buttons 1, 3, 4 above — the flag-on-
+    /// only Search and "?" buttons were deleted from it, since it only ever renders flag-off).
     @ViewBuilder
     private var recenterButtonStack: some View {
+        if AppConstants.driveModeDefaultEnabled {
+            ambientRail
+        } else {
+            legacyRecenterButtonStack
+        }
+    }
+
+    // MARK: - Addendum 3 A3.2: ambient rail (flag-on only)
+
+    /// Whether the ambient rail's conditional Recenter circle shows right now — a thin wrapper
+    /// over the pure `ambientRecenterButtonVisible(...)` decision (where the rule is documented
+    /// and unit-tested) feeding it the live auth status, user fix, and visible map region.
+    private var ambientRecenterVisible: Bool {
+        ambientRecenterButtonVisible(
+            authorizationStatus: locationService.authorizationStatus,
+            userLocation: locationService.userLocation,
+            visibleRegion: region
+        )
+    }
+
+    /// One 56pt `.regularMaterial` rail circle (Addendum 3 A3.2). Icon scales with Dynamic
+    /// Type (`.title3.weight(.semibold)`) while the circle stays 56pt; `.primary` foreground.
+    private func railCircleButton(
+        systemImage: String,
+        accessibilityLabel label: String,
+        accessibilityHint hint: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.title3.weight(.semibold))
+                .frame(width: 56, height: 56)
+                .background(.regularMaterial, in: Circle())
+                .foregroundStyle(.primary)
+        }
+        .accessibilityLabel(label)
+        .accessibilityHint(hint)
+    }
+
+    /// Addendum 3 A3.2: top-right rail, fixed order so nothing shifts when another appears —
+    /// Search, More, then Recenter ONLY after the user pans away (or while location
+    /// authorization is undecided). Recenter is last so its appearance never moves Search or
+    /// More; `.transition(.opacity)`, no haptic. Icon size capped at `.xxxLarge` on this rail.
+    @ViewBuilder
+    private var ambientRail: some View {
+        VStack(spacing: 12) {
+            // 1. Search — presents `.browseNav` at `.medium` (unchanged from §2.6).
+            railCircleButton(
+                systemImage: "magnifyingglass",
+                accessibilityLabel: "Search",
+                accessibilityHint: "Find a street or place"
+            ) {
+                presentBrowseNavSearch()
+            }
+            // 2. More — the single door to Report, the map key, the palette toggle, Find my
+            //    car, and the Park Until clock (`MoreMenuSheet`).
+            railCircleButton(
+                systemImage: "ellipsis",
+                accessibilityLabel: "More",
+                accessibilityHint: "Report, what the colors mean, and more"
+            ) {
+                activeSheet = .moreMenu
+            }
+            // 3. Recenter — conditional, last. `location` (outline) is correct here: it only
+            //    shows when the map is NOT following the user (or auth is undecided), so the
+            //    "following" `location.fill` state the spec mentions can't occur on this button.
+            if ambientRecenterVisible {
+                railCircleButton(
+                    systemImage: "location",
+                    accessibilityLabel: "Show my location",
+                    accessibilityHint: "Moves the map to show your current GPS position."
+                ) {
+                    recenterOnUser()
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.default, value: ambientRecenterVisible)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+    }
+
+    // MARK: - Flag-off rail (pre-DM-2, unchanged)
+
+    @ViewBuilder
+    private var legacyRecenterButtonStack: some View {
         VStack(spacing: 8) {
             // Button 1: "Find me" — recenter on user's current GPS location.
             Button {
@@ -3403,29 +3604,8 @@ struct ContentView: View {
             .accessibilityLabel("Recenter on my location")
             .accessibilityHint("Moves the map to show your current GPS position.")
 
-            // Button 2: Search — DM-2 (`docs/drive-mode-default-spec.md` §0.4/§0.4a,
-            // design doc §2.6). Presents `.browseNav` at its `.medium` detent — the
-            // mitigation for the "no persistent sheet means Job B costs +1 tap" regression
-            // §0.4a flags honestly. Gated on `AppConstants.driveModeDefaultEnabled`: AC-2
-            // ("no persistent Search icon render anywhere" while the flag is off) and this
-            // stream's own dispatch are explicit that this is flag-gated, NOT unconditional
-            // — the regression it mitigates (losing the always-open `.browseNav` sheet as a
-            // search entry point) only exists once the flag flips the rest state to `nil` in
-            // the first place. Flag off: `.browseNav` is still the persistent default sheet,
-            // so this icon would be a redundant, un-speced second way to reach it.
-            if AppConstants.driveModeDefaultEnabled {
-                Button {
-                    presentBrowseNavSearch()
-                } label: {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(Color.accentColor)
-                }
-                .accessibilityLabel("Search for a destination")
-                .accessibilityHint("Opens search to navigate somewhere, or find a spot nearby.")
-            }
+            // (DM-2's flag-on-only Search button is now `ambientRail`'s first circle; flag off
+            // never rendered it — `.browseNav` is the persistent default sheet there.)
 
             // Button 3: "Find my car" — shown only when a parked-car pin exists.
             if parkPinService.parkedCar != nil {
@@ -3463,28 +3643,8 @@ struct ContentView: View {
                 .accessibilityLabel(parkUntilMode ? "Park Until filter active — tap to change time" : "Park Until — filter blocks by departure time")
                 .accessibilityHint("Shows only blocks where you can park until a chosen time.")
             }
-
-            // Button 5: "?" map key — Addendum 2 (A2.1 item 1), flag-on ONLY. Joins this rail
-            // as its LAST circle (after Find me / Search / Find my car / clock, in whichever
-            // combination is currently showing) rather than floating alone at the bottom of
-            // the screen. Same `Image(systemName:)`/font/background/foreground treatment as
-            // every other circle in this stack — deliberately NOT special-cased (the
-            // addendum's own instruction) — unlike `communityMapChromeOverlay`'s own
-            // `mapKeyButton`, which stays a bold `Text("?")` and unchanged for the flag-off
-            // bottom-right placement this button does NOT touch.
-            if AppConstants.driveModeDefaultEnabled {
-                Button {
-                    activeSheet = .mapKeyLegend
-                } label: {
-                    Image(systemName: "questionmark")
-                        .font(.system(size: 17, weight: .medium))
-                        .frame(width: 44, height: 44)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
-                        .foregroundStyle(Color.accentColor)
-                }
-                .accessibilityLabel("Map key")
-                .accessibilityHint("Shows what the map colors and pins mean.")
-            }
+            // (Addendum 3: the flag-on-only "?" circle Addendum 2 added here is deleted — the
+            // map key is now More-sheet row 2. Flag off never rendered it.)
         }
     }
 
@@ -6106,6 +6266,44 @@ nonisolated func parkUntilClockButtonVisible(
     fullPaletteMode: Bool
 ) -> Bool {
     !driveModeDefaultEnabled || fullPaletteMode
+}
+
+// MARK: - Addendum 3: ambient rail Recenter visibility (A3.2)
+
+/// Whether the flag-on ambient rail's third, conditional circle (Recenter) shows right now
+/// (`docs/design/goal-first-ambient-design.md` Addendum 3 A3.2, flag-on UI only — the caller
+/// is `ContentView.ambientRail`). It appears "when needed, not before":
+///   - `.notDetermined`: always — it is the route to the system permission prompt
+///     (`recenterOnUser()` -> `requestAndFetchLocation()`).
+///   - authorized (`.authorizedWhenInUse`/`.authorizedAlways`): only when there IS a fix and
+///     the user's dot lies OUTSIDE the central 50% of the visible map (i.e. more than a
+///     quarter of the visible span away from the region center on either axis) — the user has
+///     panned away. No fix yet: hidden (there is no dot to return to; a fix arriving later
+///     re-evaluates this on the next render).
+///   - `.denied`/`.restricted`: hidden — recentering cannot work, and Start Driving already
+///     routes denied users to the Location Settings alert.
+/// Pure so the rule is directly unit-testable; `nonisolated` for the same sync-XCTest reason
+/// every other pure decision function in this file is.
+nonisolated func ambientRecenterButtonVisible(
+    authorizationStatus: CLAuthorizationStatus,
+    userLocation: CLLocationCoordinate2D?,
+    visibleRegion: MKCoordinateRegion
+) -> Bool {
+    switch authorizationStatus {
+    case .notDetermined:
+        return true
+    case .authorizedWhenInUse, .authorizedAlways:
+        guard let user = userLocation else { return false }
+        let latOffset = abs(user.latitude - visibleRegion.center.latitude)
+        let lngOffset = abs(user.longitude - visibleRegion.center.longitude)
+        let insideCentralHalf = latOffset <= visibleRegion.span.latitudeDelta * 0.25
+            && lngOffset <= visibleRegion.span.longitudeDelta * 0.25
+        return !insideCentralHalf
+    case .denied, .restricted:
+        return false
+    @unknown default:
+        return false
+    }
 }
 
 // MARK: - DM-2: Park & Forget viewport resolution (§0.8.9/§0.8.10)
