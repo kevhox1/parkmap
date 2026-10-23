@@ -107,3 +107,49 @@ None.
 
 1. Fix-round: `hysteresisPoints` default 14 plus the test edits in #1; add the widened-scan / custom-config tests (#2); optionally #3, #4.
 2. Mac gate (hard): `xcodebuild build` + the 41 tests (first compile of type-level `nonisolated`), Release-config perf numbers vs the A.6 targets (A6), recorded in the PR.
+
+---
+
+# Pass 2 addendum — 2026-10-23
+
+**Reviewed:** `dbb0a77f` (fresh pull), diff `a07539e3..dbb0a77f`
+**Verdict:** ✅ MERGE (code-wise). The Mac compile + 48-test run and Release perf numbers (A6) remain hard gates, exactly as in pass 1. Still no Swift toolchain on this host: static + hand-derived only, nothing executed.
+
+## (4) Nothing else drifted
+`git diff --name-only a07539e3..dbb0a77f` = `CurbSnapIndex.swift` + `CurbSnapIndexTests.swift` only. Service diff is exactly: default 8 -> 14, doc comments (including a stale-claim cleanup of the "100 m probe is a follow-up" wording), the wide-config recipe doc, the `ring` clamp, and the `==` / haversine notes. No logic change besides the ring line. Test file: 35 -> 42 `func test` (verified by count); header inventory updated to match; PR total 48 with the 6 perf tests. Grep finds no stale 8 pt / 2.24 / 8.62 / 6.38 numbers left.
+
+## (1) Every changed / "unchanged" expectation re-derived at H = 14 x 0.28 = 3.92 (floating 3.9200000000000004 < 4.0 ceiling)
+Curbs S y=0, N y=15; flip S->N when 15-y < y-3.92, i.e. y > 9.46; N->S when y < 5.54.
+- defaults test (14), scale test (0.28 -> 3.92; `1.5/14` boundary; 0.05 -> 1.5, 2.0 -> 4.0, 0.5 -> 4.0 still hold): correct.
+- sweepUp, y = -3 + i: y=9 gives 6 < 5.08 false; y=10 gives 5 < 6.08 true -> index 13. Correct. sweepDown, y = 18 - i: y=6 false; y=5 true -> index 13. Correct.
+- noIncumbentStart (y 1..14): S wins at y=1, flips at y=10, one flip, ends N. Holds.
+- roundTrip (0.1 m steps): up flips at first sample > 9.46 = 9.5 (i=125); down flips at first sample < 5.54 = 5.5. Measured band = 9.5 - 5.5 = 4.0, theoretical 3.92. Assertion 3.5 < band < 4.5 passes with 0.5 margin each side; flipYs 9.46 / 5.54 +/-0.15 pass (errors 0.04 each). The widened band is right; it is not vacuous (a 2.24 band or a no-dead-band 0.0 would fail the lower bound).
+- jitter: max |dS - dN| = 0.6 m << 3.92, zero flips for both starting incumbents. noisyCrossing: reaches y >= 9.16 min after the 9.46 threshold passes; return to 5.54 impossible (min post-flip y ~9.2); one flip, ends N. Holds.
+- deadbandTracksMetersPerPoint: 14 x 0.05 = 0.7 -> floor 1.5 (flip 8.25); 14 x 1.0 -> ceiling 4.0 (flip 9.5). Unchanged, holds.
+- takesOver: dB = 23.5 <= 24 and 23.5 < 29.5 - 3.92 = 25.58 -> B. Holds. releaseBand tests: acquirability gate (26 / 24.5 > 24) blocks regardless of H. Holds.
+- test 20: with min-over-copies, incumbent d=2, rival 6.5 < 2 - 3.92 false -> stays KNEAR; with far copy only, 6.5 < 12 - 3.92 = 8.08 true -> would flip. Still discriminating.
+- perf/oracle: oracle and `noIncumbent` use no incumbent; incumbent perf runs only assert "snapped", unaffected.
+
+## (2) New tests (`CurbSnapCustomConfigTests`, 7) and the ring claim
+- customInit: 20 x 0.28 = 5.6; 20 x 1.0 -> 9 ceiling; partial init keeps defaults (incl. 14). Correct.
+- customSmallRadii: 11 m vs 10 m acquire -> none; 11.5 retained under 12 release; 13 dropped (best 13 > 10). Correct.
+- customDeadband (min = max = 6): 15 - y < y - 6 -> y > 10.5; y=10: 5 < 4 false, y=11: 4 < 5 true -> index 14. Correct. Skipping defaulted labeled args in the init call is legal.
+- wideRecipe 100 m: ring = ceil(100/32) = 4. Pin (30,-80) is cell y=-3, curb in cell y=0 (curb northing is exactly 0.0 by construction), x cells -4..3 vs pin cell 0 -> reached; the default config (ring 1: cells -4..-2) cannot see it. Distance 80, foot (30,0), fraction 130/200 = 0.65: correct.
+- boundaries/corners: "inside" 99.0-99.31 m is within the ring (pin cell y=-4 at worst, reach to 0) and <= 100. "Outside" 104.0-104.31 m: reported `nearest` is the FLAT-EARTH scan distance (exactly the authored distance), tolerance 0.3, guaranteed within the >= 128 m reach. Offsets 0..31 cover every in-cell x position. Corner (170,-70): sqrt(9800) = 98.99 to the endpoint; pin cell (5,-3), curb x cells to 3, ring covers 1..9; fraction exactly 1.0. 400 m away -> cell -13, unreachable, no snap. All correct.
+- scanWidening 50 m: ring 2; pin y=-45 is cell -2, curb cell 0: only ring >= 2 reaches it, so this does discriminate widening from the 3x3 block (offsets 0..28 step 4). Correct.
+- huge/non-finite: 1e300 -> ringRaw finite -> clamped to 8.0 then Int (no trap); +inf -> `max(1, inf)` = inf -> min -> 8.0 (ringRaw.isNaN is false) -> ring 8, acquires W1; NaN radii: `max(nan,nan)` NaN -> ring 1, `bestD <= NaN` false -> no curb. Correct.
+- Ring cap claim: ring 8 = 17x17 cells, guaranteed reach 8 x 32 = 256 m from any in-cell position. "Radii beyond ~256 m are not guaranteed" is accurate (and conservative: NaN-safe, a negative radius clamps to 1).
+
+## (3) Compile-class scan on the diff
+`csiKeyS` / `csiKeyN` are file-scope `private let` at lines 142-143 of the same file, already used by the pre-existing Radii tests (lines 415/420/434); the new class in the same file sees them; no collision. New class name `CurbSnapCustomConfigTests` is unique repo-wide. Literals feed Double params (`6`, `20`, `0.5`); `stride(from: 0.0, to: 32.0, by: 4.0)` typed; no literal-receiver cases; labeled-arg order matches the init (`acquireRadius, releaseRadius, hysteresisPoints, hysteresisMinMeters, hysteresisMaxMeters`; partial calls keep declaration order); no `Category`, no `Calendar`, no new helpers/extensions. `sqrt` from Foundation (CoreLocation import chain, already used elsewhere in this file).
+
+## New findings
+- 🟢 **#11: `testResolve_wideConfigRecipe_100m_findsCurbBeyondThe3x3Block` distance tolerance is nearly exhausted.** `result.distanceMeters` is haversine (R = 6,371 km -> 111,194.9 m/deg) vs the fixture's flat 111,320 m/deg, so a pure N-S 80 m offset reads 79.910: error 0.0899 against `accuracy: 0.1`. It passes by ~0.01 m. Make it 0.15 (or 0.2) to avoid a latent flake if the haversine constant or fixture scale ever shifts. Not blocking. Owner: `@ios-engineer`.
+- Carry-forward 💡 (not defects): the pass-1 #7 trap analysis stands at 14 pt (separations <= ~4 m can never displace an incumbent; +/-2 m wrong-nearer band at entry zoom). Mac-gate item, unchanged.
+
+## Pass-1 findings status
+#1 (14 pt + test sweep): fixed, re-derived correct. #2 (widening / custom config untested): fixed with 7 tests. #3 (Int trap): fixed, tested. #4 (== doc): fixed. #5 / #6 (haversine, allocation wording): fixed as comments. #8: recipe now documented on `resolve`. #9 / #10: unchanged, still out of scope.
+
+## Required before merge
+1. Mac gate: `xcodebuild build` + 48 tests (first compile of type-level `nonisolated`), Release perf numbers vs A.6 targets recorded in the PR.
+2. Optional: loosen #11's tolerance.
