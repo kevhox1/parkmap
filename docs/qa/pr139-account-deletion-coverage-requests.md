@@ -13,7 +13,7 @@ I stood up my own Postgres 16.15 cluster, applied the repo's real 01-06 on a stu
 - [x] No argument, no overload. `pg_proc` shows only `delete_my_account()`. Calling `delete_my_account(uuid)` gives 42883.
 - [x] anon is refused, with or without forged claims. No claims gives 42501 "permission denied for function". With `request.jwt.claims` forced to A's sub while in role anon (stronger than a real client can do), it is still 42501 at the ACL layer.
 - [x] authenticated with no claims, an empty sub, or a malformed sub is refused. No claims and empty sub give 42501 "authentication required". A malformed sub gives 22P02, which is harmless.
-- [x] `service_role` with no claims gets 42501 "authentication required". It has no JWT sub, so it cannot target anyone (see #9).
+- [x] `service_role` with no claims gets 42501 "authentication required". It has no JWT sub, so it cannot target anyone (see #7).
 - [x] `has_function_privilege`: anon=f, authenticated=t, PUBLIC has no ACL entry (`proacl = {postgres, service_role, authenticated}`). `prosecdef=t`, `proconfig={"search_path=\"\""}`.
 - [x] search_path hygiene. With a malicious schema/table on the caller's search_path (`set search_path = evil, public`), the call behaved normally. Every reference is schema-qualified.
 - [x] Identity comes only from `auth.uid()`. A client controls only the JWT, not session GUCs, and no `set_config` is exposed through `public`.
