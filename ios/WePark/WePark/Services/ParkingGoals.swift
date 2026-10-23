@@ -288,7 +288,9 @@ enum ParkingGoals {
         guard let date = nextMoveForcingDate(for: segment, goal: goal, from: from, engine: engine) else {
             return nil
         }
-        return "Good through \(relativeDayLabel(for: date, from: from))"
+        let day = relativeDayLabel(for: date, from: from)
+        // Mid-sentence: "Good through tomorrow", not "Tomorrow" (weekday/date labels keep their case).
+        return "Good through " + ((day == "Today" || day == "Tomorrow") ? day.lowercased() : day)
     }
 
     /// Date-only relative-day label — "Today" / "Tomorrow" / a weekday abbreviation

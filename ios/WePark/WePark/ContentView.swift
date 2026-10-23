@@ -2337,8 +2337,8 @@ struct ContentView: View {
         let trailingClause: String
         switch goal {
         case .freeOvernight, .parkAndForget:
-            let label = "Good through \(ParkingGoals.relativeDayLabel(for: target, from: now))"
-            trailingClause = label == "Good through Today" ? "Good through tomorrow" : label
+            let day = ParkingGoals.relativeDayLabel(for: target, from: now)
+            trailingClause = "Good through " + ((day == "Today" || day == "Tomorrow") ? "tomorrow" : day)
         case .freeFewHours:
             trailingClause = "until \(ParkUntilSheet.formatTime(target))"
         }
