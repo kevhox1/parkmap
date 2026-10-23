@@ -102,11 +102,11 @@ jobs:
           PY
           cat "$GITHUB_OUTPUT"
 
-      - name: Boot simulator
+      - name: Start simulator boot (overlaps with the build)
         run: |
-          set -euo pipefail
+          # First boot on a fresh runner takes ~8 min (data migration); kick it
+          # off now and only wait for it right before the tests run.
           xcrun simctl boot "${{ steps.sim.outputs.udid }}" || true
-          xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b
 
       - name: Build for testing
         run: |
@@ -126,6 +126,7 @@ jobs:
       - name: Test
         run: |
           set -euo pipefail
+          xcrun simctl bootstatus "${{ steps.sim.outputs.udid }}" -b
           rm -rf "$RESULTS/test.xcresult"
           xcodebuild test-without-building \
             -project "$PROJECT" \
@@ -146,8 +147,9 @@ jobs:
             echo
             echo "### Raw error lines"
             echo '```'
-            grep -hE "error:|\*\* (BUILD|TEST) (FAILED|SUCCEEDED)|Executed [0-9]+ tests|Test [Cc]ase .* failed" \
+            grep -hE "error:|\*\* (BUILD|TEST) (FAILED|SUCCEEDED)|Test [Cc]ase .* failed" \
               "$RESULTS/build.log" "$RESULTS/test.log" 2>/dev/null | sort -u | head -n 100
+            grep -h "Executed [0-9]* tests" "$RESULTS/test.log" 2>/dev/null | tail -n 1
             echo '```'
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
