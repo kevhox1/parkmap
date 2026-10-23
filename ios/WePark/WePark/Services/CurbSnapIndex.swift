@@ -502,10 +502,13 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
     /// Ordering is ascending by the scan's flat-earth distance — the exact metric `resolve`
     /// ranks by — with ties broken on `blockfaceKey` (then segment id when comparing copies of
     /// one blockface), never on input order. Consequently, with no incumbent and
-    /// `radius >= config.acquireRadius`, element 0 is exactly the blockface `resolve` acquires.
+    /// `radius >= config.acquireRadius`, element 0 is exactly the blockface `resolve` acquires
+    /// WHEN `resolve` acquires one — a larger radius can list a nearest curb (beyond the acquire
+    /// radius) that `resolve` rejects as `noCurbInRange`.
     /// Because the reported `distanceMeters` is haversine, two entries whose distances differ by
     /// under ~0.1% could appear in the reverse order from their reported distances; do not
-    /// re-sort the result.
+    /// re-sort the result. For the same reason the radius filter is flat-earth: do not re-filter
+    /// on `distanceMeters <= radius` (an entry within ~0.1% of the radius could be dropped).
     ///
     /// Empty when nothing is within `radius`, when the index is empty, or when `p` is not a
     /// usable coordinate (non-finite / absurdly distant). Reuses `resolve`'s grid scan, ring
