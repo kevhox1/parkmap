@@ -122,3 +122,94 @@ PR's items 1-8 all stand. Add:
 15. **Start Driving from the wide step vs the tight step:** one animation vs no jump; chevron appears; End brings the plain dot back with an identity transform (no leftover rotation).
 16. **First Mac build:** watch for the finding #3 compile error in `AmbientDrivingLook.shouldTighten`; run `AmbientDrivingLookTests` and `AmbientDrivingLookLocationPostureTests` and confirm `W85cTests` still pass in the same run.
 17. **Tile loading under pitch:** the pitched `region` is a larger trapezoid bounding box; confirm no visible tile-load lag at the wide step.
+
+---
+
+# QA Pass 2 addendum - 2026-10-23
+
+**Reviewed:** branch `feat/a36-driving-look-launch` at `d11d614d` (fix commit on top of merge `181da4ba`, which brought in PR #137).
+**Verdict:** MERGE, gated on Kevin's Mac compile + live-UI smoke (still not runnable here: no Xcode toolchain; this is a mount-chain PR, so that gate is not waived). 0 blocking, 0 significant, 3 new minor.
+
+## Scope of change since pass 1
+
+- `git diff 7fe90acc 181da4ba` (the merge) touches only PR #137 files (`CurbSnap*`, `docs/open-items.md`, `docs/qa/pr137-*`). It does not touch any PR #138 file.
+- `git diff 181da4ba d11d614d` touches only the 5 expected files: `ContentView` (+13), `AmbientDrivingLook` (+32), `LocationService` (+4), `MapViewRepresentable` (+10), `AmbientDrivingLookTests`. No drive-by.
+- Flag still `false` (`AppConstants.driveModeDefaultEnabled`; `testFlagShipsDark` unchanged).
+
+## Pass-1 findings: status
+
+| # | Status | Basis |
+|---|---|---|
+| 1 Cruise End race | RESOLVED (flag-on); needs Mac smoke | Re-trace below |
+| 2 Tighten does not re-center | RESOLVED | `tightenCenter` + call site below |
+| 3 `==` on nested enum | RESOLVED (best-effort; still uncompiled) | `switch`; `exitZoomStep()` is now a function |
+| 5 Stale accuracy across drive | RESOLVED | nil-reset in `startDriveMode`/`endDriveMode` |
+| 7 Weak wake-lock assert | RESOLVED with one nit (#12) | Positive control added |
+| 6 Rotate/tilt not "user adjusted" | Stays minor; deferral is reasonable | Needs a new recognizer in the highest-risk file |
+
+## (1) Cruise End re-trace, every writer, flag-on
+
+1. Tap End: `driveModeActive = false`. SwiftUI renders; `updateUIView` runs. `context.coordinator.parent = self` is the first line (MapViewRepresentable:1534), so the coordinator sees `driveModeActive == false` from this render on. `effectiveDriveHeading` is still the stale non-nil value, so `syncDriveHeading(h)` hits its dead-band (same value, diff <= 2) and does not write.
+2. `.onChange` -> `handleDriveModeAndCamera(false)` -> `handleDriveCameraChange(false)` -> early-returns into `restoreAmbientDrivingLookAfterDrive()`: muted style, buildings off, `refreshUserLocationPuck`, then ONE animated `setAmbientDrivingLook`. That closure copies the current camera (center kept) and sets `pitch = 30`, `heading = AmbientDrivingLook.heading (0)`, and `centerCoordinateDistance = altitudeForSpan(tight)`, all in the same `setCamera`. So the restore carries its own heading 0 and its own explicit tight distance. A pinch or rotation in Cruise is overwritten by absolute values, not deltas. `ambientLookStep = .tight` and `ambientLookUserAdjusted = false` are set inside `applyAmbientDrivingLook`.
+3. `handleDriveModeChange(false)`: `locationService.endDriveMode()`, `effectiveDriveHeading = nil`, `followPaused = false`. No camera call.
+4. Next render -> `syncDriveHeading(nil)`: `lastAppliedHeading` is cleared (state still reset), then `isInEffect(flag, parent.driveModeActive == false)` is true -> returns before the un-animated `setCamera`. The in-flight restore animation is no longer cancelled.
+5. `applyDriveCameraState`'s exit branch is NOT reached flag-on (the early return precedes `applyDrivePitch`). `lastCapturedPriorDistance` goes unused, which is harmless.
+6. `regionDidChangeAnimated` at settle: `wasUserInteracting` is false (programmatic), so no adjusted flag. It dispatches the usual `onRegionChanged` -> `handleRegionChanged` -> re-measure Recenter, and `rebuildOverlays` (the `!driveModeActive` gate is now open). No camera write.
+7. Is the skipped write ever needed? It runs only when `lastAppliedHeading != nil`, which means a heading-up Cruise session happened. Every `driveModeActive` true->false path goes through `handleDriveModeAndCamera(false)` -> `handleDriveCameraChange(false)` -> restore, which sets heading 0 itself. So there is no state where the skip leaves a non-zero heading. The restore always runs before step 4.
+8. Flag-off `syncDriveHeading(nil)`: the new block is `isInEffect(false, ...) == false`, so it falls through to the original `camera.heading = 0; setCamera(animated: false)`. Byte-identical apart from one pure `Bool` call.
+9. Residual, unverifiable here: MapKit's heading interpolation for an animated `setCamera` from a Cruise heading to 0 (shortest arc vs. long way round) is MapKit's behavior, not ours. Covered by smoke item 10 below.
+
+No remaining double write, snap, or freeze found in the trace.
+
+## (2) Tighten
+
+- `handleAmbientLookLocationUpdate` -> `shouldTighten(currentStep, userAdjusted, newAccuracy)` -> `applyAmbientDrivingLook(center: tightenCenter(fix:, fixInCoverage:), step: .tight, animated: true)`. `tightenCenter` returns the fix only when it is in Manhattan coverage, else nil (keep the current center). `cameraMoving = true` suppresses the pre-move Recenter measurement, and `handleRegionChanged` re-measures once the camera settles on the new fix. Result: a good fix after a poor one lands the dot at screen center, with no unprompted Recenter. Pass-1 repro is resolved.
+- Already-tight: `shouldTighten` returns false. User-adjusted: false at the first guard. Poor or nil accuracy: false. Out-of-coverage with a good fix: tightens in place around the current center (acceptable: no data to center on, and no recenter could have happened).
+- Launch double-move check: `recenterMap(usingUserFix: true)` (launch branches) applies the step from the same accuracy, so `ambientLookStep` already matches and `shouldTighten` is false in the same tick. One camera move, not two.
+- False-positive check: the tighten `setCamera` is programmatic, so `regionWillChangeAnimated` sees no active observer pan/pinch and never sets `isUserInteracting`. It cannot mark the look "user adjusted". Same for Cruise End.
+- Mid-gesture edge (new minor #10): `ambientLookUserAdjusted` is set only after the gesture settles (async from `regionDidChangeAnimated`). A good fix landing while the user's finger is still down in the wide phase would tighten mid-pan. Needs a pan plus a fix arrival in the same sub-second window; cosmetic.
+
+## (3) Compile-class scan (independent)
+
+- Every `nonisolated` member in `AmbientDrivingLook.swift` (`maxTightHorizontalAccuracyMeters`, `wideStepSpanMultiplier`, `heading`, `exitZoomStep()`, `centralHalfFraction`, `isInEffect`, `zoomStep`, `span`, `shouldTighten`, `tightenCenter`, `restoresAmbientLookOnDriveExit`, `userDotOutsideCentralHalf`): the stored statics are `Double`/`CGFloat` (Sendable, no MainActor reads); none reads `MapViewRepresentable.*` or any `AppConstants` value (those arrive as parameters).
+- The only `==` on a nested enum in the library file was in `shouldTighten`; it is now a nested `switch` (no `==` left in the file). The old `static let exitZoomStep: ZoomStep` is gone. All call sites updated: `ContentView:4411` and the 3 test uses call `exitZoomStep()`; a grep for the bare property finds none.
+- Tests use `XCTAssertEqual(..., .tight/.wide)` on `ZoomStep`. The test classes are default-MainActor, and `DriveHeadingSnapTests` already does the same on `HeadingSourceKind`, so this has precedent.
+- MainActor values in the new tests (`MapViewRepresentable.driveModeCameraSpan`) are read into locals first. No bare `Category`, no literal-receiver pattern, no labeled-argument-order issue (`tightenCenter(fix:fixInCoverage:)` matches its declaration at both call sites), no memberwise init, no `XCTestCase` extension. `ContentView`'s `fix.map { AppConstants.isInManhattanCoverage($0) } ?? false` is MainActor-to-MainActor.
+- `Calendar.current`: none. SwiftUI import in the pure file: none.
+- Still not compiled. The Mac build is the real check.
+
+## (4) LocationService diff vs `main`
+
+Total: one `private(set) var userHorizontalAccuracy`, the resting-branch local + assignment (set before `locationUpdateCount` increments), and two `userHorizontalAccuracy = nil` lines (one each in `startDriveMode` and `endDriveMode`, both after the `guard`). `desiredAccuracy`, `activityType`, `pausesLocationUpdatesAutomatically`, `distanceFilter`, `startUpdatingHeading`, the wake lock, and the drive branch of `didUpdateLocations` are unchanged. Pass.
+
+Side effect to note: during Cruise the accuracy is nil, and just after End (until the post-End single-shot fix lands) a Find-me tap in that window would choose `.wide` and then self-tighten when the fix arrives (the tighten path re-centers now). Self-healing; not a finding.
+
+## (5) Wake-lock positive-control test
+
+- Real `startDriveMode()` in a unit test: `LocationService.init` only reads `authorizationStatus` and never requests authorization, and `startUpdatingLocation()` without a grant does not show a prompt. `W85cTests` already calls real `startDriveMode()` / `endDriveMode()` in six tests, so this adds no new class of side effect. `LocationServiceTests` documents avoiding it only because a live session can race simulator-synthesized fixes; here the only consequence of a stray fix is a drive-branch write nothing in the test asserts on.
+- Leaves the lock on if an assertion fails? `XCTAssert*` records a failure and does not abort (`continueAfterFailure` defaults to true), so `endDriveMode()` still runs. It would stay on only on a crash, and the test has no throwing or early-exit path. Low risk, but not structurally guaranteed (nit #12).
+- Test strength: the sleep drains the main queue and the positive control proves the lock is observable, so `false` after resting fixes is now a meaningful assertion. It also resets the lock to `false` at start, which defends against ordering with `W85cTests`' paired async set/clear.
+
+## (6) Diff scope
+
+Confirmed in "Scope of change" above.
+
+## New findings
+
+### Minor / nit
+- **#10: Tighten can fire mid-pan** (`ambientLookUserAdjusted` is set only on settle). See (2). `@ios-engineer`, low priority.
+- **#11: `startDriveMode`'s nil-reset is untested.** `testDriveStartAndEnd_dropTheStaleRestingAccuracy` uses `setDriveModeActiveForTesting(true)` then `endDriveMode()`, so only the `endDriveMode` line is covered. One-line test addition.
+- **#12: Wake-lock test lacks `addTeardownBlock { endDriveMode(); isIdleTimerDisabled = false }`.** Defensive; makes cleanup structural rather than reliant on non-aborting assertions.
+
+## Smoke checklist deltas (Kevin's Mac)
+
+The pass-1 list (items 1 to 17) stands. Re-point and add:
+
+- Item 10 (Cruise End after real motion): now expect ONE smooth animation, with no rotation snap, ending at the launch zoom regardless of any in-Cruise pinch. Try a Cruise heading near 270 and watch which way it rotates to north (MapKit's choice; report if it takes the long way round).
+- 18. Poor-then-good fix: after the tighten the dot sits at screen center and Recenter stays hidden (confirms #2).
+- 19. Compile: confirm `AmbientDrivingLook.swift` and the 2 test classes build clean on the first Mac build (the switch-based `shouldTighten` was the targeted fix).
+- 20. Flag-off Cruise End regression: with the flag off, End must still show the old pre-drive camera restore with the un-animated heading reset (byte-identical path).
+
+## Verdict
+
+MERGE once Kevin's Mac build is green and the live-UI smoke (items 1 to 8 plus 10, 18 to 20) passes. All pass-1 significant items are fixed; the remaining items are minor and not merge-gating.
