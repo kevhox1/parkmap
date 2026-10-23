@@ -110,6 +110,16 @@ struct BlockDetailView: View {
     /// call-site argument order.
     var goalGoodThroughLabel: String? = nil
 
+    /// Addendum 3 (A3.4 verify-item, `docs/design/goal-first-ambient-design.md`): when
+    /// non-nil, a "Report a problem on this block" button renders under "Park here" —
+    /// "report this block" is the most natural moment for the action, and with the floating
+    /// Report pill gone flag-on it is the contextual backstop that keeps Report discoverable.
+    /// `ContentView` passes `nil` (no button) flag-off or with community disabled, so the
+    /// flag-off sheet is unchanged. `var` + declared last for the same synthesized-memberwise-
+    /// initializer reasons as the properties above (call-site argument order = declaration
+    /// order).
+    var onReportBlock: (() -> Void)? = nil
+
     // Evaluate once at sheet-open time (stable reference time for the whole sheet).
     private let now: Date = .nowET
 
@@ -202,6 +212,11 @@ struct BlockDetailView: View {
 
                     // 5. Park here stub button
                     parkHereStub
+
+                    // 6. Addendum 3: Report this block (flag-on + community only).
+                    if let onReportBlock {
+                        reportBlockButton(action: onReportBlock)
+                    }
                 }
                 .padding(.horizontal, 20)
                 .padding(.vertical, 12)
@@ -522,6 +537,22 @@ struct BlockDetailView: View {
             }
         }
         .padding(.top, 8)
+    }
+
+    // MARK: - Report this block (Addendum 3, A3.4)
+
+    /// Secondary (bordered, default blue tint — no orange/green/red) so it never out-shouts
+    /// "Park here". Roomy 48pt target.
+    private func reportBlockButton(action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Label("Report a problem on this block", systemImage: "flag.fill")
+                .font(.subheadline.weight(.semibold))
+                .frame(maxWidth: .infinity)
+                .frame(minHeight: 48)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel("Report a problem on this block")
+        .accessibilityHint("Opens the report form for this block.")
     }
 
     // MARK: - Block header helpers (view-file only, not engine domain)
