@@ -133,6 +133,7 @@ jobs:
             -destination "id=${{ steps.sim.outputs.udid }}" \
             -derivedDataPath "$DERIVED" \
             -resultBundlePath "$RESULTS/test.xcresult" \
+            -parallel-testing-enabled NO \
             2>&1 | tee "$RESULTS/test.log"
 
       - name: Job summary
@@ -145,10 +146,10 @@ jobs:
             echo
             echo "### Raw error lines"
             echo '```'
-            grep -hE "error:|\*\* (BUILD|TEST) (FAILED|SUCCEEDED)|Executed [0-9]+ tests|Test Case .* failed" \
+            grep -hE "error:|\*\* (BUILD|TEST) (FAILED|SUCCEEDED)|Executed [0-9]+ tests|Test [Cc]ase .* failed" \
               "$RESULTS/build.log" "$RESULTS/test.log" 2>/dev/null | sort -u | head -n 100
             echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Upload result bundles and logs
         if: always()
