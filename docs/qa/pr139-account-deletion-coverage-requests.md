@@ -163,3 +163,92 @@ None.
 - Anonymization needs no schema change. The existing LEFT JOIN views and the iOS models already tolerate NULL authors.
 - Coverage table: the column-level privilege model is correct and complete, the rounding trigger is un-bypassable, and the advisory-lock claim is true under 12-way concurrency.
 - The test suites are honest. Both mutations I tried were caught, and the doc states plainly what the stub cannot prove and tells Kevin a rollback.
+
+---
+
+# QA Pass 2 addendum — 2026-10-23
+
+**Reviewed:** branch `backend/account-deletion-and-coverage-requests` at `fe2c1a27` (builder's pass-1 fixes), fresh clone of the branch, my own scratch Postgres 16.15 (new DB, rebuilt from the repo's stub + real 01-06).
+**Verdict:** MERGE for the SQL (10, 11, 12) and the ceremony. Every pass-1 finding is closed and I found no hole in the new surface. **One new high-impact finding belongs to the iOS stream, not this PR: evidence uploads appear to fail with 403 in the shipped app (uppercase storage path), see #P2-1.** It does not block applying 10-12, but it must be resolved before the Settings "Delete account" flow or any evidence-photo feature is trusted.
+
+## Pass-1 finding status
+
+| # | Finding | Status |
+|---|---|---|
+| 1 | No real-schema pre-check | Closed. Step 0 queries A-E ran on a scratch DB with only 01-06: A = 8 rows, B = exactly `pins_claimed_by_fkey` (a), C = 0 rows, D = 11 rows, E = 0. All five expected outputs in the doc match. |
+| 2 | Smoke deleted an empty account | Closed. I replayed Step 4 as SQL (same inserts, claim, vote, storage object, delete, repeat delete, B cleanup). BEFORE/AFTER tables came out exactly as documented: pin and message kept with NULL author, `claimed_by` null, `confirm_count` 1 to 0, 0 votes/profile/storage objects, user gone. |
+| 3 | Orphaned photos | Closed at the SQL level by migration 12 (attacks below). The iOS sequence is still to be built, and #P2-1 affects it. |
+| 6 | Invisible-only city | Closed (see section 5). |
+| 7 | `service_role` EXECUTE | Closed. ACL is exactly `{postgres=X/postgres, authenticated=X/postgres}`. Nothing in the repo calls `delete_my_account` (grepped `ios/`, `supabase/functions/*`, SQL; the Edge Functions only use the service key for ingest/push). |
+| 8 | Header nits | Closed (anonymous-only auth, one label, any-2xx, `return=minimal` warning). |
+| 9 | Missing indexes | Closed (see section 4). |
+
+## (1) Apply and re-run
+
+Fresh DB, 01-06 then 10, 11, 12, twice, with `ON_ERROR_STOP`: all six applies rc=0 (idempotent). Re-ran all three suites unmodified: **69/69, 91/91, 28/28**, matching the builder.
+
+Mutation spot-checks on copies in `/tmp` (not the repo), all caught:
+- 12 without `to authenticated`: 5 failures (an anon role carrying a forged sub deleted 3 rows).
+- 12 without the bucket check: 2 failures. 12 with the owner check replaced by `true`: 2 failures. These two fail only because the test widens SELECT, which is the right design.
+- 11 with the city check neutered to `>= 0`: 15 failures.
+
+## (2) Attacks on the storage DELETE policy (all negative)
+
+Policy listing on `storage.objects`: `pin_evidence_storage_delete_own (d, {authenticated})`, `..._insert_own (a, public)`, `..._select_own (r, public)`. One permissive policy per command, so nothing is OR-widened across commands; there is no UPDATE policy. I widened SELECT to `true` (temporary policy, dropped afterwards) so a `DELETE ... WHERE true` sees every row and only the DELETE policy gates. Fourteen planted objects:
+
+- **anon** `delete from storage.objects returning name`: 0 rows. **authenticated with no/empty sub**: 0 rows.
+- **User B** sweep deleted only `B/g1/b1.jpg`, `B/nullowner.jpg`, `B/../A/trick.jpg`, `B/A/later-seg.jpg`. All four have B's own uid as the first path segment. A's `A/g1/a1.jpg` and `A/a-top.jpg` survived.
+- Survivors B could not touch: other-bucket objects (including one under B's own uid), the look-alike bucket `pin-evidence-x`, a leading-slash name `/B/...`, a no-slash name `B`, the empty name, `A%2Fx/enc.jpg` (the policy does not decode a URL-encoded slash), and `AAAA...A/g1/upper.jpg` (an uppercase prefix matches no caller because `auth.uid()::text` is always lowercase).
+- A NULL-owner object under B's prefix is deletable by B. That is correct: ownership is the path, per the 02f convention (the `owner` column is not used).
+- `B/../A/trick.jpg` deletes only the object literally named that. Whether the real Storage service normalizes `..` before using the key is **not verified** (scratch cannot show it). The insert policy already has the same property, so this is not new; see the Step 4 probe suggestion (#P2-6).
+- **UPDATE** by A (rename into B's prefix): 0 rows (no update policy).
+
+## (3) `service_role` revoke
+
+Confirmed: no legitimate caller exists. The revoke is safe. `service_role` bypasses RLS and can still administer data directly if ever needed.
+
+## (4) The five new indexes
+
+- Column names verified against the real applied schema: `pins(author_id)`, `pins(claimed_by)`, `votes(user_id)`, `zone_messages(author_id)`, `reputation_award_log(subject_id)`. No name collisions with any existing index (listed all indexes on the four tables).
+- None is redundant. `pins_author_report_group_created_idx` starts with `author_id` but is partial (`WHERE report_group_id IS NOT NULL`), so it cannot serve general author lookups; `votes_pin_id_user_id_key` starts with `pin_id`, not `user_id`.
+- `if not exists` matches by name only. If production held a differently-defined index with one of these names it would be skipped silently, and Step 1.3 counts by name only so it would not notice. Nothing in the repo creates these names; very low risk.
+- No `CONCURRENTLY` in 10/11/12 outside comments (grepped), so it runs inside the SQL Editor's transaction. Plain `CREATE INDEX` takes a SHARE lock (blocks writes, not reads) on each table for the build; seconds at worst at current scale. Acceptable.
+
+## (5) City / note normalization
+
+- Rejected by the CHECK (23514): all-ZWSP, BOM-only, ideographic-space-only, NBSP+ZWJ+LRM, tab+`a`+ZWSP (1 visible char), and 81 characters.
+- Accepted: a 2-character CJK city (`北京`), `Soho` padded with NBSP (stored trimmed), a ZWJ family emoji, `e` + combining acute (2 code points), heart + VS16.
+- An interior ZWSP in `Park​Slope` is preserved (only edges are trimmed). Fine.
+- Note is edge-trimmed with the same class; an invisible-only note stores NULL.
+- Trigger and CHECK agree: an untrimmed-edge value with 2 visible characters passes, 1 visible fails.
+- **Locale independence verified.** The class uses `\uXXXX` escapes (code point based), not `[[:space:]]`. Same results on a `C.UTF-8` DB and a freshly created `en_US.utf8` DB. `standard_conforming_strings` is on (Supabase default), which the literal regex needs.
+- Gap (🟢): invisible characters outside the class are not stripped, for example Hangul filler U+3164 and combining grapheme joiner U+034F. A city of two U+3164 passes. Harmless for a dashboard-read table.
+
+## (6) Ceremony walk-through
+
+Steps 0-3 are runnable as written. Step 4: replayed as SQL (above); expectations are right. Findings:
+
+- 🟡 **#P2-2 SQL Editor shows only the last statement's result (believed, not verified here).** Step 0 has five separate code blocks (A-E), fine if run one at a time, but a non-expert who selects all five will see only E. The Step 4 "After deleting" block has two statements (the union table, then the standing orphan check): the union table, the one that matters, may be hidden. Suggest an explicit "run each block separately" line in Step 0 and splitting the after-delete block in two.
+- 🟢 **#P2-3** Step 0 is only valid before 11 is applied. After 11, Query A shows 9 rows (adds `coverage_requests_user_id_fkey`, n). Add "(9 if 11 is already applied)" for any re-run.
+- 🟢 **#P2-4** The standing orphan query does `(storage.foldername(name))[1]::uuid` in the same WHERE as the regex guard; Postgres does not guarantee evaluation order, so a non-UUID first segment could in theory throw 22P02. It did not on scratch with a planted `not-a-uuid/g/x.jpg`. Safer: `not in (select id::text from auth.users)` with no cast.
+- 🟢 **#P2-5** Step 4 posts a chat message into the real `soho-les` zone. It is visible to real users (and via Realtime) until the cleanup `delete` at the end. The pin is in New York Harbor with no `zone_id`, so no push fires.
+- 🟢 **#P2-6** The Storage list call uses `"prefix":"<uid>/"` with a trailing slash. I cannot verify how the real `storage.search` treats it. Step 4 catches it: if the list returns nothing, the "storage under A" check shows 1 instead of 0, so read that result closely. Optional extra probe: also try uploading/deleting `$B/../$A/x` to see whether the Storage service rejects `..`.
+- Safety: all calls use throwaway anonymous users A and B created in the script; no real account is touched. Works in bash and zsh.
+- Step 3 Dashboard-UI fallback: the field names and expression match what that form generates (name, operation, target role, USING expression), so it is plausible. The Step 3.3 verification query returns the 3 expected rows (`d`, `a`, `r`) on scratch.
+
+## (7) The builder's flagged iOS bug is real
+
+- **#P2-1 (🔴 for the iOS stream; not a merge blocker for this PR).** `ios/WePark/WePark/Services/PinEvidenceUploader.swift:201` builds `objectPath = "\(userId.uuidString)/\(reportGroupId.uuidString)/\(filename)"`. Swift's `UUID.uuidString` is UPPERCASE. I grepped the whole `ios/` tree: nothing lowercases it anywhere in the upload chain (`CommunityPinService.insertBlockScopedReport` passes `authSvc.currentUserId` straight in, and `currentUserId = session.user.id`, a `UUID`). The only `.lowercased()` calls in `ios/` are unrelated string formatting.
+- 02f's INSERT policy compares `auth.uid()::text = (storage.foldername(name))[1]`; `auth.uid()` is a `uuid`, so its text form is lowercase. Reproduced on my scratch DB as role `authenticated` with sub `abcdef01-...`: inserting `ABCDEF01-.../GROUP/FILE.jpg` gives `new row violates row-level security policy for table "objects"`; the lowercase twin inserts fine.
+- The iOS unit test `testPinEvidenceUploader_objectPathConvention...` bakes in the uppercase expectation against a mocked network, so it can never catch this. HANDOFF's "storage policies verified live" refers to the policies being applied, not to a successful upload; I found no record of a real upload ever succeeding.
+- **What one real upload test would show:** `POST /storage/v1/object/pin-evidence/<UPPERCASE-UID>/...` returns HTTP 403 (body like `{"statusCode":"403","error":"Unauthorized","message":"new row violates row-level security policy"}`), the uploader throws, `insertBlockScopedReport` surfaces `.evidenceUploadFailed`, and zero `pins` rows are created. So today every block-scoped report (film shoot / construction closure) from the shipped app would fail at the photo step, because the photo is mandatory.
+- Fix (iOS, one line plus its test): `userId.uuidString.lowercased()` in the object path (and the group segment for consistency), the same for every prefix the delete-account flow lists or removes, and update the unit-test expectation. One real-device upload after the fix is the acceptance test.
+- Interaction with this PR: if uploads have never succeeded there are no photos to orphan, and migration 12 is harmless and ready for when uploads work. Do not skip 12: the fix will make uploads start working.
+
+## Remaining caveats (unchanged from pass 1)
+
+The stub still cannot prove real GoTrue cascades, real PostgREST status codes, or real Storage service behavior (list/remove API, `protect_delete`, `..` handling). Step 0 (Query B) and Step 4 are the acceptance tests for those and are now strong enough for that role.
+
+## Smoke tests run (pass 2)
+
+Fresh scratch DB from the branch at `fe2c1a27`; double apply of 10/11/12; three suites re-run; three mutation checks on 12 and one on 11; 14-object storage attack matrix with SELECT widened; uppercase-prefix insert reproduction; Step 0 A-E queries on a 01-06-only DB; Step 4 replayed end to end in SQL including the orphan query with a planted orphan; city/note matrix on `C.UTF-8` and `en_US.utf8`; grep of `ios/` and `supabase/functions/` for callers and for any lowercasing. No Swift changed in this PR, so no live-UI smoke applies.
