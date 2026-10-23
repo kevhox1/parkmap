@@ -927,6 +927,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onSetPlacementBottomInset: ((CGFloat) -> Void)?
         var onFocusPlacement: ((CLLocationCoordinate2D) -> Void)?
         var onQueryPlacementActive: (() -> Bool)?
+        var onQueryPlacementPin: (() -> CLLocationCoordinate2D?)?
 
         /// True while a placement session is live (installed in `makeUIView`; false before that
         /// and flag-off). A3: read this before trusting its own state, and route EVERY reset path
@@ -978,6 +979,16 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// The settle that follows fires `onPlacementOutcome`. No-op when no session is live.
         func focusPlacement(on coordinate: CLLocationCoordinate2D) {
             onFocusPlacement?(coordinate)
+        }
+
+        /// The TRUE ground coordinate under the pin tip right now (`convert(tipPoint)`, the same
+        /// point the resolver, the settle nudge and the exit camera use), or nil when no session
+        /// is live (always, flag-off) or before `makeUIView` installed the provider. A3 reads it
+        /// at tap time wherever no snapped curb supplies a coordinate (the "No curb here" save,
+        /// the nearest-curb chip probe) - correct under rotation and pitch, unlike any estimate
+        /// derived from `region` (PR #143 QA #1). Pure read; mutates nothing.
+        func placementPinCoordinate() -> CLLocationCoordinate2D? {
+            onQueryPlacementPin?()
         }
 
         /// Lifts the Apple logo / Legal link above the bottom card; call when the card's measured
@@ -1562,6 +1573,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         coordinatorActions.onQueryPlacementActive = { [weak coordinator] in
             coordinator?.placementController != nil
+        }
+        // PR #143 QA #1: the pin tip's ground coordinate, nil unless a session is live.
+        coordinatorActions.onQueryPlacementPin = { [weak coordinator] in
+            guard let coordinator, coordinator.placementController != nil,
+                  let mapView = coordinator.mapView else { return nil }
+            return mapView.convert(
+                CurbPlacementMapPolicy.tipPoint(in: mapView.bounds),
+                toCoordinateFrom: mapView
+            )
         }
 
         // PR #89 on-device follow-up: repositioned compass (see `showsCompass = false`
