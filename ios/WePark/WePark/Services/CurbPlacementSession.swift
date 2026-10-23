@@ -106,13 +106,22 @@ nonisolated struct CurbPlacementNearestCurb: Equatable {
 /// The one `@State` value ContentView holds while the mode is live (nil = mode off - the only
 /// state flag-off ever sees).
 nonisolated struct CurbPlacementSession {
+    /// Identity of THIS session, so a delayed callback (the loading timeout, a refresh retry)
+    /// can tell it still belongs to the session that scheduled it.
+    let id: UUID
     let entry: CurbPlacementEntry
     let seed: CLLocationCoordinate2D
+    /// Whether the seed lies inside the Manhattan tile footprint. Outside it there is no parking
+    /// data to wait for: the card shows "No parking data here" instead of "Loading curbs..."
+    /// (PR #143 QA #2).
+    let seedInCoverage: Bool
     /// Path B pre-selects its block's blockface as the incumbent; nil for the other entries.
     let incumbentBlockfaceKey: String?
     /// Whether the first-use hint pill shows this session (decided once, at entry).
     let showsHint: Bool
 
+    /// Set by a one-shot timer after entry: "Loading curbs..." is BOUNDED, never indefinite.
+    var loadingExpired: Bool
     /// The latest `onPlacementOutcome`; nil until the first one arrives ("Loading curbs...").
     var outcome: CurbSnapOutcome?
     /// Whether a blockface for the OTHER curb of the snapped block is loaded (feeds the
@@ -125,10 +134,14 @@ nonisolated struct CurbPlacementSession {
         entry: CurbPlacementEntry,
         seed: CLLocationCoordinate2D,
         incumbentBlockfaceKey: String? = nil,
-        showsHint: Bool = false
+        showsHint: Bool = false,
+        seedInCoverage: Bool = true
     ) {
+        self.id = UUID()
         self.entry = entry
         self.seed = seed
+        self.seedInCoverage = seedInCoverage
+        self.loadingExpired = false
         self.incumbentBlockfaceKey = incumbentBlockfaceKey
         self.showsHint = showsHint
         self.outcome = nil
@@ -159,11 +172,18 @@ nonisolated struct CurbPlacementRecenterPlan: Equatable {
     let consumeRequested: Bool
     /// Run (and clear) the launch auto-center this fix.
     let consumeAtLaunch: Bool
-    /// Let the ambient-look location hook (auto-tighten) run this fix.
-    let allowAmbientLook: Bool
 }
 
 /// What `healStuckCurbPlacement` / the `.onChange(of: curbPlacement != nil)` safety net does.
+/// What the card may say about data availability (QA #2).
+nonisolated enum CurbPlacementDataStatus: Equatable {
+    /// An index build / first resolve is genuinely in progress (bounded by the timeout).
+    case loading
+    case ready
+    /// Outside coverage, or the viewport has no tiles after the timeout.
+    case noData
+}
+
 nonisolated enum CurbPlacementHealAction: Equatable {
     case none
     /// No session but the map layer is still in the mode: call `endPlacement`.
@@ -254,28 +274,30 @@ nonisolated enum CurbPlacementPolicy {
     /// With no session: consume exactly what is pending, ambient look allowed - the pre-A3
     /// behavior. With a live session: consume NOTHING (the pending flags stay set so the recenter
     /// is DEFERRED, not dropped - `handleLocationUpdate` used to clear them before calling
-    /// `recenterMap`, so gating only the call would lose the recenter permanently) and run no
-    /// ambient-look hook. The `pending` inputs make the "nothing pending, nothing consumed"
-    /// case explicit.
+    /// `recenterMap`, so gating only the call would lose the recenter permanently). (The ambient
+    /// look's own gate is the `guard curbPlacement == nil` in `handleAmbientLookLocationUpdate`.)
     static func recenterPlan(
         requestedPending: Bool,
         atLaunchPending: Bool,
         placementActive: Bool
     ) -> CurbPlacementRecenterPlan {
         if placementActive {
-            return CurbPlacementRecenterPlan(consumeRequested: false, consumeAtLaunch: false, allowAmbientLook: false)
+            return CurbPlacementRecenterPlan(consumeRequested: false, consumeAtLaunch: false)
         }
         return CurbPlacementRecenterPlan(
             consumeRequested: requestedPending,
-            consumeAtLaunch: atLaunchPending,
-            allowAmbientLook: true
+            consumeAtLaunch: atLaunchPending
         )
     }
 
-    /// On exit, a deferred recenter has no GPS fix scheduled to complete it (resting posture
-    /// fixes are single-shot), so one fresh single-shot fix is requested to re-queue it.
-    static func shouldRequeueRecenterOnExit(requestedPending: Bool, atLaunchPending: Bool) -> Bool {
-        requestedPending || atLaunchPending
+    /// On exit, a deferred explicit "Find me" recenter has no GPS fix scheduled to complete it
+    /// (resting posture fixes are single-shot), so one fresh single-shot fix is requested to
+    /// re-queue it. ONLY the explicit flag: the best-effort launch auto-center is dropped when a
+    /// session starts (the user has taken over the map), so it can never yank the camera
+    /// after Cancel (PR #143 QA #7). `isAuthorized` makes "this can never prompt" structural
+    /// (QA #8).
+    static func shouldRequeueRecenterOnExit(requestedPending: Bool, isAuthorized: Bool) -> Bool {
+        requestedPending && isAuthorized
     }
 
     // MARK: Ambient-look bookkeeping on exit (PR #140 QA P2-1 (c))
@@ -294,26 +316,6 @@ nonisolated enum CurbPlacementPolicy {
     ) -> Bool {
         guard ambientLookInEffect else { return currentUserAdjusted }
         return restored ? currentUserAdjusted : true
-    }
-
-    // MARK: Pin estimate (deviation: A2 exposes no pin-coordinate seam)
-
-    /// The pin's ground coordinate ESTIMATED from the map's region: the tip sits
-    /// `0.5 - tipHeightFraction` of the visible height above the view centre. Exact for a
-    /// north-up, flat camera (the mode's entry camera); degrades if the user rotates the map.
-    /// Used ONLY where there is no snapped curb to take a coordinate from (the "No curb here"
-    /// save and the nearest-curb chip). Reported to the orchestrator as a deviation request:
-    /// the clean fix is an A2 `placementPinCoordinate()` seam.
-    static func estimatedPinCoordinate(
-        regionCenter: CLLocationCoordinate2D,
-        regionLatitudeDelta: CLLocationDegrees,
-        tipHeightFraction: Double
-    ) -> CLLocationCoordinate2D {
-        guard regionLatitudeDelta.isFinite, regionLatitudeDelta > 0 else { return regionCenter }
-        return CLLocationCoordinate2D(
-            latitude: regionCenter.latitude + (0.5 - tipHeightFraction) * regionLatitudeDelta,
-            longitude: regionCenter.longitude
-        )
     }
 
     // MARK: Nearest-curb chip
@@ -348,6 +350,70 @@ nonisolated enum CurbPlacementPolicy {
         case .noCurbInRange:
             return nil
         }
+    }
+
+    // MARK: Loading vs no-data (PR #143 QA #2)
+
+    /// How long "Loading curbs..." may last after entry before the card gives up and tells the
+    /// truth. Tiles are bundled and decode locally, so this is a generous bound, not a network wait.
+    static let loadingTimeoutSeconds: Double = 3.0
+
+    /// What the card may claim about data availability.
+    static func dataStatus(
+        seedInCoverage: Bool,
+        indexReady: Bool,
+        indexBuilding: Bool,
+        segmentsEmpty: Bool,
+        outcomeReceived: Bool,
+        loadingExpired: Bool
+    ) -> CurbPlacementDataStatus {
+        // Outside the Manhattan footprint there is nothing to wait for.
+        if !seedInCoverage { return .noData }
+        if loadingExpired { return segmentsEmpty ? .noData : .ready }
+        if indexBuilding || !indexReady { return .loading }
+        if segmentsEmpty { return .loading }
+        if !outcomeReceived { return .loading }
+        return .ready
+    }
+
+    /// Report-pill seed: the GPS fix only when it is inside coverage (the Recenter button's own
+    /// rule - "no data AND can't get back" must be unreachable), else the map centre. Stops the
+    /// pill flying the camera to an out-of-coverage fix.
+    static func pillSeed(
+        userLocation: CLLocationCoordinate2D?,
+        userLocationInCoverage: Bool,
+        regionCenter: CLLocationCoordinate2D
+    ) -> CLLocationCoordinate2D {
+        if let userLocation, userLocationInCoverage { return userLocation }
+        return regionCenter
+    }
+
+    // MARK: Index cache + refresh retry (PR #143 QA #4)
+
+    /// Cheap identity for "the loaded segment set": count plus first/last ids. The index is
+    /// cached across sessions and reused only when this is unchanged, so a pan to a different
+    /// area that happens to load the same NUMBER of segments does not reuse a stale index.
+    static func segmentsVersion(count: Int, firstID: String?, lastID: String?) -> Int {
+        var hasher = Hasher()
+        hasher.combine(count)
+        hasher.combine(firstID)
+        hasher.combine(lastID)
+        return hasher.finalize()
+    }
+
+    /// Delays (seconds) of the bounded post-swap refresh retries: the first attempt is the next
+    /// run-loop turn (delay 0 = attempt 0), then these. nil = stop.
+    static let refreshRetryDelays: [Double] = [0.25, 0.6, 1.2]
+
+    static func refreshRetryDelay(afterAttempt attempt: Int) -> Double? {
+        guard attempt >= 0, attempt < refreshRetryDelays.count else { return nil }
+        return refreshRetryDelays[attempt]
+    }
+
+    /// Retry only while the SAME session still has no outcome (an outcome means the refresh
+    /// worked; a different or absent session means stop).
+    static func shouldRetryRefresh(sessionMatches: Bool, outcomeReceived: Bool) -> Bool {
+        sessionMatches && !outcomeReceived
     }
 
     // MARK: Handoffs (spec A.6 table)

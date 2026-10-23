@@ -88,8 +88,7 @@ private func cpcmMake(
     _ outcome: CurbSnapOutcome?,
     intent: CurbPlacementIntent,
     community: Bool = true,
-    tilesLoaded: Bool = true,
-    indexRefreshing: Bool = false,
+    data: CurbPlacementDataStatus = .ready,
     oppositeLoaded: Bool = true,
     nearest: CurbPlacementNearestCurb? = nil
 ) -> CurbPlacementCardModel {
@@ -99,8 +98,7 @@ private func cpcmMake(
         communityEnabled: community,
         engine: ParkingRulesEngine(),
         now: cpcmNow,
-        tilesLoaded: tilesLoaded,
-        indexRefreshing: indexRefreshing,
+        dataStatus: data,
         oppositeSideLoaded: oppositeLoaded,
         nearestCurb: nearest,
         usesMetricSystem: false
@@ -251,40 +249,189 @@ final class CurbPlacementCardEmptyStateTests: XCTestCase {
         XCTAssertEqual(model.voiceOverValue, "No curb here. Move the map until the pin is near a street.")
     }
 
-    func testLoading_whenNoOutcomeYet() {
-        let model = cpcmMake(nil, intent: .plant)
+    func testLoading_whenDataIsGenuinelyLoading() {
+        let model = cpcmMake(nil, intent: .plant, data: .loading)
         XCTAssertEqual(model.state, .loading)
         XCTAssertEqual(model.title, "Loading curbs\u{2026}")
         XCTAssertNil(model.subtitle)
         XCTAssertFalse(model.primaryEnabled)
         XCTAssertTrue(model.showsProgress)
         XCTAssertEqual(model.primaryTitle, "Park here")
-        XCTAssertEqual(cpcmMake(nil, intent: .report).primaryTitle, "Next")
+        XCTAssertEqual(cpcmMake(nil, intent: .report, data: .loading).primaryTitle, "Next")
     }
 
-    func testLoading_notNoCurb_whileTilesAreStillLoading() {
-        let model = cpcmMake(cpcmNoCurb, intent: .plant, tilesLoaded: false)
-        XCTAssertEqual(model.state, .loading, "AC-A13: never a false 'No curb here' before tiles arrive.")
+    func testLoading_notNoCurb_whileDataIsLoading() {
+        let model = cpcmMake(cpcmNoCurb, intent: .plant, data: .loading)
+        XCTAssertEqual(model.state, .loading, "AC-A13: never a false 'No curb here' while data arrives.")
         XCTAssertFalse(model.primaryEnabled)
     }
 
-    func testLoading_notNoCurb_whileIndexIsRebuilding() {
-        let model = cpcmMake(cpcmNoCurb, intent: .plant, indexRefreshing: true)
-        XCTAssertEqual(model.state, .loading)
+    func testSnapped_staysSnapped_whateverTheDataStatus() {
+        let statuses: [CurbPlacementDataStatus] = [.loading, .ready, .noData]
+        for status in statuses {
+            let model = cpcmMake(cpcmSnapped(cpcmBareSegment()), intent: .plant, data: status)
+            XCTAssertEqual(model.state, .snapped)
+            XCTAssertTrue(model.primaryEnabled)
+        }
     }
 
-    func testSnapped_staysSnapped_evenWhileTilesOrIndexAreRefreshing() {
-        let model = cpcmMake(cpcmSnapped(cpcmBareSegment()), intent: .plant, tilesLoaded: false, indexRefreshing: true)
-        XCTAssertEqual(model.state, .snapped)
-        XCTAssertTrue(model.primaryEnabled)
+    func testReadyWithNoOutcomeYet_isNeverADisabledDeadEnd() {
+        // Loading is bounded: after the timeout the data status is .ready/.noData even with no
+        // outcome, and the card must then be usable (PR #143 QA #2).
+        for intent in cpcmAllIntents {
+            let ready = cpcmMake(nil, intent: intent, data: .ready)
+            XCTAssertTrue(ready.primaryEnabled, "intent \(intent)")
+            XCTAssertEqual(ready.state, .noCurb)
+            let noData = cpcmMake(nil, intent: intent, data: .noData)
+            XCTAssertTrue(noData.primaryEnabled, "intent \(intent)")
+            XCTAssertEqual(noData.state, .noData)
+        }
     }
 
-    func testLoading_cardHasNoDeadEndOnceTilesArrive() {
-        let loading = cpcmMake(cpcmNoCurb, intent: .plant, tilesLoaded: false)
-        let resolved = cpcmMake(cpcmNoCurb, intent: .plant, tilesLoaded: true, indexRefreshing: false)
+    func testLoading_cardHasNoDeadEndOnceDataSettles() {
+        let loading = cpcmMake(cpcmNoCurb, intent: .plant, data: .loading)
+        let resolved = cpcmMake(cpcmNoCurb, intent: .plant, data: .ready)
         XCTAssertFalse(loading.primaryEnabled)
         XCTAssertEqual(resolved.state, .noCurb)
         XCTAssertTrue(resolved.primaryEnabled)
+    }
+}
+
+// MARK: - No parking data (outside coverage / no tiles; PR #143 QA #2)
+
+final class CurbPlacementCardNoDataTests: XCTestCase {
+
+    func testNoData_parkIntents_saveCarHere_enabled() {
+        for intent in [CurbPlacementIntent.park, .plant, .parkBlock] {
+            let model = cpcmMake(cpcmNoCurb, intent: intent, data: .noData)
+            XCTAssertEqual(model.state, .noData)
+            XCTAssertEqual(model.title, "No parking data here")
+            XCTAssertEqual(model.subtitle, "You can still save your car at this spot")
+            XCTAssertEqual(model.primaryTitle, "Save car here (no parking info)")
+            XCTAssertEqual(model.primaryAction, .saveCarHere)
+            XCTAssertTrue(model.primaryEnabled)
+            XCTAssertFalse(model.showsProgress)
+            XCTAssertNil(model.statusText)
+        }
+    }
+
+    func testNoData_reportIntent_nextWorks() {
+        let model = cpcmMake(cpcmNoCurb, intent: .report, data: .noData)
+        XCTAssertEqual(model.state, .noData)
+        XCTAssertEqual(model.subtitle, "You can still send a report for this spot")
+        XCTAssertEqual(model.primaryTitle, "Next")
+        XCTAssertEqual(model.primaryAction, .next)
+        XCTAssertTrue(model.primaryEnabled)
+    }
+
+    func testNoData_keepsTheQuietReportLink_forPlantWithCommunity() {
+        XCTAssertEqual(cpcmMake(nil, intent: .plant, community: true, data: .noData).secondaryTitle, "Report something here")
+        XCTAssertNil(cpcmMake(nil, intent: .plant, community: false, data: .noData).secondaryTitle)
+    }
+
+    func testNoData_neverShowsTheNearestCurbChip() {
+        let hint = CurbPlacementNearestCurb(latitude: 40.75, longitude: -73.99, distanceMeters: 40, bearingDegrees: 10)
+        let model = cpcmMake(cpcmNoCurb, intent: .plant, data: .noData, nearest: hint)
+        XCTAssertNil(model.nearestCurb)
+    }
+
+    func testNoData_voiceOverValue() {
+        let model = cpcmMake(cpcmNoCurb, intent: .plant, data: .noData)
+        XCTAssertEqual(model.voiceOverValue, "No parking data here. You can still save your car at this spot.")
+    }
+}
+
+// MARK: - Constant card height (PR #143 QA #3 / design Finding 8)
+
+final class CurbPlacementCardHeightTests: XCTestCase {
+
+    private func allModels(intent: CurbPlacementIntent) -> [CurbPlacementCardModel] {
+        let hint = CurbPlacementNearestCurb(latitude: 40.75, longitude: -73.99, distanceMeters: 40, bearingDegrees: 10)
+        return [
+            cpcmMake(nil, intent: intent, data: .loading),
+            cpcmMake(cpcmNoCurb, intent: intent, data: .loading),
+            cpcmMake(cpcmSnapped(cpcmRestrictedSegment()), intent: intent),
+            cpcmMake(cpcmSnapped(cpcmBareSegment(), distance: 20), intent: intent, oppositeLoaded: false),
+            cpcmMake(cpcmNoCurb, intent: intent, data: .ready),
+            cpcmMake(cpcmNoCurb, intent: intent, data: .ready, nearest: hint),
+            cpcmMake(cpcmNoCurb, intent: intent, data: .noData),
+        ]
+    }
+
+    func testEveryState_fillsExactlyOneStatusSlot() {
+        // The slot is one fixed 44 pt row; chip / nearest-curb chip / skeleton / blank are
+        // interchangeable inside it, so no state adds a row.
+        for intent in cpcmAllIntents {
+            for model in allModels(intent: intent) {
+                var populated = 0
+                if model.statusText != nil { populated += 1 }
+                if model.nearestCurb != nil { populated += 1 }
+                if model.showsProgress { populated += 1 }
+                XCTAssertLessThanOrEqual(populated, 1, "state \(model.state): at most one thing in the status slot")
+            }
+        }
+    }
+
+    func testNearestCurbChip_replacesTheStatusText_neverCoexists() {
+        let hint = CurbPlacementNearestCurb(latitude: 40.75, longitude: -73.99, distanceMeters: 40, bearingDegrees: 10)
+        let model = cpcmMake(cpcmNoCurb, intent: .plant, data: .ready, nearest: hint)
+        XCTAssertEqual(model.statusSlot, .nearestCurbChip)
+        XCTAssertNil(model.statusText)
+        let withStatus = cpcmMake(cpcmSnapped(cpcmRestrictedSegment()), intent: .plant, nearest: hint)
+        XCTAssertEqual(withStatus.statusSlot, .statusChip)
+        XCTAssertNil(withStatus.nearestCurb, "a snapped state never carries the chip")
+    }
+
+    func testStatusSlotKinds() {
+        XCTAssertEqual(cpcmMake(nil, intent: .plant, data: .loading).statusSlot, .progress)
+        XCTAssertEqual(cpcmMake(cpcmNoCurb, intent: .plant, data: .ready).statusSlot, .empty)
+        XCTAssertEqual(cpcmMake(cpcmNoCurb, intent: .plant, data: .noData).statusSlot, .empty)
+    }
+
+    func testLayoutHeight_hasNoStateInput_andIsStableForAnIntent() {
+        // The layout function takes no card state at all; the two things that DO change the
+        // height are the link row and Dynamic Type, both fixed for an intent.
+        let withLink = CurbPlacementCardLayout.naturalHeight(hasLink: true, primaryHeight: 60, linkHeight: 48)
+        let noLink = CurbPlacementCardLayout.naturalHeight(hasLink: false, primaryHeight: 60, linkHeight: 48)
+        for model in allModels(intent: .plant) {
+            XCTAssertEqual(model.secondaryTitle != nil, true)
+        }
+        for model in allModels(intent: .report) {
+            XCTAssertNil(model.secondaryTitle)
+        }
+        XCTAssertGreaterThan(withLink, noLink)
+        XCTAssertEqual(withLink - noLink, 12 + 48 + 8 - 16, accuracy: 0.001)
+    }
+
+    func testCappedHeight_neverCrossesTheClearanceBelowTheTip() {
+        // The card top must stay at least tip + 130 pt down the screen on every phone class,
+        // with and without the link row, even though the natural height can exceed the cap
+        // (the text rows then scroll while the buttons stay pinned).
+        let screens: [(height: Double, bottomInset: Double)] = [(667, 0), (852, 34), (932, 34)]
+        for screen in screens {
+            for hasLink in [true, false] {
+                let height = CurbPlacementCardLayout.cappedHeight(
+                    hasLink: hasLink,
+                    primaryHeight: 60,
+                    linkHeight: 48,
+                    fullScreenHeight: screen.height,
+                    bottomInset: screen.bottomInset,
+                    tipFraction: 0.40
+                )
+                let cardTop = screen.height - height
+                let tipY = 0.40 * screen.height
+                XCTAssertGreaterThanOrEqual(cardTop, tipY + 130 - 0.001, "screen \(screen.height) link \(hasLink)")
+            }
+        }
+    }
+
+    func testCappedHeight_isNaturalWherePhonesHaveRoom() {
+        let natural = CurbPlacementCardLayout.naturalHeight(hasLink: true, primaryHeight: 60, linkHeight: 48)
+        let capped = CurbPlacementCardLayout.cappedHeight(
+            hasLink: true, primaryHeight: 60, linkHeight: 48,
+            fullScreenHeight: 932, bottomInset: 34, tipFraction: 0.40
+        )
+        XCTAssertEqual(capped, natural + 34, accuracy: 0.001)
     }
 }
 
@@ -416,11 +563,15 @@ final class CurbPlacementCopyHygieneTests: XCTestCase {
             CurbPlacementCardCopy.noCurbSubtitle, CurbPlacementCardCopy.loadingTitle,
             CurbPlacementCardCopy.farCurbFootnote, CurbPlacementCardCopy.hint,
             CurbPlacementCardCopy.cancel, CurbPlacementCardCopy.locateLabel,
+            CurbPlacementCardCopy.noDataTitle, CurbPlacementCardCopy.noDataParkSubtitle,
+            CurbPlacementCardCopy.noDataReportSubtitle,
         ]
         let outcomes: [CurbSnapOutcome?] = [nil, cpcmNoCurb, cpcmSnapped(cpcmBareSegment(), distance: 20)]
+        let statuses: [CurbPlacementDataStatus] = [.loading, .ready, .noData]
         for outcome in outcomes {
-            for intent in cpcmAllIntents {
-                let model = cpcmMake(outcome, intent: intent, oppositeLoaded: false)
+            for status in statuses {
+              for intent in cpcmAllIntents {
+                let model = cpcmMake(outcome, intent: intent, data: status, oppositeLoaded: false)
                 strings.append(model.title)
                 strings.append(model.subtitle ?? "")
                 strings.append(model.primaryTitle)
@@ -429,6 +580,7 @@ final class CurbPlacementCopyHygieneTests: XCTestCase {
                 strings.append(model.voiceOverValue)
                 strings.append(model.footnote ?? "")
                 strings.append(model.secondaryTitle ?? "")
+              }
             }
         }
         return strings
@@ -455,7 +607,7 @@ final class CurbPlacementCopyHygieneTests: XCTestCase {
         let outcomes: [CurbSnapOutcome?] = [nil, cpcmNoCurb, cpcmSnapped(cpcmBareSegment())]
         for outcome in outcomes {
             for intent in cpcmAllIntents {
-                let model = cpcmMake(outcome, intent: intent)
+                let model = cpcmMake(outcome, intent: intent, data: .ready)
                 XCTAssertFalse(model.title.isEmpty)
                 XCTAssertFalse(model.primaryTitle.isEmpty)
             }

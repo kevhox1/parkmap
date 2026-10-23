@@ -328,13 +328,12 @@ final class CurbPlacementChromeThreadingTests: XCTestCase {
 
 final class CurbPlacementDeferralTests: XCTestCase {
 
-    func testNoSession_consumesExactlyWhatIsPending_andAllowsAmbientLook() {
+    func testNoSession_consumesExactlyWhatIsPending() {
         for requested in [true, false] {
             for atLaunch in [true, false] {
                 let plan = CurbPlacementPolicy.recenterPlan(requestedPending: requested, atLaunchPending: atLaunch, placementActive: false)
                 XCTAssertEqual(plan.consumeRequested, requested, "flag-off: byte-identical consumption")
                 XCTAssertEqual(plan.consumeAtLaunch, atLaunch)
-                XCTAssertTrue(plan.allowAmbientLook)
             }
         }
     }
@@ -345,7 +344,6 @@ final class CurbPlacementDeferralTests: XCTestCase {
                 let plan = CurbPlacementPolicy.recenterPlan(requestedPending: requested, atLaunchPending: atLaunch, placementActive: true)
                 XCTAssertFalse(plan.consumeRequested, "(b): the pending flag must stay set")
                 XCTAssertFalse(plan.consumeAtLaunch, "(b): the pending flag must stay set")
-                XCTAssertFalse(plan.allowAmbientLook, "(a): no ambient auto-tighten hijacking the placement camera")
             }
         }
     }
@@ -364,9 +362,12 @@ final class CurbPlacementDeferralTests: XCTestCase {
     }
 
     func testRequeueOnExit_onlyWhenSomethingWasDeferred() {
-        XCTAssertTrue(CurbPlacementPolicy.shouldRequeueRecenterOnExit(requestedPending: true, atLaunchPending: false))
-        XCTAssertTrue(CurbPlacementPolicy.shouldRequeueRecenterOnExit(requestedPending: false, atLaunchPending: true))
-        XCTAssertFalse(CurbPlacementPolicy.shouldRequeueRecenterOnExit(requestedPending: false, atLaunchPending: false))
+        XCTAssertTrue(CurbPlacementPolicy.shouldRequeueRecenterOnExit(requestedPending: true, isAuthorized: true))
+        XCTAssertFalse(CurbPlacementPolicy.shouldRequeueRecenterOnExit(requestedPending: false, isAuthorized: true))
+        XCTAssertFalse(
+            CurbPlacementPolicy.shouldRequeueRecenterOnExit(requestedPending: true, isAuthorized: false),
+            "QA #8: structurally unable to prompt - never requests a fix while unauthorized."
+        )
     }
 
     func testAmbientBookkeeping_cancelLeavesTheFlagUntouched() {
@@ -520,25 +521,9 @@ final class CurbPlacementHandoffTests: XCTestCase {
     }
 }
 
-// MARK: - Pin estimate, bearing, nearest-curb helpers
+// MARK: - Bearing, nearest-curb helpers
 
 final class CurbPlacementGeometryHelperTests: XCTestCase {
-
-    func testEstimatedPin_isTenPercentOfTheVisibleHeightNorthOfCentre() {
-        let center = CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99)
-        let pin = CurbPlacementPolicy.estimatedPinCoordinate(regionCenter: center, regionLatitudeDelta: 0.004, tipHeightFraction: 0.40)
-        XCTAssertEqual(pin.latitude, 40.75 + 0.1 * 0.004, accuracy: 1e-9)
-        XCTAssertEqual(pin.longitude, -73.99, accuracy: 1e-12)
-    }
-
-    func testEstimatedPin_invalidSpanFallsBackToTheCentre() {
-        let center = CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99)
-        for delta in [0.0, -1.0, Double.nan, Double.infinity] {
-            let pin = CurbPlacementPolicy.estimatedPinCoordinate(regionCenter: center, regionLatitudeDelta: delta, tipHeightFraction: 0.40)
-            XCTAssertEqual(pin.latitude, 40.75)
-            XCTAssertEqual(pin.longitude, -73.99)
-        }
-    }
 
     func testBearing_cardinalDirections() {
         let origin = CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99)
@@ -600,5 +585,179 @@ final class CurbPlacementHintGateTests: XCTestCase {
         gate.markShown()
         XCTAssertFalse(gate.shouldShow())
         XCTAssertFalse(CurbPlacementHintGate(defaults: defaults, key: "cpsp_test_hint").shouldShow(), "persists across instances")
+    }
+}
+
+
+// MARK: - Pin-coordinate seam (PR #143 QA #1)
+
+final class CurbPlacementPinSeamTests: XCTestCase {
+
+    func testFreshActions_havePinProviderNil_andReturnNil() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        XCTAssertNil(actions.onQueryPlacementPin)
+        XCTAssertNil(actions.placementPinCoordinate(), "flag-off / no session / before makeUIView: nil")
+    }
+
+    func testSeamForwardsTheProviderValue_andFollowsTheSession() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        var live = false
+        actions.onQueryPlacementPin = {
+            live ? CLLocationCoordinate2D(latitude: 40.7301, longitude: -73.9901) : nil
+        }
+        XCTAssertNil(actions.placementPinCoordinate())
+        live = true
+        let pin = actions.placementPinCoordinate()
+        XCTAssertEqual(pin?.latitude ?? 0, 40.7301, accuracy: 1e-9)
+        XCTAssertEqual(pin?.longitude ?? 0, -73.9901, accuracy: 1e-9)
+        live = false
+        XCTAssertNil(actions.placementPinCoordinate(), "nil again once the session is over")
+    }
+
+    func testSeamIsReadOnly_doesNotStartASession() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        _ = actions.placementPinCoordinate()
+        XCTAssertFalse(actions.isPlacementActive)
+    }
+
+    func testCommitFallback_usesTheSeamPinNotARegionEstimate() {
+        // ContentView passes `placementPinCoordinate() ?? session.seed` as the no-curb fallback;
+        // the policy must carry that coordinate through untouched (no segment, no distance).
+        let seam = CLLocationCoordinate2D(latitude: 40.7301, longitude: -73.9901)
+        let target = CurbPlacementPolicy.parkTarget(outcome: .noCurbInRange(nearestMeters: nil), fallbackPin: seam)
+        XCTAssertEqual(target.latitude, 40.7301)
+        XCTAssertEqual(target.longitude, -73.9901)
+        XCTAssertNil(target.segment)
+        let report = CurbPlacementPolicy.reportTarget(outcome: nil, entry: .reportPill, fallbackPin: seam)
+        XCTAssertEqual(report.coordinate.latitude, 40.7301)
+        XCTAssertNil(report.segment)
+    }
+}
+
+// MARK: - Loading vs no-data (PR #143 QA #2) and the pill seed
+
+final class CurbPlacementDataStatusTests: XCTestCase {
+
+    private func status(
+        coverage: Bool = true, ready: Bool = true, building: Bool = false,
+        empty: Bool = false, outcome: Bool = true, expired: Bool = false
+    ) -> CurbPlacementDataStatus {
+        CurbPlacementPolicy.dataStatus(
+            seedInCoverage: coverage, indexReady: ready, indexBuilding: building,
+            segmentsEmpty: empty, outcomeReceived: outcome, loadingExpired: expired
+        )
+    }
+
+    func testOutsideCoverage_isNoData_immediately_neverLoading() {
+        XCTAssertEqual(status(coverage: false, ready: false, building: true, empty: true, outcome: false), .noData)
+        XCTAssertEqual(status(coverage: false), .noData)
+    }
+
+    func testInCoverage_loadsWhileTheIndexBuilds_orIsMissing() {
+        XCTAssertEqual(status(ready: false), .loading)
+        XCTAssertEqual(status(building: true), .loading)
+    }
+
+    func testInCoverage_emptySegments_loadsUntilTheTimeout_thenNoData() {
+        XCTAssertEqual(status(empty: true), .loading)
+        XCTAssertEqual(status(empty: true, expired: true), .noData)
+    }
+
+    func testInCoverage_waitsForTheFirstOutcome_thenReady() {
+        XCTAssertEqual(status(outcome: false), .loading)
+        XCTAssertEqual(status(), .ready)
+    }
+
+    func testTimeout_boundsEveryLoadingCase() {
+        // After the timeout NO combination is .loading - the card can never spin forever.
+        for ready in [true, false] {
+            for building in [true, false] {
+                for empty in [true, false] {
+                    for outcome in [true, false] {
+                        let result = status(ready: ready, building: building, empty: empty, outcome: outcome, expired: true)
+                        XCTAssertNotEqual(result, .loading)
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(status(ready: false, building: true, empty: false, outcome: false, expired: true), .ready)
+    }
+
+    func testLoadingTimeout_isShortAndFinite() {
+        let timeout = CurbPlacementPolicy.loadingTimeoutSeconds
+        XCTAssertGreaterThan(timeout, 0)
+        XCTAssertLessThanOrEqual(timeout, 5)
+    }
+
+    func testPillSeed_prefersAnInCoverageFix() {
+        let fix = CLLocationCoordinate2D(latitude: 40.73, longitude: -73.99)
+        let center = CLLocationCoordinate2D(latitude: 40.78, longitude: -73.96)
+        XCTAssertEqual(CurbPlacementPolicy.pillSeed(userLocation: fix, userLocationInCoverage: true, regionCenter: center).latitude, 40.73)
+    }
+
+    func testPillSeed_neverFliesToAnOutOfCoverageFix() {
+        let brooklyn = CLLocationCoordinate2D(latitude: 40.65, longitude: -73.95)
+        let center = CLLocationCoordinate2D(latitude: 40.78, longitude: -73.96)
+        XCTAssertEqual(CurbPlacementPolicy.pillSeed(userLocation: brooklyn, userLocationInCoverage: false, regionCenter: center).latitude, 40.78)
+        XCTAssertEqual(CurbPlacementPolicy.pillSeed(userLocation: nil, userLocationInCoverage: false, regionCenter: center).latitude, 40.78)
+    }
+
+    func testSession_defaultsToInCoverage_notExpired_withUniqueIDs() {
+        let seed = CLLocationCoordinate2D(latitude: 40.72, longitude: -73.99)
+        let a = CurbPlacementSession(entry: .longPress, seed: seed)
+        let b = CurbPlacementSession(entry: .longPress, seed: seed, seedInCoverage: false)
+        XCTAssertTrue(a.seedInCoverage)
+        XCTAssertFalse(b.seedInCoverage)
+        XCTAssertFalse(a.loadingExpired)
+        XCTAssertNotEqual(a.id, b.id)
+    }
+}
+
+// MARK: - Index cache key + refresh retry (PR #143 QA #4)
+
+final class CurbPlacementIndexCacheTests: XCTestCase {
+
+    func testSegmentsVersion_sameInputsSameKey() {
+        XCTAssertEqual(
+            CurbPlacementPolicy.segmentsVersion(count: 10, firstID: "A", lastID: "Z"),
+            CurbPlacementPolicy.segmentsVersion(count: 10, firstID: "A", lastID: "Z")
+        )
+    }
+
+    func testSegmentsVersion_changesWithCount_orWithADifferentAreaOfTheSameSize() {
+        let base = CurbPlacementPolicy.segmentsVersion(count: 10, firstID: "A", lastID: "Z")
+        XCTAssertNotEqual(base, CurbPlacementPolicy.segmentsVersion(count: 11, firstID: "A", lastID: "Z"))
+        XCTAssertNotEqual(
+            base,
+            CurbPlacementPolicy.segmentsVersion(count: 10, firstID: "Q", lastID: "R"),
+            "a pan to a different area with the same NUMBER of segments must not reuse the cached index"
+        )
+        XCTAssertNotEqual(
+            CurbPlacementPolicy.segmentsVersion(count: 0, firstID: nil, lastID: nil),
+            base
+        )
+    }
+
+    func testRefreshRetryDelays_areBoundedAndIncreasing() {
+        let delays = CurbPlacementPolicy.refreshRetryDelays
+        XCTAssertFalse(delays.isEmpty)
+        XCTAssertLessThanOrEqual(delays.count, 4)
+        XCTAssertEqual(delays, delays.sorted())
+        XCTAssertLessThanOrEqual(delays.last ?? 0, 2.0)
+    }
+
+    func testRefreshRetryDelay_walksTheTable_thenStops() {
+        let delays = CurbPlacementPolicy.refreshRetryDelays
+        for (attempt, delay) in delays.enumerated() {
+            XCTAssertEqual(CurbPlacementPolicy.refreshRetryDelay(afterAttempt: attempt), delay)
+        }
+        XCTAssertNil(CurbPlacementPolicy.refreshRetryDelay(afterAttempt: delays.count))
+        XCTAssertNil(CurbPlacementPolicy.refreshRetryDelay(afterAttempt: -1))
+    }
+
+    func testShouldRetryRefresh_onlyWhileTheSameSessionHasNoOutcome() {
+        XCTAssertTrue(CurbPlacementPolicy.shouldRetryRefresh(sessionMatches: true, outcomeReceived: false))
+        XCTAssertFalse(CurbPlacementPolicy.shouldRetryRefresh(sessionMatches: true, outcomeReceived: true))
+        XCTAssertFalse(CurbPlacementPolicy.shouldRetryRefresh(sessionMatches: false, outcomeReceived: false))
     }
 }

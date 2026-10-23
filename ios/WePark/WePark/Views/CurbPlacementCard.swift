@@ -49,6 +49,11 @@ nonisolated enum CurbPlacementCardCopy {
     static let noCurbTitle = "No curb here"
     static let noCurbSubtitle = "Move the map until the pin is near a street"
     static let loadingTitle = "Loading curbs\u{2026}"
+    /// Outside coverage / no tiles after the loading timeout (PR #143 QA #2): an honest state,
+    /// never an indefinite spinner. Park and the report path both still work.
+    static let noDataTitle = "No parking data here"
+    static let noDataParkSubtitle = "You can still save your car at this spot"
+    static let noDataReportSubtitle = "You can still send a report for this spot"
     static let farCurbFootnote = "Nearest curb with data"
     static let hint = "Drag the map to place the pin"
     static let cancel = "Cancel"
@@ -102,6 +107,17 @@ nonisolated enum CurbPlacementCardState: Equatable {
     /// Snapped, but the curb is far and its opposite side has no data (A12).
     case farCurb
     case noCurb
+    /// Outside coverage, or no tiles for the viewport once the loading timeout expired.
+    case noData
+}
+
+/// What fills the card's single reserved status slot (design 3.3 "rows swapped": the nearest-curb
+/// chip REPLACES the status text, so the card's height never depends on the state).
+nonisolated enum CurbPlacementStatusSlot: Equatable {
+    case statusChip
+    case nearestCurbChip
+    case progress
+    case empty
 }
 
 /// Which handoff the primary button runs.
@@ -141,17 +157,16 @@ nonisolated struct CurbPlacementCardModel: Equatable {
     let secondaryHint: String
 
     /// Pure builder. Parameters beyond the spec sketch are the honest-state inputs the sketch
-    /// left implicit: `tilesLoaded` / `indexRefreshing` (A13 "Loading curbs..." instead of a
-    /// false "No curb here"), `oppositeSideLoaded` (A12 footnote), the chip target, and the
-    /// locale's unit system.
+    /// left implicit: `dataStatus` (A13 "Loading curbs..." while data is genuinely arriving,
+    /// "No parking data here" when there is none - never an endless spinner, PR #143 QA #2),
+    /// `oppositeSideLoaded` (A12 footnote), the chip target, and the locale's unit system.
     nonisolated static func make(
         outcome: CurbSnapOutcome?,
         intent: CurbPlacementIntent,
         communityEnabled: Bool,
         engine: ParkingRulesEngine,
         now: Date,
-        tilesLoaded: Bool,
-        indexRefreshing: Bool,
+        dataStatus: CurbPlacementDataStatus,
         oppositeSideLoaded: Bool,
         nearestCurb: CurbPlacementNearestCurb?,
         usesMetricSystem: Bool
@@ -174,18 +189,26 @@ nonisolated struct CurbPlacementCardModel: Equatable {
 
         // Resolve the outcome into one of: nothing yet, a snapped curb, or no curb in range.
         var snappedResult: CurbSnapResult?
-        var noCurb = false
         if let outcome {
             switch outcome {
             case .snapped(let result):
                 snappedResult = result
             case .noCurbInRange:
-                noCurb = true
+                break
             }
         }
 
-        // LOADING: no outcome yet, or "no curb" reported while tiles / the index are still arriving.
-        let isLoading = (outcome == nil) || (noCurb && (!tilesLoaded || indexRefreshing))
+        // A snapped curb always wins. Without one, the data status decides: genuinely loading
+        // (bounded by the caller's timeout), nothing to load, or a real "no curb here".
+        var isLoading = false
+        var isNoData = false
+        if snappedResult == nil {
+            switch dataStatus {
+            case .loading: isLoading = true
+            case .noData:  isNoData = true
+            case .ready:   break
+            }
+        }
         if isLoading {
             let title = isReport ? CurbPlacementCardCopy.next : CurbPlacementCardCopy.parkHere
             return CurbPlacementCardModel(
@@ -203,6 +226,31 @@ nonisolated struct CurbPlacementCardModel: Equatable {
                 showsProgress: true,
                 voiceOverValue: "Loading curbs",
                 primaryHint: isReport ? nextHint : "Available when a curb is found.",
+                secondaryHint: nextHint
+            )
+        }
+
+        // NO DATA: honest, and never a dead end - Park saves with no segment, Next continues with
+        // segment: nil (the legacy flow worked out here too).
+        if isNoData {
+            let primaryTitle = isReport ? CurbPlacementCardCopy.next : CurbPlacementCardCopy.saveCarHere
+            let action: CurbPlacementPrimaryAction = isReport ? .next : .saveCarHere
+            let subtitle = isReport ? CurbPlacementCardCopy.noDataReportSubtitle : CurbPlacementCardCopy.noDataParkSubtitle
+            return CurbPlacementCardModel(
+                state: .noData,
+                title: CurbPlacementCardCopy.noDataTitle,
+                subtitle: subtitle,
+                statusText: nil,
+                statusTone: nil,
+                footnote: nil,
+                primaryTitle: primaryTitle,
+                primaryEnabled: true,
+                primaryAction: action,
+                secondaryTitle: secondaryTitle,
+                nearestCurb: nil,
+                showsProgress: false,
+                voiceOverValue: CurbPlacementCardCopy.noDataTitle + ". " + subtitle + ".",
+                primaryHint: isReport ? nextHint : "Saves your car at this spot. No parking information is available here.",
                 secondaryHint: nextHint
             )
         }
@@ -263,6 +311,19 @@ nonisolated struct CurbPlacementCardModel: Equatable {
             primaryHint: isReport ? nextHint : "Saves your car on \(spokenStreet), \(sideName).",
             secondaryHint: nextHint
         )
+    }
+
+    // MARK: Reserved status slot (card height is constant, PR #143 QA #3)
+
+    /// The ONE thing that fills the status slot in this state. The slot is always a 44 pt row;
+    /// chip, nearest-curb chip, spinner and the empty placeholder are interchangeable inside it,
+    /// so a state change never changes the card's height (and never drives a margin write
+    /// mid-pan).
+    var statusSlot: CurbPlacementStatusSlot {
+        if statusText != nil { return .statusChip }
+        if nearestCurb != nil { return .nearestCurbChip }
+        if showsProgress { return .progress }
+        return .empty
     }
 
     // MARK: Pure helpers
@@ -344,6 +405,53 @@ nonisolated struct CurbPlacementCardModel: Equatable {
     nonisolated static func arrowRotationDegrees(bearing: Double, cameraHeading: Double) -> Double {
         guard bearing.isFinite, cameraHeading.isFinite else { return 0 }
         return (bearing - cameraHeading + 360).truncatingRemainder(dividingBy: 360)
+    }
+}
+
+// MARK: - Layout metrics (pure; the height test lives on these)
+
+/// The card's reserved geometry at the default Dynamic Type size. NOTHING here takes a card
+/// state: every row is a fixed-size slot (title reserves 2 lines, subtitle 1 line and truncates,
+/// the status slot is 44 pt whatever fills it, the footnote row is always reserved), which is
+/// precisely why the height is invariant across states. Values are layout ESTIMATES for the cap
+/// check; the live smoke confirms them on device.
+nonisolated enum CurbPlacementCardLayout {
+    static let topPadding: Double = 16
+    static let titleBlock: Double = 56          // title2 bold, 2 reserved lines
+    static let rowSpacing: Double = 4
+    static let subtitleBlock: Double = 20       // subheadline, 1 reserved line
+    static let statusTop: Double = 8
+    static let statusSlot: Double = 44
+    static let footnoteBlock: Double = 20       // always reserved
+    static let primaryGap: Double = 16
+    static let linkGap: Double = 12
+    static let bottomPaddingWithLink: Double = 8
+    static let bottomPaddingNoLink: Double = 16
+    /// Design 3.5: the card may not cover the pin, ghost or highlight: it stays at least this far
+    /// below the pin tip.
+    static let minClearanceBelowTip: Double = 130
+
+    /// Natural (uncapped) card height EXCLUDING the home-indicator zone.
+    static func naturalHeight(hasLink: Bool, primaryHeight: Double, linkHeight: Double) -> Double {
+        let text = titleBlock + rowSpacing + subtitleBlock + statusTop + statusSlot + rowSpacing + footnoteBlock
+        let link = hasLink ? (linkGap + linkHeight) : 0
+        let bottom = hasLink ? bottomPaddingWithLink : bottomPaddingNoLink
+        return topPadding + text + primaryGap + primaryHeight + link + bottom
+    }
+
+    /// The height the card actually takes: natural, but never beyond the cap (the text rows
+    /// scroll under the cap while the primary and link stay pinned).
+    static func cappedHeight(
+        hasLink: Bool,
+        primaryHeight: Double,
+        linkHeight: Double,
+        fullScreenHeight: Double,
+        bottomInset: Double,
+        tipFraction: Double
+    ) -> Double {
+        let natural = naturalHeight(hasLink: hasLink, primaryHeight: primaryHeight, linkHeight: linkHeight)
+        let cap = CurbPlacementCardModel.maxCardHeight(fullScreenHeight: fullScreenHeight, tipFraction: tipFraction)
+        return min(natural + bottomInset, cap)
     }
 }
 
@@ -524,7 +632,7 @@ struct CurbPlacementOverlay: View {
         // Everything that is pinned (never scrolled away): top padding + primary + its gap +
         // the link row + bottom padding. The text rows get whatever the cap leaves.
         let pinned = 16 + primaryHeight + 16 + (hasLink ? (12 + linkHeight) : 0) + bottomPadding
-        let textCap = max(120, cardCap - bottomInset - pinned)
+        let textCap = max(44, cardCap - bottomInset - pinned)
         return VStack(alignment: .leading, spacing: 0) {
             ViewThatFits(in: .vertical) {
                 textRows
@@ -532,7 +640,6 @@ struct CurbPlacementOverlay: View {
                     .scrollBounceBehavior(.basedOnSize)
             }
             .frame(maxHeight: textCap)
-            nearestCurbRow
             primaryButton
                 .padding(.top, 16)
             if let link = model.secondaryTitle {
@@ -566,46 +673,56 @@ struct CurbPlacementOverlay: View {
 
     // MARK: Text rows (the adjustable VoiceOver summary)
 
+    /// Every row is a FIXED slot so the card's height is constant across states (design Finding
+    /// 8; `CurbPlacementCardLayout`): the title reserves 2 lines (4 at accessibility sizes) and the
+    /// subtitle 1 line (2), both truncating rather than wrapping further; the status slot is one
+    /// 44 pt row that the status chip, the nearest-curb chip or the loading skeleton fill in turn;
+    /// the footnote row is always reserved.
     private var textRows: some View {
         VStack(alignment: .leading, spacing: 4) {
+            // The title carries the adjustable VoiceOver summary for the whole text block (the
+            // other rows are hidden from VoiceOver so nothing is read twice; the tappable
+            // nearest-curb chip is NOT hidden - it is its own control).
             Text(model.title)
                 .font(.title2.weight(.bold))
                 .foregroundStyle(Color(.label))
                 .lineLimit(dynamicTypeSize.isAccessibilitySize ? 4 : 2, reservesSpace: true)
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityLabel("Parking spot")
+                .accessibilityValue(model.voiceOverValue)
+                .accessibilityHint("Swipe up or down to choose a nearby curb. Three-finger swipe pans the map.")
+                .accessibilityAdjustableAction { _ in
+                    // Increment and decrement both step to the next nearby curb.
+                    onCycleCurb()
+                }
+                .accessibilitySortPriority(3)
             Text(model.subtitle ?? " ")
                 .font(.subheadline)
                 .foregroundStyle(Color(.label))
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-            statusSlot
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? 2 : 1, reservesSpace: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityHidden(true)
+            statusSlotView
                 .padding(.top, 8)
-            if let footnote = model.footnote {
-                Label(footnote, systemImage: "info.circle")
-                    .font(.footnote)
-                    .foregroundStyle(Color(.label))
-                    .padding(.top, 4)
-            }
+            footnoteSlot
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Parking spot")
-        .accessibilityValue(model.voiceOverValue)
-        .accessibilityHint("Swipe up or down to choose a nearby curb. Three-finger swipe pans the map.")
-        .accessibilityAdjustableAction { _ in
-            // Increment and decrement both step to the next nearby curb.
-            onCycleCurb()
-        }
-        .accessibilitySortPriority(3)
     }
 
-    /// Row 3: the status chip, the loading skeleton, or (no curb) a reserved empty slot - the
-    /// card never changes height while the user pans.
+    /// The reserved 44 pt status row (see `CurbPlacementCardModel.statusSlot`).
     @ViewBuilder
-    private var statusSlot: some View {
-        if let text = model.statusText, let tone = model.statusTone {
-            statusChip(text: text, tone: tone)
-        } else if model.showsProgress {
+    private var statusSlotView: some View {
+        switch model.statusSlot {
+        case .statusChip:
+            if let text = model.statusText, let tone = model.statusTone {
+                statusChip(text: text, tone: tone)
+                    .accessibilityHidden(true)
+            }
+        case .nearestCurbChip:
+            if let curb = model.nearestCurb {
+                nearestCurbChip(curb)
+            }
+        case .progress:
             HStack(spacing: 10) {
                 ProgressView()
                 Text(CurbPlacementCardCopy.loadingTitle)
@@ -616,9 +733,25 @@ struct CurbPlacementOverlay: View {
             .padding(.vertical, 10)
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(Color(.systemGray4)))
-        } else {
+            .accessibilityHidden(true)
+        case .empty:
             Color.clear.frame(height: 44)
         }
+    }
+
+    /// Always-reserved footnote row ("Nearest curb with data" or blank).
+    private var footnoteSlot: some View {
+        Group {
+            if let footnote = model.footnote {
+                Label(footnote, systemImage: "info.circle")
+                    .font(.footnote)
+                    .foregroundStyle(Color(.label))
+                    .accessibilityHidden(true)
+            } else {
+                Color.clear
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: CGFloat(CurbPlacementCardLayout.footnoteBlock), alignment: .leading)
     }
 
     private func statusChip(text: String, tone: CurbPlacementStatusTone) -> some View {
@@ -635,36 +768,32 @@ struct CurbPlacementOverlay: View {
         .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(CurbPlacementOverlay.chipFill(for: tone)))
     }
 
-    // MARK: Nearest-curb chip (no-curb state)
+    // MARK: Nearest-curb chip (no-curb state; lives IN the status slot)
 
-    @ViewBuilder
-    private var nearestCurbRow: some View {
-        if let curb = model.nearestCurb {
-            Button {
-                onNearestCurb(curb)
-            } label: {
-                HStack(spacing: 8) {
-                    Image(systemName: "location.north.fill")
-                        .rotationEffect(.degrees(CurbPlacementCardModel.arrowRotationDegrees(
-                            bearing: curb.bearingDegrees,
-                            cameraHeading: 0
-                        )))
-                    Text(CurbPlacementCardModel.nearestCurbChipText(curb, usesMetricSystem: usesMetricSystem))
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                .font(.headline)
-                .foregroundStyle(Color(.label))
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                .background(Capsule().fill(Color(.systemGray4)))
+    private func nearestCurbChip(_ curb: CurbPlacementNearestCurb) -> some View {
+        Button {
+            onNearestCurb(curb)
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "location.north.fill")
+                    .rotationEffect(.degrees(CurbPlacementCardModel.arrowRotationDegrees(
+                        bearing: curb.bearingDegrees,
+                        cameraHeading: 0
+                    )))
+                Text(CurbPlacementCardModel.nearestCurbChipText(curb, usesMetricSystem: usesMetricSystem))
+                    .lineLimit(1)
             }
-            .buttonStyle(.plain)
-            .padding(.top, 4)
-            .accessibilityLabel(CurbPlacementCardModel.nearestCurbAccessibilityLabel(curb, usesMetricSystem: usesMetricSystem))
-            .accessibilityHint("Moves the pin there.")
-            .accessibilitySortPriority(2)
+            .font(.headline)
+            .foregroundStyle(Color(.label))
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .background(Capsule().fill(Color(.systemGray4)))
         }
+        .buttonStyle(.plain)
+        .accessibilityLabel(CurbPlacementCardModel.nearestCurbAccessibilityLabel(curb, usesMetricSystem: usesMetricSystem))
+        .accessibilityHint("Moves the pin there.")
+        .accessibilitySortPriority(2)
     }
 
     // MARK: Primary + link
