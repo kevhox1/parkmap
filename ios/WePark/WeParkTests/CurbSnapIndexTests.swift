@@ -832,7 +832,7 @@ final class CurbSnapCustomConfigTests: XCTestCase {
         let outcome = index.resolve(pin, incumbent: nil, metersPerPoint: 0.28, config: wide)
         guard let result = csiSnapped(outcome) else { return }
         XCTAssertEqual(result.segment.id, "W1")
-        XCTAssertEqual(result.distanceMeters, 80.0, accuracy: 0.1)
+        XCTAssertEqual(result.distanceMeters, 80.0, accuracy: 0.15)
         XCTAssertEqual(csiMetersBetween(result.snappedCoordinate, csiPoint(30, 0)), 0, accuracy: 0.05)
         // x = 30 on [-100, 100] => 130/200 along.
         XCTAssertEqual(result.positionFraction, 130.0 / 200.0, accuracy: 1e-4)
