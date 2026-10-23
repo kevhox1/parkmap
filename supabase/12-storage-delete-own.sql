@@ -1,0 +1,103 @@
+-- WePark — owner-scoped DELETE policy on the private `pin-evidence` Storage bucket
+-- (companion to 10-account-deletion.sql; PR #139 QA finding #3, orchestrator ruling 2026-10-23:
+-- "go CLIENT-SIDE").
+-- Proposed by @backend-data 2026-10-23. NOT yet applied to production.
+-- Kevin applies this via the Supabase SQL Editor (see OPERATOR NOTE) or, if that fails on ownership,
+-- the Dashboard Policies UI (steps below). Companion test: supabase/12-storage-delete-own-test.sh.
+-- Idempotent: drop-then-create policy; safe to re-run.
+-- Depends on: 02f-block-scoped-restrictions.sql section 8 (the `pin-evidence` bucket and its
+-- select-own / insert-own policies). Does NOT depend on 10 or 11, but the iOS delete-account flow
+-- needs 10 AND 12 both live.
+--
+-- ============================================================================================
+-- WHY THIS EXISTS
+-- ============================================================================================
+-- delete_my_account() (10) deletes the user's `pin_evidence` ROWS, but the PHOTO FILES live in the
+-- private `pin-evidence` bucket under `{auth.uid()}/{report_group_id}/{filename}`. The evidence photo
+-- is mandatory for block-scoped reports (AC-R5) and commonly shows a placard with a real name/phone
+-- number (spec §7), so orphaning it after "delete my account" is a real erasure gap. SQL cannot fix
+-- it: deleting `storage.objects` rows only drops metadata (the S3 object stays) and the table belongs
+-- to supabase_storage_admin. The Storage API is what removes files, and it runs as the CALLER under
+-- RLS — so the caller needs a DELETE policy on their own prefix. 02f deliberately shipped none
+-- ("write-once; nothing in the spec requires removing an evidence photo post-submit"); account
+-- deletion is now that requirement.
+--
+-- ============================================================================================
+-- THE iOS CONTRACT (account-deletion sequence — files FIRST, account LAST)
+-- ============================================================================================
+--   1. List everything under the user's prefix in `pin-evidence`. Storage "list" is NOT recursive:
+--        POST {SUPABASE_URL}/storage/v1/object/list/pin-evidence
+--        body {"prefix": "<uid-lowercase>/", "limit": 1000, "offset": 0}
+--      returns the first level = the `{report_group_id}` "folders" (entries with id == null). List each
+--      of those (prefix "<uid>/<report_group_id>/") to get the files; page with offset until a page is
+--      shorter than `limit`. Enumerate the STORAGE bucket, not the `pin_evidence` table: that also
+--      catches orphan objects that never got a row (PinEvidenceUploader's own documented partial-failure
+--      case), and `delete_my_account()` deletes the table rows anyway.
+--   2. Remove them:  DELETE {SUPABASE_URL}/storage/v1/object/pin-evidence
+--                    body {"prefixes": ["<uid>/<group>/<file>", ...]}      (batches of <= 100 paths)
+--      (supabase-swift Storage: `.from("pin-evidence").remove(paths:)`; the project links only Auth +
+--      Realtime today, so raw URLSession like PinEvidenceUploader is the existing convention.)
+--      Any non-2xx, or a returned list shorter than the paths sent, = FAILURE.
+--   3. ONLY IF every removal succeeded, call `delete_my_account()` (see 10's header).
+--   4. If step 1 or 2 fails: ABORT with a user-visible error ("We couldn't remove your photos. Your
+--      account was not deleted — please try again.") and DO NOT call the RPC. Never delete the account
+--      while orphaning files. The sequence is safely retryable: re-listing finds only what's left, and
+--      the RPC is idempotent.
+--   !! PATH CASE: the policy compares the path's first segment to `auth.uid()::text`, which Postgres
+--      renders LOWERCASE. Swift's `UUID.uuidString` is UPPERCASE. Always build/list prefixes with
+--      `userId.uuidString.lowercased()`. An uppercase prefix matches nothing (list returns [], remove
+--      deletes 0) — which would look like "no photos" and let step 3 orphan real files. (Tested in
+--      12-storage-delete-own-test.sh.) Corollary, FLAGGED FOR THE ORCHESTRATOR: PinEvidenceUploader.swift
+--      builds the upload path with `userId.uuidString` (uppercase) at line ~201; the 02f INSERT policy
+--      uses the same case-sensitive comparison, so unless the uploader lowercases somewhere I could not
+--      find, evidence uploads from the app are rejected 403 by RLS. I could not verify this against the
+--      live project (no access). Worth a one-photo live check; if confirmed it is an iOS fix
+--      (`.lowercased()`), and no objects with uppercase prefixes can exist to clean up.
+--
+-- ============================================================================================
+-- OPERATOR NOTE (ownership) — read before pasting
+-- ============================================================================================
+-- Same situation as 02f section 8: `storage.objects` is owned by `supabase_storage_admin`, so
+-- `create policy ... on storage.objects` can fail with "must be owner of table objects" depending on
+-- project vintage. Kevin's HANDOFF records that 02f's two storage policies were applied and
+-- "verified live" on this project, so the SQL Editor role evidently CAN create them here — paste this
+-- file the same way. If it fails with an ownership error, create the same policy in the Dashboard
+-- instead (no SQL Editor ownership needed):
+--   Dashboard -> Storage -> Policies -> under "Other policies under storage.objects" (or the
+--   `pin-evidence` bucket) -> New policy -> "For full customization" ->
+--     Policy name:        pin_evidence_storage_delete_own
+--     Allowed operation:  DELETE
+--     Target roles:       authenticated
+--     USING expression:   bucket_id = 'pin-evidence' and auth.uid() is not null and auth.uid()::text = (storage.foldername(name))[1]
+--   -> Review -> Save policy.
+-- This is the ONLY statement in the file, so there is no partial-apply state to reason about.
+-- Deliberately NOT touching RLS enablement on storage.objects (managed projects have it on; see 02f).
+--
+-- Notes on the real Storage service (not exercised by the scratch tests):
+--   * Storage API object removal is `DELETE ... RETURNING`, so it also needs the existing
+--     select-own policy from 02f (the same RETURNING-needs-SELECT rule as 05) — present, nothing to add.
+--   * Direct `delete from storage.objects` in SQL is blocked by Supabase's protect_delete trigger and
+--     would not delete the file anyway; this policy is only exercised through the Storage API.
+--
+-- One deliberate divergence from 02f's two policies: this one adds `TO authenticated` (02f's have no
+-- role clause and rely on auth.uid() being null for anon). Strictly narrower, costs nothing, and means
+-- the anon role is denied at the policy-applicability layer rather than only by the uid comparison.
+--
+-- Scope: delete only. No UPDATE policy (upload is write-once; replacing is not a feature). Own prefix
+-- only; no cross-user path exists. The policy gives a user the ability to delete their OWN evidence
+-- photos at any time, not just during account deletion — consistent with the data-minimization intent
+-- of spec §7, and the pin_evidence TABLE row (no delete policy) is simply left as a pointer until the
+-- account is deleted.
+-- ============================================================================================
+
+drop policy if exists pin_evidence_storage_delete_own on storage.objects;
+create policy pin_evidence_storage_delete_own on storage.objects
+  for delete to authenticated using (
+    bucket_id = 'pin-evidence'
+    and auth.uid() is not null
+    and auth.uid()::text = (storage.foldername(name))[1]
+  );
+
+-- Verify after applying (Kevin, SQL Editor) — expect 3 rows: delete_own (d), insert_own (a), select_own (r):
+--   select polname, polcmd from pg_policy
+--    where polrelid = 'storage.objects'::regclass and polname like 'pin_evidence_storage_%' order by polname;
