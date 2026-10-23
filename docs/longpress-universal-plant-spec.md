@@ -366,6 +366,18 @@ before the flag flips):** **A-1 = adopt the recommendation** (primary "Park here
 **A-2 = accept** (pill lands in placement first, +1 confirm tap). Both are cheap to flip later
 (label/route in `CurbPlacementCardModel`), so Kevin's Mac-gate reaction is the real test.
 
+**STREAM B DESIGN REVIEW LANDED 2026-10-23 — `docs/design/curb-pin-placement-design.md` is AUTHORITATIVE
+over this amendment wherever the two differ** (adopted by the orchestrator under the autonomy directive).
+Two blockers it found in the amendment, both resolved in its favour: (1) **pin tip at 40% of screen
+height (not bounds centre) + zoom floor ~0.55x entry distance + card height cap** — otherwise the card
+can cover the pin/ghost/highlight, tight on SE-class phones; (2) **VoiceOver cannot pan the map**, so the
+mode ships an adjustable summary element that cycles nearby curbs with ordered labels and debounced
+announcements. Also adopted: the 4-layer highlight stroke (the amendment's white-14/core-9 is invisible on
+a light basemap), the opaque `secondarySystemBackground` card with `Color(.label)` text (never
+`.secondary`), the 60 pt white-capsule primary (system-blue prominent fails 4.5:1), status chip with an SF
+Symbol, 48 pt "Report something here" row, labelled Cancel capsule, first-use hint pill. Its contrast
+numbers are estimates pending Mac/outdoor verification.
+
 Everything else (new flag, snap numbers, arrival prompt untouched, Path B routed through the new
 mode, cancel restores the camera) is a tech-lead decision with reasoning below.
 
