@@ -4408,7 +4408,7 @@ struct ContentView: View {
         coordinatorActions.applyDriveMapStyle?(true, nil)
         coordinatorActions.setShowsBuildings?(false)
         coordinatorActions.refreshUserLocationPuck?(false)
-        applyAmbientDrivingLook(center: nil, step: AmbientDrivingLook.exitZoomStep, animated: true)
+        applyAmbientDrivingLook(center: nil, step: AmbientDrivingLook.exitZoomStep(), animated: true)
     }
 
     /// Per-fix hook (from `handleLocationUpdate`): tighten a wide look when a better fix has
@@ -4424,7 +4424,16 @@ struct ContentView: View {
             userAdjusted: ambientLookUserAdjusted,
             newAccuracy: locationService.userHorizontalAccuracy
         ) {
-            applyAmbientDrivingLook(center: nil, step: .tight, animated: true)
+            // Center on the improved fix (QA #2) - not the stale first-fix center.
+            let fix = locationService.userLocation
+            applyAmbientDrivingLook(
+                center: AmbientDrivingLook.tightenCenter(
+                    fix: fix,
+                    fixInCoverage: fix.map { AppConstants.isInManhattanCoverage($0) } ?? false
+                ),
+                step: .tight,
+                animated: true
+            )
             cameraMoving = true
         }
         if !cameraMoving {

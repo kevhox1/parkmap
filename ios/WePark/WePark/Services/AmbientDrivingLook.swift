@@ -74,7 +74,9 @@ enum AmbientDrivingLook {
     /// A3.6.3 "End returns to this exact launch look": on Cruise exit the look is restored at
     /// the tight step. The driver was just on a navigation-grade fix, so the accuracy guard has
     /// nothing to protect; the post-End single-shot fix can only ever tighten, never widen.
-    nonisolated static let exitZoomStep: ZoomStep = .tight
+    /// A function (not a stored `nonisolated static let` of the nested enum type) so no
+    /// stored global of a MainActor-default type is read from a nonisolated context.
+    nonisolated static func exitZoomStep() -> ZoomStep { .tight }
 
     /// The Recenter test's "central 50%": the dot is inside when it is within this fraction of
     /// the map's width/height of the center on each axis (a quarter either side = the middle
@@ -123,9 +125,31 @@ enum AmbientDrivingLook {
         userAdjusted: Bool,
         newAccuracy: CLLocationAccuracy?
     ) -> Bool {
-        currentStep == .wide
-            && !userAdjusted
-            && zoomStep(forHorizontalAccuracy: newAccuracy) == .tight
+        // `switch`, not `==`: this nested enum is implicitly MainActor-isolated under the
+        // project's default isolation, and `==` on it from a `nonisolated` function risks an
+        // isolated-conformance error. `HeadingSourceKind` in DriveHeadingSnap does the same.
+        guard !userAdjusted else { return false }
+        switch currentStep {
+        case .tight:
+            return false
+        case .wide:
+            switch zoomStep(forHorizontalAccuracy: newAccuracy) {
+            case .tight: return true
+            case .wide:  return false
+            }
+        }
+    }
+
+    /// Where a wide -> tight tighten should center. The improved fix, so the dot lands in the
+    /// middle of the tighter frame instead of wherever the (possibly 100m-off) first fix put
+    /// the camera - but only when that fix is inside tile coverage (same guard `recenterOnUser`
+    /// uses; a non-NYC fix would center on a map with no data). `nil` = keep the current center.
+    nonisolated static func tightenCenter(
+        fix: CLLocationCoordinate2D?,
+        fixInCoverage: Bool
+    ) -> CLLocationCoordinate2D? {
+        guard let fix, fixInCoverage else { return nil }
+        return fix
     }
 
     // MARK: - Drive exit

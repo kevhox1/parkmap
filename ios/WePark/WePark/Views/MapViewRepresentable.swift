@@ -2346,6 +2346,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 // Drive Mode exited — reset to north-up and clear state.
                 guard lastAppliedHeading != nil else { return }
                 lastAppliedHeading = nil
+                // A3.6 (flag-on, resting posture): the ambient-look restore on Cruise End
+                // (`ContentView.restoreAmbientDrivingLookAfterDrive`) already carries heading 0
+                // in its single animated `setCamera`. Writing an un-animated heading-0 camera
+                // here would cancel that animation mid-flight (rotation snap, zoom frozen at
+                // an in-between distance). State above is still cleared; only the write is
+                // skipped. Flag-off: `isInEffect` is false, so the original write runs unchanged.
+                if AmbientDrivingLook.isInEffect(
+                    driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+                    driveModeActive: parent.driveModeActive
+                ) { return }
                 let camera = mapView.camera.copy() as! MKMapCamera
                 camera.heading = 0
                 // Exit path stays animated: false (immediate reset on Drive Mode exit is correct).

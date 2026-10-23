@@ -246,6 +246,9 @@ final class LocationService: NSObject {
     func startDriveMode() {
         guard !driveModeActiveInternal else { return }
         driveModeActiveInternal = true
+        // The drive branch of didUpdateLocations never updates this, so drop the pre-drive
+        // value rather than let it go stale across the session (A3.6 accuracy guard input).
+        userHorizontalAccuracy = nil
 
         // R-4 mitigation: stop first, reconfigure, then restart.
         manager.stopUpdatingLocation()
@@ -272,6 +275,7 @@ final class LocationService: NSObject {
     func endDriveMode() {
         guard driveModeActiveInternal else { return }
         driveModeActiveInternal = false
+        userHorizontalAccuracy = nil  // stale-across-drive guard; see startDriveMode.
 
         // Stop continuous updates.
         manager.stopUpdatingHeading()

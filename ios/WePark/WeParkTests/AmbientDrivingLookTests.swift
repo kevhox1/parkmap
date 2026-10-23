@@ -193,8 +193,61 @@ final class AmbientDrivingLookTests: XCTestCase {
     }
 
     func testExit_restoresTightStep() {
-        XCTAssertEqual(AmbientDrivingLook.exitZoomStep, .tight,
+        XCTAssertEqual(AmbientDrivingLook.exitZoomStep(), .tight,
             "End returns to the launch look at the tight step - the driver just had a nav-grade fix.")
+    }
+
+    // MARK: Tighten re-centers on the improved fix (QA pass 1 #2)
+
+    func testTightenCenter_inCoverageFix_centersOnTheNewFix() {
+        let fix = CLLocationCoordinate2D(latitude: 40.7581, longitude: -73.9855)
+        let center = AmbientDrivingLook.tightenCenter(fix: fix, fixInCoverage: true)
+        XCTAssertNotNil(center)
+        XCTAssertEqual(center?.latitude ?? 0, 40.7581, accuracy: 0.0000001)
+        XCTAssertEqual(center?.longitude ?? 0, -73.9855, accuracy: 0.0000001)
+    }
+
+    func testTightenCenter_outOfCoverageFix_keepsCurrentCenter() {
+        let fix = CLLocationCoordinate2D(latitude: 37.33, longitude: -122.03)
+        XCTAssertNil(AmbientDrivingLook.tightenCenter(fix: fix, fixInCoverage: false),
+            "Never center a tighten on a coordinate with no parking data.")
+    }
+
+    func testTightenCenter_noFix_keepsCurrentCenter() {
+        XCTAssertNil(AmbientDrivingLook.tightenCenter(fix: nil, fixInCoverage: true))
+    }
+
+    // MARK: Cruise End is one coherent camera move (QA pass 1 #1)
+
+    func testExitRestore_targetIsTheTightLaunchLook_northUp_cruisePitch() {
+        let cruiseSpan = MapViewRepresentable.driveModeCameraSpan
+        let step = AmbientDrivingLook.exitZoomStep()
+        let altitude = MapViewRepresentable.altitudeForSpan(
+            AmbientDrivingLook.span(for: step, cruiseSpan: cruiseSpan)
+        )
+        XCTAssertEqual(altitude, MapViewRepresentable.altitudeForSpan(cruiseSpan), accuracy: 0.001,
+            "End restores Cruise's own distance regardless of any pinch made during the drive.")
+        XCTAssertEqual(AmbientDrivingLook.heading, 0, accuracy: 0.0001,
+            "The restore itself carries heading 0, so the follow-up heading reset has nothing to do.")
+    }
+
+    func testExitRestore_leavesNothingPendingToTighten() {
+        // The restore re-asserts .tight and clears user-adjusted, so a stale first-fix state
+        // from before the drive can never leave the look permanently un-tightened or
+        // trigger a redundant second camera move right after End.
+        XCTAssertFalse(AmbientDrivingLook.shouldTighten(
+            currentStep: AmbientDrivingLook.exitZoomStep(), userAdjusted: false, newAccuracy: 10
+        ))
+    }
+
+    func testHeadingResetWrite_skippedOnlyWhenTheLookIsInEffect() {
+        // `syncDriveHeading(nil)`'s un-animated heading-0 write is skipped exactly when
+        // `isInEffect` is true (flag-on, resting). Flag-off it must still run (byte-identical).
+        XCTAssertTrue(AmbientDrivingLook.isInEffect(driveModeDefaultEnabled: true, driveModeActive: false))
+        XCTAssertFalse(AmbientDrivingLook.isInEffect(driveModeDefaultEnabled: false, driveModeActive: false),
+            "Flag-off: the original heading-0 reset write is NOT skipped.")
+        XCTAssertFalse(AmbientDrivingLook.isInEffect(driveModeDefaultEnabled: true, driveModeActive: true),
+            "While driving the reset is not skipped either.")
     }
 
     // MARK: Recenter under tilt (screen space)
@@ -379,9 +432,7 @@ final class AmbientDrivingLookLocationPostureTests: XCTestCase {
         )
     }
 
-    func testFreshService_hasNoWakeLock_noDriveState_noAccuracy() {
-        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled,
-            "AC-13: at rest the screen idle timer is never disabled.")
+    func testFreshService_hasNoDriveState_noAccuracy() {
         XCTAssertNil(service.driveHeading)
         XCTAssertNil(service.driveSpeed)
         XCTAssertNil(service.driveCourseAccuracy)
@@ -397,8 +448,40 @@ final class AmbientDrivingLookLocationPostureTests: XCTestCase {
         XCTAssertNil(service.driveHeading, "AC-13: a resting fix never produces drive heading state.")
         XCTAssertNil(service.driveSpeed, "AC-13: a resting fix never produces drive speed state.")
         XCTAssertNil(service.driveCourseAccuracy)
+    }
+
+    /// The wake lock is taken via `DispatchQueue.main.async` inside `startDriveMode()`, so a
+    /// bare `== false` right after a resting fix would pass even if it were set. This test
+    /// (1) drains the main queue after resting fixes and asserts the lock is still off, then
+    /// (2) proves the assertion is not a tautology with a positive control: the real
+    /// `startDriveMode()` DOES flip it on, and `endDriveMode()` flips it back off.
+    func testRestingFixes_neverTakeWakeLock_andTheLockIsObservable() async {
+        UIApplication.shared.isIdleTimerDisabled = false
+        service.locationManager(Self.dummyManager, didUpdateLocations: [makeFix(horizontalAccuracy: 20)])
+        service.locationManager(Self.dummyManager, didUpdateLocations: [makeFix(horizontalAccuracy: 90)])
+        try? await Task.sleep(for: .milliseconds(150))
         XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled,
-            "AC-13: consuming a resting fix does not take the wake lock.")
+            "AC-13: consuming resting fixes (after the main queue drained) never takes the wake lock.")
+
+        // Positive control (also exercises the real drive posture, which resting fixes never reach).
+        service.startDriveMode()
+        await waitUntil { UIApplication.shared.isIdleTimerDisabled }
+        XCTAssertTrue(UIApplication.shared.isIdleTimerDisabled,
+            "Control: startDriveMode() is what takes the lock, so the false above is meaningful.")
+        service.endDriveMode()
+        await waitUntil { !UIApplication.shared.isIdleTimerDisabled }
+        XCTAssertFalse(UIApplication.shared.isIdleTimerDisabled)
+    }
+
+    func testDriveStartAndEnd_dropTheStaleRestingAccuracy() async {
+        service.locationManager(Self.dummyManager, didUpdateLocations: [makeFix(horizontalAccuracy: 30)])
+        await waitUntil { self.service.userHorizontalAccuracy != nil }
+        XCTAssertNotNil(service.userHorizontalAccuracy, "Sanity: published before the drive.")
+
+        service.setDriveModeActiveForTesting(true)
+        service.endDriveMode()
+        XCTAssertNil(service.userHorizontalAccuracy,
+            "A resting accuracy from before a drive must not outlive it (QA pass 1 #5).")
     }
 
     func testRestingFix_invalidAccuracy_publishesNil() async {
