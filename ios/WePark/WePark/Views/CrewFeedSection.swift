@@ -548,6 +548,64 @@ enum LeaderboardPublishGuard {
     }
 }
 
+// MARK: - CrewFeedProfileState
+
+/// The crew feed's cached per-user state: the signed-in identity's own `profiles` row and whether
+/// a load has been attempted for THAT identity. A pure value type so the account-deletion reset is
+/// unit-testable (a SwiftUI `@State` bool is not).
+///
+/// Why this exists (QA PR #144 Y3): the old pair of `@State` flags (`currentProfile`,
+/// `hasAttemptedProfileLoad`) were keyed to nothing. After account deletion the app silently
+/// switches to a NEW anonymous identity; a still-mounted crew feed would keep showing the deleted
+/// user's profile card / "You" leaderboard row and, because `hasAttemptedProfileLoad` stayed
+/// `true`, never fetch the new identity's profile. Now the cache remembers WHICH user it was
+/// loaded for (`ownerId`) and is dropped the moment the identity differs.
+struct CrewFeedProfileState {
+    private(set) var profile: CommunityProfile? = nil
+    private(set) var hasAttemptedLoad = false
+    private(set) var ownerId: UUID? = nil
+
+    /// Forgets everything (profile, the attempted-load flag, the owner).
+    mutating func reset() {
+        profile = nil
+        hasAttemptedLoad = false
+        ownerId = nil
+    }
+
+    /// Call with the CURRENT identity. Drops the cache when it was loaded for a different user
+    /// (including "no user" after a deletion whose replacement mint has not finished). Returns
+    /// `true` if anything was dropped.
+    @discardableResult
+    mutating func syncIdentity(_ userId: UUID?) -> Bool {
+        guard ownerId != userId, hasAttemptedLoad || profile != nil || ownerId != nil else {
+            return false
+        }
+        reset()
+        return true
+    }
+
+    /// `true` when a profile fetch should run for `userId`: there is a user, and the cache was not
+    /// already loaded for that same user.
+    func needsLoad(for userId: UUID?) -> Bool {
+        guard let userId else { return false }
+        return !(hasAttemptedLoad && ownerId == userId)
+    }
+
+    /// Records a finished load (`profile` is nil for "no profile row yet" or a failed fetch).
+    mutating func recordLoad(_ profile: CommunityProfile?, for userId: UUID) {
+        self.profile = profile
+        hasAttemptedLoad = true
+        ownerId = userId
+    }
+}
+
+/// `.task(id:)` key for the crew feed's profile + leaderboard load: re-runs on a zone switch AND
+/// on an identity change (account deletion), so the new identity's profile is fetched.
+struct CrewFeedLoadKey: Equatable {
+    let zoneId: String?
+    let userId: UUID?
+}
+
 // MARK: - CrewFeedSection
 
 /// The crew feed's top-level view: zone chips, zone header, and the merged feed (or its
@@ -602,17 +660,20 @@ struct CrewFeedSection: View {
     /// when none exists yet (an anonymous device that's never authored/voted/chatted — see
     /// `CommunityPinService.fetchOwnProfile(userId:)`'s doc comment). Drives `profileRow`
     /// (renders nothing when `nil`) and `CommunityLeaderboard.build`'s `hasProfile` gate.
-    @State private var currentProfile: CommunityProfile? = nil
+    @State private var profileState = CrewFeedProfileState()
+
+    /// The cached profile for the CURRENT identity (nil when none / not loaded). See
+    /// `CrewFeedProfileState` for the account-deletion reset.
+    private var currentProfile: CommunityProfile? { profileState.profile }
 
     /// This zone's "THIS WEEK" leaderboard — recomputed on every zone switch (AC-P3.4).
     @State private var leaderboardEntries: [LeaderboardEntry] = []
 
-    /// Guards `loadProfileIfNeeded()` against refetching on every zone switch — the profile
-    /// isn't zone-scoped, so once an attempt has been made (successful or not), subsequent
-    /// `.task(id: selectedZoneId)` invocations skip straight to the leaderboard load. Stays
-    /// `false` if `authService.currentUserId` was nil at attempt time (shouldn't happen given
-    /// anonymous auth, but this lets a later invocation retry rather than permanently give up).
-    @State private var hasAttemptedProfileLoad = false
+    // `loadProfileIfNeeded()` is guarded by `profileState.needsLoad(for:)` against refetching on
+    // every zone switch — the profile isn't zone-scoped, so once an attempt has been made for
+    // THIS identity (successful or not), later task runs skip straight to the leaderboard load.
+    // No attempt is recorded when `authService.currentUserId` is nil, so a later invocation
+    // retries rather than permanently giving up.
 
     // MARK: - S13b (build 20, hero-gap-inventory WP3 rider): zone-level compose bar
 
@@ -661,6 +722,13 @@ struct CrewFeedSection: View {
             garageSavingsTotal = GarageSavingsService().currentMonthTotal()
         }
         .onChange(of: selectedZoneId) { _, newZoneId in selectZone(newZoneId) }
+        // Account deletion (QA PR #144 Y3): the identity changed under a mounted feed — drop the
+        // previous user's profile card and leaderboard rows immediately; the `.task(id:)` below
+        // (keyed on the user id too) then loads the new identity's.
+        .onChange(of: authService.currentUserId) { _, newUserId in
+            profileState.syncIdentity(newUserId)
+            leaderboardEntries = []
+        }
         // Community 2.0 S14: re-defaults the selection if `zoneStore.zones` changes after this
         // view has already mounted (the fetch resolving WHILE the crew feed is open — rare,
         // since the fetch fires once at cold launch, but possible if the sheet is opened
@@ -683,7 +751,7 @@ struct CrewFeedSection: View {
         // successful attempt), so the "profile known before the leaderboard's hasProfile
         // decision" sequencing the old onAppear/onChange split needed is now just "await it
         // first, every time" — cheap and race-free rather than a bespoke double-load.
-        .task(id: selectedZoneId) {
+        .task(id: CrewFeedLoadKey(zoneId: selectedZoneId, userId: authService.currentUserId)) {
             await loadProfileIfNeeded()
             if let selectedZoneId {
                 await loadLeaderboard(zoneId: selectedZoneId)
@@ -835,19 +903,24 @@ struct CrewFeedSection: View {
 
     // MARK: - Profile + leaderboard loading (Community 2.0 Phase 3, build 20 S9)
 
-    /// Loads the current user's own profile once — `hasAttemptedProfileLoad` makes every
+    /// Loads the current user's own profile once PER IDENTITY — `profileState` makes every
     /// invocation after the first a no-op, so calling this unconditionally from
     /// `.task(id: selectedZoneId)` on every zone switch doesn't refetch a profile that isn't
     /// zone-scoped in the first place. A fetch failure (network hiccup) leaves `currentProfile`
     /// at its previous value (`nil` on first load) rather than crashing or showing an error —
     /// the profile row simply doesn't render, same degrade as "no profile exists yet." Does
-    /// NOT set `hasAttemptedProfileLoad` when `authService.currentUserId` is nil, so a later
+    /// NOT record an attempt when `authService.currentUserId` is nil, so a later
     /// call can retry rather than permanently give up (defensive; shouldn't occur given
     /// anonymous auth's silent on-launch session).
     private func loadProfileIfNeeded() async {
-        guard !hasAttemptedProfileLoad, let userId = authService.currentUserId else { return }
-        currentProfile = try? await pinService.fetchOwnProfile(userId: userId)
-        hasAttemptedProfileLoad = true
+        let userId = authService.currentUserId
+        profileState.syncIdentity(userId)
+        guard let userId, profileState.needsLoad(for: userId) else { return }
+        let fetched = try? await pinService.fetchOwnProfile(userId: userId)
+        // The identity can change while the fetch is in flight (account deleted): never publish
+        // the previous user's profile under the new identity.
+        guard authService.currentUserId == userId else { return }
+        profileState.recordLoad(fetched, for: userId)
     }
 
     /// Fetches + ranks this zone's "THIS WEEK" leaderboard (AC-P3.4: recomputed on every zone

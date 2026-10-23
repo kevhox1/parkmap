@@ -271,9 +271,12 @@ enum AppConstants {
     /// Flip to `true` ONLY AFTER Kevin has confirmed BOTH production migrations are applied and
     /// verified (`docs/supabase-ceremony-10-11.md`): `supabase/10-account-deletion.sql` (the
     /// `delete_my_account()` RPC) AND `supabase/12-storage-delete-own.sql` (the owner-scoped
-    /// Storage DELETE policy the photo-removal step needs). With either missing, the flow fails
-    /// safe (it aborts before/at the RPC and the account is left intact) but every user who taps
-    /// it gets an error — so do not ship the row ahead of the SQL.
+    /// Storage DELETE policy the photo-removal step needs). The flow destroys the evidence PHOTOS
+    /// FIRST and calls the RPC LAST. With migration 12 missing, photo removal is denied and the
+    /// flow aborts before the RPC (nothing lost). With migration 10 missing, the photos are
+    /// already deleted when the RPC fails: the user LOSES THEIR PHOTOS but KEEPS THE ACCOUNT, and
+    /// every retry then errors at the RPC. So do not ship the row ahead of the SQL; run the
+    /// ceremony's Q0/Q1 checks first.
     ///
     /// Guard tests: `AccountDeletionTests.testAccountDeletionFlag_defaultsFalse` and
     /// `testAccountDeletionRow_hidden_whenDisabled`.

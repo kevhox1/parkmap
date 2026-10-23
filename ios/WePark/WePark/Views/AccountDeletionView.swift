@@ -156,6 +156,11 @@ struct DeleteAccountConfirmView: View {
     /// Called when the sheet should close (Cancel, or success).
     let onFinished: () -> Void
 
+    /// What deletion does NOT touch (the SQL contract: parked car and reminders are device-local,
+    /// not account data) and what the app does next. Exposed for a copy test.
+    nonisolated static let keptOnDeviceCopy =
+        "Your parked car and reminders on this device are kept. WePark keeps working, with a fresh anonymous profile."
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -175,6 +180,10 @@ struct DeleteAccountConfirmView: View {
                     consequenceRow(
                         systemImage: "trash.fill",
                         text: "Your profile, notification registrations, votes and evidence photos are deleted."
+                    )
+                    consequenceRow(
+                        systemImage: "car.fill",
+                        text: DeleteAccountConfirmView.keptOnDeviceCopy
                     )
                     consequenceRow(
                         systemImage: "exclamationmark.circle.fill",
