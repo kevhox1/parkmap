@@ -5561,6 +5561,10 @@ struct ContentView: View {
             curbPlacementIndexBuilding = false
             return
         }
+        // Cache miss: drop the stale index NOW so the card shows Loading (primary disabled)
+        // instead of snapping against a mismatched/partial segment set while the rebuild runs.
+        curbPlacementIndex = nil
+        curbPlacementIndexKey = nil
         startCurbPlacementIndexBuild()
     }
 
