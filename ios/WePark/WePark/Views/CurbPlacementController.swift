@@ -51,6 +51,13 @@ struct CurbPlacementHooks {
     let fireOutcome: (CurbSnapOutcome) -> Void
 }
 
+/// Margin state captured by the first `setBottomInset` (see its doc comment for the why).
+struct PlacementMarginSnapshot {
+    let insetsFromSafeArea: Bool
+    let rawMargins: UIEdgeInsets
+    let effectiveMargins: UIEdgeInsets
+}
+
 // MARK: - Display link proxy
 
 /// Weak target so `CADisplayLink` (which retains its target) cannot retain the controller.
@@ -76,7 +83,11 @@ final class CurbPlacementController {
 
     private let snapshot: PlacementCameraState
     private let snapshotZoomRange: MKMapView.CameraZoomRange
-    private let snapshotBottomMargin: CGFloat
+
+    /// Layout-margin state, captured lazily by the FIRST `setBottomInset` (a session that never
+    /// sets an inset never touches margins). See `setBottomInset` for why this is NOT a plain
+    /// read/write of `layoutMargins.bottom`.
+    private var marginSnapshot: PlacementMarginSnapshot?
 
     // MARK: Owned UIKit objects
 
@@ -113,24 +124,34 @@ final class CurbPlacementController {
 
     // MARK: Init
 
+    /// - Parameter replacing: a live session this one supersedes (QA #4). The new session
+    ///   INHERITS its entry snapshot (camera, zoom window, margins) so a later Cancel returns to
+    ///   the real pre-placement state, not to the street-level camera the old session left.
     init(
         mapView: MKMapView,
         seed: CLLocationCoordinate2D,
         incumbentKey: String?,
-        hooks: CurbPlacementHooks
+        hooks: CurbPlacementHooks,
+        replacing previous: CurbPlacementController? = nil
     ) {
         self.mapView = mapView
         self.seed = seed
         self.incumbentKey = incumbentKey
         self.hooks = hooks
-        self.snapshot = PlacementCameraState(
-            center: mapView.camera.centerCoordinate,
-            distance: mapView.camera.centerCoordinateDistance,
-            pitch: mapView.camera.pitch,
-            heading: mapView.camera.heading
-        )
-        self.snapshotZoomRange = mapView.cameraZoomRange
-        self.snapshotBottomMargin = mapView.layoutMargins.bottom
+        if let previous {
+            self.snapshot = previous.snapshot
+            self.snapshotZoomRange = previous.snapshotZoomRange
+            self.marginSnapshot = previous.marginSnapshot
+        } else {
+            self.snapshot = PlacementCameraState(
+                center: mapView.camera.centerCoordinate,
+                distance: mapView.camera.centerCoordinateDistance,
+                pitch: mapView.camera.pitch,
+                heading: mapView.camera.heading
+            )
+            self.snapshotZoomRange = mapView.cameraZoomRange
+            self.marginSnapshot = nil
+        }
     }
 
     deinit {
@@ -483,8 +504,13 @@ final class CurbPlacementController {
     private func scheduleNudge(toward coordinate: CLLocationCoordinate2D, nudge: PlacementNudge) {
         let work = DispatchWorkItem { [weak self] in
             guard let self, !self.isEnded else { return }
-            // A touch during the dwell abandons the nudge (design Finding 9).
-            if self.hooks.touchDown() { return }
+            // A touch during the dwell abandons the nudge (design Finding 9). If that touch
+            // never moves the map no region callback follows, so emit the settle now (QA #7);
+            // a touch that does move the map settles again, which is harmless.
+            if self.hooks.touchDown() {
+                self.fireSettle()
+                return
+            }
             self.performNudge(toward: coordinate, nudge: nudge)
         }
         dwellWork = work
@@ -622,11 +648,76 @@ final class CurbPlacementController {
         performNudge(toward: result.snappedCoordinate, nudge: PlacementNudge(animated: false, duration: 0))
     }
 
+    /// Animates the camera so `coordinate` lands under the pin tip (the design's tappable
+    /// "Nearest curb" chip). Same path as the settle nudge, so the normal settle / snap follows
+    /// and fires `onPlacementOutcome`. No-op during the entry flight or when already there.
+    func focus(on coordinate: CLLocationCoordinate2D) {
+        guard !isEnded, !entryInProgress, let mapView else { return }
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let point = mapView.convert(coordinate, toPointTo: mapView)
+        let offset = Double(hypot(point.x - tip.x, point.y - tip.y))
+        guard let nudge = CurbPlacementMapPolicy.settleNudge(
+            ghostOffsetPoints: offset,
+            reduceMotion: hooks.reduceMotion()
+        ) else { return }
+        moveWasUserInitiated = false
+        performNudge(toward: coordinate, nudge: nudge)
+    }
+
     /// Lifts the Apple logo / Legal link above the card (design Finding 7). Called when the
-    /// card's measured height changes - never per frame.
+    /// card's measured height changes - never per frame; `cardHeight <= 0` clears it.
+    ///
+    /// WHY NOT `layoutMargins.bottom = ...` round-tripped (PR #140 QA #3): with
+    /// `insetsLayoutMarginsFromSafeArea == true` (the default) the `layoutMargins` GETTER can
+    /// include the safe-area contribution, while the SETTER stores a raw value. Reading the
+    /// getter and writing it back on exit could therefore bake the home-indicator inset into the
+    /// stored margin and permanently lift the Apple logo (a double count). Instead:
+    ///   1. Remember the original flag and the RAW margins (read with the flag temporarily
+    ///      false, where the getter returns exactly what was stored), plus the EFFECTIVE margins
+    ///      (read under the original flag - what the user currently sees).
+    ///   2. While the session is live, run with the flag FALSE and explicit raw margins equal
+    ///      to the effective ones except the bottom, so what is set is exactly what is drawn.
+    ///   3. On exit, restore the flag and the RAW margins - never the effective ones.
+    /// UNVERIFIED on device (no Xcode here): the Mac smoke checks the Apple logo / Legal link
+    /// position on a notch phone before and after a session, and that the ghost stays under
+    /// the tip when the inset changes (MapKit may re-centre on a margin change).
     func setBottomInset(_ cardHeight: CGFloat) {
         guard !isEnded, let mapView else { return }
-        mapView.layoutMargins.bottom = max(snapshotBottomMargin, cardHeight + 8)
+        let snap: PlacementMarginSnapshot
+        if let existing = marginSnapshot {
+            snap = existing
+        } else {
+            let effective = mapView.layoutMargins
+            let originalFlag = mapView.insetsLayoutMarginsFromSafeArea
+            mapView.insetsLayoutMarginsFromSafeArea = false
+            let raw = mapView.layoutMargins
+            mapView.insetsLayoutMarginsFromSafeArea = originalFlag
+            snap = PlacementMarginSnapshot(insetsFromSafeArea: originalFlag, rawMargins: raw, effectiveMargins: effective)
+            marginSnapshot = snap
+        }
+        var applied = snap.effectiveMargins
+        applied.bottom = CurbPlacementMapPolicy.bottomMargin(
+            cardHeight: cardHeight,
+            snapshotEffectiveBottom: snap.effectiveMargins.bottom
+        )
+        mapView.insetsLayoutMarginsFromSafeArea = false
+        mapView.layoutMargins = applied
+    }
+
+    private func restoreMargins() {
+        guard let snap = marginSnapshot, let mapView else { return }
+        mapView.insetsLayoutMarginsFromSafeArea = snap.insetsFromSafeArea
+        mapView.layoutMargins = snap.rawMargins
+        marginSnapshot = nil
+    }
+
+    /// Stops this session WITHOUT touching the camera, zoom window or margins, because a
+    /// replacement session has inherited them (`init(... replacing:)`).
+    func endForReplacement() {
+        guard !isEnded else { return }
+        teardownTimersAndLink()
+        reticle.removeFromSuperview()
+        removeHighlight()
     }
 
     // MARK: - End
@@ -647,7 +738,7 @@ final class CurbPlacementController {
         teardownTimersAndLink()
         reticle.removeFromSuperview()
         removeHighlight()
-        mapView.layoutMargins.bottom = snapshotBottomMargin
+        restoreMargins()
         // Widen the window BEFORE the camera move so the target is not clamped.
         mapView.setCameraZoomRange(snapshotZoomRange, animated: false)
 
@@ -697,7 +788,8 @@ final class CurbPlacementController {
 extension MapViewRepresentable.Coordinator {
 
     func beginPlacement(seed: CLLocationCoordinate2D, incumbentKey: String?, animated: Bool) {
-        guard placementController == nil, let mapView else { return }
+        guard let mapView else { return }
+        let previous = placementController
         let hooks = CurbPlacementHooks(
             index: { [weak self] in
                 self?.parent.placementIndex
@@ -723,8 +815,12 @@ extension MapViewRepresentable.Coordinator {
             mapView: mapView,
             seed: seed,
             incumbentKey: incumbentKey,
-            hooks: hooks
+            hooks: hooks,
+            replacing: previous
         )
+        // QA #4: begin-while-live REPLACES the session (the old one ends WITHOUT restoring its
+        // camera; the new one inherited the original snapshot). Never silently ignored.
+        previous?.endForReplacement()
         placementController = controller
         controller.begin(animated: animated)
     }

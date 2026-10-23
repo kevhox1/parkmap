@@ -167,38 +167,76 @@ final class CurbPlacementEntryCameraTests: XCTestCase {
         XCTAssertEqual(recovered, wantedMeters, accuracy: 0.01)
     }
 
-    func testEntryDistance_clampsToTheCeiling() {
-        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 444), 400, accuracy: 0.0001)
+    /// Metres per screen point on a 390x844 view at camera distance `d`, under the repo's own
+    /// `altitudeForSpan` FOV convention (visible height = 2 d tan 15 deg).
+    private func cpmMetersPerPoint(atDistance d: Double) -> Double {
+        2 * d * tan(15.0 * Double.pi / 180.0) / 844.0
+    }
+
+    func testEntryDistance_isNotClampedTo400_andOnlyBoundedByThePinchOutCeiling() {
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 444), 444, accuracy: 0.0001,
+            "Orchestrator ruling: entry is the altitude for the 110 m target, no 400 m clamp.")
         XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 300), 300, accuracy: 0.0001)
-        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 400), 400, accuracy: 0.0001)
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 600), 600, accuracy: 0.0001)
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 900), 600, accuracy: 0.0001,
+            "Safety net: a very tall view must not start outside its own window.")
     }
 
-    func testEntryDistance_degenerateInputFallsBackToTheCeiling() {
-        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 0), 400, accuracy: 0.0001)
-        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: -5), 400, accuracy: 0.0001)
-        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: Double.nan), 400, accuracy: 0.0001)
-        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: Double.infinity), 400, accuracy: 0.0001)
+    func testEntryDistance_degenerateInputFallsBackToThePhoneDefault() {
+        let fallback = CurbPlacementMapPolicy.defaultEntryDistanceMeters
+        XCTAssertEqual(fallback, 444, accuracy: 0.0001)
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: 0), fallback, accuracy: 0.0001)
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: -5), fallback, accuracy: 0.0001)
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: Double.nan), fallback, accuracy: 0.0001)
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: Double.infinity), fallback, accuracy: 0.0001)
     }
 
-    /// DEVIATION PIN (see PR body): under the repo's own `altitudeForSpan` FOV convention, a
-    /// 110 m-wide street-level view needs MORE than the spec's ~400 m ceiling, so the entry is
-    /// clamped (~99 m wide) until the Mac measures the real MapKit relation. This test fails -
-    /// on purpose - the day either number changes, forcing the ruling to be revisited.
-    func testSpecInconsistency_110mWidthNeedsMoreThanTheCeilingUnderRepoFOV() {
+    /// Replaces the old "spec inconsistency" tripwire: the relation is now CONSISTENT. The 110 m
+    /// target resolves to ~444 m under the repo FOV, entry is that value (not clamped), and it
+    /// sits inside the 600 m pinch-out ceiling with headroom.
+    func testEntryFor110mTarget_isAbout444m_insideTheCeiling_unclamped() {
         let heightMeters = CurbPlacementMapPolicy.entryVisibleHeightMeters(boundsSize: CGSize(width: 390, height: 844))
         let requested = MapViewRepresentable.altitudeForSpan(
             CurbPlacementMapPolicy.latitudeSpan(forVisibleHeightMeters: heightMeters)
         )
-        XCTAssertGreaterThan(requested, CurbPlacementMapPolicy.maxCenterDistanceMeters)
-        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: requested),
-                       CurbPlacementMapPolicy.maxCenterDistanceMeters, accuracy: 0.0001)
+        let ceiling = CurbPlacementMapPolicy.zoomOutCeilingMeters
+        XCTAssertEqual(requested, 444.2, accuracy: 0.5)
+        XCTAssertLessThan(requested, ceiling)
+        XCTAssertEqual(CurbPlacementMapPolicy.entryDistance(requested: requested), requested, accuracy: 0.0001)
+        XCTAssertEqual(cpmMetersPerPoint(atDistance: requested), 0.282, accuracy: 0.002,
+            "Spec A.3's ~0.28 m/pt entry scale.")
     }
 
-    func testZoomRange_floorIs055xEntryDistance_ceilingIs400() {
-        let range = CurbPlacementMapPolicy.zoomRange(entryDistance: 400)
-        XCTAssertEqual(range.minDistance, 220, accuracy: 0.0001, "Design Finding 1: floor ~0.55x entry distance.")
-        XCTAssertEqual(range.maxDistance, 400, accuracy: 0.0001, "Spec A.3: ceiling ~400 m.")
+    func testZoomRange_floorIs055xEntryDistance_ceilingIs600() {
+        let range = CurbPlacementMapPolicy.zoomRange(entryDistance: 444)
+        XCTAssertEqual(range.minDistance, 244.2, accuracy: 0.0001, "Design Finding 1: floor ~0.55x entry distance.")
+        XCTAssertEqual(range.maxDistance, 600, accuracy: 0.0001, "Orchestrator ruling: pinch-out cap 600 m.")
         XCTAssertLessThan(range.minDistance, range.maxDistance)
+    }
+
+    func testZoomFloor_keepsGhostReachUnder160pt_designFinding1() {
+        let floor = CurbPlacementMapPolicy.zoomRange(entryDistance: 444.2).minDistance
+        let mpp = cpmMetersPerPoint(atDistance: floor)
+        XCTAssertGreaterThanOrEqual(mpp, 0.15)
+        XCTAssertLessThanOrEqual(24.0 / mpp, 160)
+    }
+
+    func testPinchOutCeiling_keepsTheAcquireRadiusAtLeast40pt() {
+        let mpp = cpmMetersPerPoint(atDistance: CurbPlacementMapPolicy.zoomOutCeilingMeters)
+        XCTAssertEqual(mpp, 0.381, accuracy: 0.002)
+        XCTAssertGreaterThanOrEqual(24.0 / mpp, 40, "Spec A.3 rationale for the cap.")
+    }
+
+    func testBottomMargin_isMaxOfSnapshotAndCardPlusGap() {
+        XCTAssertEqual(Double(CurbPlacementMapPolicy.bottomMargin(cardHeight: 300, snapshotEffectiveBottom: 42)), 308, accuracy: 0.0001)
+        XCTAssertEqual(Double(CurbPlacementMapPolicy.bottomMargin(cardHeight: 20, snapshotEffectiveBottom: 42)), 42, accuracy: 0.0001,
+            "Never below what the user already sees.")
+    }
+
+    func testBottomMargin_clearedHeightReturnsTheSnapshot() {
+        XCTAssertEqual(Double(CurbPlacementMapPolicy.bottomMargin(cardHeight: 0, snapshotEffectiveBottom: 42)), 42, accuracy: 0.0001)
+        XCTAssertEqual(Double(CurbPlacementMapPolicy.bottomMargin(cardHeight: -3, snapshotEffectiveBottom: 42)), 42, accuracy: 0.0001)
+        XCTAssertEqual(Double(CurbPlacementMapPolicy.bottomMargin(cardHeight: CGFloat.nan, snapshotEffectiveBottom: 42)), 42, accuracy: 0.0001)
     }
 
     func testZoomRange_scalesWithEntryDistance() {
@@ -759,6 +797,35 @@ final class CurbPlacementFlagOffGuardTests: XCTestCase {
         XCTAssertNil(actions.onRefreshPlacement)
         XCTAssertNil(actions.onCyclePlacementCurb)
         XCTAssertNil(actions.onSetPlacementBottomInset)
+        XCTAssertNil(actions.onFocusPlacement)
+        XCTAssertNil(actions.onQueryPlacementActive)
+    }
+
+    func testIsPlacementActive_falseWhenNothingInstalled_andFollowsTheProvider() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        XCTAssertFalse(actions.isPlacementActive)
+        var live = true
+        actions.onQueryPlacementActive = { live }
+        XCTAssertTrue(actions.isPlacementActive)
+        live = false
+        XCTAssertFalse(actions.isPlacementActive)
+    }
+
+    func testFocusPlacementSeamForwardsTheCoordinate_andIsInertWhenNotInstalled() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        actions.focusPlacement(on: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99))
+        var received: Double?
+        actions.onFocusPlacement = { coordinate in received = coordinate.latitude }
+        actions.focusPlacement(on: CLLocationCoordinate2D(latitude: 40.76, longitude: -73.99))
+        XCTAssertEqual(received ?? 0, 40.76, accuracy: 0.0000001)
+    }
+
+    func testFreshCoordinator_isNotPlacementActive_viaTheInstalledProvider() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        let representable = cpmRepresentable(actions: actions)
+        let coordinator = MapViewRepresentable.Coordinator(parent: representable)
+        actions.onQueryPlacementActive = { [weak coordinator] in coordinator?.placementController != nil }
+        XCTAssertFalse(actions.isPlacementActive)
     }
 
     func testPlacementActionsAreInertWhenNothingInstalledThem() {

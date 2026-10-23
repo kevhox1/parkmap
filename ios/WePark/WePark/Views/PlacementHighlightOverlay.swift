@@ -38,17 +38,21 @@ import UIKit
 
 // MARK: - Overlay
 
-final class PlacementHighlightOverlay: NSObject, MKOverlay {
+/// `@unchecked Sendable` + `nonisolated` members (PR #140 QA #5): MapKit reads `coordinate` /
+/// `boundingMapRect` and calls the renderer's `draw` OFF the main thread, while this project's
+/// default actor isolation is MainActor. Every stored property is an immutable `let`, so sharing
+/// is safe; the annotations just keep the compiler from inferring MainActor for them.
+nonisolated final class PlacementHighlightOverlay: NSObject, MKOverlay, @unchecked Sendable {
 
     /// Extra metres added on every side of the polyline's bbox so a wide stroke is not clipped
     /// (half the widest layer is 10 pt; at the 0.6 m/pt zoom-out ceiling that is 6 m).
-    static let boundingInflationMeters: Double = 12
+    nonisolated static let boundingInflationMeters: Double = 12
 
-    let blockfaceKey: String
-    let points: [MKMapPoint]
-    let coreColor: CGColor
-    let coordinate: CLLocationCoordinate2D
-    let boundingMapRect: MKMapRect
+    nonisolated let blockfaceKey: String
+    nonisolated let points: [MKMapPoint]
+    nonisolated let coreColor: CGColor
+    nonisolated let coordinate: CLLocationCoordinate2D
+    nonisolated let boundingMapRect: MKMapRect
 
     /// nil if the segment has fewer than two usable vertices (nothing to draw).
     init?(segment: Segment, coreColor: CGColor) {
@@ -91,14 +95,14 @@ final class PlacementHighlightOverlay: NSObject, MKOverlay {
 
 final class PlacementHighlightRenderer: MKOverlayRenderer {
 
-    private let highlight: PlacementHighlightOverlay
+    private nonisolated let highlight: PlacementHighlightOverlay
 
     init(highlight: PlacementHighlightOverlay) {
         self.highlight = highlight
         super.init(overlay: highlight)
     }
 
-    override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
+    override nonisolated func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
         let mapPoints = highlight.points
         guard mapPoints.count >= 2, zoomScale > 0 else { return }
 

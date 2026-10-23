@@ -123,28 +123,49 @@ nonisolated enum CurbPlacementMapPolicy {
         meters / metersPerDegreeForSpan
     }
 
-    /// Spec A.3 "While active": camera centre distance never exceeds this (~400 m), so the snap
-    /// radii never fall under ~40 pt. See the PR body: at `altitudeForSpan`'s own FOV convention
-    /// 110 m of width needs MORE than this, so the entry distance is clamped to it (deviation
-    /// flagged for orchestrator ruling, not silently substituted).
-    static let maxCenterDistanceMeters: CLLocationDistance = 400
+    /// The entry camera distance when the map has no usable size yet: the distance
+    /// `altitudeForSpan` gives for the 110 m target on a 390x844 phone (~444 m).
+    static let defaultEntryDistanceMeters: CLLocationDistance = 444
 
-    /// Design Finding 1: zoom floor = 0.55x the entry distance (~60 m visible width, >= 0.15
-    /// m/pt, so the ghost's max reach is ~160 pt and can never run under the card).
+    /// PINCH-OUT cap while the mode is active - a constant SEPARATE from the entry distance
+    /// (orchestrator ruling on PR #140, superseding the spec's "~400 m", which the repo's own
+    /// `altitudeForSpan` field-of-view convention makes unreachable: 110 m of width needs
+    /// ~444 m). At 600 m a 390x844 view shows ~0.381 m/pt, so the 24 m acquire radius is still
+    /// ~63 pt (>= the 40 pt target), and the entry (~444 m) has ~1.35x of pinch-out headroom.
+    static let zoomOutCeilingMeters: CLLocationDistance = 600
+
+    /// Design Finding 1: zoom floor = 0.55x the entry distance (~244 m = ~60 m visible width,
+    /// >= 0.15 m/pt, so the ghost's max reach is ~155 pt and can never run under the card).
     static let zoomFloorFactor: Double = 0.55
 
-    /// The entry camera distance: the requested one, clamped to the zoom-out ceiling.
+    /// The entry camera distance: the one the 110 m target needs (NOT clamped to a 400 m cap
+    /// any more), bounded only by the pinch-out ceiling as a safety net (a very tall/iPad view
+    /// would otherwise start outside its own window). Invalid input falls back to the
+    /// phone-default distance.
     static func entryDistance(requested: CLLocationDistance) -> CLLocationDistance {
-        guard requested.isFinite, requested > 0 else { return maxCenterDistanceMeters }
-        return min(requested, maxCenterDistanceMeters)
+        guard requested.isFinite, requested > 0 else { return defaultEntryDistanceMeters }
+        return min(requested, zoomOutCeilingMeters)
     }
 
-    /// The zoom window for a given (already clamped) entry distance.
+    /// The zoom window for a given entry distance: floor 0.55x entry, ceiling `zoomOutCeilingMeters`.
     static func zoomRange(entryDistance: CLLocationDistance) -> PlacementZoomRange {
         PlacementZoomRange(
             minDistance: entryDistance * zoomFloorFactor,
-            maxDistance: maxCenterDistanceMeters
+            maxDistance: zoomOutCeilingMeters
         )
+    }
+
+    // MARK: Bottom inset (design Finding 7 / QA #3)
+
+    /// Breathing room between the card top and the Apple logo / Legal link.
+    static let bottomInsetGapPoints: CGFloat = 8
+
+    /// The bottom layout margin to apply while the card is `cardHeight` tall:
+    /// `max(snapshotEffectiveBottom, cardHeight + gap)`, and exactly `snapshotEffectiveBottom`
+    /// for a non-positive / non-finite height (the "inset cleared" call).
+    static func bottomMargin(cardHeight: CGFloat, snapshotEffectiveBottom: CGFloat) -> CGFloat {
+        guard cardHeight.isFinite, cardHeight > 0 else { return snapshotEffectiveBottom }
+        return max(snapshotEffectiveBottom, cardHeight + bottomInsetGapPoints)
     }
 
     /// Visible height in metres after the distance clamp (visible extent is linear in

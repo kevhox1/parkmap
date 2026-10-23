@@ -925,8 +925,20 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onRefreshPlacement: (() -> Void)?
         var onCyclePlacementCurb: (() -> Void)?
         var onSetPlacementBottomInset: ((CGFloat) -> Void)?
+        var onFocusPlacement: ((CLLocationCoordinate2D) -> Void)?
+        var onQueryPlacementActive: (() -> Bool)?
 
-        /// Enters placement: snapshots the camera, flattens to pitch 0 / north-up at street
+        /// True while a placement session is live (installed in `makeUIView`; false before that
+        /// and flag-off). A3: read this before trusting its own state, and route EVERY reset path
+        /// (view rebuild, error path, sheet/scene reset) through `endPlacement` - while a session
+        /// is live map taps / long-presses are no-ops and nothing self-heals if A3 drops its state.
+        var isPlacementActive: Bool {
+            onQueryPlacementActive?() ?? false
+        }
+
+        /// Enters placement (or REPLACES a live session: the old one ends without restoring its
+        /// camera and the new one inherits the original pre-placement snapshot, so Cancel still
+        /// returns to the true prior state). Snapshots the camera, flattens to pitch 0 / north-up at street
         /// level with `seed` under the pin tip (40% of the view height), tightens the zoom window,
         /// shows the reticle and starts resolving. ONE animated `setCamera`.
         /// - Parameters:
@@ -949,7 +961,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             onEndPlacement?(restore)
         }
 
-        /// Re-resolves once at the current pin (call after swapping `placementIndex`).
+        /// Re-resolves once at the current pin. The controller reads `placementIndex` off the
+        /// representable, which only updates when `updateUIView` runs - so call this AFTER the
+        /// index swap has rendered (e.g. a following run-loop turn / next `.onChange`), NOT in
+        /// the same pass that assigned the new index, or it re-resolves against the old one.
         func refreshPlacement() {
             onRefreshPlacement?()
         }
@@ -959,8 +974,14 @@ struct MapViewRepresentable: UIViewRepresentable {
             onCyclePlacementCurb?()
         }
 
+        /// Animates the camera so `coordinate` lands under the pin tip (the "Nearest curb" chip).
+        /// The settle that follows fires `onPlacementOutcome`. No-op when no session is live.
+        func focusPlacement(on coordinate: CLLocationCoordinate2D) {
+            onFocusPlacement?(coordinate)
+        }
+
         /// Lifts the Apple logo / Legal link above the bottom card; call when the card's measured
-        /// height changes (never per frame). Restored by `endPlacement`.
+        /// height changes (never per frame); 0 clears it. Restored by `endPlacement`.
         func setPlacementBottomInset(_ cardHeight: CGFloat) {
             onSetPlacementBottomInset?(cardHeight)
         }
@@ -1535,6 +1556,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         coordinatorActions.onSetPlacementBottomInset = { [weak coordinator] cardHeight in
             coordinator?.placementController?.setBottomInset(cardHeight)
+        }
+        coordinatorActions.onFocusPlacement = { [weak coordinator] coordinate in
+            coordinator?.placementController?.focus(on: coordinate)
+        }
+        coordinatorActions.onQueryPlacementActive = { [weak coordinator] in
+            coordinator?.placementController != nil
         }
 
         // PR #89 on-device follow-up: repositioned compass (see `showsCompass = false`
@@ -3059,7 +3086,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             // real pan/pinch (observer recognizers) - taps/long-presses and programmatic
             // setCamera calls never set it - so tap-a-block and the look's own animations don't
             // count. Async for the same "no state write mid-render" reason as below.
-            if AppConstants.driveModeDefaultEnabled, !parent.driveModeActive, wasUserInteracting {
+            // A2: a pan/pinch INSIDE a placement session is not the user abandoning the ambient
+            // look - without this guard it would permanently disable PR #138's auto-tighten.
+            if AppConstants.driveModeDefaultEnabled, !parent.driveModeActive, wasUserInteracting,
+               placementController == nil {
                 DispatchQueue.main.async { [weak self] in
                     self?.parent.coordinatorActions.onAmbientUserAdjusted?()
                 }

@@ -124,7 +124,6 @@ final class PlacementReticleView: UIView {
 
         needleView.isUserInteractionEnabled = false
         needleView.backgroundColor = .clear
-        needleView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(needleView)
         for layer in [stemLayer, headLayer] {
             layer.fillColor = UIColor.white.cgColor
@@ -144,7 +143,11 @@ final class PlacementReticleView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        needleView.frame = bounds
+        // bounds + center, NOT frame: while the needle is lifted `needleView.transform` is a
+        // non-identity translation and setting `frame` on a transformed view is undefined
+        // (PR #140 QA #13 - reachable on rotation mid-lift).
+        needleView.bounds = CGRect(origin: .zero, size: bounds.size)
+        needleView.center = CGPoint(x: bounds.midX, y: bounds.midY)
         tip = CurbPlacementMapPolicy.tipPoint(in: bounds)
         rebuildStaticGeometry()
         applyGhost()
