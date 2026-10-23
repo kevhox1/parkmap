@@ -408,10 +408,17 @@ final class PushRegistrationService {
     /// Identifies exactly which `(token, environment, zone)` triple was last SUCCESSFULLY
     /// uploaded — `attemptUpsert` no-ops if the current candidate matches this, so a foreground
     /// re-check or a zone recompute that resolves to the same value doesn't re-POST needlessly.
+    ///
+    /// `userId` (open item #38, account deletion): the token row is keyed `(user_id, apns_token)`
+    /// server-side, so a NEW identity on the same device (after "Delete account" the app mints a
+    /// fresh anonymous user) must re-upload the same token even though token/env/zone are
+    /// unchanged. Without it, this in-memory dedupe would suppress the new identity's upload
+    /// until the next cold launch.
     private struct UploadKey: Equatable {
         let tokenHex: String
         let environment: String
         let zoneId: String
+        let userId: UUID?
     }
     private var lastUploaded: UploadKey?
 
@@ -568,7 +575,12 @@ final class PushRegistrationService {
               let zoneId = currentZoneId
         else { return }
         let environment = environmentProvider()
-        let candidate = UploadKey(tokenHex: tokenHex, environment: environment, zoneId: zoneId)
+        let candidate = UploadKey(
+            tokenHex: tokenHex,
+            environment: environment,
+            zoneId: zoneId,
+            userId: authService.currentUserId
+        )
         guard candidate != lastUploaded else { return }
         // S13a fold-in fix: see `inFlightCandidate`'s own doc comment — this closes the
         // foreground double-POST window `lastUploaded` alone can't catch.
@@ -639,7 +651,15 @@ final class PushRegistrationService {
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 return
             }
-            lastUploaded = candidate
+            // Record the user id the row was ACTUALLY written for (the candidate's may be nil if
+            // the session was minted inside this call), so the next check with the now-known id
+            // dedupes instead of re-uploading.
+            lastUploaded = UploadKey(
+                tokenHex: candidate.tokenHex,
+                environment: candidate.environment,
+                zoneId: candidate.zoneId,
+                userId: userId
+            )
         } catch {
             // Best-effort — the next zone change / foreground / relaunch retries naturally,
             // since `attemptUpsert`'s dedupe only skips when the LAST upload SUCCEEDED

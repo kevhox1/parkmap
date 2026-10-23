@@ -840,7 +840,7 @@ private struct BlockChatRow: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(message.authorUsername ?? "Neighbor")
+                    Text(AuthorDisplayName.name(for: message))
                         .font(.caption.weight(.bold))
                         .foregroundStyle(.secondary)
                     Text("\u{00B7} \(PinMarkerAnnotation.ageString(since: message.createdAt, now: .now))")

@@ -191,6 +191,10 @@ struct BrowseSearchAreaView: View {
     @State private var isRequestingAuth: Bool = false
     @State private var showLocationDeniedAlert: Bool = false
 
+    /// Open item #39: presents `SuggestNeighborhoodSheet` from the out-of-coverage place card.
+    /// Only ever set by `suggestAreaRow`, which is flag-gated.
+    @State private var showSuggestSheet: Bool = false
+
     @FocusState private var searchFieldFocused: Bool
 
     // MARK: - Body
@@ -557,6 +561,15 @@ struct BrowseSearchAreaView: View {
             .padding(.horizontal, 16)
             .accessibilityElement(children: .combine)
 
+            // Open item #39: out-of-coverage demand signal. Flag-gated
+            // (`AppConstants.coverageRequestsEnabled`, dark-shipped `false`): with the flag off
+            // this `if` is false at its first operand and the card is unchanged.
+            if AppConstants.coverageSuggestionVisible(),
+               let resolvedCoordinate,
+               !AppConstants.isInManhattanCoverage(resolvedCoordinate) {
+                suggestAreaRow
+            }
+
             if isLoadingRoute {
                 HStack(spacing: 8) {
                     ProgressView()
@@ -597,6 +610,35 @@ struct BrowseSearchAreaView: View {
             }
         }
         .padding(.bottom, 12)
+    }
+
+    /// Open item #39: "Suggest this area" row shown on the place card when the resolved
+    /// destination is outside the pre-built tile coverage. Opens `SuggestNeighborhoodSheet` with
+    /// the DESTINATION's coordinate as the viewed area (never the user's GPS; the sheet rounds it
+    /// to 2 decimals). The sheet is attached HERE, to a view that only exists while the flag is
+    /// on, so flag-off adds no presentation modifier to this view tree. Large touch target.
+    private var suggestAreaRow: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("We don\u{2019}t have parking data here yet.")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            Button {
+                showSuggestSheet = true
+            } label: {
+                Label("Suggest this area", systemImage: "mappin.and.ellipse")
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, minHeight: 48)
+            }
+            .buttonStyle(.bordered)
+            .accessibilityHint("Tells WePark you\u{2019}d like parking data for this area.")
+        }
+        .padding(.horizontal, 16)
+        .sheet(isPresented: $showSuggestSheet) {
+            SuggestNeighborhoodSheet(
+                viewedLatitude: resolvedCoordinate?.latitude,
+                viewedLongitude: resolvedCoordinate?.longitude
+            )
+        }
     }
 
     /// OQ-4 / design-review finding S2: the bucketed word carries semantic color, reusing

@@ -261,6 +261,49 @@ enum AppConstants {
     /// "4 dark-ship guard tests transformed into launched-world assertions").
     static let driveModeDefaultEnabled = false
 
+    // MARK: - Account deletion + "Suggest a neighborhood" (open items #38 / #39)
+
+    /// DARK-SHIPS `false` (same playbook as `communityEnabled` / `regularsEnabled` /
+    /// `driveModeDefaultEnabled`). Gates the Settings "Delete account" row and its confirmation
+    /// sheet (`Views/AccountDeletionView.swift`) — with it `false` NOTHING deletion-related
+    /// renders anywhere and no deletion network call can be made.
+    ///
+    /// Flip to `true` ONLY AFTER Kevin has confirmed BOTH production migrations are applied and
+    /// verified (`docs/supabase-ceremony-10-11.md`): `supabase/10-account-deletion.sql` (the
+    /// `delete_my_account()` RPC) AND `supabase/12-storage-delete-own.sql` (the owner-scoped
+    /// Storage DELETE policy the photo-removal step needs). With either missing, the flow fails
+    /// safe (it aborts before/at the RPC and the account is left intact) but every user who taps
+    /// it gets an error — so do not ship the row ahead of the SQL.
+    ///
+    /// Guard tests: `AccountDeletionTests.testAccountDeletionFlag_defaultsFalse` and
+    /// `testAccountDeletionRow_hidden_whenDisabled`.
+    static let accountDeletionEnabled = false
+
+    /// DARK-SHIPS `false`. Gates the "Suggest this area" affordance on the out-of-coverage
+    /// destination card (`BrowseSearchAreaView`), the Settings "Suggest a neighborhood" row, and
+    /// the sheet itself (`Views/SuggestNeighborhoodSheet.swift`).
+    ///
+    /// Flip to `true` ONLY AFTER Kevin has confirmed `supabase/11-coverage-requests.sql` is
+    /// applied and verified (`docs/supabase-ceremony-10-11.md`). Without the table every submit
+    /// would fail. Independent of the account-deletion flag (migration 11 does not depend on 10
+    /// or 12).
+    ///
+    /// Guard tests: `CoverageRequestTests.testCoverageRequestsFlag_defaultsFalse` and
+    /// `testSuggestAffordance_hidden_whenDisabled`.
+    static let coverageRequestsEnabled = false
+
+    /// Single gating function for the Settings "Delete account" row — callers read through this
+    /// rather than the raw flag (same shape as `regularsSettingsRowVisible(enabled:)`).
+    nonisolated static func accountDeletionRowVisible(enabled: Bool = accountDeletionEnabled) -> Bool {
+        enabled
+    }
+
+    /// Single gating function for every "Suggest a neighborhood" entry point (the out-of-coverage
+    /// card button and the Settings row).
+    nonisolated static func coverageSuggestionVisible(enabled: Bool = coverageRequestsEnabled) -> Bool {
+        enabled
+    }
+
     // MARK: - A3: Fixed-center pin with live curb snap ("curb-pin placement")
 
     /// Master flag for the curb-pin placement mode (`docs/longpress-universal-plant-spec.md`,

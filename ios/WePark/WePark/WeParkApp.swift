@@ -337,6 +337,12 @@ struct WeParkApp: App {
                 supabaseClients: supabaseClients,
                 regularsService: regularsService
             )
+                // Open items #38/#39: the shared auth service (the SAME AC-A5 singleton passed
+                // to ContentView above) is also published through the SwiftUI environment so the
+                // dark-shipped Settings "Delete account" / "Suggest a neighborhood" surfaces and
+                // the out-of-coverage "Suggest this area" sheet can reach it WITHOUT threading a
+                // new parameter through ContentView.swift. Read as an Optional there.
+                .environment(authService)
                 .task {
                     // Non-blocking: the map loads while auth completes in the background.
                     // ensureSession() fails silently if the network is unavailable (AC-A4).

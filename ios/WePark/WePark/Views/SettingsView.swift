@@ -29,6 +29,12 @@
 //    Section 4 — About:
 //      Version row: "Version" label + "<version> (<build>)" trailing text.
 //
+//    Open items #38/#39 (both dark-shipped behind AppConstants flags, off today):
+//      "Coverage" section (after Help) — "Suggest a neighborhood" row.
+//      Final section — red "Delete account" row -> confirmation sheet. Both read the shared
+//      SupabaseAuthService from the SwiftUI environment (injected in WeParkApp), so this view's
+//      initializer and ContentView's call site are unchanged.
+//
 //  No termsURL constant, no Link row — deferred per resolved OQ-W7-1.
 //  The engineer has been explicitly instructed NOT to add any Terms/Privacy affordance.
 //
@@ -97,6 +103,17 @@ struct SettingsView: View {
                     }
                 }
 
+                // MARK: Section 1.2 — Suggest a neighborhood (open item #39)
+
+                // Flag-gated (`AppConstants.coverageRequestsEnabled`, dark-shipped `false`):
+                // with the flag off this section does not exist and the sheet is never
+                // constructed. Flip only after `supabase/11-coverage-requests.sql` is applied.
+                if AppConstants.coverageSuggestionVisible() {
+                    Section("Coverage") {
+                        SuggestNeighborhoodSettingsRow()
+                    }
+                }
+
                 // MARK: Section 1.5 — Regulars (S7, docs/regulars-network-spec.md §3.1)
 
                 // FULLY gated on AppConstants.regularsSettingsRowVisible() (which reads
@@ -144,6 +161,16 @@ struct SettingsView: View {
                         Text("\(appVersion) (\(buildNumber))")
                             .foregroundStyle(.secondary)
                     }
+                }
+
+                // MARK: Section 5 — Delete account (open item #38)
+
+                // Last section, set apart at the bottom. Flag-gated
+                // (`AppConstants.accountDeletionEnabled`, dark-shipped `false`): with the flag
+                // off nothing deletion-related renders. Flip only after migrations 10 AND 12 are
+                // applied and verified (`docs/supabase-ceremony-10-11.md`).
+                if AppConstants.accountDeletionRowVisible() {
+                    AccountDeletionSection()
                 }
             }
             .navigationTitle("Settings")
