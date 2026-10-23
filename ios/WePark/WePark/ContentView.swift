@@ -929,6 +929,39 @@ struct ContentView: View {
     /// now, matching this codebase's W5.1 single-sheet decision).
     @State private var pendingIdentityAction: (() -> Void)? = nil
 
+    // MARK: - A3 curb-pin placement state (flag-gated; SEAM: self-contained block)
+    //
+    // Stream A3 of docs/longpress-universal-plant-spec.md "Amendment - fixed-center pin with live
+    // curb snap". Every value below is nil / false / 0 for the whole lifetime of a flag-off
+    // build: only `beginCurbPlacement(...)` ever writes `curbPlacement`, and it is reachable
+    // only through `CurbPlacementPolicy.routing(...)` returning `.placement`, which needs
+    // `AppConstants.curbPinPlacementEnabled`.
+
+    /// The live placement session (intent, seed, latest snap outcome), or nil = mode off. THE
+    /// single source of truth: `curbPlacementActive` is derived from it, the card renders from it,
+    /// and `.onChange(of: curbPlacement != nil)` drives the camera seams from it.
+    @State private var curbPlacement: CurbPlacementSession? = nil
+
+    /// The snap index the map layer resolves against. Built lazily on entry and rebuilt when
+    /// `tileLoader.segments.count` changes, OFF the main actor, guarded by
+    /// `curbPlacementIndexGeneration` (a stale build is discarded). Dropped on exit.
+    @State private var curbPlacementIndex: CurbSnapIndex? = nil
+    @State private var curbPlacementIndexGeneration: Int = 0
+    /// True while a build is in flight (so a "no curb" outcome reads "Loading curbs..." instead
+    /// of a false empty state when new tiles just arrived - spec A13).
+    @State private var curbPlacementIndexBuilding: Bool = false
+    /// Bumped each time a freshly built index is installed; `.onChange` of it schedules the
+    /// `refreshPlacement()` that must run AFTER the swap has rendered (A2 doc comment).
+    @State private var curbPlacementIndexVersion: Int = 0
+    /// The placement locate button asked for a fix and none was cached yet; the fix, when it
+    /// arrives, moves the pin (single-shot `requestAndFetchLocation()` only - never the drive
+    /// posture).
+    @State private var curbPlacementLocatePending: Bool = false
+    /// The card's last measured height (card top to physical screen bottom). Re-applied to the
+    /// map layer's bottom margin right after `beginPlacement` (the card mounts before the
+    /// controller exists, so the first measurement would otherwise be dropped).
+    @State private var curbPlacementCardHeight: CGFloat = 0
+
     // MARK: - Community 1.0 / Tier 1: Community pin service + map state
 
     /// Community pin service. Fetches filming / asp_suspended_today / special_event pins
@@ -1115,7 +1148,7 @@ struct ContentView: View {
     // MARK: - Body
 
     var body: some View {
-        mapLayerWithEvents
+        mapLayerWithPlacementEvents
             .onReceive(parkPinService.pinDropped) { newCar in handlePinDropped(newCar) }
             .onReceive(parkPinService.remoteCarChanged) { newCar, oldCarID in
                 handleRemoteCarChanged(newCar: newCar, oldCarID: oldCarID)
@@ -1224,8 +1257,19 @@ struct ContentView: View {
                 // `browseNavigationSheetContent`'s `.interactiveDismissDisabled` rework) or any
                 // other no-explicit-dismiss-closure case lands on the genuinely sheet-free
                 // ambient home screen (AC-6), not back into `.browseNav`.
-                if Self.ft20BrowseSheetEnabled, activeSheet == nil, !driveModeActive,
-                   !blockSelectModeActive, !spotPlacementActive {
+                //
+                // A3 (curb-pin placement): also guarded on `curbPlacement == nil`. Entering the
+                // mode sets `activeSheet = nil` (dismissing whatever sheet launched it), and that
+                // dismissal's `onDismiss` must NOT re-present a rest-state sheet mid-mode (AC-A21).
+                // Always true flag-off, so this is byte-identical there.
+                if CurbPlacementPolicy.sheetDismissRestoresRestState(
+                    browseSheetEnabled: Self.ft20BrowseSheetEnabled,
+                    activeSheetIsNil: activeSheet == nil,
+                    driveModeActive: driveModeActive,
+                    blockSelectModeActive: blockSelectModeActive,
+                    spotPlacementActive: spotPlacementActive,
+                    placementActive: curbPlacement != nil
+                ) {
                     activeSheet = driveModeDefaultRestStateSheet()
                 }
             }) { sheet in sheetContent(sheet) }
@@ -2611,7 +2655,8 @@ struct ContentView: View {
                     endDriveControl
                 } else if recenterButtonStackVisible(
                     driveModeActive: driveModeActive,
-                    blockSelectModeActive: blockSelectModeActive
+                    blockSelectModeActive: blockSelectModeActive,
+                    curbPlacementActive: curbPlacement != nil
                 ) {
                     recenterButtonStack
                         .padding(.top, 100)
@@ -2659,6 +2704,9 @@ struct ContentView: View {
             // a new positioning mechanism. See `locationPrimingCardOverlay`'s own doc
             // comment for its gating.
             locationPrimingCardOverlay
+            // A3 (curb-pin placement): the placement card + Cancel + locate + first-use hint.
+            // Renders nothing unless a session is live (never, flag-off).
+            curbPlacementOverlay
         }
     }
 
@@ -2813,15 +2861,19 @@ struct ContentView: View {
     /// own floating chrome (the park-confirm card) shouldn't compete with this persistent
     /// row, and it hides/returns exactly when the card does, since both read off the same
     /// `pendingLongPressCoord != nil` condition at the call site below.
+    ///
+    /// A3 (curb-pin placement): trailing `curbPlacementActive` (default `false` = byte-identical
+    /// to before) hides the pill and "?" for the duration of the mode.
     nonisolated static func communityMapChromeVisible(
         communityEnabled: Bool,
         driveModeActive: Bool,
         blockSelectModeActive: Bool,
         spotPlacementActive: Bool,
-        longPressParkConfirmActive: Bool
+        longPressParkConfirmActive: Bool,
+        curbPlacementActive: Bool = false
     ) -> Bool {
         communityEnabled && !driveModeActive && !blockSelectModeActive && !spotPlacementActive
-            && !longPressParkConfirmActive
+            && !longPressParkConfirmActive && !curbPlacementActive
     }
 
     /// Addendum 3 (A3.4): whether the FLOATING Report pill + "?" layer
@@ -2889,7 +2941,8 @@ struct ContentView: View {
                 driveModeActive: driveModeActive,
                 blockSelectModeActive: blockSelectModeActive,
                 spotPlacementActive: spotPlacementActive,
-                longPressParkConfirmActive: pendingLongPressCoord != nil
+                longPressParkConfirmActive: pendingLongPressCoord != nil,
+                curbPlacementActive: curbPlacement != nil
             ),
             driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled
         ) {
@@ -2925,7 +2978,8 @@ struct ContentView: View {
     @ViewBuilder
     private var locationPrimingCardOverlay: some View {
         if AppConstants.driveModeDefaultEnabled && showLocationPrimingCard
-            && !driveModeActive && !blockSelectModeActive && !spotPlacementActive {
+            && !driveModeActive && !blockSelectModeActive && !spotPlacementActive
+            && curbPlacement == nil {
             VStack(spacing: 0) {
                 LocationPrimingCard(
                     onAllow: { dismissLocationPrimingCard(allowed: true) },
@@ -2998,6 +3052,14 @@ struct ContentView: View {
     ///      degrade gracefully" semantics (OD-1) — `ReportSheet` already handles a
     ///      candidate search that comes up empty.
     private func handleReportPillTap() {
+        // A3 (curb-pin placement), spec A.7 + A-2: flag-on, the pill lands in placement first
+        // (seed = GPS, else the map centre - the chain below) and reaches the chooser via
+        // "Next". Flag-off (or a blocked entry) `curbPlacementRouting` is `.legacy` and the
+        // original body runs untouched.
+        if startCurbPlacementIfRouted(
+            entry: .reportPill,
+            seed: locationService.userLocation ?? region.center
+        ) { return }
         let hasGPSFix = locationService.userLocation != nil
         let coord = locationService.userLocation ?? region.center
         let reportSegment = findCandidateSegments(
@@ -3044,7 +3106,8 @@ struct ContentView: View {
     /// `ZStack(alignment: .top)`) rather than inventing a new positioning mechanism.
     @ViewBuilder
     private var parkingGuideBannerOverlay: some View {
-        if showParkingGuideBanner && !driveModeActive && !parkUntilMode && !blockSelectModeActive {
+        if showParkingGuideBanner && !driveModeActive && !parkUntilMode && !blockSelectModeActive
+            && curbPlacement == nil {
             VStack(spacing: 0) {
                 Spacer()
                 ParkingGuidePromptBanner(
@@ -3083,6 +3146,20 @@ struct ContentView: View {
             // visiblePinsGeneration increments on every visiblePins assignment.
             .onChange(of: pinService.visiblePinsGeneration) { _, _ in handleVisiblePinsChange(pinService.visiblePins) }
             .onReceive(parkPinService.firstPinDropped) { handleFirstPinDropped() }
+    }
+
+    /// A3: `mapLayerWithEvents` + the placement mode's three observers (third group, kept apart
+    /// from the two above for the same type-checker-budget reason they were split). All three
+    /// values are constant (`false` / `0`) for the whole life of a flag-off build, so these
+    /// modifiers never fire there.
+    @ViewBuilder
+    private var mapLayerWithPlacementEvents: some View {
+        mapLayerWithEvents
+            .onChange(of: curbPlacement != nil) { _, active in handleCurbPlacementActiveChange(active) }
+            .onChange(of: curbPlacementIndexVersion) { _, _ in scheduleCurbPlacementRefresh() }
+            .onChange(of: curbPlacementHasConflictingSheet) { _, conflicting in
+                if conflicting { endCurbPlacementForConflictingSheet() }
+            }
     }
 
     // MARK: - Map representable callbacks (extracted for type-checker budget)
@@ -3277,7 +3354,14 @@ struct ContentView: View {
             driveModeActive: driveModeActive,
             onDrivePanDetected: handleDrivePanDetected,
             onDrivePinchZoomed: handleDrivePinchZoomed(_:),
-            coordinatorActions: coordinatorActions
+            coordinatorActions: coordinatorActions,
+            // A3 (curb-pin placement): the three seam inputs A2 declared AFTER
+            // `coordinatorActions` (NB: declaration order). `curbPlacementIndex` is nil
+            // whenever no session is live (always, flag-off); the callbacks are never invoked
+            // without a session.
+            placementIndex: curbPlacementIndex,
+            onPlacementOutcome: handleCurbPlacementOutcome(_:),
+            placementSeverity: curbPlacementSeverity(for:)
         )
     }
 
@@ -3320,7 +3404,8 @@ struct ContentView: View {
             activeSheetIsNil: activeSheet == nil,
             driveModeActive: driveModeActive,
             blockSelectModeActive: blockSelectModeActive,
-            spotPlacementActive: spotPlacementActive
+            spotPlacementActive: spotPlacementActive,
+            curbPlacementActive: curbPlacement != nil
         )
         let goalTilesVisible = goalTileRowVisible(
             driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
@@ -3328,7 +3413,8 @@ struct ContentView: View {
             fullPaletteMode: fullPaletteMode,
             driveModeActive: driveModeActive,
             blockSelectModeActive: blockSelectModeActive,
-            spotPlacementActive: spotPlacementActive
+            spotPlacementActive: spotPlacementActive,
+            curbPlacementActive: curbPlacement != nil
         )
         // Addendum 2 (A2.2): whether the CURRENT Park Until filter came from a goal tap —
         // see `activeGoalForParkUntilPill`'s own doc comment for why this needs ZERO new
@@ -3397,7 +3483,10 @@ struct ContentView: View {
             // `activeGoal == nil` (flag off, or full-palette mode) renders TODAY'S generic
             // `ParkUntilPill`, completely unchanged. Same ✕ → `clearParkUntilFilter()`, no
             // gating, no confirm, in both branches.
-            if parkUntilMode, let target = parkUntilTarget, !goalTilesVisible {
+            //
+            // A3 (curb-pin placement): hidden for the duration of the mode - the card is a map
+            // overlay and this pill (inside the bottom safe-area inset) would sit behind/under it.
+            if parkUntilMode, let target = parkUntilTarget, !goalTilesVisible, curbPlacement == nil {
                 if let activeGoal {
                     let content = ContentView.goalPillContent(for: activeGoal, target: target, now: lastEvaluatedAt)
                     GoalParkUntilPill(
@@ -4319,6 +4408,13 @@ struct ContentView: View {
     /// (the parked car, a deep link) accuracy is irrelevant and the look opens tight. `region`
     /// is still written for tile loading either way. Flag off / driving: unchanged `setRegion`.
     private func recenterMap(on coordinate: CLLocationCoordinate2D, usingUserFix: Bool = false) {
+        // A3 (curb-pin placement), PR #140 QA P2-1: THE funnel for every recenter (launch
+        // auto-center, Find me, parked-car, deep link). While a placement session is live the
+        // camera belongs to it - flag-off `setRegion` below would flatten/clobber the placement
+        // camera. The DEFERRAL of the flag-driven callers lives in `handleLocationUpdate`
+        // (their pending flags are NOT cleared while a session is live); this guard is the
+        // backstop for any other caller. Always false flag-off.
+        if curbPlacement != nil { return }
         let newRegion = MKCoordinateRegion(
             center: coordinate,
             latitudinalMeters: AppConstants.streetLevelRecenterMeters,
@@ -4418,6 +4514,11 @@ struct ContentView: View {
     /// once it settles.
     private func handleAmbientLookLocationUpdate(cameraMoveInFlight: Bool) {
         guard ambientDrivingLookInEffect else { return }
+        // A3 (curb-pin placement), PR #140 QA #2: auto-tighten issues `setAmbientDrivingLook`
+        // (pitch 30 + re-centre on the fix), which would hijack the placement camera. Skipped
+        // while a session is live; nothing is lost - `ambientLookStep` is unchanged, so the next
+        // fix after the session re-evaluates. Always nil flag-off.
+        guard curbPlacement == nil else { return }
         var cameraMoving = cameraMoveInFlight
         if AmbientDrivingLook.shouldTighten(
             currentStep: ambientLookStep,
@@ -4758,11 +4859,23 @@ struct ContentView: View {
         // A3.6: captured BEFORE the recenter branches below clear these flags - if either was
         // set, a recenter camera move is about to start this tick (see the ambient hook below).
         let ambientRecenterPending = recenterOnUserRequested || recenterOnUserAtLaunch
+        // A3 (curb-pin placement), PR #140 QA P2-1 (b): while a session is live both pending
+        // recenter flags are DEFERRED - left set, not cleared - so the recenter still happens
+        // once the session ends (`endCurbPlacement` re-queues a fix). Gating only the
+        // `recenterMap` call would lose it for good, because the flags are cleared first. With no
+        // session the plan consumes exactly what is pending: the original behavior.
+        let placementPlan = CurbPlacementPolicy.recenterPlan(
+            requestedPending: recenterOnUserRequested,
+            atLaunchPending: recenterOnUserAtLaunch,
+            placementActive: curbPlacement != nil
+        )
+        // The placement locate button's deferred fix (no cached fix when it was tapped).
+        consumeCurbPlacementLocateFix(coord)
         // W5.1: Recenter on user location if requested.
         // zoom-out-limit-tighten: same out-of-coverage guard as the immediate-fix branch in
         // recenterOnUser() above — this is the deferred completion of the same button tap
         // when no cached fix was available yet.
-        if recenterOnUserRequested {
+        if recenterOnUserRequested && placementPlan.consumeRequested {
             recenterOnUserRequested = false
             if AppConstants.isInManhattanCoverage(coord) {
                 recenterMap(on: coord, usingUserFix: true)
@@ -4771,7 +4884,7 @@ struct ContentView: View {
             }
         }
         // Viewport-polish Priority 2b: auto-center at launch if in coverage.
-        if recenterOnUserAtLaunch {
+        if recenterOnUserAtLaunch && placementPlan.consumeAtLaunch {
             recenterOnUserAtLaunch = false
             if AppConstants.isInManhattanCoverage(coord) {
                 recenterMap(on: coord, usingUserFix: true)
@@ -4987,6 +5100,10 @@ struct ContentView: View {
             return
         }
         guard newPhase == .active else { return }
+        // A3 (curb-pin placement), PR #140 QA #4 / (d) "scene changes": if the SwiftUI state and
+        // the map layer disagree about whether a session is live, reconcile through
+        // `endPlacement`. No-op when both agree (always, flag-off).
+        healStuckCurbPlacement()
         bannerState = aspService.suspensionState(at: .nowET)
         // Re-sync mute state in case it changed while backgrounded (edge case).
         notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
@@ -5199,6 +5316,429 @@ struct ContentView: View {
 
         guard closestDistance <= tapHitThresholdMeters, let segment = closestSegment else { return }
         toggleBlockSelection(segment)
+    }
+
+    // MARK: - A3: Curb-pin placement mode (flag: AppConstants.curbPinPlacementEnabled)
+    //
+    // Stream A3 of docs/longpress-universal-plant-spec.md "Amendment - fixed-center pin with live
+    // curb snap". The map layer (reticle, highlight, display link, camera) is Stream A2
+    // (`CurbPlacementController`, reached ONLY through `coordinatorActions`); the snap engine is
+    // Stream A1 (`CurbSnapIndex`). THIS block is the SwiftUI side: the `curbPlacement` session,
+    // the three entry rewires, the card, and the two commit handoffs.
+    //
+    // Invariants:
+    //   - Placement is a RESTING-posture mode. This block never reads `driveModeStyle`, never
+    //     WRITES `driveModeActive`, and never touches `LocationService`'s drive posture; the
+    //     locate button uses the existing single-shot `requestAndFetchLocation()`.
+    //   - Every camera mutation goes through `coordinatorActions` from an `.onChange` / button
+    //     handler / main-queue hop - NEVER from `updateUIView` (#31).
+    //   - EVERY way out of the mode routes through `endCurbPlacement(...)`, which calls
+    //     `endPlacement` (PR #140 QA #4: a stuck session leaves the map ignoring taps).
+    //   - Card placement decision (QA P2-2): the card is a MAP OVERLAY (`curbPlacementOverlay`,
+    //     design section 3 / spec A.4), NOT part of the bottom `.safeAreaInset` dock. The dock's
+    //     rows are hidden for the duration of the mode, so the inset is empty and A2's
+    //     `setPlacementBottomInset` is the SINGLE owner of lifting the Apple logo / Legal link
+    //     above the card. Putting the card in the safe-area inset instead would resize the map's
+    //     safe area every time the card's content changes, an unverified re-centring hazard for
+    //     the tip/ghost maths. Mac smoke: confirm MapKit does not shift the camera when the
+    //     margin changes.
+
+    /// Routes an entry point through the pure policy (flag + mode exclusions).
+    private func curbPlacementRouting(for entry: CurbPlacementEntry) -> CurbPlacementEntryRouting {
+        CurbPlacementPolicy.routing(
+            for: entry,
+            flagEnabled: AppConstants.curbPinPlacementEnabled,
+            driveModeActive: driveModeActive,
+            blockSelectModeActive: blockSelectModeActive,
+            spotPlacementActive: spotPlacementActive,
+            placementActive: curbPlacement != nil
+        )
+    }
+
+    /// The report pill / Path B shape: enter placement when routed there and a seed exists,
+    /// otherwise report `false` so the caller runs its unmodified legacy body.
+    private func startCurbPlacementIfRouted(
+        entry: CurbPlacementEntry,
+        seed: CLLocationCoordinate2D?,
+        incumbentBlockfaceKey: String? = nil
+    ) -> Bool {
+        switch curbPlacementRouting(for: entry) {
+        case .placement:
+            guard let seed else { return false }
+            beginCurbPlacement(entry: entry, seed: seed, incumbentBlockfaceKey: incumbentBlockfaceKey)
+            return true
+        case .legacy, .ignore:
+            return false
+        }
+    }
+
+    /// Enters the mode (spec A.3 "Entry"): clears the block selection, dismisses whatever sheet
+    /// launched it, and publishes the session. The camera itself is begun from
+    /// `.onChange(of: curbPlacement != nil)` (`handleCurbPlacementActiveChange`), outside any
+    /// view update. `curbPlacement` is written BEFORE `activeSheet = nil` so the sheet's
+    /// `onDismiss` catch-all already sees a live session and does not restore the rest state.
+    private func beginCurbPlacement(
+        entry: CurbPlacementEntry,
+        seed: CLLocationCoordinate2D,
+        incumbentBlockfaceKey: String? = nil
+    ) {
+        let hintGate = CurbPlacementHintGate()
+        let showsHint = hintGate.shouldShow()
+        if showsHint { hintGate.markShown() }
+
+        if selectedSegmentID != nil { selectedSegmentID = nil }
+        curbPlacementCardHeight = 0
+        curbPlacement = CurbPlacementSession(
+            entry: entry,
+            seed: seed,
+            incumbentBlockfaceKey: incumbentBlockfaceKey,
+            showsHint: showsHint
+        )
+        if activeSheet != nil { activeSheet = nil }
+    }
+
+    /// `.onChange(of: curbPlacement != nil)`: begins the map layer on entry; on a nil-ing that did
+    /// not go through `endCurbPlacement` (it always does today) it is the safety net that still
+    /// ends the map layer, so taps can never stay disabled.
+    private func handleCurbPlacementActiveChange(_ active: Bool) {
+        if active {
+            guard let session = curbPlacement else { return }
+            startCurbPlacementIndexBuild()
+            coordinatorActions.beginPlacement(
+                seed: session.seed,
+                incumbentBlockfaceKey: session.incumbentBlockfaceKey,
+                animated: session.animatedEntry
+            )
+            // The map view is not ready (no controller was created): abort rather than leave a
+            // card up over a map that is not in the mode.
+            guard coordinatorActions.isPlacementActive else {
+                endCurbPlacement(restore: true)
+                activeSheet = driveModeDefaultRestStateSheet()
+                return
+            }
+            applyCurbPlacementBottomInset(curbPlacementCardHeight)
+        } else {
+            // Safety net: the session went away without going through endCurbPlacement - end
+            // the map layer so taps can never stay disabled.
+            switch CurbPlacementPolicy.healAction(sessionPresent: false, mapLayerActive: coordinatorActions.isPlacementActive) {
+            case .endMapLayer:
+                coordinatorActions.endPlacement(restore: true)
+            case .none, .dropSession:
+                break
+            }
+        }
+    }
+
+    /// Every exit funnels here (Cancel, commit, report, Drive entry, abort, conflicting sheet,
+    /// scene heal). Camera first, through the A2 seam; then all SwiftUI-side session state; then
+    /// the ambient-look and deferred-recenter bookkeeping (state only - NEVER a camera move: A2's
+    /// `endPlacement` already restores / centres, and `applyAmbientDrivingLook` would issue a
+    /// competing `setCamera`, PR #140 QA P2-1 (c)). Callers that leave the map set `activeSheet`
+    /// themselves AFTER this returns.
+    ///
+    /// - Parameter restore: true = Cancel (exact prior camera); false = commit / hand off to the
+    ///   report sheet (stay street-level on the placed point).
+    private func endCurbPlacement(restore: Bool) {
+        if coordinatorActions.isPlacementActive {
+            coordinatorActions.endPlacement(restore: restore)
+        }
+        curbPlacementIndexGeneration += 1
+        curbPlacementIndexBuilding = false
+        curbPlacementIndex = nil
+        curbPlacementLocatePending = false
+        curbPlacementCardHeight = 0
+
+        let adjusted = CurbPlacementPolicy.ambientUserAdjustedAfterExit(
+            restored: restore,
+            ambientLookInEffect: ambientDrivingLookInEffect,
+            currentUserAdjusted: ambientLookUserAdjusted
+        )
+        if adjusted != ambientLookUserAdjusted { ambientLookUserAdjusted = adjusted }
+
+        curbPlacement = nil
+
+        // A deferred recenter (see `handleLocationUpdate`) has no fix scheduled to complete it:
+        // ask for one single-shot fix so it is re-queued rather than waiting for an unrelated one.
+        if CurbPlacementPolicy.shouldRequeueRecenterOnExit(
+            requestedPending: recenterOnUserRequested,
+            atLaunchPending: recenterOnUserAtLaunch
+        ) {
+            locationService.requestAndFetchLocation()
+        }
+    }
+
+    /// Top-left Cancel: back to the exact prior camera and the rest-state sheet (NOT a literal
+    /// `.browseNav` - DM-1's QA found that bug class twice).
+    private func cancelCurbPlacement() {
+        endCurbPlacement(restore: true)
+        activeSheet = driveModeDefaultRestStateSheet()
+    }
+
+    /// Another sheet was presented over a live session (deep link, invite link, ...). Map
+    /// interaction exists only here, never under a sheet: end the session, leave the new sheet.
+    private var curbPlacementHasConflictingSheet: Bool {
+        CurbPlacementPolicy.sheetConflicts(placementActive: curbPlacement != nil, activeSheetPresent: activeSheet != nil)
+    }
+
+    private func endCurbPlacementForConflictingSheet() {
+        endCurbPlacement(restore: true)
+    }
+
+    /// Reconciles SwiftUI state with the map layer (scene becoming active). Both directions
+    /// route through `endPlacement` / `endCurbPlacement`.
+    private func healStuckCurbPlacement() {
+        switch CurbPlacementPolicy.healAction(
+            sessionPresent: curbPlacement != nil,
+            mapLayerActive: coordinatorActions.isPlacementActive
+        ) {
+        case .none:
+            break
+        case .endMapLayer:
+            coordinatorActions.endPlacement(restore: true)
+        case .dropSession:
+            endCurbPlacement(restore: true)
+            activeSheet = driveModeDefaultRestStateSheet()
+        }
+    }
+
+    // MARK: A3: snap index (lazy, off-main, generation-guarded)
+
+    /// Builds the index for the CURRENT `tileLoader.segments` on a detached task. A newer build
+    /// (or an exit) bumps `curbPlacementIndexGeneration`, so a stale result is discarded.
+    private func startCurbPlacementIndexBuild() {
+        curbPlacementIndexGeneration += 1
+        let generation = curbPlacementIndexGeneration
+        let segments = tileLoader.segments
+        curbPlacementIndexBuilding = true
+        Task { @MainActor in
+            let built = await Task.detached(priority: .userInitiated) {
+                CurbSnapIndex(segments: segments)
+            }.value
+            guard generation == curbPlacementIndexGeneration, curbPlacement != nil else { return }
+            curbPlacementIndex = built
+            curbPlacementIndexBuilding = false
+            curbPlacementIndexVersion += 1
+        }
+    }
+
+    /// `handleSegmentsChanged` hook: rebuild while a session is live.
+    private func rebuildCurbPlacementIndexIfLive() {
+        guard curbPlacement != nil else { return }
+        startCurbPlacementIndexBuild()
+    }
+
+    /// `.onChange(of: curbPlacementIndexVersion)`: the swap has been published; re-resolve once
+    /// AFTER it has rendered into the representable (A2 doc comment: the controller reads
+    /// `placementIndex` off the representable, which only updates in `updateUIView`). Hopping a
+    /// run-loop turn out of this `.onChange` pass keeps it out of the same pass that assigned
+    /// the index. UNVERIFIED on device: Mac smoke "index race" (begin before tiles load).
+    private func scheduleCurbPlacementRefresh() {
+        guard curbPlacement != nil else { return }
+        DispatchQueue.main.async {
+            guard curbPlacement != nil else { return }
+            coordinatorActions.refreshPlacement()
+        }
+    }
+
+    /// The severity a segment is painted with right now (the highlight CORE colour).
+    private func curbPlacementSeverity(for segment: Segment) -> CurrentState {
+        engine.currentState(for: segment, at: .nowET)
+    }
+
+    // MARK: A3: outcomes, card and handoffs
+
+    /// `onPlacementOutcome` (main queue; fires only on a blockface / outcome-kind change and on
+    /// settle - never per frame, A23). One state write per call.
+    private func handleCurbPlacementOutcome(_ outcome: CurbSnapOutcome) {
+        guard var session = curbPlacement else { return }
+        var opposite = false
+        var needsNearestProbe = false
+        switch outcome {
+        case .snapped(let result):
+            opposite = CandidateSegmentSearch.oppositeSideCandidate(of: result.segment, in: tileLoader.segments) != nil
+            session.nearestCurb = nil
+        case .noCurbInRange:
+            needsNearestProbe = true
+        }
+        session.outcome = outcome
+        session.oppositeSideLoaded = opposite
+        curbPlacement = session
+        if needsNearestProbe {
+            // `handleRegionChanged` (which refreshes `region`) is hopped to the main queue by the
+            // map layer right after the settle that produced this outcome; hop behind it so the
+            // pin estimate below reads the settled region.
+            DispatchQueue.main.async { updateCurbPlacementNearestCurb() }
+        }
+    }
+
+    /// Spec A.3 "No curb in range": the nearest curb within 100 m, once per settle (wide-config
+    /// recipe from `CurbSnapIndex.resolve`'s doc comment).
+    private func updateCurbPlacementNearestCurb() {
+        guard var session = curbPlacement, let index = curbPlacementIndex, let outcome = session.outcome else { return }
+        switch outcome {
+        case .snapped:
+            return
+        case .noCurbInRange:
+            break
+        }
+        let pin = estimatedCurbPlacementPin()
+        let probe = index.resolve(
+            pin,
+            incumbent: nil,
+            metersPerPoint: 0.28,
+            config: CurbSnapConfig(acquireRadius: CurbPlacementPolicy.nearestCurbProbeMeters,
+                                   releaseRadius: CurbPlacementPolicy.nearestCurbProbeMeters)
+        )
+        session.nearestCurb = CurbPlacementPolicy.nearestCurb(from: pin, probe: probe)
+        curbPlacement = session
+    }
+
+    /// DEVIATION (reported): A2 exposes no pin-coordinate seam, so where no snapped curb supplies
+    /// a coordinate (the "No curb here" save, the nearest-curb chip) the pin is estimated from
+    /// the map `region`. Exact for the mode's north-up flat camera; see
+    /// `CurbPlacementPolicy.estimatedPinCoordinate`.
+    private func estimatedCurbPlacementPin() -> CLLocationCoordinate2D {
+        CurbPlacementPolicy.estimatedPinCoordinate(
+            regionCenter: region.center,
+            regionLatitudeDelta: region.span.latitudeDelta,
+            tipHeightFraction: Double(CurbPlacementMapPolicy.tipHeightFraction)
+        )
+    }
+
+    private func performCurbPlacementPrimary(_ action: CurbPlacementPrimaryAction) {
+        guard let session = curbPlacement else { return }
+        switch action {
+        case .parkHere, .saveCarHere:
+            commitCurbPlacementPark(session)
+        case .next:
+            openCurbPlacementReport(session)
+        }
+    }
+
+    /// "Park here" / "Save car here": the EXISTING commit path. `ParkConfirmView` is skipped
+    /// flag-on; `confirmPinDrop(result:)` is the only writer (A15), reminders default ON (the
+    /// arrival path's precedent: toggle later in `ParkedCarDetailView`). The rest-state sheet is
+    /// assigned BEFORE the save so a first-ever drop's `.notificationRationale` (set by
+    /// `handleFirstPinDropped`) is not overwritten.
+    private func commitCurbPlacementPark(_ session: CurbPlacementSession) {
+        let target = CurbPlacementPolicy.parkTarget(
+            outcome: session.outcome,
+            fallbackPin: estimatedCurbPlacementPin()
+        )
+        endCurbPlacement(restore: false)
+        activeSheet = driveModeDefaultRestStateSheet()
+        let intent = PinDropIntent(
+            pinLat: target.latitude,
+            pinLng: target.longitude,
+            detectedSegment: target.segment,
+            detectedSegmentDistance: target.distanceMeters,
+            alternativeCandidates: []
+        )
+        confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true))
+    }
+
+    /// "Next" (pill) and the quiet "Report something here" link (long-press): leave the mode,
+    /// then open the existing chooser at the SNAPPED coordinate (fixed before the sheet exists -
+    /// base spec 3.3 invariant). The street-closure tile keeps its unchanged
+    /// `streetClosureHandoff`.
+    private func openCurbPlacementReport(_ session: CurbPlacementSession) {
+        let target = CurbPlacementPolicy.reportTarget(
+            outcome: session.outcome,
+            entry: session.entry,
+            fallbackPin: estimatedCurbPlacementPin()
+        )
+        endCurbPlacement(restore: false)
+        let candidates = target.segment.map {
+            CandidateSegmentSearch.confirmStreetCandidates(for: $0, in: tileLoader.segments)
+        } ?? []
+        activeSheet = .reportPin(
+            coord: target.coordinate,
+            streetName: nil,
+            segment: target.segment,
+            confirmCandidates: candidates,
+            coordinateSource: target.coordinateSource
+        )
+    }
+
+    // MARK: A3: locate / chip / VoiceOver
+
+    /// The card's locate button: the existing single-shot fix, never the drive posture. A cached
+    /// fix moves the pin immediately; otherwise the fix, when it arrives, does
+    /// (`consumeCurbPlacementLocateFix`). Mirrors `recenterOnUser()`'s coverage guard.
+    private func locateInCurbPlacement() {
+        guard curbPlacement != nil else { return }
+        if let fix = locationService.userLocation {
+            focusCurbPlacement(onFix: fix)
+        } else {
+            curbPlacementLocatePending = true
+        }
+        locationService.requestAndFetchLocation()
+    }
+
+    /// `handleLocationUpdate` hook: completes a locate request that had no cached fix.
+    private func consumeCurbPlacementLocateFix(_ fix: CLLocationCoordinate2D) {
+        guard curbPlacementLocatePending else { return }
+        curbPlacementLocatePending = false
+        guard curbPlacement != nil else { return }
+        focusCurbPlacement(onFix: fix)
+    }
+
+    private func focusCurbPlacement(onFix fix: CLLocationCoordinate2D) {
+        guard AppConstants.isInManhattanCoverage(fix) else {
+            ToastService.shared.show(message: "Limited parking data outside Manhattan")
+            return
+        }
+        coordinatorActions.focusPlacement(on: fix)
+    }
+
+    /// Lifts the Apple logo / Legal link above the card (design Finding 7). Called when the
+    /// card's measured height changes - NEVER from inside a SwiftUI update (QA P2-5): it mutates
+    /// UIKit layout state, so it hops one run-loop turn.
+    private func applyCurbPlacementBottomInset(_ height: CGFloat) {
+        guard height > 0 else { return }
+        DispatchQueue.main.async {
+            guard curbPlacement != nil, coordinatorActions.isPlacementActive else { return }
+            coordinatorActions.setPlacementBottomInset(height)
+        }
+    }
+
+    @ViewBuilder
+    private var curbPlacementOverlay: some View {
+        if let session = curbPlacement, !driveModeActive {
+            let usesMetric = Locale.current.measurementSystem == .metric
+            let model = CurbPlacementCardModel.make(
+                outcome: session.outcome,
+                intent: session.intent,
+                communityEnabled: AppConstants.communityEnabled,
+                engine: engine,
+                now: .nowET,
+                tilesLoaded: !tileLoader.segments.isEmpty,
+                indexRefreshing: curbPlacementIndexBuilding,
+                oppositeSideLoaded: session.oppositeSideLoaded,
+                nearestCurb: session.nearestCurb,
+                usesMetricSystem: usesMetric
+            )
+            CurbPlacementOverlay(
+                model: model,
+                showsHint: session.showsHint,
+                usesMetricSystem: usesMetric,
+                topPadding: paddingForBannerState(bannerState),
+                tipFraction: CurbPlacementMapPolicy.tipHeightFraction,
+                onPrimary: { action in performCurbPlacementPrimary(action) },
+                onSecondary: {
+                    // Read the LIVE session (the outcome may have settled since this body ran).
+                    if let live = curbPlacement { openCurbPlacementReport(live) }
+                },
+                onCancel: { cancelCurbPlacement() },
+                onLocate: { locateInCurbPlacement() },
+                onNearestCurb: { curb in coordinatorActions.focusPlacement(on: curb.coordinate) },
+                onCycleCurb: { coordinatorActions.cyclePlacementCurb() },
+                onCardHeightChange: { height in
+                    curbPlacementCardHeight = height
+                    applyCurbPlacementBottomInset(height)
+                }
+            )
+        }
     }
 
     // MARK: - Community 2.0 Phase 2b (build 20 S7): Spot placement mode
@@ -5482,6 +6022,20 @@ struct ContentView: View {
         // the floating bar's Cancel/Continue before any other long-press action is available.
         guard !driveModeActive, !blockSelectModeActive else { return }
 
+        // A3 (curb-pin placement), spec A.7: flag-on, a resting long-press enters placement
+        // centred on the pressed point (intent `.plant`) - and a long-press during spot
+        // placement / an already-live session is a no-op (A22). Flag-off `.legacy` falls
+        // straight through to the unmodified code below.
+        switch curbPlacementRouting(for: .longPress) {
+        case .placement:
+            beginCurbPlacement(entry: .longPress, seed: coordinate)
+            return
+        case .ignore:
+            return
+        case .legacy:
+            break
+        }
+
         // Clear any current selection and dismiss any open sheet before showing the popup —
         // but ONLY if either is not already at its target value (open item #17b — see this
         // function's doc comment above for why an unconditional write here raced the
@@ -5544,6 +6098,15 @@ struct ContentView: View {
     // MARK: - W5: "Park here →" Path B (from BlockDetailView)
 
     private func initiatePathBPinDrop(from segment: Segment) {
+        // A3 (curb-pin placement), spec A.7: flag-on, "Park here ->" enters placement at the
+        // block's midpoint with THAT blockface as the incumbent (intent `.parkBlock`). The
+        // arrival prompt and the in-drive "Park here" are different code paths and are not
+        // touched (AC-A28). Flag-off / blocked: `.legacy`, the original body below.
+        if startCurbPlacementIfRouted(
+            entry: .pathB,
+            seed: segment.midpoint ?? segment.coordinates.first,
+            incumbentBlockfaceKey: segment.blockfaceKey
+        ) { return }
         // Clear selection and dismiss BlockDetailView before presenting ParkConfirmView.
         // FT-20 Stream A: uses the shared dismiss-target helper (not a literal `nil`) so
         // that if `midpoint` below is unexpectedly nil (malformed segment — the guard right
@@ -5617,6 +6180,13 @@ struct ContentView: View {
     /// happens inside updateUIView. All camera mutations are driven from .onChange handlers
     /// in ContentView or from MapKit delegate callbacks.
     private func handleDriveModeAndCamera(_ active: Bool) {
+        // A3 (curb-pin placement), PR #140 QA #4 / (d): Drive Mode entry tears a live placement
+        // session down THROUGH `endPlacement` (the entry guard makes this unreachable through the
+        // UI; this is the self-healing backstop, same role as the block-select clear below). A
+        // stuck session would leave the map ignoring taps. Never true flag-off.
+        if active && curbPlacement != nil {
+            endCurbPlacement(restore: true)
+        }
         // FT-20 Stream C (spec §6, AC-28/AC-29a, design-review S3): apply the browse-sheet
         // Drive Mode boundary FIRST, in this SAME synchronous handler — this is the single
         // funnel every Drive Mode entry/exit path runs through (`.onChange(of:
@@ -5761,6 +6331,9 @@ struct ContentView: View {
 
     private func handleSegmentsChanged() {
         rebuildOverlays(at: lastEvaluatedAt)
+        // A3: new tiles arrived mid-session - rebuild the snap index (off-main, generation
+        // token). No-op unless a session is live (always, flag-off).
+        rebuildCurbPlacementIndexIfLive()
     }
 
     private func handleSelectionChanged() {
@@ -6215,8 +6788,15 @@ func gearButtonVisible(driveModeActive: Bool) -> Bool {
 /// Extracted as an `internal` pure function — same testability rationale as
 /// `gearButtonVisible` / `parkingGuideButtonVisible` — so this specific state-interaction
 /// bug has a regression test that doesn't require instantiating a full `ContentView`.
-func recenterButtonStackVisible(driveModeActive: Bool, blockSelectModeActive: Bool) -> Bool {
-    !driveModeActive && !blockSelectModeActive
+///
+/// A3 (curb-pin placement): trailing `curbPlacementActive` (default `false` = byte-identical to
+/// before) hides the rail for the duration of the mode.
+func recenterButtonStackVisible(
+    driveModeActive: Bool,
+    blockSelectModeActive: Bool,
+    curbPlacementActive: Bool = false
+) -> Bool {
+    !driveModeActive && !blockSelectModeActive && !curbPlacementActive
 }
 
 /// Returns whether entering Drive Mode (`active == true`) should force-clear block-select
@@ -6399,15 +6979,20 @@ nonisolated func cruiseEntryAuthAction(for status: CLAuthorizationStatus) -> Cru
 ///
 /// `nonisolated` for the same sync-XCTest reason every other pure decision function in this
 /// file is (`recenterButtonStackVisible`, `communityMapChromeVisible`, etc.).
+///
+/// A3 (curb-pin placement): trailing `curbPlacementActive` (default `false` = byte-identical to
+/// before). The mode sets `activeSheet = nil`, so without this the dock would mount under the
+/// placement card (DM-2 goal-first screen included).
 nonisolated func goalSelectorDockVisible(
     driveModeDefaultEnabled: Bool,
     activeSheetIsNil: Bool,
     driveModeActive: Bool,
     blockSelectModeActive: Bool,
-    spotPlacementActive: Bool
+    spotPlacementActive: Bool,
+    curbPlacementActive: Bool = false
 ) -> Bool {
     driveModeDefaultEnabled && activeSheetIsNil && !driveModeActive
-        && !blockSelectModeActive && !spotPlacementActive
+        && !blockSelectModeActive && !spotPlacementActive && !curbPlacementActive
 }
 
 /// Whether the goal-TILE row specifically is showing (design doc §2.2/§2.4) — the dock
@@ -6423,14 +7008,16 @@ nonisolated func goalTileRowVisible(
     fullPaletteMode: Bool,
     driveModeActive: Bool,
     blockSelectModeActive: Bool,
-    spotPlacementActive: Bool
+    spotPlacementActive: Bool,
+    curbPlacementActive: Bool = false
 ) -> Bool {
     goalSelectorDockVisible(
         driveModeDefaultEnabled: driveModeDefaultEnabled,
         activeSheetIsNil: activeSheetIsNil,
         driveModeActive: driveModeActive,
         blockSelectModeActive: blockSelectModeActive,
-        spotPlacementActive: spotPlacementActive
+        spotPlacementActive: spotPlacementActive,
+        curbPlacementActive: curbPlacementActive
     ) && !fullPaletteMode
 }
 
