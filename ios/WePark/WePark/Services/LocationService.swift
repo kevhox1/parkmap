@@ -148,6 +148,16 @@ final class LocationService: NSObject {
     /// Most-recently received user location. Nil until first fix acquired.
     private(set) var userLocation: CLLocationCoordinate2D?
 
+    /// `CLLocation.horizontalAccuracy` (meters) of the most-recent SINGLE-SHOT / resting-posture
+    /// fix; nil until a fix arrives or when CoreLocation reports an invalid (negative) value.
+    /// Added for Addendum 3 A3.6.1's accuracy guard (`AmbientDrivingLook.zoomStep`): the
+    /// ambient driving look zooms fully in only when the first fix is within 65m. Purely
+    /// additive and read-only - set alongside `userLocation` in the non-drive branch of
+    /// `locationManager(_:didUpdateLocations:)` (BEFORE `locationUpdateCount` increments, so an
+    /// `.onChange(of: locationUpdateCount)` reader always sees the matching accuracy). Changes
+    /// nothing about the drive posture (no accuracy/activityType/wake-lock/distanceFilter edit).
+    private(set) var userHorizontalAccuracy: CLLocationAccuracy?
+
     /// Incremented each time a new location fix is received.
     /// Observers can use .onChange(of: locationService.locationUpdateCount) to react
     /// to new fixes without needing CLLocationCoordinate2D to be Equatable.
@@ -236,6 +246,9 @@ final class LocationService: NSObject {
     func startDriveMode() {
         guard !driveModeActiveInternal else { return }
         driveModeActiveInternal = true
+        // The drive branch of didUpdateLocations never updates this, so drop the pre-drive
+        // value rather than let it go stale across the session (A3.6 accuracy guard input).
+        userHorizontalAccuracy = nil
 
         // R-4 mitigation: stop first, reconfigure, then restart.
         manager.stopUpdatingLocation()
@@ -262,6 +275,7 @@ final class LocationService: NSObject {
     func endDriveMode() {
         guard driveModeActiveInternal else { return }
         driveModeActiveInternal = false
+        userHorizontalAccuracy = nil  // stale-across-drive guard; see startDriveMode.
 
         // Stop continuous updates.
         manager.stopUpdatingHeading()
@@ -449,8 +463,10 @@ extension LocationService: CLLocationManagerDelegate {
             }
         } else {
             // Single-shot / recenter mode (unchanged W5.1 behavior).
+            let horizontalAccuracy: CLLocationAccuracy? = loc.horizontalAccuracy >= 0 ? loc.horizontalAccuracy : nil
             DispatchQueue.main.async { [weak self] in
                 self?.userLocation = coordinate
+                self?.userHorizontalAccuracy = horizontalAccuracy
                 self?.locationUpdateCount += 1
             }
         }
