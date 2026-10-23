@@ -813,10 +813,12 @@ final class FT15B3PinEvidenceUploaderTests: XCTestCase {
         )
         let result = try await uploader.upload(photoData: Data([0x1, 0x2]), reportGroupId: reportGroupId)
 
-        let expectedPrefix = "/storage/v1/object/pin-evidence/\(kB3User.uuidString)/\(reportGroupId.uuidString)/"
+        // Lowercase: Postgres's auth.uid()::text is lowercase and the storage RLS compares it
+        // to the first path segment (open item #43 — uppercase uploads were rejected with 403).
+        let expectedPrefix = "/storage/v1/object/pin-evidence/\(kB3User.uuidString.lowercased())/\(reportGroupId.uuidString.lowercased())/"
         XCTAssertTrue(capturedUploadPath?.hasPrefix(expectedPrefix) == true,
             "path convention {auth.uid()}/{report_group_id}/{filename} is fixed by the storage RLS policies; got \(capturedUploadPath ?? "nil")")
-        XCTAssertTrue(result.storagePath.hasPrefix("\(kB3User.uuidString)/\(reportGroupId.uuidString)/"))
+        XCTAssertTrue(result.storagePath.hasPrefix("\(kB3User.uuidString.lowercased())/\(reportGroupId.uuidString.lowercased())/"))
     }
 
     func testPinEvidenceUploader_insertsPinEvidenceRow_withReportGroupIdAndUploadedBy() async throws {

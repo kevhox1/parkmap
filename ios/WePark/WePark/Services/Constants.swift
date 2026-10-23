@@ -304,6 +304,29 @@ enum AppConstants {
         enabled
     }
 
+    // MARK: - A3: Fixed-center pin with live curb snap ("curb-pin placement")
+
+    /// Master flag for the curb-pin placement mode (`docs/longpress-universal-plant-spec.md`,
+    /// "Amendment - fixed-center pin with live curb snap", section A.6): long-press, the Report
+    /// pill and BlockDetail's "Park here" enter ONE map mode - a fixed needle pin, the map pans
+    /// beneath it, the blockface under the pin highlights live, one primary button commits.
+    ///
+    /// DARK-SHIPS `false`, same convention as `driveModeDefaultEnabled` above, and INDEPENDENT of
+    /// both it and `communityEnabled` (spec A.6): the new behavior is a live-gesture camera mode
+    /// plus unvalidated outdoor legibility, so it gets its own flag and its own flip gate
+    /// (Kevin's Mac smoke + daylight check, spec A.5/A.11).
+    ///
+    /// Flag off: `handleLongPress`, `handleReportPillTap` and `initiatePathBPinDrop` take their
+    /// existing branches byte-identically, every chrome-visibility function receives
+    /// `curbPlacementActive == false` (its default), and nothing in this mode - state, index,
+    /// overlay, camera, display link - is ever created. Guard tests: `CurbPlacementSessionPolicyTests`.
+    static let curbPinPlacementEnabled = false
+
+    /// UserDefaults key: set to true once the placement mode's first-use hint pill ("Drag the map
+    /// to place the pin") has been shown on this install. `BackgroundNoteGate` convention (see
+    /// `CurbPlacementHintGate`); naming mirrors the other `wepark_<feature>_shown` keys.
+    static let curbPlacementHintShownKey = "wepark_curb_placement_hint_shown"
+
     // MARK: - DM-3: First-launch location priming card
 
     /// UserDefaults key: set to true after `LocationPrimingCard` has been shown/dismissed

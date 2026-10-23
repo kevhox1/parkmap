@@ -799,6 +799,8 @@ final class CurbPlacementFlagOffGuardTests: XCTestCase {
         XCTAssertNil(actions.onSetPlacementBottomInset)
         XCTAssertNil(actions.onFocusPlacement)
         XCTAssertNil(actions.onQueryPlacementActive)
+        XCTAssertNil(actions.onQueryPlacementPin)
+        XCTAssertNil(actions.placementPinCoordinate())
     }
 
     func testIsPlacementActive_falseWhenNothingInstalled_andFollowsTheProvider() {
