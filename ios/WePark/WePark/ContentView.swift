@@ -642,6 +642,22 @@ struct ContentView: View {
     /// On exit, this restores whatever configuration was active before Drive Mode started.
     @State private var preDriveMapConfiguration: MKMapConfiguration? = nil
 
+    // MARK: - A3.6 ambient driving look state (flag-on only; SEAM: self-contained block)
+
+    /// Which zoom step the ambient driving look was last applied at (`AmbientDrivingLook`,
+    /// A3.6.1 accuracy guard). Only ever read/written while `AppConstants.driveModeDefaultEnabled`.
+    @State private var ambientLookStep: AmbientDrivingLook.ZoomStep = .wide
+
+    /// True once the USER has panned/pinched the map since the look was last applied
+    /// (`coordinatorActions.onAmbientUserAdjusted`). Stops auto-tightening from fighting them.
+    @State private var ambientLookUserAdjusted = false
+
+    /// Screen-space "user's dot is outside the central 50% of the map" (Recenter, A3.2) -
+    /// correct under the look's pitch. `nil` until measured; the rail falls back to the
+    /// region-based test while nil. Refreshed from `handleRegionChanged` /
+    /// `handleLocationUpdate`, never from a view body.
+    @State private var ambientUserDotOffCenter: Bool? = nil
+
     /// Reference-type action box shared with MapViewRepresentable's Coordinator.
     /// Created here, passed to MapViewRepresentable as a stored property. `makeUIView` populates
     /// the closures inside. ContentView calls `coordinatorActions.applyDrivePitch` from the
@@ -3122,6 +3138,9 @@ struct ContentView: View {
         if ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive: driveModeActive) {
             rebuildOverlays(at: lastEvaluatedAt)
         }
+        // A3.6: re-measure the user's dot in screen space now that the camera has settled
+        // (the ambient Recenter button reads it). No-op flag-off / while driving.
+        refreshAmbientUserDotOffCenter()
     }
 
     /// Forwards community pin taps to the sheet presentation.
@@ -3521,7 +3540,8 @@ struct ContentView: View {
         ambientRecenterButtonVisible(
             authorizationStatus: locationService.authorizationStatus,
             userLocation: locationService.userLocation,
-            visibleRegion: region
+            visibleRegion: region,
+            userDotOutsideCentralHalfOnScreen: ambientUserDotOffCenter
         )
     }
 
@@ -4216,7 +4236,7 @@ struct ContentView: View {
                 return
             }
             // We have a cached fix, in coverage — recenter immediately.
-            recenterMap(on: loc)
+            recenterMap(on: loc, usingUserFix: true)
             // Also request a fresh fix in the background for next use.
             locationService.requestAndFetchLocation()
         } else {
@@ -4290,14 +4310,143 @@ struct ContentView: View {
     ///
     /// Writing `region` is still required for tile loading (`rebuildOverlays` span gating,
     /// `DriveModeDestinationView.currentRegion`, and the initial `tileLoader.loadTiles` call).
-    private func recenterMap(on coordinate: CLLocationCoordinate2D) {
+    ///
+    /// **A3.6 (flag-on, resting posture):** `setRegion` would FLATTEN the ambient driving look
+    /// (it resets pitch), so while `ambientDrivingLookInEffect` the recenter is applied as the
+    /// look itself - same pitch/heading/distance, centered on `coordinate` - via
+    /// `applyAmbientDrivingLook`. `usingUserFix` says the coordinate IS the user's GPS dot, so
+    /// the accuracy guard (A3.6.1) picks the zoom step from the latest fix; for any other target
+    /// (the parked car, a deep link) accuracy is irrelevant and the look opens tight. `region`
+    /// is still written for tile loading either way. Flag off / driving: unchanged `setRegion`.
+    private func recenterMap(on coordinate: CLLocationCoordinate2D, usingUserFix: Bool = false) {
         let newRegion = MKCoordinateRegion(
             center: coordinate,
             latitudinalMeters: AppConstants.streetLevelRecenterMeters,
             longitudinalMeters: AppConstants.streetLevelRecenterMeters
         )
         region = newRegion
-        coordinatorActions.setRegion?(newRegion)
+        if ambientDrivingLookInEffect {
+            applyAmbientDrivingLook(
+                center: coordinate,
+                step: usingUserFix
+                    ? AmbientDrivingLook.zoomStep(forHorizontalAccuracy: locationService.userHorizontalAccuracy)
+                    : .tight,
+                animated: true
+            )
+        } else {
+            coordinatorActions.setRegion?(newRegion)
+        }
+    }
+
+    // MARK: - A3.6 ambient driving look (flag-on only; SEAM: self-contained block)
+    //
+    // Addendum 3 A3.6 / Kevin's Option A: flag-on, the resting map OPENS looking like drive
+    // mode - Cruise's pitch and distance, north-up, muted, standard blue dot - on the cheap
+    // location posture. It is a camera + style posture ONLY: `driveModeActive` stays false, and
+    // nothing here calls `startDriveMode()`, touches the wake lock, starts continuous GPS, or
+    // speaks (AC-13). The expensive posture still engages only via `enterCruiseMode()`.
+    //
+    // #31 invariant: every camera mutation below goes through `coordinatorActions` and is
+    // called from `.task` / `.onChange`-driven handlers (`performLaunchSetup`,
+    // `handleLocationUpdate`, `handleDriveCameraChange`, the recenter actions) - NEVER from
+    // `updateUIView` or a view body. Pure decisions live in `AmbientDrivingLook`.
+
+    /// Flag on AND not in an escalated drive session (thin wrapper over the tested pure gate).
+    private var ambientDrivingLookInEffect: Bool {
+        AmbientDrivingLook.isInEffect(
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            driveModeActive: driveModeActive
+        )
+    }
+
+    /// Applies the look in ONE `setCamera` (see `CoordinatorActions.setAmbientDrivingLook`):
+    /// Cruise pitch, heading 0, and the distance for `step`. `center == nil` keeps the camera's
+    /// current center. Records the step and clears "user adjusted" (an explicit apply - launch,
+    /// Recenter, exit - IS the look being re-asserted).
+    private func applyAmbientDrivingLook(
+        center: CLLocationCoordinate2D?,
+        step: AmbientDrivingLook.ZoomStep,
+        animated: Bool
+    ) {
+        ambientLookStep = step
+        ambientLookUserAdjusted = false
+        let span = AmbientDrivingLook.span(for: step, cruiseSpan: MapViewRepresentable.driveModeCameraSpan)
+        coordinatorActions.setAmbientDrivingLook?(
+            center,
+            MapViewRepresentable.driveModePitch,
+            AmbientDrivingLook.heading,
+            MapViewRepresentable.altitudeForSpan(span),
+            animated
+        )
+    }
+
+    /// Cold-launch entry point (from `performLaunchSetup`): muted style, no 3D buildings (same
+    /// rationale as Cruise - they occlude the curb lines at this pitch; also keeps entering
+    /// Cruise from popping them), then the look itself, non-animated so there is no launch
+    /// swoop. The zoom step comes from the latest fix's accuracy (nil at a true cold launch =
+    /// `.wide`; `handleLocationUpdate` tightens it when a good fix arrives). Flag off: no-op.
+    private func startAmbientDrivingLook() {
+        guard AppConstants.driveModeDefaultEnabled else { return }
+        coordinatorActions.onAmbientUserAdjusted = {
+            self.ambientLookUserAdjusted = true
+        }
+        coordinatorActions.applyDriveMapStyle?(true, nil)
+        coordinatorActions.setShowsBuildings?(false)
+        applyAmbientDrivingLook(
+            center: nil,
+            step: AmbientDrivingLook.zoomStep(forHorizontalAccuracy: locationService.userHorizontalAccuracy),
+            animated: false
+        )
+    }
+
+    /// Drive exit (flag-on): back to the ambient look, centered where the camera already is.
+    /// Reuses the existing style / buildings / puck closures with the AMBIENT values (muted,
+    /// buildings off) instead of restoring the entry-time snapshot, then one `setCamera`.
+    /// `refreshUserLocationPuck` re-queries `viewFor`, which now (driveModeActive == false)
+    /// returns the plain ambient dot.
+    private func restoreAmbientDrivingLookAfterDrive() {
+        coordinatorActions.applyDriveMapStyle?(true, nil)
+        coordinatorActions.setShowsBuildings?(false)
+        coordinatorActions.refreshUserLocationPuck?(false)
+        applyAmbientDrivingLook(center: nil, step: AmbientDrivingLook.exitZoomStep, animated: true)
+    }
+
+    /// Per-fix hook (from `handleLocationUpdate`): tighten a wide look when a better fix has
+    /// arrived and the user has not touched the map; otherwise re-measure the Recenter test.
+    /// `cameraMoveInFlight` = a recenter this tick is about to move the camera, so measuring
+    /// now would read the pre-move camera and flash Recenter; `handleRegionChanged` measures
+    /// once it settles.
+    private func handleAmbientLookLocationUpdate(cameraMoveInFlight: Bool) {
+        guard ambientDrivingLookInEffect else { return }
+        var cameraMoving = cameraMoveInFlight
+        if AmbientDrivingLook.shouldTighten(
+            currentStep: ambientLookStep,
+            userAdjusted: ambientLookUserAdjusted,
+            newAccuracy: locationService.userHorizontalAccuracy
+        ) {
+            applyAmbientDrivingLook(center: nil, step: .tight, animated: true)
+            cameraMoving = true
+        }
+        if !cameraMoving {
+            refreshAmbientUserDotOffCenter()
+        }
+    }
+
+    /// Re-measures whether the user's dot is outside the central 50% of the map IN SCREEN
+    /// SPACE (correct under pitch - see `AmbientDrivingLook.userDotOutsideCentralHalf`). Pure
+    /// read of MapKit state; writes `@State` only when the value changes. Called from
+    /// non-render handlers only. No-op flag-off / while driving.
+    private func refreshAmbientUserDotOffCenter() {
+        guard ambientDrivingLookInEffect else { return }
+        let measured: Bool?
+        if let coord = locationService.userLocation {
+            measured = coordinatorActions.userDotOutsideCentralHalf?(coord)
+        } else {
+            measured = nil
+        }
+        if measured != ambientUserDotOffCenter {
+            ambientUserDotOffCenter = measured
+        }
     }
 
     // MARK: - Community 1.0 / Tier 1: visible pins change handler
@@ -4536,6 +4685,16 @@ struct ContentView: View {
     ///   - Calls `applyDriveMapStyle(false, preDriveMapConfiguration)` → restores prior config.
     ///   - Calls `refreshUserLocationPuck(false)` → default blue dot restored.
     private func handleDriveCameraChange(_ active: Bool) {
+        // A3.6.3 (flag-on): leaving drive returns to the ambient driving look (the "prior"
+        // state IS the look), not the camera/style captured at entry. Flag-off falls through
+        // to today's restore, untouched.
+        if !active,
+           AmbientDrivingLook.restoresAmbientLookOnDriveExit(
+               driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled
+           ) {
+            restoreAmbientDrivingLookAfterDrive()
+            return
+        }
         if active {
             // Capture current camera state and map style before Drive Mode overwrites them.
             // These values are restored on exit.
@@ -4587,6 +4746,9 @@ struct ContentView: View {
     /// type-checker complexity in ContentView.body (W8.5c-polish PR-1 fix).
     private func handleLocationUpdate() {
         guard let coord = locationService.userLocation else { return }
+        // A3.6: captured BEFORE the recenter branches below clear these flags - if either was
+        // set, a recenter camera move is about to start this tick (see the ambient hook below).
+        let ambientRecenterPending = recenterOnUserRequested || recenterOnUserAtLaunch
         // W5.1: Recenter on user location if requested.
         // zoom-out-limit-tighten: same out-of-coverage guard as the immediate-fix branch in
         // recenterOnUser() above — this is the deferred completion of the same button tap
@@ -4594,7 +4756,7 @@ struct ContentView: View {
         if recenterOnUserRequested {
             recenterOnUserRequested = false
             if AppConstants.isInManhattanCoverage(coord) {
-                recenterMap(on: coord)
+                recenterMap(on: coord, usingUserFix: true)
             } else {
                 ToastService.shared.show(message: "Limited parking data outside Manhattan")
             }
@@ -4603,9 +4765,13 @@ struct ContentView: View {
         if recenterOnUserAtLaunch {
             recenterOnUserAtLaunch = false
             if AppConstants.isInManhattanCoverage(coord) {
-                recenterMap(on: coord)
+                recenterMap(on: coord, usingUserFix: true)
             }
         }
+        // A3.6 ambient driving look (flag-on, resting posture only): tighten a wide look when a
+        // better fix arrives, and refresh the screen-space Recenter measurement. No-op flag-off
+        // and while driving.
+        handleAmbientLookLocationUpdate(cameraMoveInFlight: ambientRecenterPending)
         // W8.5c: Drive Mode context update + Option A custom follow.
         if driveModeActive {
             // Option A: Custom follow camera — per-tick setCamera (A-AC-2, A-AC-3).
@@ -4742,6 +4908,11 @@ struct ContentView: View {
         lastEvaluatedAt = .now
         rebuildOverlays(at: lastEvaluatedAt)
 
+        // A3.6: flag-on, open with the driving look (tilted/zoomed/muted/north-up) BEFORE the
+        // launch recenter below so that recenter (which now applies the look too) lands on it.
+        // No-op flag-off.
+        startAmbientDrivingLook()
+
         // Viewport-polish: Auto-center camera at launch.
         // Three-priority decision (see viewport-polish-spec.md §5):
         //
@@ -4766,7 +4937,7 @@ struct ContentView: View {
             if let cachedLoc = locationService.userLocation {
                 if AppConstants.isInManhattanCoverage(cachedLoc) {
                     // Priority 2a: cached fix in coverage — snap immediately.
-                    recenterMap(on: cachedLoc)
+                    recenterMap(on: cachedLoc, usingUserFix: true)
                     // Allow re-snap if a fresher fix arrives within ~3s.
                     recenterOnUserAtLaunch = true
                 }
@@ -6282,18 +6453,34 @@ nonisolated func parkUntilClockButtonVisible(
 ///     re-evaluates this on the next render).
 ///   - `.denied`/`.restricted`: hidden — recentering cannot work, and Start Driving already
 ///     routes denied users to the Location Settings alert.
+/// **A3.6 (tilted ambient driving look):** `userDotOutsideCentralHalfOnScreen` is the same
+/// "outside the central 50%" question answered in SCREEN space by
+/// `AmbientDrivingLook.userDotOutsideCentralHalf` (via `MKMapView.convert`). When non-nil it
+/// replaces the lat/lng region test for the authorized-with-fix case, because a pitched or
+/// rotated camera's `region` bounding box is skewed (its center drifts toward the far edge and
+/// its span over-reports the near field). nil keeps the region test exactly as before, so
+/// flag-off and all pre-A3.6 callers are unchanged. Auth gating is never overridden.
 /// Pure so the rule is directly unit-testable; `nonisolated` for the same sync-XCTest reason
 /// every other pure decision function in this file is.
 nonisolated func ambientRecenterButtonVisible(
     authorizationStatus: CLAuthorizationStatus,
     userLocation: CLLocationCoordinate2D?,
-    visibleRegion: MKCoordinateRegion
+    visibleRegion: MKCoordinateRegion,
+    userDotOutsideCentralHalfOnScreen: Bool? = nil
 ) -> Bool {
     switch authorizationStatus {
     case .notDetermined:
         return true
     case .authorizedWhenInUse, .authorizedAlways:
         guard let user = userLocation else { return false }
+        // A3.6: under the tilted ambient driving look the lat/lng bounding box below is the
+        // wrong yardstick (its center and span are skewed by pitch), so when the caller has
+        // measured the dot in SCREEN space (`AmbientDrivingLook.userDotOutsideCentralHalf`),
+        // that measurement wins. nil (not yet measured / flag off) keeps the region test, so
+        // flag-off and every pre-A3.6 caller behave exactly as before.
+        if let onScreen = userDotOutsideCentralHalfOnScreen {
+            return onScreen
+        }
         let latOffset = abs(user.latitude - visibleRegion.center.latitude)
         let lngOffset = abs(user.longitude - visibleRegion.center.longitude)
         let insideCentralHalf = latOffset <= visibleRegion.span.latitudeDelta * 0.25

@@ -603,6 +603,37 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
     }
 
+    /// A3.6 ambient driving look: the plain blue user dot (white ring + soft shadow, no
+    /// heading glyph, no accuracy ring) shown flag-on while NOT in drive mode. Separate from
+    /// `driveNavPuckImage` on purpose - that function and its identity-rotation convention are
+    /// untouched. System blue so it reads as the stock dot; palette unaffected.
+    static func ambientUserDotImage() -> UIImage {
+        let canvas: CGFloat = 30      // room for the shadow so it isn't clipped
+        let outer: CGFloat = 22       // white ring
+        let inner: CGFloat = 16       // blue core
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: canvas, height: canvas))
+        return renderer.image { context in
+            let cg = context.cgContext
+            let outerRect = CGRect(
+                x: (canvas - outer) / 2, y: (canvas - outer) / 2, width: outer, height: outer
+            )
+            let innerRect = CGRect(
+                x: (canvas - inner) / 2, y: (canvas - inner) / 2, width: inner, height: inner
+            )
+            cg.setShadow(
+                offset: CGSize(width: 0, height: 1),
+                blur: 3,
+                color: UIColor.black.withAlphaComponent(0.3).cgColor
+            )
+            cg.setFillColor(UIColor.white.cgColor)
+            cg.fillEllipse(in: outerRect)
+            // Shadow applies to the white disc only.
+            cg.setShadow(offset: .zero, blur: 0, color: nil)
+            cg.setFillColor(UIColor.systemBlue.cgColor)
+            cg.fillEllipse(in: innerRect)
+        }
+    }
+
     /// Pure pitch-decision function: no MKMapView dependency, directly unit-testable.
     ///
     /// Returns the target camera pitch given the Drive Mode state and the pitch that was
@@ -858,6 +889,31 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// Kevin: change the `false` to `true` in ContentView's handleDriveCameraChange
         /// if you prefer buildings visible during Drive Mode navigation.
         var setShowsBuildings: ((Bool) -> Void)?
+
+        // MARK: - A3.6 ambient driving look (flag-on only; SEAM: self-contained block)
+        //
+        // Everything the ambient "driving look" needs from UIKit, kept together so a parallel
+        // stream editing this file (the curb-pin placement layer, stream A2) merges around it.
+        // All three are populated in `makeUIView` (block marked "A3.6 ambient driving look")
+        // and called only from ContentView handlers that run OUTSIDE `updateUIView` (#31).
+        // Flag-off nothing ever calls the first two and the third is never installed.
+
+        /// Applies the ambient driving look in ONE `setCamera`: given center (nil = keep the
+        /// current center), pitch, heading, `centerCoordinateDistance`, and whether to animate.
+        /// Same single-`setCamera` architecture as `applyDriveCameraState` - never `setRegion`
+        /// (which flattens pitch). Callers pass `driveModePitch`, `AmbientDrivingLook.heading`,
+        /// and `altitudeForSpan(AmbientDrivingLook.span(...))`.
+        var setAmbientDrivingLook: ((CLLocationCoordinate2D?, CGFloat, CLLocationDirection, CLLocationDistance, Bool) -> Void)?
+
+        /// Pure-read query: is this coordinate's SCREEN position outside the central 50% of the
+        /// map view (nil if the map has no size yet)? Feeds the ambient Recenter button; uses
+        /// `MKMapView.convert`, which is correct under pitch/rotation. No mutation.
+        var userDotOutsideCentralHalf: ((CLLocationCoordinate2D) -> Bool?)?
+
+        /// Fired (async, main) when a settled camera change was caused by the user's own
+        /// pan/pinch while NOT in drive mode and the flag is on. ContentView uses it to stop
+        /// auto-tightening the look - never fight a gesture the user just made.
+        var onAmbientUserAdjusted: (() -> Void)?
 
     }
 
@@ -1358,6 +1414,32 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Called from ContentView's .onChange(of: driveModeActive) OUTSIDE updateUIView per #31.
         coordinatorActions.setShowsBuildings = { [weak mapView] show in
             mapView?.showsBuildings = show
+        }
+
+        // MARK: A3.6 ambient driving look (flag-on only; SEAM: self-contained block)
+        //
+        // Installed unconditionally (closures are inert until ContentView calls them, which it
+        // only does flag-on). Camera mutation happens ONLY when ContentView invokes
+        // `setAmbientDrivingLook`, from its own non-`updateUIView` handlers (#31 invariant).
+        coordinatorActions.setAmbientDrivingLook = { [weak mapView] center, pitch, heading, distance, animated in
+            guard let mapView, let camera = mapView.camera.copy() as? MKMapCamera else { return }
+            if let center {
+                camera.centerCoordinate = center
+            }
+            camera.pitch = pitch
+            camera.heading = heading
+            camera.centerCoordinateDistance = distance
+            // Single combined setCamera (center + pitch + heading + zoom): one
+            // regionDidChangeAnimated, and no `setRegion` (which would flatten the pitch).
+            mapView.setCamera(camera, animated: animated)
+        }
+        coordinatorActions.userDotOutsideCentralHalf = { [weak mapView] coordinate in
+            guard let mapView, mapView.bounds.width > 0, mapView.bounds.height > 0 else { return nil }
+            let point = mapView.convert(coordinate, toPointTo: mapView)
+            return AmbientDrivingLook.userDotOutsideCentralHalf(
+                screenPoint: point,
+                mapSize: mapView.bounds.size
+            )
         }
 
         // PR #89 on-device follow-up: repositioned compass (see `showsCompass = false`
@@ -2364,6 +2446,30 @@ struct MapViewRepresentable: UIViewRepresentable {
             )
         }
 
+        // MARK: - A3.6 ambient user dot (flag-on resting posture; SEAM: self-contained block)
+
+        /// The standard-looking blue dot (white ring, soft shadow) for the ambient driving look.
+        /// Returned from `viewFor` for `MKUserLocation` only when `AppConstants
+        /// .driveModeDefaultEnabled && !driveModeActive`. A custom view replaces MapKit's stock
+        /// `MKUserLocationView` - the only thing that draws the large accuracy ring - which is
+        /// how A3.6.1's "suppress the large accuracy ring" is met without private API. It is
+        /// NOT the heading chevron (`driveNavPuckImage`, untouched): no course exists at launch.
+        /// Identity transform - never rotated. Cruise entry/exit swap views via the existing
+        /// `refreshUserLocationPuck` toggle, which re-queries `viewFor`.
+        func ambientUserDotView(for annotation: MKAnnotation, in mapView: MKMapView) -> MKAnnotationView {
+            let reuseID = "ambientUserDot"
+            let view = mapView.dequeueReusableAnnotationView(withIdentifier: reuseID)
+                ?? MKAnnotationView(annotation: annotation, reuseIdentifier: reuseID)
+            view.annotation = annotation
+            view.image = MapViewRepresentable.ambientUserDotImage()
+            view.transform = .identity
+            view.canShowCallout = false
+            view.isAccessibilityElement = true
+            view.accessibilityLabel = "Your current location"
+            view.accessibilityTraits = .staticText
+            return view
+        }
+
         // MARK: - MKMapViewDelegate: annotation view
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -2382,7 +2488,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             // causes MapKit to re-query this delegate — then `parent.driveModeActive` is false
             // so we return nil and MapKit renders the default blue dot.
             if annotation is MKUserLocation {
-                guard parent.driveModeActive else { return nil }
+                guard parent.driveModeActive else {
+                    // A3.6: flag-on, the resting posture shows a plain blue dot WITHOUT the
+                    // system accuracy ring; flag-off returns nil (the stock MapKit dot), exactly
+                    // as before.
+                    guard AppConstants.driveModeDefaultEnabled else { return nil }
+                    return ambientUserDotView(for: annotation, in: mapView)
+                }
                 let reuseID = "driveUserPuck"
                 let view = mapView.dequeueReusableAnnotationView(withIdentifier: reuseID)
                     ?? MKAnnotationView(annotation: annotation, reuseIdentifier: reuseID)
@@ -2812,6 +2924,17 @@ struct MapViewRepresentable: UIViewRepresentable {
                     DispatchQueue.main.async { [weak self] in
                         self?.parent.onDrivePinchZoomed?(newAltitude)
                     }
+                }
+            }
+
+            // A3.6 (flag-on, resting posture only): tell ContentView the USER moved the camera
+            // so the ambient look stops auto-tightening. `wasUserInteracting` is only true for a
+            // real pan/pinch (observer recognizers) - taps/long-presses and programmatic
+            // setCamera calls never set it - so tap-a-block and the look's own animations don't
+            // count. Async for the same "no state write mid-render" reason as below.
+            if AppConstants.driveModeDefaultEnabled, !parent.driveModeActive, wasUserInteracting {
+                DispatchQueue.main.async { [weak self] in
+                    self?.parent.coordinatorActions.onAmbientUserAdjusted?()
                 }
             }
 
