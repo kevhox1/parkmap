@@ -398,12 +398,11 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
     ) -> CurbSnapOutcome {
         guard !edges.isEmpty else { return .noCurbInRange(nearestMeters: nil) }
 
-        let (px, py) = CurbSnapIndex.project(latitude: p.latitude, longitude: p.longitude)
-        guard px.isFinite, py.isFinite,
-              abs(px) <= CurbSnapIndex.maxQueryExtentMeters,
-              abs(py) <= CurbSnapIndex.maxQueryExtentMeters else {
+        guard let query = CurbSnapIndex.projectedQuery(p) else {
             return .noCurbInRange(nearestMeters: nil)
         }
+        let px = query.x
+        let py = query.y
 
         var incumbentGroup: Int32 = -1
         if let incumbent, let found = groupIDs[incumbent] {
@@ -411,13 +410,7 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
         }
 
         // Cells to scan on each side of the pin's cell. 1 (=> 3x3) for the default config.
-        let cell = CurbSnapIndex.cellSizeMeters
-        let scanRadius = max(config.acquireRadius, config.releaseRadius)
-        let ringRaw = (scanRadius / cell).rounded(.up)
-        // Clamp in Double BEFORE converting: Int(1e300) traps. NaN radius => default ring.
-        let ring = ringRaw.isNaN ? 1 : Int(min(8.0, max(1.0, ringRaw)))
-        let pinCellX = Int((px / cell).rounded(.down))
-        let pinCellY = Int((py / cell).rounded(.down))
+        let ring = CurbSnapIndex.scanRing(forRadius: max(config.acquireRadius, config.releaseRadius))
 
         // Best edge of the incumbent's blockface, and best edge of any OTHER blockface.
         var incumbentD2 = Double.infinity
@@ -425,26 +418,17 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
         var otherD2 = Double.infinity
         var otherEdge = -1
 
-        for cy in (pinCellY - ring)...(pinCellY + ring) {
-            for cx in (pinCellX - ring)...(pinCellX + ring) {
-                guard let slot = cellSlots[CurbSnapIndex.cellKey(cx, cy)] else { continue }
-                var k = Int(cellStarts[Int(slot)])
-                let end = Int(cellStarts[Int(slot) + 1])
-                while k < end {
-                    let edgeIndex = Int(cellEdgeIndices[k])
-                    k += 1
-                    let edge = edges[edgeIndex]
-                    let d2 = CurbSnapIndex.distanceSquared(edge, px, py)
-                    if edge.group == incumbentGroup {
-                        if isBetter(d2, edgeIndex, than: incumbentD2, incumbentEdge) {
-                            incumbentD2 = d2
-                            incumbentEdge = edgeIndex
-                        }
-                    } else if isBetter(d2, edgeIndex, than: otherD2, otherEdge) {
-                        otherD2 = d2
-                        otherEdge = edgeIndex
-                    }
+        forEachCandidateEdge(x: px, y: py, ring: ring) { (edgeIndex: Int) -> Void in
+            let edge = edges[edgeIndex]
+            let d2 = CurbSnapIndex.distanceSquared(edge, px, py)
+            if edge.group == incumbentGroup {
+                if isBetter(d2, edgeIndex, than: incumbentD2, incumbentEdge) {
+                    incumbentD2 = d2
+                    incumbentEdge = edgeIndex
                 }
+            } else if isBetter(d2, edgeIndex, than: otherD2, otherEdge) {
+                otherD2 = d2
+                otherEdge = edgeIndex
             }
         }
 
@@ -496,6 +480,138 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
             distanceMeters: match.distanceMeters,
             snappedCoordinate: match.coordinate
         ))
+    }
+
+    // MARK: - Nearby blockfaces
+
+    /// Every distinct blockface whose polyline passes within `radius` metres of `p`, nearest
+    /// first. Backs the placement mode's VoiceOver adjustable element ("swipe up/down to choose
+    /// a nearby curb"): at a corner or on a divided street it lists the real candidates the
+    /// pin could belong to, instead of only the single winner `resolve` returns.
+    ///
+    /// - Parameters:
+    ///   - p: the pin's ground coordinate (`mapView.centerCoordinate`).
+    ///   - radius: metres. Inclusive (`distance <= radius`, same as `resolve`'s acquire test).
+    ///     Negative or NaN => empty. A huge or infinite radius is clamped to the scannable block
+    ///     (see below) rather than trapping.
+    ///
+    /// Returns one `CurbSnapResult` per distinct `Segment.blockfaceKey` (a blockface present in
+    /// several tiles is one entry, represented by its nearest copy), each carrying the same
+    /// foot point / `positionFraction` / `distanceMeters` that `resolve` would report for it.
+    ///
+    /// Ordering is ascending by the scan's flat-earth distance — the exact metric `resolve`
+    /// ranks by — with ties broken on `blockfaceKey` (then segment id when comparing copies of
+    /// one blockface), never on input order. Consequently, with no incumbent and
+    /// `radius >= config.acquireRadius`, element 0 is exactly the blockface `resolve` acquires.
+    /// Because the reported `distanceMeters` is haversine, two entries whose distances differ by
+    /// under ~0.1% could appear in the reverse order from their reported distances; do not
+    /// re-sort the result.
+    ///
+    /// Empty when nothing is within `radius`, when the index is empty, or when `p` is not a
+    /// usable coordinate (non-finite / absurdly distant). Reuses `resolve`'s grid scan, ring
+    /// widening and ring cap: radii up to ~(ring x 32 m) are complete, and the ring is capped
+    /// at 8 cells (17x17), so beyond ~256 m the result is best-effort. Allocates (a dictionary
+    /// and the result array) — meant for a user gesture, not the 30 Hz display link.
+    func nearbyBlockfaces(_ p: CLLocationCoordinate2D, radius: Double) -> [CurbSnapResult] {
+        guard !edges.isEmpty, !radius.isNaN, radius >= 0 else { return [] }
+        guard let query = CurbSnapIndex.projectedQuery(p) else { return [] }
+        let px = query.x
+        let py = query.y
+        let ring = CurbSnapIndex.scanRing(forRadius: radius)
+
+        // Best edge per blockface group, using the same ranking as `resolve`.
+        var bestPerGroup: [Int32: NearbyCandidate] = [:]
+        forEachCandidateEdge(x: px, y: py, ring: ring) { (edgeIndex: Int) -> Void in
+            let edge = edges[edgeIndex]
+            let d2 = CurbSnapIndex.distanceSquared(edge, px, py)
+            if let current = bestPerGroup[edge.group] {
+                if isBetter(d2, edgeIndex, than: current.distanceSquared, current.edge) {
+                    bestPerGroup[edge.group] = NearbyCandidate(group: edge.group, edge: edgeIndex, distanceSquared: d2)
+                }
+            } else {
+                bestPerGroup[edge.group] = NearbyCandidate(group: edge.group, edge: edgeIndex, distanceSquared: d2)
+            }
+        }
+
+        var inRange: [NearbyCandidate] = []
+        for candidate in bestPerGroup.values where candidate.distanceSquared.squareRoot() <= radius {
+            inRange.append(candidate)
+        }
+        // Total order: groups are unique, and group keys are unique, so no two entries compare equal.
+        inRange.sort { (a: NearbyCandidate, b: NearbyCandidate) -> Bool in
+            if a.distanceSquared != b.distanceSquared { return a.distanceSquared < b.distanceSquared }
+            return groupKeys[Int(a.group)] < groupKeys[Int(b.group)]
+        }
+
+        var results: [CurbSnapResult] = []
+        results.reserveCapacity(inRange.count)
+        for candidate in inRange {
+            let winner = segments[Int(edges[candidate.edge].segment)]
+            // Same belt-and-braces guard as `resolve`: indexed segments always have >= 2 usable
+            // vertices, so this never skips an entry in practice.
+            guard let match = CandidateSegmentSearch.nearestPointOnPolyline(
+                from: p,
+                polyline: winner.coordinates
+            ) else { continue }
+            results.append(CurbSnapResult(
+                segment: winner,
+                positionFraction: match.fraction,
+                distanceMeters: match.distanceMeters,
+                snappedCoordinate: match.coordinate
+            ))
+        }
+        return results
+    }
+
+    /// Best edge found so far for one blockface group during `nearbyBlockfaces`.
+    private nonisolated struct NearbyCandidate {
+        let group: Int32
+        /// Index into `edges`.
+        let edge: Int
+        let distanceSquared: Double
+    }
+
+    // MARK: - Shared scan internals (used by `resolve` and `nearbyBlockfaces`)
+
+    /// Projects a query coordinate to local metres, or nil when it is non-finite / beyond
+    /// `maxQueryExtentMeters` (keeps the later `Int(floor(...))` cell maths in range).
+    private static func projectedQuery(_ p: CLLocationCoordinate2D) -> (x: Double, y: Double)? {
+        let (x, y) = project(latitude: p.latitude, longitude: p.longitude)
+        guard x.isFinite, y.isFinite,
+              abs(x) <= maxQueryExtentMeters,
+              abs(y) <= maxQueryExtentMeters else {
+            return nil
+        }
+        return (x: x, y: y)
+    }
+
+    /// Cells to scan on each side of the pin's cell for a given radius: 1 (=> 3x3) up to 32 m,
+    /// widening one cell per further 32 m, capped at 8 (17x17).
+    private static func scanRing(forRadius radius: Double) -> Int {
+        let ringRaw = (radius / cellSizeMeters).rounded(.up)
+        // Clamp in Double BEFORE converting: Int(1e300) traps. NaN radius => default ring.
+        return ringRaw.isNaN ? 1 : Int(min(8.0, max(1.0, ringRaw)))
+    }
+
+    /// Calls `body` with the index (into `edges`) of every edge registered in the
+    /// (2 x ring + 1)^2 cell block around (x, y). An edge registered in several cells in the
+    /// block is visited once per cell; both callers keep a running best, so repeats are harmless.
+    @inline(__always)
+    private func forEachCandidateEdge(x: Double, y: Double, ring: Int, _ body: (Int) -> Void) {
+        let cell = CurbSnapIndex.cellSizeMeters
+        let pinCellX = Int((x / cell).rounded(.down))
+        let pinCellY = Int((y / cell).rounded(.down))
+        for cy in (pinCellY - ring)...(pinCellY + ring) {
+            for cx in (pinCellX - ring)...(pinCellX + ring) {
+                guard let slot = cellSlots[CurbSnapIndex.cellKey(cx, cy)] else { continue }
+                var k = Int(cellStarts[Int(slot)])
+                let end = Int(cellStarts[Int(slot) + 1])
+                while k < end {
+                    body(Int(cellEdgeIndices[k]))
+                    k += 1
+                }
+            }
+        }
     }
 
     // MARK: - Tie-breaking
