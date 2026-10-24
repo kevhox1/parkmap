@@ -400,9 +400,10 @@ final class AccountDeletionService: AccountDeleting {
             return false
         }
         if (object["code"] as? String) == "NoSuchKey" { return true }
-        let error = (object["error"] as? String)?.lowercased()
+        // The message is what distinguishes a missing OBJECT from a missing bucket/route; the `error`
+        // label varies by storage-api version ("not_found" vs "Not Found"), so it is not required.
         let message = (object["message"] as? String)?.lowercased()
-        return error == "not_found" && message == "object not found"
+        return message == "object not found"
     }
 
     // MARK: - Storage listing (step 1)

@@ -1211,6 +1211,9 @@ final class AccountDeletionHardeningTests: XCTestCase {
         XCTAssertTrue(AccountDeletionService.isObjectNotFound(status: 400, body: notFound))
         XCTAssertTrue(AccountDeletionService.isObjectNotFound(
             status: 400, body: Data(#"{"code":"NoSuchKey","message":"The resource was not found"}"#.utf8)))
+        // The `error` label differs across storage-api versions; the message is what counts.
+        XCTAssertTrue(AccountDeletionService.isObjectNotFound(
+            status: 404, body: Data(#"{"statusCode":"404","error":"Not Found","message":"Object not found"}"#.utf8)))
         XCTAssertFalse(AccountDeletionService.isObjectNotFound(status: 500, body: notFound))
         XCTAssertFalse(AccountDeletionService.isObjectNotFound(status: 200, body: notFound))
         XCTAssertFalse(AccountDeletionService.isObjectNotFound(status: 401, body: notFound))
