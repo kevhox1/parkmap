@@ -461,3 +461,252 @@ final class SupabaseAuthServiceTests: XCTestCase {
         for key in legacyKeys { UserDefaults.standard.removeObject(forKey: key) }
     }
 }
+
+// MARK: - Account deletion handoff (open item #38; QA PR #144 Y2)
+//
+//  Real SDK (`AuthClient`) behind the mocked network + in-memory storage seam, like the tests
+//  above. The contract under test: after `endSessionAfterAccountDeletion(deletedUserId:)` returns,
+//  the app is on exactly ONE new anonymous identity (never zero when the network works, never two),
+//  whatever order the SDK's separate `.signedOut` handler task runs in, and the deleted user's
+//  token is never served again even when local sign-out fails.
+//
+//  Cases:
+//    1. testEndSession_replacesIdentityBeforeReturning_exactlyOneMint
+//    2. testEndSession_logoutFailsWithAnyStatus_stillMintsExactlyOne
+//    3. testEndSession_sdkCannotRemoveStoredSession_wipesItDirectly
+//    4. testEndSession_removalFailsEverywhere_andMintOffline_neverServesDeletedToken
+//    5. testEndSession_withNoStoredSession_mintsExactlyOne
+//    6. testEndSession_mintOffline_leavesNoSession_noRetryLoop_thenLazyMintRecovers
+//    7. testCurrentSessionSnapshot_tokenAndUserFromOneSession
+//    8. testSessionStorageKey_matchesSDKDefault
+
+/// Routes the SDK's Auth endpoints and counts what it saw. Thread-safe (the mock URLProtocol
+/// answers on a background queue).
+private final class SeamAuthServer: @unchecked Sendable {
+    private let lock = NSLock()
+    private let signupUsers: [UUID]
+    private var attempts = 0
+    private var mints = 0
+    private var signupStatus = 200
+    private var logoutStatus = 200
+    private var logouts: [String] = []
+
+    init(signupUsers: [UUID]) {
+        self.signupUsers = signupUsers
+    }
+
+    func setSignupStatus(_ status: Int) { lock.lock(); signupStatus = status; lock.unlock() }
+    func setLogoutStatus(_ status: Int) { lock.lock(); logoutStatus = status; lock.unlock() }
+
+    var signupAttempts: Int { lock.lock(); defer { lock.unlock() }; return attempts }
+    var logoutQueries: [String] { lock.lock(); defer { lock.unlock() }; return logouts }
+
+    func handle(_ request: URLRequest) -> (HTTPURLResponse, Data) {
+        let path = request.url?.path ?? ""
+        lock.lock(); defer { lock.unlock() }
+        func response(_ status: Int) -> HTTPURLResponse {
+            HTTPURLResponse(url: request.url ?? kURL, statusCode: status, httpVersion: nil, headerFields: nil)!
+        }
+        if path.hasSuffix("/signup") {
+            attempts += 1
+            guard signupStatus == 200 else { return (response(signupStatus), Data()) }
+            let user = signupUsers[min(mints, signupUsers.count - 1)]
+            mints += 1
+            return (response(200), sessionJSON(userId: user))
+        }
+        if path.hasSuffix("/logout") {
+            logouts.append(request.url?.query ?? "")
+            return (response(logoutStatus), Data())
+        }
+        return (response(404), Data())
+    }
+}
+
+@MainActor
+private func seamMakeService(server: SeamAuthServer, storage: InMemoryAuthStorage) -> SupabaseAuthService {
+    let session = seamMockSession()
+    SeamMockURLProtocol.requestHandler = { request in server.handle(request) }
+    return SupabaseAuthService(
+        supabaseURL: kURL,
+        supabaseAnonKey: kAnonKey,
+        testStorage: storage,
+        fetch: { try await session.data(for: $0) }
+    )
+}
+
+/// Lets any late `.signedOut` handler task run (it hops to the main actor) before asserting that
+/// nothing further happened.
+private func seamSettle() async throws {
+    for _ in 0..<20 { await Task.yield() }
+    try await Task.sleep(nanoseconds: 300_000_000)
+}
+
+private func seamStoredText(_ storage: InMemoryAuthStorage) -> String? {
+    storage.retrieve(key: SupabaseClients.sessionStorageKey).map { String(decoding: $0, as: UTF8.self) }
+}
+
+@MainActor
+final class SupabaseAuthServiceAccountDeletionTests: XCTestCase {
+
+    /// Y2 core: no polling, no sleeping between the call returning and the assertions -- the new
+    /// identity is ALREADY in place. Then a late `.signedOut` handler must not mint a second user.
+    func testEndSession_replacesIdentityBeforeReturning_exactlyOneMint() async throws {
+        let server = SeamAuthServer(signupUsers: [kUser1, kUser2])
+        let storage = InMemoryAuthStorage()
+        let service = seamMakeService(server: server, storage: storage)
+        await service.ensureSession()
+        XCTAssertEqual(service.currentUserId, kUser1, "sanity: first identity")
+        XCTAssertEqual(server.signupAttempts, 1)
+
+        await service.endSessionAfterAccountDeletion(deletedUserId: kUser1)
+
+        XCTAssertEqual(service.currentUserId, kUser2, "the replacement identity must be settled on return")
+        XCTAssertTrue(service.isAuthenticated)
+        XCTAssertEqual(server.signupAttempts, 2, "exactly one replacement sign-up (1 initial + 1)")
+        XCTAssertEqual(server.logoutQueries, ["scope=local"], "local scope only: no other session is touched")
+
+        try await seamSettle()
+
+        XCTAssertEqual(server.signupAttempts, 2, "the late .signedOut handler must not mint a second user")
+        XCTAssertEqual(service.currentUserId, kUser2)
+        let stored = try XCTUnwrap(seamStoredText(storage))
+        XCTAssertTrue(stored.contains(kUser2.uuidString), "the persisted session is the replacement's")
+        XCTAssertFalse(stored.contains(kUser1.uuidString), "the deleted user's session is gone from storage")
+    }
+
+    /// The server already destroyed the session, so /logout may answer anything.
+    func testEndSession_logoutFailsWithAnyStatus_stillMintsExactlyOne() async throws {
+        for status in [401, 403, 404, 500] {
+            let server = SeamAuthServer(signupUsers: [kUser1, kUser2])
+            let service = seamMakeService(server: server, storage: InMemoryAuthStorage())
+            await service.ensureSession()
+            server.setLogoutStatus(status)
+
+            await service.endSessionAfterAccountDeletion(deletedUserId: kUser1)
+            try await seamSettle()
+
+            XCTAssertEqual(service.currentUserId, kUser2, "logout status \(status)")
+            XCTAssertEqual(server.signupAttempts, 2, "logout status \(status): exactly one replacement mint")
+        }
+    }
+
+    /// The SDK's own storage delete fails (it logs and swallows that). Force the mint to fail too,
+    /// so the ONLY thing that can empty storage is the direct wipe.
+    func testEndSession_sdkCannotRemoveStoredSession_wipesItDirectly() async throws {
+        let server = SeamAuthServer(signupUsers: [kUser1, kUser2])
+        let storage = InMemoryAuthStorage()
+        let service = seamMakeService(server: server, storage: storage)
+        await service.ensureSession()
+        XCTAssertNotNil(seamStoredText(storage), "sanity: a session is stored")
+        server.setSignupStatus(500)
+        storage.failNextRemovals(1)
+
+        await service.endSessionAfterAccountDeletion(deletedUserId: kUser1)
+
+        XCTAssertNil(seamStoredText(storage), "the deleted user's session must be wiped even if the SDK could not")
+        XCTAssertNil(service.currentUserId)
+        XCTAssertNil(service.accessToken)
+        XCTAssertFalse(service.isAuthenticated)
+    }
+
+    /// Worst case: neither the SDK nor the direct wipe can remove the stored session, and the
+    /// network is down. The deleted user's token must STILL never be served; once the network is
+    /// back the next request mints the replacement, which overwrites the dead session.
+    func testEndSession_removalFailsEverywhere_andMintOffline_neverServesDeletedToken() async throws {
+        let server = SeamAuthServer(signupUsers: [kUser1, kUser2])
+        let storage = InMemoryAuthStorage()
+        let service = seamMakeService(server: server, storage: storage)
+        await service.ensureSession()
+        server.setSignupStatus(500)
+        storage.failNextRemovals(Int.max)
+
+        await service.endSessionAfterAccountDeletion(deletedUserId: kUser1)
+
+        XCTAssertNil(service.currentUserId, "the deleted identity must not stay cached")
+        XCTAssertNil(service.accessToken)
+        XCTAssertNotNil(seamStoredText(storage), "sanity: the dead session really is still stored")
+
+        let offlineToken = await service.validAccessToken()
+        XCTAssertNil(offlineToken, "offline: no token at all beats the deleted user's token")
+        let offlineSnapshot = await service.currentSessionSnapshot()
+        XCTAssertNil(offlineSnapshot)
+
+        server.setSignupStatus(200)
+        let token = await service.validAccessToken()
+        XCTAssertNotNil(token)
+        XCTAssertTrue(token?.contains(kUser2.uuidString) == true, "the replacement identity's token")
+        XCTAssertFalse(token?.contains(kUser1.uuidString) == true)
+        XCTAssertEqual(service.currentUserId, kUser2)
+    }
+
+    /// SDK `signOut` returns early (no event, no request) when nothing is stored; the handoff must
+    /// still end with exactly one identity.
+    func testEndSession_withNoStoredSession_mintsExactlyOne() async throws {
+        let server = SeamAuthServer(signupUsers: [kUser2])
+        let service = seamMakeService(server: server, storage: InMemoryAuthStorage())
+
+        await service.endSessionAfterAccountDeletion(deletedUserId: kUser1)
+        try await seamSettle()
+
+        XCTAssertEqual(service.currentUserId, kUser2)
+        XCTAssertEqual(server.signupAttempts, 1)
+        XCTAssertTrue(server.logoutQueries.isEmpty, "nothing stored => the SDK sends no logout")
+    }
+
+    func testEndSession_mintOffline_leavesNoSession_noRetryLoop_thenLazyMintRecovers() async throws {
+        let server = SeamAuthServer(signupUsers: [kUser1, kUser2])
+        let service = seamMakeService(server: server, storage: InMemoryAuthStorage())
+        await service.ensureSession()
+        server.setSignupStatus(500)
+
+        await service.endSessionAfterAccountDeletion(deletedUserId: kUser1)
+        try await seamSettle()
+
+        XCTAssertNil(service.currentUserId)
+        XCTAssertFalse(service.isAuthenticated)
+        // A failed mint creates no user, so the two possible callers (this method and the
+        // separate .signedOut handler) may each make one attempt: at most 1 initial + 2. The point
+        // is that nothing retries on its own.
+        let attemptsAfterHandoff = server.signupAttempts
+        XCTAssertLessThanOrEqual(attemptsAfterHandoff, 3)
+        try await seamSettle()
+        XCTAssertEqual(server.signupAttempts, attemptsAfterHandoff, "no background retry loop")
+
+        server.setSignupStatus(200)
+        let token = await service.validAccessToken()
+        XCTAssertNotNil(token, "the existing lazy path recovers on the next write")
+        XCTAssertEqual(service.currentUserId, kUser2)
+    }
+
+    /// QA G5: token and user id from ONE session value.
+    func testCurrentSessionSnapshot_tokenAndUserFromOneSession() async throws {
+        let server = SeamAuthServer(signupUsers: [kUser1, kUser2])
+        let service = seamMakeService(server: server, storage: InMemoryAuthStorage())
+
+        let first = await service.currentSessionSnapshot()
+        let firstSnapshot = try XCTUnwrap(first)
+        XCTAssertEqual(firstSnapshot.userId, kUser1)
+        XCTAssertTrue(firstSnapshot.accessToken.contains(kUser1.uuidString), "the JWT belongs to the snapshot's user")
+
+        await service.endSessionAfterAccountDeletion(deletedUserId: kUser1)
+
+        let second = await service.currentSessionSnapshot()
+        let secondSnapshot = try XCTUnwrap(second)
+        XCTAssertEqual(secondSnapshot.userId, kUser2)
+        XCTAssertTrue(secondSnapshot.accessToken.contains(kUser2.uuidString))
+    }
+
+    /// `SupabaseClients.sessionStorageKey` (used by the direct wipe) must be the key the SDK
+    /// really writes, or the wipe silently does nothing.
+    func testSessionStorageKey_matchesSDKDefault() async {
+        let storage = InMemoryAuthStorage()
+        let service = seamMakeService(server: SeamAuthServer(signupUsers: [kUser1]), storage: storage)
+
+        await service.ensureSession()
+
+        XCTAssertNotNil(
+            storage.retrieve(key: SupabaseClients.sessionStorageKey),
+            "the SDK must persist the session under SupabaseClients.sessionStorageKey"
+        )
+    }
+}

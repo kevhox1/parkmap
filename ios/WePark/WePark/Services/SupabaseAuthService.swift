@@ -39,15 +39,18 @@
 //
 //  ── Auto-resign on `.signedOut` (AC-A3) ──────────────────────────────────────────────────────
 //  The SDK's AuthClient publishes an auth-state-change event stream (`authStateChanges`)
-//  including a `.signedOut` case. This fires both for an explicit `signOut()` call (WePark
-//  exposes no such call today) AND for the SDK's own detection of a server-invalidated session
+//  including a `.signedOut` case. This fires both for an explicit `signOut()` call (WePark's
+//  only caller is `endSessionAfterAccountDeletion`, open item #38 — there is still NO
+//  user-visible sign-out) AND for the SDK's own detection of a server-invalidated session
 //  — see supabase-swift's `APIClient.handleError`, which emits `.signedOut` whenever a session
 //  refresh fails with one of `session_not_found` / `session_expired` / `refresh_token_not_found`
 //  / `refresh_token_already_used`. WePark's identity model is "silent anonymous session, always
 //  logged in, never a user-visible logged-out state" (docs/tier3-auth-and-reactions-spec.md
 //  §3.8) — so this service re-triggers an anonymous sign-in automatically on `.signedOut`,
 //  closing a real (if narrow) gap: previously, a revoked session went unnoticed until the next
-//  write's `validAccessToken()` call failed.
+//  write's `validAccessToken()` call failed. The handler is IDEMPOTENT against a replacement
+//  session that already exists (see `handleAuthStateChange`), which is what makes the
+//  account-deletion handoff mint exactly one identity regardless of task scheduling.
 //
 //  ── Public API: byte-identical (AC-A1) ───────────────────────────────────────────────────────
 //  `currentUserId: UUID?`, `isAuthenticated: Bool`, `validAccessToken() async -> String?` keep
@@ -119,12 +122,23 @@ final class SupabaseAuthService {
     /// meaningful leak risk for an app-lifetime object.
     private var authStateTask: Task<Void, Never>?
 
+    /// Last-resort wipe of the persisted session, straight from the `AuthLocalStorage` (see
+    /// `SupabaseClients.sessionWipe`). nil for previews / inert construction.
+    private let sessionWipe: (@Sendable () -> Void)?
+
+    /// Users whose server-side account was deleted in this process. A session belonging to one of
+    /// them is NEVER served (`validAccessToken`, `currentSessionSnapshot`, `ensureSession`), even if
+    /// the persisted copy could not be removed. In-memory only: once the replacement identity's
+    /// session is stored it overwrites the dead one on disk anyway.
+    private var revokedUserIds: Set<UUID> = []
+
     // MARK: - Init
 
     /// Designated initializer. Takes an already-configured `AuthClient` (Keychain-backed by
     /// default — see `SupabaseClients.swift`).
-    init(authClient: AuthClient) {
+    init(authClient: AuthClient, sessionWipe: (@Sendable () -> Void)? = nil) {
         self.authClient = authClient
+        self.sessionWipe = sessionWipe
         observeAuthStateChanges()
     }
 
@@ -151,6 +165,10 @@ final class SupabaseAuthService {
     func ensureSession() async {
         do {
             let session = try await authClient.session
+            guard !revokedUserIds.contains(session.user.id) else {
+                await signInAnonymously()
+                return
+            }
             applySession(session)
         } catch {
             await signInAnonymously()
@@ -163,7 +181,7 @@ final class SupabaseAuthService {
     ///
     /// - Returns: The current access token, or nil if authentication is unavailable.
     func validAccessToken() async -> String? {
-        if let session = try? await authClient.session {
+        if let session = try? await authClient.session, !revokedUserIds.contains(session.user.id) {
             accessToken = session.accessToken
             return session.accessToken
         }
@@ -172,27 +190,74 @@ final class SupabaseAuthService {
         return accessToken
     }
 
+    /// A valid access token AND the user id it was issued for, read from ONE `Session` value —
+    /// so the two can never disagree (a racing sign-in between two separate reads of
+    /// `validAccessToken()` and `currentUserId` could pair user A's id with user B's JWT).
+    /// Account deletion lists/removes by this id and calls the RPC with this JWT, so a mismatch
+    /// would delete one user's account while listing another's photos. Same refresh / mint
+    /// semantics as `validAccessToken()`.
+    func currentSessionSnapshot() async -> AccountSessionSnapshot? {
+        if let session = try? await authClient.session, !revokedUserIds.contains(session.user.id) {
+            accessToken = session.accessToken
+            return AccountSessionSnapshot(accessToken: session.accessToken, userId: session.user.id)
+        }
+        await signInAnonymously()
+        guard let session = authClient.currentSession,
+              !revokedUserIds.contains(session.user.id) else { return nil }
+        return AccountSessionSnapshot(accessToken: session.accessToken, userId: session.user.id)
+    }
+
     // MARK: - Account deletion (open item #38)
 
-    /// Ends the local session after `delete_my_account()` succeeded server-side, then waits for
-    /// the replacement anonymous identity.
+    /// Ends the local session after `delete_my_account()` succeeded server-side and establishes
+    /// the replacement anonymous identity, DETERMINISTICALLY: when this returns, the persisted
+    /// session and the cached state belong to a NEW anonymous user (or, offline, to nobody — the
+    /// next `validAccessToken()` mints one). It never returns with the deleted user's session still
+    /// being served.
     ///
-    /// The server already destroyed the sessions and refresh tokens, so the SDK's own sign-out
-    /// request may come back 401/403/404 (it swallows those) or fail on the network — all of
-    /// which are ignored here (`try?`): the only goal is clearing the Keychain-cached session.
-    /// `.local` scope so no other session is touched.
+    /// Steps:
+    ///  1. Tombstone `deletedUserId` so its token is never handed out again, whatever happens next.
+    ///  2. `signOut(scope: .local)`. The server already destroyed the sessions, so the SDK's
+    ///     network call may fail (401/403/404 are swallowed by the SDK; other errors by `try?`) —
+    ///     irrelevant: the SDK removes the stored session and emits `.signedOut` BEFORE its network
+    ///     call (supabase-swift v2.55.0 `AuthClient.signOut`). BUT the SDK's storage delete logs and
+    ///     swallows a Keychain failure, so
+    ///  3. we VERIFY via `currentSession` that the DELETED user's session is really gone and, if
+    ///     it is still stored, wipe it straight from the storage (`sessionWipe`). A failed local
+    ///     sign-out is therefore handled, not ignored.
+    ///  4. `adoptOrMintReplacement()` -- the SAME routine the `.signedOut` handler runs, on top of
+    ///     the `signInAnonymously()` single-flight. The handler consumes the SDK's event on a
+    ///     SEPARATE task, so it may run before, during or after this method; whichever gets there
+    ///     first mints, and the other joins the in-flight mint or finds the finished replacement
+    ///     and adopts it. Exactly ONE sign-up request in every ordering.
     ///
-    /// The SDK removes the stored session and emits `.signedOut` BEFORE its network call, and
-    /// `handleAuthStateChange(.signedOut)` already clears the cached state and mints a NEW
-    /// anonymous identity (a different, empty `auth.users` row — the deleted identity cannot be
-    /// signed back into). This method deliberately does NOT call `clearSession()` /
-    /// `signInAnonymously()` itself on top of that handler: doing both could create two
-    /// anonymous users (Supabase anonymous sign-up has no idempotency key). It only awaits the
-    /// handler's in-flight sign-in (`pendingSignIn`) so callers see a settled identity.
-    func endSessionAfterAccountDeletion() async {
+    /// Mint failure (offline) is not retried here: no loop. State is clean, and the existing lazy
+    /// path (`validAccessToken` -> `signInAnonymously`) retries on the next write.
+    func endSessionAfterAccountDeletion(deletedUserId: UUID) async {
+        revokedUserIds.insert(deletedUserId)
+
         _ = try? await authClient.signOut(scope: .local)
-        if let pendingSignIn {
-            await pendingSignIn.value
+
+        // Only the DELETED user's leftover session is wiped: by now the `.signedOut` handler may
+        // already have stored the replacement, which must survive.
+        if let remaining = authClient.currentSession, remaining.user.id == deletedUserId {
+            sessionWipe?()
+        }
+
+        await adoptOrMintReplacement()
+    }
+
+    /// Makes the cached identity match reality after a `.signedOut`: if a usable (non-revoked)
+    /// session is already stored -- a replacement minted by `endSessionAfterAccountDeletion` or the
+    /// `.signedOut` handler, whichever ran first -- adopt it and mint NOTHING; otherwise drop the
+    /// cached identity and mint through the single-flight (which joins an in-flight mint).
+    /// No `await` between the check and the mint call, so the main actor cannot interleave.
+    private func adoptOrMintReplacement() async {
+        if let current = authClient.currentSession, !revokedUserIds.contains(current.user.id) {
+            applySession(current)
+        } else {
+            clearSession()
+            await signInAnonymously()
         }
     }
 
@@ -253,7 +318,7 @@ final class SupabaseAuthService {
     private func handleAuthStateChange(event: AuthChangeEvent, session: Session?) async {
         switch event {
         case .initialSession, .signedIn, .tokenRefreshed, .userUpdated:
-            if let session {
+            if let session, !revokedUserIds.contains(session.user.id) {
                 applySession(session)
             }
             // A nil session on .initialSession just means "nothing persisted yet" — the
@@ -264,10 +329,13 @@ final class SupabaseAuthService {
         case .signedOut:
             // WePark has no user-visible signed-out state (tier3-auth-and-reactions-spec.md
             // §3.8) — silently re-establish a fresh anonymous session. Covers both an explicit
-            // signOut() call (not exposed to any caller today) and the SDK's own detection of a
+            // signOut() call (`endSessionAfterAccountDeletion`) and the SDK's own detection of a
             // server-invalidated session (APIClient.handleError's sessionCleanupErrorCodes).
-            clearSession()
-            await signInAnonymously()
+            //
+            // IDEMPOTENT: this event is consumed on a separate task, so it can be handled AFTER
+            // `endSessionAfterAccountDeletion` already minted the replacement; the shared routine
+            // adopts an existing usable session instead of clearing it and minting a second user.
+            await adoptOrMintReplacement()
 
         case .userDeleted:
             // The underlying auth.users row is gone. Clear local state, but do NOT auto-resign
@@ -310,6 +378,27 @@ final class SupabaseAuthService {
 final class InMemoryAuthStorage: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: [String: Data] = [:]
+    /// Number of upcoming `remove` calls that FAIL (throw, leaving the value in place) — simulates
+    /// a Keychain delete failure, which the SDK logs and swallows.
+    private var pendingRemoveFailures = 0
+
+    struct RemoveFailure: Error {}
+
+    /// The next `count` removals fail. `Int.max` = every removal fails.
+    func failNextRemovals(_ count: Int) {
+        lock.lock(); defer { lock.unlock() }
+        pendingRemoveFailures = count
+    }
+
+    /// Removal honoring `failNextRemovals`. Used by the SDK adapter and the wipe closure.
+    func removeThrowing(key: String) throws {
+        lock.lock(); defer { lock.unlock() }
+        if pendingRemoveFailures > 0 {
+            if pendingRemoveFailures != Int.max { pendingRemoveFailures -= 1 }
+            throw RemoveFailure()
+        }
+        storage.removeValue(forKey: key)
+    }
 
     func store(key: String, value: Data) {
         lock.lock(); defer { lock.unlock() }
@@ -333,7 +422,7 @@ private struct InMemoryAuthLocalStorageAdapter: AuthLocalStorage {
     let backing: InMemoryAuthStorage
     func store(key: String, value: Data) throws { backing.store(key: key, value: value) }
     func retrieve(key: String) throws -> Data? { backing.retrieve(key: key) }
-    func remove(key: String) throws { backing.remove(key: key) }
+    func remove(key: String) throws { try backing.removeThrowing(key: key) }
 }
 
 extension SupabaseAuthService {
@@ -353,7 +442,7 @@ extension SupabaseAuthService {
             localStorage: InMemoryAuthLocalStorageAdapter(backing: testStorage),
             fetch: fetch
         )
-        self.init(authClient: clients.authClient)
+        self.init(authClient: clients.authClient, sessionWipe: clients.sessionWipe)
     }
 }
 

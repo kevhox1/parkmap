@@ -58,6 +58,19 @@ struct SupabaseClients: Sendable {
     /// for why no `accessToken`/JWT is wired here.
     let realtimeClient: RealtimeClientV2
 
+    /// The SDK's default `AuthClient.Configuration.storageKey` (`defaultStorageKey` in
+    /// supabase-swift v2.55.0). WePark never overrides `storageKey`, so this is the key the SDK
+    /// persists the session under. Used ONLY by `sessionWipe` below; a test pins that it is the
+    /// key the SDK really writes (`SupabaseAuthServiceTests.testSessionStorageKey_matchesSDKDefault`).
+    nonisolated static let sessionStorageKey = "supabase.auth.token"
+
+    /// Last-resort local session wipe: removes the persisted session straight from the same
+    /// `AuthLocalStorage` the `AuthClient` uses, bypassing the SDK (whose own delete logs and
+    /// swallows a storage failure). `SupabaseAuthService.endSessionAfterAccountDeletion` calls it
+    /// only if the SDK's `signOut(scope: .local)` left a session behind. Errors are ignored here;
+    /// the caller re-checks the SDK's view of the session afterwards.
+    let sessionWipe: @Sendable () -> Void
+
     // MARK: - Production init
 
     /// Builds clients from `Bundle.main`'s Info.plist keys (Config.xcconfig → Info.plist
@@ -97,6 +110,9 @@ struct SupabaseClients: Sendable {
             localStorage: localStorage,
             fetch: fetch
         )
+        self.sessionWipe = { [localStorage] in
+            try? localStorage.remove(key: SupabaseClients.sessionStorageKey)
+        }
         // NOT changed here: `emitLocalSessionAsInitialSession` (Stream A QA Finding #2,
         // docs/qa/supabase-auth-keychain-stream-a-qa.md) stays at the SDK default (`false`).
         // Evaluated flipping it to `true` while touching this file for Stream B — traced
@@ -130,7 +146,7 @@ struct SupabaseClients: Sendable {
     /// boundary. Exists so `WeParkApp.swift` never needs `import Auth` itself just to
     /// construct this.
     func makeAuthService() -> SupabaseAuthService {
-        SupabaseAuthService(authClient: authClient)
+        SupabaseAuthService(authClient: authClient, sessionWipe: sessionWipe)
     }
 
     /// Builds a `RealtimePinSubscribing`-conforming channel wrapping this instance's shared

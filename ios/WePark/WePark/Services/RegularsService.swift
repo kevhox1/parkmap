@@ -174,6 +174,35 @@ final class RegularsService {
         self.supabaseAnonKey = supabaseAnonKey
         self.authService = authService
         self.urlSession = urlSession
+        // Account deletion (QA PR #144 Y3): edges / notices are PER-USER; drop them when the
+        // account is deleted so the replacement anonymous identity never sees the old graph.
+        accountDeletionObserver = NotificationCenter.default.addObserver(
+            forName: .weParkAccountDeleted,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.resetForAccountDeletion()
+        }
+    }
+
+    deinit {
+        if let accountDeletionObserver {
+            NotificationCenter.default.removeObserver(accountDeletionObserver)
+        }
+    }
+
+    /// Observer token for `.weParkAccountDeleted` (removed in `deinit`).
+    @ObservationIgnored private var accountDeletionObserver: NSObjectProtocol?
+
+    /// Clears every piece of per-user in-memory state (the trust graph and notices, their loading
+    /// flags and errors). Called on `.weParkAccountDeleted`; also directly testable.
+    func resetForAccountDeletion() {
+        edges = []
+        isLoadingEdges = false
+        edgesFetchError = nil
+        notices = []
+        isLoadingNotices = false
+        noticesFetchError = nil
     }
 
     /// Convenience initializer that reads `SUPABASE_URL` and `SUPABASE_ANON_KEY` from
