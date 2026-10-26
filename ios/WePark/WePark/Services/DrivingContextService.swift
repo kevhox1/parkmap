@@ -706,11 +706,15 @@ final class DrivingContextService {
     /// fix's PR description for the alternative considered (gating on the flag) and why it
     /// was rejected.
     ///
-    /// "Side passes" = EVERY segment on this side individually passes `isFree(...)` — the
-    /// same conservative-worst-case philosophy `aggregateSideDetail` above already uses when
-    /// ranking a side's "Free until X" text (a side with ANY move-forcing segment is a side
-    /// you may have to touch the car for, even if some other physical piece of the same curb
-    /// would clear on its own). Returns `nil` (defer to the legacy severity, unchanged) when
+    /// "Side passes" = EVERY segment on this side individually passes `isFree(...)` — a
+    /// deliberately safety-biased rule: a side with ANY move-forcing segment is a side you
+    /// may have to touch the car for, even if some other physical piece of the same curb
+    /// would clear on its own. (NOTE: this is intentionally STRICTER than
+    /// `aggregateSideDetail`'s opportunity bucket, which is optimistic/ANY-wins for its
+    /// "free parking available" purpose — the two answer different questions, see the
+    /// PR #146 QA report. A multi-segment side can therefore read red here while parts of
+    /// the painted curb are green; the map stays the per-segment source of truth.) Returns
+    /// `nil` (defer to the legacy severity, unchanged) when
     /// `parkUntilMode` is `false`, `target` is `nil`, or there are no segments for this side
     /// (mirrors `aggregateSideDetail`'s own `.unknown` early return for an empty side).
     ///
