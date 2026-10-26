@@ -56,6 +56,42 @@ struct DrivingContext: Equatable {
     let leftLabel: SafetyLabel
     let rightLabel: SafetyLabel
 
+    /// fix/goal-aware-drive-card (Kevin smoke, 2026-10-26): goal-aware (or clock-set Park
+    /// Until) chip-COLOR override for the corresponding side. `nil` means "no Park Until
+    /// filter active — use `leftLabel.severity`/`rightLabel.severity` unchanged," the exact
+    /// pre-fix behavior. Non-nil (`.free` or `.restricted` only) when `parkUntilMode` was
+    /// active at the time this context was built — see
+    /// `DrivingContextService.goalAwareChipSeverity(...)`, which mirrors
+    /// `ContentView.rebuildOverlays()`'s own `parkUntilMode` branch exactly so the chip
+    /// agrees with the map's binary green/red bucket for this side.
+    ///
+    /// Deliberately a SEPARATE field from `leftLabel`/`rightLabel.severity`, not a mutation
+    /// of it — `CruiseVoicePolicy`/`DrivingContextService.buildUtteranceText` read
+    /// `leftLabel.severity`/`rightLabel.severity` directly and are UNCHANGED by this fix
+    /// (OQ-4 predates this fix: voice always speaks real-time status, ignoring any Park
+    /// Until filter). See this fix's PR description for the resulting voice/card mismatch,
+    /// flagged as a named follow-up rather than refactored here.
+    let leftChipColorOverride: SafetyLabel.Severity?
+    let rightChipColorOverride: SafetyLabel.Severity?
+
+    init(
+        street: String,
+        from: String,
+        to: String,
+        leftLabel: SafetyLabel,
+        rightLabel: SafetyLabel,
+        leftChipColorOverride: SafetyLabel.Severity? = nil,
+        rightChipColorOverride: SafetyLabel.Severity? = nil
+    ) {
+        self.street = street
+        self.from = from
+        self.to = to
+        self.leftLabel = leftLabel
+        self.rightLabel = rightLabel
+        self.leftChipColorOverride = leftChipColorOverride
+        self.rightChipColorOverride = rightChipColorOverride
+    }
+
     /// Block identity key for change detection. Mirrors PWA: `${ctx.street}|${ctx.from}|${ctx.to}`.
     var blockKey: String { "\(street)|\(from)|\(to)" }
 }
@@ -251,12 +287,29 @@ final class DrivingContextService {
     ///   - segments: Currently-loaded tile segments.
     ///   - engine: ParkingRulesEngine instance for safety label evaluation.
     ///   - date: Current date for rule evaluation. Defaults to `.nowET`.
+    ///   - parkUntilMode: fix/goal-aware-drive-card — `ContentView`'s own `parkUntilMode`
+    ///     `@State`, threaded straight through, unchanged. `false` (the default) preserves
+    ///     every pre-fix call site byte-for-byte: `goalAwareChipSeverity` returns `nil` for
+    ///     both sides whenever this is `false`, leaving `DrivingContext.leftChipColorOverride`/
+    ///     `rightChipColorOverride` `nil` (chip falls back to legacy severity, unchanged).
+    ///   - parkUntilTarget: `ContentView`'s own `parkUntilTarget` `@State`. Ignored when
+    ///     `parkUntilMode` is `false`.
+    ///   - parkUntilIgnoresMeteredPayment: `ContentView`'s own `parkUntilIgnoresMeteredPayment`
+    ///     `@State` — already resolved by `rebuildOverlays()`'s DM-2 goal-recompute block for
+    ///     the goal-first path (`ParkingGoals.ignoresMeteredPayment(for:)`) or left at its
+    ///     `false` default for the power-user clock-set `ParkUntilSheet` path. This function
+    ///     never imports `ParkingGoals` itself — it consumes whichever value the map's own
+    ///     `rebuildOverlays()` already resolved, so goal-active and clock-set Park Until are
+    ///     covered by the exact same mechanism.
     func update(
         coordinate: CLLocationCoordinate2D,
         heading: CLLocationDirection?,
         segments: [Segment],
         engine: ParkingRulesEngine,
-        date: Date = .nowET
+        date: Date = .nowET,
+        parkUntilMode: Bool = false,
+        parkUntilTarget: Date? = nil,
+        parkUntilIgnoresMeteredPayment: Bool = false
     ) {
         guard !segments.isEmpty else {
             currentContext = nil
@@ -326,12 +379,39 @@ final class DrivingContextService {
         let leftLabel  = SafetyLabel(for: leftAgg)
         let rightLabel = SafetyLabel(for: rightAgg)
 
+        // fix/goal-aware-drive-card: goal-aware (or clock-set Park Until) chip-color
+        // override — computed from the SAME per-side raw segments as leftAgg/rightAgg
+        // above, but tested with `engine.isFree(...)` (the map's own binary Park Until
+        // predicate) instead of the legacy 5-color `safetyLabel`/`currentState`
+        // classification those aggregations use. See `goalAwareChipSeverity`'s doc
+        // comment for why this intentionally does NOT touch `leftLabel`/`rightLabel`.
+        let leftSideSegments: [Segment] = leftCardinalSide.map { s in blockSegments.filter { $0.side == s } } ?? []
+        let rightSideSegments: [Segment] = rightCardinalSide.map { s in blockSegments.filter { $0.side == s } } ?? []
+        let leftChipColorOverride = DrivingContextService.goalAwareChipSeverity(
+            sideSegments: leftSideSegments,
+            parkUntilMode: parkUntilMode,
+            target: parkUntilTarget,
+            ignoringMeteredPayment: parkUntilIgnoresMeteredPayment,
+            from: date,
+            engine: engine
+        )
+        let rightChipColorOverride = DrivingContextService.goalAwareChipSeverity(
+            sideSegments: rightSideSegments,
+            parkUntilMode: parkUntilMode,
+            target: parkUntilTarget,
+            ignoringMeteredPayment: parkUntilIgnoresMeteredPayment,
+            from: date,
+            engine: engine
+        )
+
         let context = DrivingContext(
             street: block.street,
             from: block.from,
             to: block.to,
             leftLabel: leftLabel,
-            rightLabel: rightLabel
+            rightLabel: rightLabel,
+            leftChipColorOverride: leftChipColorOverride,
+            rightChipColorOverride: rightChipColorOverride
         )
         currentContext = context
 
@@ -598,6 +678,64 @@ final class DrivingContextService {
 
         // Step 6: segments found but none free or metered.
         return SideAggregation(opportunity: .restricted, earliestFreeUntilText: nil)
+    }
+
+    // MARK: - fix/goal-aware-drive-card: goal-aware chip-color override
+
+    /// Computes the goal-aware (or clock-set Park Until) chip-color OVERRIDE for one side
+    /// of the current block (Kevin smoke, 2026-10-26: an escalated-Cruise session with the
+    /// Overnight goal active showed BOTH side chips green via the legacy `aggregateSideDetail`
+    /// classification above, while the map painted the left side red because it fails the
+    /// Overnight goal — the text ["Free until Tomorrow 8:00 AM"] was honest, the COLOR lied).
+    ///
+    /// Mirrors `ContentView.rebuildOverlays()`'s `parkUntilMode` branch EXACTLY — the same
+    /// `engine.isFree(segment:from:until:ignoringMeteredPayment:)` call, collapsed to the
+    /// same two-color (`.free` / `.restricted`) bucket the map's binary Park Until overlay
+    /// already uses. Deliberately gated on `parkUntilMode` alone — NOT on
+    /// `AppConstants.driveModeDefaultEnabled` and NOT on a `ParkingGoal` parameter. The
+    /// map's own overlay branch doesn't care whether `parkUntilTarget` came from a goal tap
+    /// (`docs/drive-mode-default-spec.md` §0.8) or the power-user clock-set `ParkUntilSheet`
+    /// (§0.8.9) — both set the identical `parkUntilMode`/`parkUntilTarget`/
+    /// `parkUntilIgnoresMeteredPayment` triple in `ContentView`, so gating on `parkUntilMode`
+    /// alone covers BOTH of the smoke finding's fix items with one mechanism and zero new
+    /// `ParkingGoals` coupling in this file — `ContentView` has already resolved
+    /// `ignoringMeteredPayment` for whichever path is live (`ParkingGoals.ignoresMeteredPayment
+    /// (for:)` for the goal path; the clock-set path's own `false` default) by the time this
+    /// is called. This also means the fix applies correctly flag-OFF (clock-set Park Until
+    /// has shipped and is reachable with `driveModeDefaultEnabled == false`) — see this
+    /// fix's PR description for the alternative considered (gating on the flag) and why it
+    /// was rejected.
+    ///
+    /// "Side passes" = EVERY segment on this side individually passes `isFree(...)` — the
+    /// same conservative-worst-case philosophy `aggregateSideDetail` above already uses when
+    /// ranking a side's "Free until X" text (a side with ANY move-forcing segment is a side
+    /// you may have to touch the car for, even if some other physical piece of the same curb
+    /// would clear on its own). Returns `nil` (defer to the legacy severity, unchanged) when
+    /// `parkUntilMode` is `false`, `target` is `nil`, or there are no segments for this side
+    /// (mirrors `aggregateSideDetail`'s own `.unknown` early return for an empty side).
+    ///
+    /// Pure, `nonisolated static` — no stored state, no side effects. Does NOT read
+    /// `SafetyLabel`/`SideOpportunity` at all; this answers the SAME binary question the
+    /// map's overlay answers, independent of the 5-color legacy classification
+    /// `aggregateSideDetail` computes for TEXT purposes.
+    nonisolated static func goalAwareChipSeverity(
+        sideSegments: [Segment],
+        parkUntilMode: Bool,
+        target: Date?,
+        ignoringMeteredPayment: Bool,
+        from: Date,
+        engine: ParkingRulesEngine
+    ) -> SafetyLabel.Severity? {
+        guard parkUntilMode, let target, !sideSegments.isEmpty else { return nil }
+        let allPass = sideSegments.allSatisfy {
+            engine.isFree(
+                segment: $0,
+                from: from,
+                until: target,
+                ignoringMeteredPayment: ignoringMeteredPayment
+            )
+        }
+        return allPass ? .free : .restricted
     }
 
     /// Computes the haversine length of a segment's polyline in meters.
