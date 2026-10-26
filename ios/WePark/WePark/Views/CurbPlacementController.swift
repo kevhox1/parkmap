@@ -18,7 +18,13 @@
 //  Invariants this file keeps:
 //    - Every camera mutation happens from a `CoordinatorActions` call (ContentView `.onChange`),
 //      a `DispatchWorkItem`, or a MapKit delegate callback - NEVER inside `updateUIView` (#31).
-//      There is exactly ONE animated `setCamera` per transition (entry, exit).
+//      There is exactly ONE animated camera move per transition (entry, exit) - no silent second
+//      "correction" step. Entry uses `setRegion` (not `setCamera`): `MKCoordinateRegion` is the
+//      only EXACT MapKit API for "this is the visible extent I want," so the seed lands under the
+//      tip with no field-of-view approximation to correct afterwards - see `begin()`'s doc
+//      comment and `CurbPlacementMapPolicy.entrySpanDegrees` for the full root-cause writeup of
+//      the 2026-10-26 "pin lands mid-building" report this replaced. Exit still uses `setCamera`
+//      (pitch/heading restoration needs the camera API).
 //    - No SwiftUI state is written per frame. `onPlacementOutcome` fires only on a blockface /
 //      outcome-kind change and on settle (`CurbPlacementMapPolicy.shouldFireOutcome`), always
 //      hopped through `DispatchQueue.main.async` (same "no state write mid-render" rule as
@@ -100,7 +106,11 @@ final class CurbPlacementController {
 
     private var isEnded = false
     private var entryInProgress = true
-    private var entryTargetDistance: CLLocationDistance = 0
+    /// The EXACT entry centre (`CurbPlacementMapPolicy.entryCenter`), captured in `begin()` and
+    /// compared against in `finishEntry` (`entryArrived`). Centre-based, not altitude-based - see
+    /// `entrySpanDegrees`'s doc comment for why: the entry region is exact, so arrival is a
+    /// position check, not a percentage-of-approximate-distance check.
+    private var entryTargetCenter: CLLocationCoordinate2D?
     private var incumbentKey: String?
     private var lastResolvedPin: CLLocationCoordinate2D?
     private var lastOutcome: CurbSnapOutcome?
@@ -171,20 +181,20 @@ final class CurbPlacementController {
         reticle.layoutIfNeeded()
         selectionHaptic.prepare()
 
-        // Entry camera numbers (pure; see CurbPlacementMapPolicy).
+        // Entry camera numbers (pure; see CurbPlacementMapPolicy). `targetDistance` only drives
+        // the soft pinch-zoom RANGE below (floor/ceiling) - ~5% slop there is harmless.
         let requestedHeightMeters = CurbPlacementMapPolicy.entryVisibleHeightMeters(boundsSize: mapView.bounds.size)
         let requestedDistance = MapViewRepresentable.altitudeForSpan(
             CurbPlacementMapPolicy.latitudeSpan(forVisibleHeightMeters: requestedHeightMeters)
         )
         let targetDistance = CurbPlacementMapPolicy.entryDistance(requested: requestedDistance)
-        entryTargetDistance = targetDistance
         let clampedHeightMeters = CurbPlacementMapPolicy.clampedVisibleHeightMeters(
             requestedVisibleHeightMeters: requestedHeightMeters,
             requestedDistance: requestedDistance,
             clampedDistance: targetDistance
         )
 
-        // Zoom window FIRST (so the single setCamera below is not re-clamped afterwards).
+        // Zoom window FIRST (so the single region move below is not re-clamped afterwards).
         let range = CurbPlacementMapPolicy.zoomRange(entryDistance: targetDistance)
         if let zoomRange = MKMapView.CameraZoomRange(
             minCenterCoordinateDistance: range.minDistance,
@@ -193,17 +203,42 @@ final class CurbPlacementController {
             mapView.setCameraZoomRange(zoomRange, animated: animate)
         }
 
-        // ONE setCamera: flatten, north-up, street-level, seed under the tip.
-        if let camera = mapView.camera.copy() as? MKMapCamera {
-            camera.centerCoordinate = CurbPlacementMapPolicy.entryCenter(
-                seed: seed,
-                visibleHeightMeters: clampedHeightMeters
-            )
-            camera.pitch = CurbPlacementMapPolicy.entryPitch
-            camera.heading = CurbPlacementMapPolicy.entryHeading
-            camera.centerCoordinateDistance = targetDistance
-            mapView.setCamera(camera, animated: animate)
-        }
+        // ONE animated camera move: flat, north-up, street-level, seed EXACTLY under the tip.
+        //
+        // This is `setRegion`, not `setCamera` - a deliberate change from the original A2 PR
+        // (flagged to the orchestrator, not a silent substitution: the "single setCamera on
+        // entry" QA invariant becomes "single animated camera move," the literal API differs).
+        // Why: `MKCoordinateRegion` is Apple's own EXACT visible-bounding-box contract (centre
+        // +/- span/2 IS the rendered edge), whereas the original `MKMapCamera
+        // .centerCoordinateDistance` path needed `altitudeForSpan`'s FOV GUESS (documented as
+        // "~5% accurate," never verified on a real device) to turn a desired visible height into
+        // an altitude. `entryCenter`'s own maths was always exact; only that altitude conversion
+        // was approximate, and the one-time correction nudge meant to paper over it
+        // (`finishEntry`'s old `performNudge(toward: seed, ...)`) only ran when the entry settled
+        // NATURALLY - the entry-safety-timer and touch-interrupt paths shipped the uncorrected
+        // position permanently, with no second chance. That is the root cause of the 2026-10-26
+        // "pin lands mid-building" report. `setRegion` removes the approximation (and the nudge
+        // it required) entirely, so there is no second step left to skip.
+        let center = CurbPlacementMapPolicy.entryCenter(seed: seed, visibleHeightMeters: clampedHeightMeters)
+        entryTargetCenter = center
+        let widthMeters = CurbPlacementMapPolicy.clampedVisibleWidthMeters(
+            boundsSize: mapView.bounds.size,
+            clampedHeightMeters: clampedHeightMeters
+        )
+        let spanDegrees = CurbPlacementMapPolicy.entrySpanDegrees(
+            seedLatitude: seed.latitude,
+            visibleHeightMeters: clampedHeightMeters,
+            visibleWidthMeters: widthMeters
+        )
+        let region = MKCoordinateRegion(
+            center: center,
+            span: MKCoordinateSpan(latitudeDelta: spanDegrees.latitudeDelta, longitudeDelta: spanDegrees.longitudeDelta)
+        )
+        // `setRegion` is the 2D/top-down MapKit API: it implies pitch 0 / heading 0, which is
+        // exactly `entryPitch`/`entryHeading` - no separate pitch/heading assignment needed.
+        // [COMPILE-UNVERIFIED] Mac smoke: confirm a session started from a tilted camera (ambient
+        // driving look, or any prior 3D state) lands fully flat, not merely re-centred.
+        mapView.setRegion(region, animated: animate)
 
         installDisplayLink()
 
@@ -566,8 +601,8 @@ final class CurbPlacementController {
         guard entryInProgress, let mapView else { return }
         if !force {
             let arrived = CurbPlacementMapPolicy.entryArrived(
-                currentDistance: mapView.camera.centerCoordinateDistance,
-                targetDistance: entryTargetDistance,
+                currentCenter: mapView.camera.centerCoordinate,
+                targetCenter: entryTargetCenter ?? seed,
                 currentPitch: mapView.camera.pitch
             )
             // A stale callback from an interrupted animation: wait for the real landing (the
@@ -579,20 +614,12 @@ final class CurbPlacementController {
         entryInProgress = false
         reticle.reveal(animated: true)
 
-        // The entry centre was computed from the FOV convention `altitudeForSpan` assumes
-        // (~5% accurate); bring the seed exactly under the tip with the normal nudge path.
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
-        let seedPoint = mapView.convert(seed, toPointTo: mapView)
-        let offset = Double(hypot(seedPoint.x - tip.x, seedPoint.y - tip.y))
-        if !force,
-           let nudge = CurbPlacementMapPolicy.settleNudge(
-               ghostOffsetPoints: offset,
-               reduceMotion: hooks.reduceMotion()
-           ) {
-            performNudge(toward: seed, nudge: nudge)
-        } else {
-            settleWithoutNudge()
-        }
+        // The entry region is EXACT (`MKCoordinateRegion`'s own centre +/- span/2 contract - see
+        // `CurbPlacementMapPolicy.entrySpanDegrees`), so there is nothing left to correct: no
+        // post-entry nudge, whether this finished naturally or via `force` (the old asymmetry -
+        // correct only when `force == false` - was the root cause of the "pin lands mid-building"
+        // report; see `begin()`'s doc comment). One resolve at the settled pin.
+        settleWithoutNudge()
     }
 
     // MARK: - Refresh / accessibility cycle / insets

@@ -63,6 +63,14 @@ nonisolated struct PlacementNudge {
     let duration: TimeInterval
 }
 
+/// A visible-extent span in degrees. No MapKit dependency (the controller wraps it into an
+/// `MKCoordinateSpan`) - this file's own "nothing here touches MapKit" invariant. See
+/// `CurbPlacementMapPolicy.entrySpanDegrees`.
+nonisolated struct PlacementSpanDegrees {
+    let latitudeDelta: CLLocationDegrees
+    let longitudeDelta: CLLocationDegrees
+}
+
 // MARK: - Policy
 
 nonisolated enum CurbPlacementMapPolicy {
@@ -193,19 +201,68 @@ nonisolated enum CurbPlacementMapPolicy {
         )
     }
 
-    /// Whether the entry camera has landed (a stale regionDidChange from an interrupted
-    /// animation must not reveal the reticle early). Distance within 10%, pitch near flat.
-    static func entryArrived(
-        currentDistance: CLLocationDistance,
-        targetDistance: CLLocationDistance,
-        currentPitch: CGFloat
-    ) -> Bool {
-        guard targetDistance > 0 else { return true }
-        let relative = abs(currentDistance - targetDistance) / targetDistance
-        return relative <= 0.10 && abs(currentPitch) < 1.0
+    /// The EXACT visible-extent span for a seed at `seedLatitude`, with NO field-of-view
+    /// approximation.
+    ///
+    /// Root cause of the 2026-10-26 "pin lands mid-building" report: the entry used to drive
+    /// `MKMapCamera.centerCoordinateDistance` (an ALTITUDE) via `altitudeForSpan`, which is only
+    /// "~5% accurate" by its own doc comment and was NEVER verified against a real device (every
+    /// file touching it carries a `[COMPILE-UNVERIFIED]` tag). `entryCenter`'s own maths is - and
+    /// always was - exact; the error lived entirely in that altitude conversion. The one-time
+    /// "bring the seed exactly under the tip" correction nudge in `CurbPlacementController
+    /// .finishEntry` existed to paper over exactly that gap, but only ran when the entry settled
+    /// NATURALLY (`force == false`) - the entry-safety-timer and touch-interrupt paths
+    /// (`force == true`) shipped the uncorrected, FOV-approximate position permanently, with no
+    /// second chance. `MKCoordinateRegion` sidesteps the whole problem: Apple's own contract is
+    /// that `center +/- span/2` IS the rendered edge - no FOV guess, so nothing is left to
+    /// correct after the fact. `CurbPlacementController.begin` now builds the entry region from
+    /// this span (see its doc comment); `altitudeForSpan`/`entryDistance` remain exactly as
+    /// before for the pinch-zoom RANGE, a soft bound where ~5% slop was always fine.
+    ///
+    /// Degenerate `cos(latitude)` (not reachable at NYC latitudes, but defensive per house style)
+    /// falls back to a square span rather than a non-finite / zero longitude delta.
+    static func entrySpanDegrees(
+        seedLatitude: CLLocationDegrees,
+        visibleHeightMeters: Double,
+        visibleWidthMeters: Double
+    ) -> PlacementSpanDegrees {
+        let latitudeDelta = visibleHeightMeters / metersPerDegreeLatitude
+        let metersPerDegreeLongitude = metersPerDegreeLatitude * cos(seedLatitude * Double.pi / 180)
+        guard metersPerDegreeLongitude.isFinite, metersPerDegreeLongitude > 1 else {
+            return PlacementSpanDegrees(latitudeDelta: latitudeDelta, longitudeDelta: latitudeDelta)
+        }
+        let longitudeDelta = visibleWidthMeters / metersPerDegreeLongitude
+        return PlacementSpanDegrees(latitudeDelta: latitudeDelta, longitudeDelta: longitudeDelta)
     }
 
-    /// Safety net if MapKit never reports a region change for the entry `setCamera` (camera
+    /// The visible WIDTH in metres that keeps the bounds' aspect ratio once the height has been
+    /// clamped (the distance-clamp safety net for a very tall/iPad-shaped view; iPhone portrait
+    /// never triggers it per the 600 m ceiling headroom) - `entryVisibleHeightMeters`'s own ratio,
+    /// inverted, so width and height shrink together.
+    static func clampedVisibleWidthMeters(boundsSize: CGSize, clampedHeightMeters: Double) -> Double {
+        let size = (boundsSize.width > 0 && boundsSize.height > 0) ? boundsSize : fallbackBoundsSize
+        return clampedHeightMeters * Double(size.width) / Double(size.height)
+    }
+
+    /// How close the entry camera's centre must land to the exact target before the entry is
+    /// considered settled (metres). Tight: the entry region is EXACT (no FOV guess - see
+    /// `entrySpanDegrees`), so a real arrival should be within floating-point/MapKit-interpolation
+    /// noise, not a percentage of an altitude that no longer drives where the seed lands.
+    static let entryArrivedToleranceMeters: Double = 3.0
+
+    /// Whether the entry camera has landed (a stale `regionDidChange` from an interrupted
+    /// animation - e.g. a REPLACE mid-flight, PR #140 QA P2-6 - must not reveal the reticle
+    /// early): centre within `entryArrivedToleranceMeters` of the exact target, pitch near flat.
+    static func entryArrived(
+        currentCenter: CLLocationCoordinate2D,
+        targetCenter: CLLocationCoordinate2D,
+        currentPitch: CGFloat
+    ) -> Bool {
+        approxMeters(from: currentCenter, to: targetCenter) <= entryArrivedToleranceMeters
+            && abs(currentPitch) < 1.0
+    }
+
+    /// Safety net if MapKit never reports a region change for the entry `setRegion` (camera
     /// already there): the entry is completed anyway after this long.
     static let entrySafetySeconds: TimeInterval = 1.5
 
