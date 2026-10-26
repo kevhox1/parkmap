@@ -18,6 +18,12 @@
 //    P2-5: Left/Right chips changed from side-by-side to stacked (full card width each) to
 //      give TF2-17's longer "Free until X" copy room to render on one line without shrinking
 //      to the 0.75 minimumScaleFactor floor.
+//  fix/goal-aware-drive-card (Kevin smoke, 2026-10-26): chip COLOR now honors
+//    `DrivingContext.leftChipColorOverride`/`rightChipColorOverride` (goal-aware or
+//    clock-set Park Until binary pass/fail) when present — previously the chip colored
+//    itself purely off the legacy 5-color `safetyLabel.severity`, which could disagree
+//    with the map's goal-filtered red/green overlay for the same side. Chip TEXT is
+//    unchanged either way — see `chipView`'s doc comment.
 //
 //  Port of `renderDrivingContext` (index.html:5863–5910) adapted to SwiftUI.
 //
@@ -142,8 +148,8 @@ struct DriveModeBottomCard: View {
                 // one line — side-by-side gave each chip only ~149pt, which routinely wrapped
                 // to 2 lines and hit the 0.75 minimumScaleFactor floor (review §P2-5).
                 VStack(spacing: 8) {
-                    chipView(label: "Left", safetyLabel: ctx.leftLabel)
-                    chipView(label: "Right", safetyLabel: ctx.rightLabel)
+                    chipView(label: "Left", safetyLabel: ctx.leftLabel, colorOverride: ctx.leftChipColorOverride)
+                    chipView(label: "Right", safetyLabel: ctx.rightLabel, colorOverride: ctx.rightChipColorOverride)
                 }
                 .padding(.horizontal, 16)
             }
@@ -168,8 +174,21 @@ struct DriveModeBottomCard: View {
     // MARK: - Chip view
 
     /// Color-coded severity chip. Port of `dm-side-chip` styling (index.html:5896–5899).
-    private func chipView(label: String, safetyLabel: SafetyLabel) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    ///
+    /// fix/goal-aware-drive-card (Kevin smoke, 2026-10-26): `colorOverride`, when non-nil,
+    /// drives the chip's BACKGROUND/TEXT COLOR ONLY — `safetyLabel.text` is always rendered
+    /// verbatim, unchanged. This is the deliberate "color is the fix, text unchanged"
+    /// resolution (see this fix's PR description): when a Park Until filter (goal-selected
+    /// or clock-set) is active, `colorOverride` is `DrivingContext.leftChipColorOverride`/
+    /// `rightChipColorOverride` — `.free` (green) iff this side passes the SAME
+    /// `isFree(...)` test the map's binary overlay uses, `.restricted` (red) iff not,
+    /// matching the map exactly even when `safetyLabel.severity` (the legacy 5-color
+    /// classification) disagrees — e.g. "Free until Tomorrow 8:00 AM" rendered in RED
+    /// because the Overnight goal's window extends past that restriction. `nil` (no filter
+    /// active) falls back to `safetyLabel.severity`, byte-identical to pre-fix behavior.
+    private func chipView(label: String, safetyLabel: SafetyLabel, colorOverride: SafetyLabel.Severity? = nil) -> some View {
+        let displaySeverity = colorOverride ?? safetyLabel.severity
+        return VStack(alignment: .leading, spacing: 4) {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
@@ -182,12 +201,12 @@ struct DriveModeBottomCard: View {
                 .fontWeight(.medium)
                 .lineLimit(2)
                 .minimumScaleFactor(0.9)
-                .foregroundStyle(chipTextColor(for: safetyLabel.severity))
+                .foregroundStyle(chipTextColor(for: displaySeverity))
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(chipBackgroundColor(for: safetyLabel.severity), in: RoundedRectangle(cornerRadius: 10))
+        .background(chipBackgroundColor(for: displaySeverity), in: RoundedRectangle(cornerRadius: 10))
     }
 
     // MARK: - Severity palette (TF2-18 P1-1: solid-fill, WCAG-fixed)

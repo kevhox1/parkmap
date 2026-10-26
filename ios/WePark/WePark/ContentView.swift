@@ -4925,11 +4925,19 @@ struct ContentView: View {
             }
             // Context update: compute parking commentary for new position.
             if let service = drivingContextService {
+                // fix/goal-aware-drive-card: thread the SAME three Park Until values
+                // `rebuildOverlays()`'s own `parkUntilMode` branch reads, so
+                // `DriveModeBottomCard`'s side chips agree with the map's binary
+                // green/red bucket whether the live filter came from a goal tap (flag on)
+                // or the power-user clock-set `ParkUntilSheet` (any flag state).
                 service.update(
                     coordinate: coord,
                     heading: locationService.driveHeading,
                     segments: tileLoader.segments,
-                    engine: engine
+                    engine: engine,
+                    parkUntilMode: parkUntilMode,
+                    parkUntilTarget: parkUntilTarget,
+                    parkUntilIgnoresMeteredPayment: parkUntilIgnoresMeteredPayment
                 )
                 drivingContext = service.currentContext
 
