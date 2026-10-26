@@ -278,16 +278,94 @@ final class CurbPlacementEntryCameraTests: XCTestCase {
         XCTAssertEqual(center.longitude, seed.longitude, accuracy: 0.0000001)
     }
 
-    func testEntryArrived_withinTenPercentAndFlat() {
-        XCTAssertTrue(CurbPlacementMapPolicy.entryArrived(currentDistance: 400, targetDistance: 400, currentPitch: 0))
-        XCTAssertTrue(CurbPlacementMapPolicy.entryArrived(currentDistance: 430, targetDistance: 400, currentPitch: 0.5))
+    // MARK: Exact entry region (2026-10-26 "pin lands mid-building" fix)
+
+    func testEntrySpanDegrees_isExactWithNoFieldOfViewApproximation() {
+        let span = CurbPlacementMapPolicy.entrySpanDegrees(
+            seedLatitude: 40.75, visibleHeightMeters: 238.05, visibleWidthMeters: 110
+        )
+        XCTAssertEqual(span.latitudeDelta, 238.05 / 111_320, accuracy: 0.0000001)
+        let expectedLongitudeDelta = 110 / (111_320 * cos(40.75 * Double.pi / 180))
+        XCTAssertEqual(span.longitudeDelta, expectedLongitudeDelta, accuracy: 0.0000001)
+    }
+
+    func testEntrySpanDegrees_degenerateLatitudeFallsBackToASquareSpan() {
+        let span = CurbPlacementMapPolicy.entrySpanDegrees(
+            seedLatitude: 90, visibleHeightMeters: 200, visibleWidthMeters: 500
+        )
+        XCTAssertEqual(span.longitudeDelta, span.latitudeDelta, accuracy: 0.0000001,
+            "cos(90 deg) == 0: no non-finite / zero longitude delta.")
+    }
+
+    func testClampedVisibleWidthMeters_keepsTheBoundsAspectRatio() {
+        let width = CurbPlacementMapPolicy.clampedVisibleWidthMeters(
+            boundsSize: CGSize(width: 390, height: 844), clampedHeightMeters: 200
+        )
+        XCTAssertEqual(width, 200 * 390.0 / 844.0, accuracy: 0.0001)
+    }
+
+    func testClampedVisibleWidthMeters_unsizedMapUsesTheFallback() {
+        let width = CurbPlacementMapPolicy.clampedVisibleWidthMeters(boundsSize: .zero, clampedHeightMeters: 200)
+        let fallback = CurbPlacementMapPolicy.clampedVisibleWidthMeters(
+            boundsSize: CurbPlacementMapPolicy.fallbackBoundsSize, clampedHeightMeters: 200
+        )
+        XCTAssertEqual(width, fallback, accuracy: 0.0001)
+    }
+
+    /// The actual requirement: given a seed, a screen size, the 40% tip fraction and a visible
+    /// span, the resulting `entryCenter` + `entrySpanDegrees` region must put the seed EXACTLY at
+    /// the tip - not approximately. This is the round trip that replaces the old
+    /// `altitudeForSpan`-driven centring (never exact; needed a post-hoc nudge that the 2026-10-26
+    /// report showed could be skipped entirely). Checked across several phone screen sizes; the
+    /// entry camera is ALWAYS pitch 0 / heading 0 (`testEntryCameraIsFlatAndNorthUp`), so there is
+    /// no rotated-entry case to also check - only straight north-up.
+    func testEntryRegion_seedLandsExactlyAtTheTipFraction_acrossScreenSizes() {
+        let seeds: [CLLocationCoordinate2D] = [
+            CLLocationCoordinate2D(latitude: 40.7484, longitude: -73.9857), // Midtown
+            CLLocationCoordinate2D(latitude: 40.8075, longitude: -73.9626), // Upper Manhattan
+        ]
+        let sizes: [CGSize] = [
+            CGSize(width: 390, height: 844),  // iPhone 12/13/14
+            CGSize(width: 375, height: 667),  // SE-class
+            CGSize(width: 428, height: 926),  // Pro Max-class
+            CGSize(width: 393, height: 852),  // iPhone 15
+        ]
+        for seed in seeds {
+            for size in sizes {
+                let heightMeters = CurbPlacementMapPolicy.entryVisibleHeightMeters(boundsSize: size)
+                let center = CurbPlacementMapPolicy.entryCenter(seed: seed, visibleHeightMeters: heightMeters)
+                let widthMeters = CurbPlacementMapPolicy.clampedVisibleWidthMeters(
+                    boundsSize: size, clampedHeightMeters: heightMeters
+                )
+                let span = CurbPlacementMapPolicy.entrySpanDegrees(
+                    seedLatitude: seed.latitude, visibleHeightMeters: heightMeters, visibleWidthMeters: widthMeters
+                )
+                let topLatitude = center.latitude + span.latitudeDelta / 2
+                let fractionFromTop = (topLatitude - seed.latitude) / span.latitudeDelta
+                XCTAssertEqual(
+                    fractionFromTop, Double(CurbPlacementMapPolicy.tipHeightFraction), accuracy: 0.000001,
+                    "seed \(seed), size \(size): must sit EXACTLY at the 40% tip fraction."
+                )
+                XCTAssertEqual(center.longitude, seed.longitude, accuracy: 0.0000001, "No horizontal offset.")
+            }
+        }
+    }
+
+    func testEntryArrived_withinToleranceAndFlat() {
+        let target = CLLocationCoordinate2D(latitude: 40.7500, longitude: -73.9900)
+        XCTAssertTrue(CurbPlacementMapPolicy.entryArrived(currentCenter: target, targetCenter: target, currentPitch: 0))
+        let nearby = CLLocationCoordinate2D(latitude: 40.75001, longitude: -73.9900) // ~1.1 m
+        XCTAssertTrue(CurbPlacementMapPolicy.entryArrived(currentCenter: nearby, targetCenter: target, currentPitch: 0.5))
     }
 
     func testEntryArrived_staleCallbackFromAnInterruptedAnimationIsRejected() {
-        XCTAssertFalse(CurbPlacementMapPolicy.entryArrived(currentDistance: 621, targetDistance: 400, currentPitch: 30))
-        XCTAssertFalse(CurbPlacementMapPolicy.entryArrived(currentDistance: 400, targetDistance: 400, currentPitch: 12),
+        let target = CLLocationCoordinate2D(latitude: 40.7500, longitude: -73.9900)
+        let farAway = CLLocationCoordinate2D(latitude: 40.7520, longitude: -73.9900) // ~223 m
+        XCTAssertFalse(CurbPlacementMapPolicy.entryArrived(currentCenter: farAway, targetCenter: target, currentPitch: 30))
+        XCTAssertFalse(CurbPlacementMapPolicy.entryArrived(currentCenter: target, targetCenter: target, currentPitch: 12),
             "Still tilted: not landed.")
-        XCTAssertFalse(CurbPlacementMapPolicy.entryArrived(currentDistance: 500, targetDistance: 400, currentPitch: 0))
+        let justOutsideTolerance = CLLocationCoordinate2D(latitude: 40.75004, longitude: -73.9900) // ~4.5 m
+        XCTAssertFalse(CurbPlacementMapPolicy.entryArrived(currentCenter: justOutsideTolerance, targetCenter: target, currentPitch: 0))
     }
 }
 
