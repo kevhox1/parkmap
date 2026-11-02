@@ -200,6 +200,11 @@ final class LocationService: NSObject {
     /// Port of drivingPrevPos (index.html:6549).
     private var prevDriveCoordinate: CLLocationCoordinate2D?
 
+    /// Wrong-way hardening change 2 (`DriveHeadingGuard.swift`): holds a large course flip
+    /// for N consecutive fixes before adopting it. Fresh per drive session — reset
+    /// alongside `headingEMA` in `endDriveMode()`.
+    private var flipGuard = DriveHeadingFlipGuard()
+
     // MARK: - Private
 
     private let manager: CLLocationManager
@@ -293,6 +298,7 @@ final class LocationService: NSObject {
         driveCourseAccuracy = nil
         headingEMA = nil
         prevDriveCoordinate = nil
+        flipGuard = DriveHeadingFlipGuard()  // wrong-way hardening change 2: fresh per session.
 
         // Restore single-shot posture with a fresh fix request.
         if isAuthorized {
@@ -320,13 +326,20 @@ final class LocationService: NSObject {
     ///   - rawHeading: The device's magnetic heading, or nil if unavailable.
     ///   - speed: Current speed in m/s (from CLLocation.speed).
     ///   - current: Current coordinate (for course-from-movement fallback).
+    ///   - courseAccuracy: `CLLocation.courseAccuracy` in degrees for this tick's GPS
+    ///     course, or `nil` when unavailable/invalid. Wrong-way hardening change 1
+    ///     (`DriveHeadingGuard.swift`). Defaults to `nil` (always passes
+    ///     `courseAccuracyQualifies`) for callers with no accuracy concept, e.g. the
+    ///     magnetometer branch in `locationManager(_:didUpdateHeading:)`.
     /// - Returns: Stabilized heading in [0, 360), or nil if no trustworthy heading available.
     func stabilizedHeading(
         rawHeading: CLLocationDirection?,
         speed: CLLocationSpeed,
-        current: CLLocationCoordinate2D
+        current: CLLocationCoordinate2D,
+        courseAccuracy: CLLocationDirection? = nil
     ) -> CLLocationDirection? {
         var h: Double? = rawHeading.flatMap { $0 >= 0 ? $0 : nil }
+        let isRawCourse = h != nil
 
         // Course-from-movement fallback when GPS heading unavailable.
         // Requires at least 4m of movement (same threshold as PWA: `if (moved >= 4)`).
@@ -350,18 +363,42 @@ final class LocationService: NSObject {
             return driveHeading  // no heading available at speed → keep last
         }
 
-        // EMA smoothing with circular wraparound (index.html:6560–6567).
-        // Open item #36: alpha is now speed-scaled (driveHeadingEMAAlpha) rather than the
-        // prior flat 0.35 — converges faster post-turn at clear driving speed, stays smooth
-        // at crawl/parking speed. Wraparound math itself is unchanged at either alpha.
-        if headingEMA == nil {
-            headingEMA = heading
-        } else {
-            var diff = heading - headingEMA!
-            while diff > 180 { diff -= 360 }
-            while diff < -180 { diff += 360 }
-            let alpha = driveHeadingEMAAlpha(speed: speed)
-            headingEMA = ((headingEMA! + alpha * diff) + 360).truncatingRemainder(dividingBy: 360)
+        // Wrong-way hardening change 1 (DriveHeadingGuard.swift): course-quality gate.
+        // Only meaningful for an actual GPS course reading — the course-from-movement
+        // fallback bearing has no CLLocation.courseAccuracy of its own; its own 4m-movement
+        // threshold above already filters most of its noise, so it's exempt.
+        if isRawCourse {
+            guard courseAccuracyQualifies(courseAccuracy) else {
+                return driveHeading  // poor-quality fix → freeze on last good, same as below-speed
+            }
+        }
+
+        // Wrong-way hardening change 2 (DriveHeadingGuard.swift): large-flip confirmation.
+        // Runs BEFORE the EMA so a single garbage/reversed fix can't snap the puck
+        // immediately; a confirmed flip is adopted crisply (bypassing the alpha blend —
+        // `.adopt` below), everything else flows through the ordinary EMA path unchanged.
+        let flipOutcome = flipGuard.next(current: headingEMA, candidate: heading)
+
+        switch flipOutcome {
+        case .adopt(let confirmed):
+            headingEMA = confirmed
+        case .blend(let value), .hold(let value):
+            // EMA smoothing with circular wraparound (index.html:6560–6567). `.hold` feeds
+            // back the UNCHANGED current heading, so diff == 0 below and headingEMA is a
+            // no-op this tick — the flip stays held without any extra branching.
+            // Open item #36: alpha is now speed-scaled (driveHeadingEMAAlpha) rather than
+            // the prior flat 0.35 — converges faster post-turn at clear driving speed, stays
+            // smooth at crawl/parking speed. Wraparound math itself is unchanged at either
+            // alpha.
+            if headingEMA == nil {
+                headingEMA = value
+            } else {
+                var diff = value - headingEMA!
+                while diff > 180 { diff -= 360 }
+                while diff < -180 { diff += 360 }
+                let alpha = driveHeadingEMAAlpha(speed: speed)
+                headingEMA = ((headingEMA! + alpha * diff) + 360).truncatingRemainder(dividingBy: 360)
+            }
         }
         // Store as the last good heading so the speed-gate freeze path can return it.
         // Port of `drivingLastGoodHeading = drivingHeadingEMA` (index.html:6568).
@@ -447,13 +484,16 @@ extension LocationService: CLLocationManagerDelegate {
             // Drive Mode: compute stabilized heading using speed and course-from-movement.
             // Use CLLocation.course as the raw heading fallback when the magnetometer isn't available.
             let courseHeading: CLLocationDirection? = loc.course >= 0 ? loc.course : nil
+            // TF2-16: capture courseAccuracy from the same tick as driveSpeed/driveHeading.
+            // Computed BEFORE stabilizedHeading so wrong-way hardening change 1 (course-
+            // quality gate) can consume it on this same fix.
+            let courseAccuracy: CLLocationDirection? = loc.courseAccuracy >= 0 ? loc.courseAccuracy : nil
             let stabilized = stabilizedHeading(
                 rawHeading: courseHeading,
                 speed: max(0, speed),
-                current: coordinate
+                current: coordinate,
+                courseAccuracy: courseAccuracy
             )
-            // TF2-16: capture courseAccuracy from the same tick as driveSpeed/driveHeading.
-            let courseAccuracy: CLLocationDirection? = loc.courseAccuracy >= 0 ? loc.courseAccuracy : nil
             DispatchQueue.main.async { [weak self] in
                 self?.userLocation = coordinate
                 self?.locationUpdateCount += 1

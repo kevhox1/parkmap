@@ -973,6 +973,64 @@ final class HeadingUpRotationTests: XCTestCase {
         XCTAssertEqual(coordinator.lastAppliedHeading!, 90.0, accuracy: 0.01,
                        "lastAppliedHeading should remain 90° when change is < 2° (FT-7 dead-band)")
     }
+
+    // MARK: - Wrong-way hardening change 3: drive-start posture
+    //
+    // Kevin's build-24 field report (2026-11-02, "the current app direction is no good")
+    // prompted an audit of what the camera shows between `enterCruiseMode()` and the first
+    // qualified GPS course (`driveHeading == nil`). Today's code is already correct: a
+    // FRESH coordinator — `lastAppliedHeading == nil`, the same state as right after
+    // `handleDriveModeChange(false)`'s prior-session reset — receiving a nil heading does
+    // NOT force the camera to north. It holds whatever heading the camera already had at
+    // entry (e.g. a user's manual two-finger rotate gesture while browsing, since
+    // `mapView.isRotateEnabled == true` and nothing but `syncDriveHeading` itself ever
+    // writes `lastAppliedHeading`). This regression test locks that in: a future "always
+    // reset to 0 on nil" edit would reintroduce exactly the "snap-to-north mid-entry" bug
+    // this change set exists to avoid.
+    func testSyncDriveHeading_freshCoordinator_nilHeading_holdsEntryHeading() {
+        @State var regionState = MKCoordinateRegion(
+            center: w85cAnchor,
+            span: MKCoordinateSpan(latitudeDelta: 0.01, longitudeDelta: 0.01)
+        )
+        @State var selectedID: String? = nil
+
+        let repr = MapViewRepresentable(
+            region: $regionState,
+            selectedSegmentID: $selectedID,
+            onTap: { _ in },
+            onLongPress: { _ in },
+            onRegionChanged: { _ in },
+            onCarPinTapped: {},
+            carPin: nil,
+            overlayPayload: MapViewRepresentable.OverlayPayload(generation: 0),
+            activeRoute: nil,
+            destinationCoordinate: nil,
+            driveHeading: nil,
+            coordinatorActions: MapViewRepresentable.CoordinatorActions()
+        )
+
+        let coordinator = repr.makeCoordinator()
+        let mapView = MKMapView()
+
+        // Simulate a user's manual rotate gesture (or simply the camera's resting
+        // orientation) leaving the browse-mode camera at 215° BEFORE Drive Mode is entered.
+        // No drive session has run yet, so lastAppliedHeading is nil — only
+        // syncDriveHeading itself ever writes it, never a gesture.
+        let camera = mapView.camera.copy() as! MKMapCamera
+        camera.heading = 215.0
+        mapView.setCamera(camera, animated: false)
+        XCTAssertNil(coordinator.lastAppliedHeading, "Sanity check: fresh coordinator, no drive session has run yet")
+
+        // Drive-entry window: driveHeading is nil until the first qualified GPS course
+        // arrives (the speed gate, the new course-quality gate, and the new flip-confirm
+        // guard can all legitimately keep it nil for the first few ticks).
+        coordinator.syncDriveHeading(nil, on: mapView)
+
+        XCTAssertEqual(mapView.camera.heading, 215.0, accuracy: 0.5,
+            "Entry window with no qualified course yet must HOLD the entry heading (215°), not reset to north")
+        XCTAssertNil(coordinator.lastAppliedHeading,
+            "lastAppliedHeading stays nil — nothing has been applied by the drive heading pipeline yet")
+    }
 }
 
 // MARK: - 10. BackgroundNoteGate Tests (S-1 fix: spec §7 R-3, AC-DM.23)
