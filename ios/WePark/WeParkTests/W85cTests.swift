@@ -1010,26 +1010,41 @@ final class HeadingUpRotationTests: XCTestCase {
         )
 
         let coordinator = repr.makeCoordinator()
-        let mapView = MKMapView()
+        // SyncDriveHeadingSpyMapView (below): a headless, zero-frame MKMapView in CI does
+        // NOT reliably retain a manually-set `camera.heading` (MapKit's CAMetalLayer has no
+        // real drawable surface to rotate — `camera.heading` reads back as 0 regardless of
+        // what was set). Reading `mapView.camera.heading` back would be testing MapKit's
+        // headless quirk, not this code. Spying on whether `setCamera` was even CALLED is
+        // the only reliable observable: "holds the entry heading" means `syncDriveHeading`
+        // must not attempt a camera write at all in this state.
+        let mapView = SyncDriveHeadingSpyMapView()
 
-        // Simulate a user's manual rotate gesture (or simply the camera's resting
-        // orientation) leaving the browse-mode camera at 215° BEFORE Drive Mode is entered.
-        // No drive session has run yet, so lastAppliedHeading is nil — only
-        // syncDriveHeading itself ever writes it, never a gesture.
-        let camera = mapView.camera.copy() as! MKMapCamera
-        camera.heading = 215.0
-        mapView.setCamera(camera, animated: false)
         XCTAssertNil(coordinator.lastAppliedHeading, "Sanity check: fresh coordinator, no drive session has run yet")
 
         // Drive-entry window: driveHeading is nil until the first qualified GPS course
         // arrives (the speed gate, the new course-quality gate, and the new flip-confirm
-        // guard can all legitimately keep it nil for the first few ticks).
+        // guard can all legitimately keep it nil for the first few ticks). No prior drive
+        // session ran (lastAppliedHeading == nil), so this must be a pure no-op — the
+        // camera is left exactly as the entry moment found it, never touched.
         coordinator.syncDriveHeading(nil, on: mapView)
 
-        XCTAssertEqual(mapView.camera.heading, 215.0, accuracy: 0.5,
-            "Entry window with no qualified course yet must HOLD the entry heading (215°), not reset to north")
+        XCTAssertEqual(mapView.setCameraCallCount, 0,
+            "Entry window with no qualified course yet must HOLD the entry heading — setCamera must not be called at all, not even to reset to north")
         XCTAssertNil(coordinator.lastAppliedHeading,
             "lastAppliedHeading stays nil — nothing has been applied by the drive heading pipeline yet")
+    }
+}
+
+/// Test-only spy: records how many times `setCamera(_:animated:)` is invoked, without
+/// altering its behavior (forwards to `super`). Used to verify "no camera mutation
+/// happened" directly, since a headless (zero-frame) `MKMapView` in CI does not reliably
+/// retain a manually-set `camera.heading` for later readback.
+private final class SyncDriveHeadingSpyMapView: MKMapView {
+    private(set) var setCameraCallCount = 0
+
+    override func setCamera(_ camera: MKMapCamera, animated: Bool) {
+        setCameraCallCount += 1
+        super.setCamera(camera, animated: animated)
     }
 }
 
