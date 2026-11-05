@@ -776,6 +776,47 @@ struct ContentView: View {
     /// banner's own ~8s auto-hide timer.
     @State private var showParkingGuideBanner: Bool = false
 
+    // MARK: - First-run onboarding (open item #41, `docs/design/first-run-onboarding-design.md`)
+
+    /// Drives `.fullScreenCover`'s presentation of `OnboardingStoryView` (Tier 1, §1). Set at
+    /// launch (`performLaunchSetup`) via `onboardingStoryShouldShow(...)` for a genuine
+    /// first-run, or directly by the More sheet's "How WePark works" row for a manual replay
+    /// (§3.2) — `onboardingStoryIsReplay` disambiguates which, for the `onDismiss` closure.
+    @State private var showOnboardingStoryCover: Bool = false
+
+    /// True only while the CURRENT `showOnboardingStoryCover` presentation is a manual replay
+    /// from More (§3.2) — a replay never reads or writes `OnboardingStoryGate`/
+    /// `OnboardingCoachGate`. Reset to `false` as soon as the cover's `onDismiss` closure has
+    /// consumed it.
+    @State private var onboardingStoryIsReplay: Bool = false
+
+    /// The coach layer's current bubble (Tier 3, §2), or `nil` when nothing is showing. `nil`
+    /// is both "never started" and "the session ended" (finished, skipped, Start-Driving-
+    /// escalated, or dismissed by a pan/zoom) — there is no separate "paused" state.
+    @State private var onboardingCoachMark: OnboardingCoachMark? = nil
+
+    /// True only while the CURRENT coach session is a manual replay from More (§3.2) — mirrors
+    /// `onboardingStoryIsReplay`'s role exactly.
+    @State private var onboardingCoachIsReplay: Bool = false
+
+    /// `GoalSelectorView`'s own overall frame, `GoalSelectorView`'s goal-tile row frame, and
+    /// the currently-selected tile's frame — all measured live via `GoalSelectorView`'s own
+    /// geometry callbacks in the shared `onboardingCoachCoordinateSpaceName` coordinate space
+    /// (`Views/GoalSelectorView.swift`'s own doc comment on the two new callback parameters).
+    /// Feed `OnboardingCoachOverlay`'s mark 1/mark 2 bubble + ring anchors. `.zero` means "not
+    /// yet measured" (the overlay's own clearance math treats that as zero clearance rather
+    /// than crashing or guessing).
+    @State private var onboardingGoalDockFrame: CGRect = .zero
+    @State private var onboardingTileRowFrame: CGRect = .zero
+    @State private var onboardingSelectedTileFrame: CGRect = .zero
+
+    /// Mark 3's already-resolved anchor offset (`onboardingNearestCurbOffset()`'s result),
+    /// computed ONCE at the moment `onboardingCoachMark` transitions to `.tapABlock` (via
+    /// `setOnboardingCoachMark(_:)` below) rather than on every `onboardingCoachOverlay`
+    /// re-render — building a fresh `CurbSnapIndex` is a real, if small, cost that has no
+    /// reason to repeat on every unrelated `ContentView` state change while mark 3 is showing.
+    @State private var onboardingCurbAnchorOffset: CGSize = .zero
+
     // MARK: - TF2-16: Drive Mode heading snap-to-street
 
     /// Which heading source currently drives the camera/puck: raw GPS course, or the
@@ -1278,6 +1319,26 @@ struct ContentView: View {
                     activeSheet = driveModeDefaultRestStateSheet()
                 }
             }) { sheet in sheetContent(sheet) }
+            // First-run onboarding (open item #41, design doc §1): the 3-card story deck.
+            // `.fullScreenCover`, not `.sheet` — a separate, independent presentation layer
+            // from the `.sheet(item: $activeSheet)` host above, so both can coexist (a More
+            // row replay sets `activeSheet` to the rest state AND `showOnboardingStoryCover`
+            // to `true` in the same tap). No drag handle — see `OnboardingStoryView.swift`'s
+            // own header for why.
+            .fullScreenCover(isPresented: $showOnboardingStoryCover, onDismiss: {
+                handleOnboardingStoryCoverDismissed()
+            }) {
+                OnboardingStoryView(onFinish: { showOnboardingStoryCover = false })
+            }
+            // First-run onboarding §2.3: escalating into Drive Mode (manual tap OR, later,
+            // sustained-motion auto-engage) dismisses any showing coach bubble outright —
+            // "escalating is a real, deliberate action; nothing should compete with it." The
+            // `onStartDriving` closure in `bottomSafeAreaContent` already clears this
+            // synchronously on the manual-tap path; this `.onChange` is the belt-and-braces
+            // catch for any OTHER path that flips `driveModeActive` true.
+            .onChange(of: driveModeActive) { _, active in
+                if active { onboardingCoachMark = nil }
+            }
             .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
                 Button("Got It", role: .cancel) {}
             } message: {
@@ -1962,6 +2023,7 @@ struct ContentView: View {
         MoreMenuSheet(
             rows: moreMenuVisibleRows(
                 communityEnabled: AppConstants.communityEnabled,
+                onboardingReplayAvailable: AppConstants.onboardingExperienceEnabled(),
                 hasParkedCar: parkPinService.parkedCar != nil,
                 fullPaletteMode: fullPaletteMode
             ),
@@ -1989,8 +2051,20 @@ struct ContentView: View {
         switch row {
         case .report:
             handleReportPillTap()
+        case .howWeParkWorks:
+            // First-run onboarding §3.1/§3.2: dismiss More to the rest state AND present the
+            // story deck as a REPLAY in the same tap — the deck's own `.fullScreenCover` and
+            // the `.sheet(item: $activeSheet)` host are independent presentation layers, so
+            // both assignments land together. Replay never reads or writes either one-shot
+            // gate (§3.2) and skips `LocationPrimingCard` entirely (it is never presented from
+            // this path — only `performLaunchSetup`'s own cold-launch check shows it).
+            activeSheet = dismissTargetOutsideBrowseNav
+            onboardingStoryIsReplay = true
+            showOnboardingStoryCover = true
         case .mapKey:
             activeSheet = .mapKeyLegend
+        case .parking101:
+            activeSheet = .parkingGuide
         case .showAllRules:
             break
         case .findMyCar:
@@ -2712,11 +2786,24 @@ struct ContentView: View {
             // the ViewBuilder 10-child ceiling (PR #143 QA #10) - add any future overlay INSIDE
             // this Group. The placement card + Cancel + locate + first-use hint render nothing
             // unless a session is live (never, flag-off).
+            // First-run onboarding (open item #41): the coach overlay joins this same Group for
+            // the same reason — it renders nothing while `onboardingCoachMark == nil` (never,
+            // flag-off or one-shot-already-consumed).
             Group {
                 locationPrimingCardOverlay
                 curbPlacementOverlay
+                onboardingCoachOverlay
             }
         }
+        // First-run onboarding (open item #41, design doc §6): the ONE named coordinate space
+        // `GoalSelectorView`'s own dock/tile-row/selected-tile geometry callbacks and
+        // `OnboardingCoachOverlay`'s bubble/ring anchors both read from — declared at this
+        // exact ancestor level so a frame measured on one side of this ZStack means the same
+        // point measured on the other. See `OnboardingCoachOverlay.swift`'s own header for why
+        // this is `.onGeometryChange` + a named coordinate space, not literal
+        // `anchorPreference`/`overlayPreferenceValue` (a flagged, documented deviation from the
+        // design doc's literal text).
+        .coordinateSpace(name: onboardingCoachCoordinateSpaceName)
     }
 
     /// The blue "Tap the curb where the spot is / Cancel" pill — visible while placement
@@ -3002,6 +3089,39 @@ struct ContentView: View {
         }
     }
 
+    /// First-run onboarding (open item #41, design doc §2): the live coach layer's 3 anchored
+    /// bubbles. Renders nothing while `onboardingCoachMark == nil` — never, flag-off (both
+    /// `AppConstants.onboardingStoryEnabled` and `driveModeDefaultEnabled` must be on for
+    /// `scheduleOnboardingCoach(isReplay:)` to ever set a mark in the first place) or once the
+    /// one-shot gate has already consumed a genuine first-run session.
+    ///
+    /// Re-checks the identical rest-posture exclusion list `onboardingCoachOverlayVisible(...)`
+    /// shares with `goalSelectorDockVisible` on every render — belt-and-braces alongside the
+    /// explicit dismiss hooks (`onStartDriving`, `handleRegionChanged`, the `driveModeActive`/
+    /// `blockSelectModeActive`/`spotPlacementActive` `.onChange` handlers below) rather than the
+    /// only thing preventing the overlay from mounting mid-drive.
+    @ViewBuilder
+    private var onboardingCoachOverlay: some View {
+        if let mark = onboardingCoachMark,
+           onboardingCoachOverlayVisible(
+                activeSheetIsNil: activeSheet == nil,
+                driveModeActive: driveModeActive,
+                blockSelectModeActive: blockSelectModeActive,
+                spotPlacementActive: spotPlacementActive,
+                curbPlacementActive: curbPlacement != nil
+           ) {
+            OnboardingCoachOverlay(
+                mark: mark,
+                goalDockFrame: onboardingGoalDockFrame,
+                tileRowFrame: onboardingTileRowFrame,
+                selectedTileFrame: onboardingSelectedTileFrame,
+                nearestCurbOffset: onboardingCurbAnchorOffset,
+                onPrimaryAction: { advanceOnboardingCoach(from: mark) },
+                onSkipAll: { finishOnboardingCoach() }
+            )
+        }
+    }
+
     /// The persistent Report pill (`design/prototype.html:76-79`: flag icon + "Report",
     /// orange text) — ported to this codebase's own chrome idiom (`.regularMaterial`
     /// capsule, matching `driveActionRow`'s existing Report button treatment) rather than
@@ -3234,6 +3354,9 @@ struct ContentView: View {
         // A3.6: re-measure the user's dot in screen space now that the camera has settled
         // (the ambient Recenter button reads it). No-op flag-off / while driving.
         refreshAmbientUserDotOffCenter()
+        // First-run onboarding §2.3: panning/zooming while a coach bubble is showing dismisses
+        // all remaining bubbles outright. No-op whenever nothing is showing.
+        dismissOnboardingCoachForMapInteraction()
     }
 
     /// Forwards community pin taps to the sheet presentation.
@@ -3468,14 +3591,33 @@ struct ContentView: View {
                     selectedGoal: selectedGoal,
                     fullPaletteMode: fullPaletteMode,
                     emptyMapGuardKind: emptyMapGuardKind,
-                    onSelectGoal: { goal in selectGoal(goal) },
+                    onSelectGoal: { goal in
+                        selectGoal(goal)
+                        // First-run onboarding §2.2/§2.3: a goal tile IS the real control
+                        // marks 1 ("Pick what you need") and 2 ("Green means...") point at.
+                        if let mark = onboardingCoachMark, mark.dismissedByGoalTileTap {
+                            handleOnboardingCoachRealControlTap(matches: mark)
+                        }
+                    },
                     // Addendum 3 (A3.3): the Report pill + full-palette toggle row is gone from
                     // the dock (both live in the More sheet now). In full-palette mode the
                     // dock's "Pick a parking goal" row calls this — `toggleFullPaletteMode()`'s
                     // turn-OFF branch (re-applies `selectedGoal`, brings the tiles back).
                     onReturnToGoals: { toggleFullPaletteMode() },
-                    onStartDriving: { enterCruiseMode() }
+                    onStartDriving: {
+                        // First-run onboarding §2.3: escalating dismisses any showing bubble
+                        // immediately, synchronously, ahead of `enterCruiseMode()` itself (the
+                        // belt-and-braces `.onChange(of: driveModeActive)` in `body` covers the
+                        // sustained-motion auto-engage path, which has no tap to hook here).
+                        onboardingCoachMark = nil
+                        enterCruiseMode()
+                    },
+                    onTileRowFrameChange: { onboardingTileRowFrame = $0 },
+                    onSelectedTileFrameChange: { onboardingSelectedTileFrame = $0 }
                 )
+                .onGeometryChange(for: CGRect.self, of: { proxy in
+                    proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+                }) { onboardingGoalDockFrame = $0 }
             }
             // W7.5 row 3: Park Until pill — carried over from browsing if already active;
             // cannot be entered mid-drive (recenterButtonStack, its only entry point, is
@@ -4141,6 +4283,145 @@ struct ContentView: View {
             recenterOnUserAtLaunch = true
             locationService.requestAndFetchLocation()
         }
+    }
+
+    // MARK: - First-run onboarding (open item #41, `docs/design/first-run-onboarding-design.md`)
+
+    /// Settle delay (§2.3) before mounting coach mark 1 after the ambient screen's own entry
+    /// finishes — avoids racing `.onGeometryChange` layout before the real dock/rail have
+    /// settled, same "wait for the map to stop" discipline the curb-pin placement mode's own
+    /// settle nudge already uses.
+    private static let onboardingCoachSettleDelayNanoseconds: UInt64 = 400_000_000
+
+    /// Beat (§2.3) between "the user tapped the real control a bubble points at" and the next
+    /// bubble appearing, so the user sees the result land first.
+    private static let onboardingCoachRealControlTapBeatNanoseconds: UInt64 = 300_000_000
+
+    /// Called from `.fullScreenCover`'s `onDismiss` (both the final card's "Let's go" and the
+    /// deck's own Skip route through the SAME `OnboardingStoryView.onFinish` closure, so there
+    /// is exactly one place to decide what dismissal means). A genuine first-run marks
+    /// `OnboardingStoryGate` shown and chains straight into the coach layer; a replay (§3.2)
+    /// writes nothing and still chains into a coach session (a REPLAY one, so its own finish
+    /// won't write `OnboardingCoachGate` either).
+    private func handleOnboardingStoryCoverDismissed() {
+        let wasReplay = onboardingStoryIsReplay
+        onboardingStoryIsReplay = false
+        if !wasReplay {
+            OnboardingStoryGate().markShown()
+        }
+        scheduleOnboardingCoach(isReplay: wasReplay)
+    }
+
+    /// Schedules the coach layer per §2.3's settle delay. `isReplay == true` bypasses the
+    /// one-shot gate check entirely (a replay always shows the coach, regardless of whether a
+    /// real session has already consumed the gate) — mirrors `OnboardingStoryView`'s own
+    /// replay-bypass shape.
+    private func scheduleOnboardingCoach(isReplay: Bool) {
+        guard isReplay || onboardingCoachShouldShow(
+            onboardingStoryEnabled: AppConstants.onboardingStoryEnabled,
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            gateShouldShow: OnboardingCoachGate().shouldShow()
+        ) else { return }
+        onboardingCoachIsReplay = isReplay
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.onboardingCoachSettleDelayNanoseconds)
+            guard onboardingCoachOverlayVisible(
+                activeSheetIsNil: activeSheet == nil,
+                driveModeActive: driveModeActive,
+                blockSelectModeActive: blockSelectModeActive,
+                spotPlacementActive: spotPlacementActive,
+                curbPlacementActive: curbPlacement != nil
+            ) else { return }
+            setOnboardingCoachMark(onboardingCoachFirstMark())
+        }
+    }
+
+    /// The bubble's own primary action ("Got it"/"Done") — always advances (or finishes, on
+    /// the last mark), regardless of `mark` matching the current state (the button is always
+    /// the "I read this" path, independent of the real-control-tap shortcut below).
+    private func advanceOnboardingCoach(from mark: OnboardingCoachMark) {
+        guard onboardingCoachMark == mark else { return }
+        guard let next = onboardingCoachNextMark(after: mark) else {
+            finishOnboardingCoach()
+            return
+        }
+        setOnboardingCoachMark(next)
+    }
+
+    /// Single assignment point for `onboardingCoachMark`'s non-nil transitions: resolves mark
+    /// 3's curb anchor offset ONCE, at the moment the mark actually becomes `.tapABlock`,
+    /// rather than on every `onboardingCoachOverlay` re-render (see `onboardingCurbAnchorOffset`'s
+    /// own doc comment).
+    private func setOnboardingCoachMark(_ mark: OnboardingCoachMark) {
+        onboardingCoachMark = mark
+        if mark == .tapABlock {
+            onboardingCurbAnchorOffset = onboardingNearestCurbOffset()
+        }
+    }
+
+    /// §2.3: "Tapping the real control the bubble points at" dismisses that bubble immediately
+    /// and advances after a short beat, once the real action has visibly landed. Called from
+    /// the goal-tile `onSelectGoal` closure and the block-tap handler — a no-op unless the
+    /// CURRENT mark actually matches the tapped control.
+    private func handleOnboardingCoachRealControlTap(matches mark: OnboardingCoachMark) {
+        guard onboardingCoachMark == mark else { return }
+        guard let next = onboardingCoachNextMark(after: mark) else {
+            finishOnboardingCoach()
+            return
+        }
+        onboardingCoachMark = nil
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: Self.onboardingCoachRealControlTapBeatNanoseconds)
+            guard onboardingCoachOverlayVisible(
+                activeSheetIsNil: activeSheet == nil,
+                driveModeActive: driveModeActive,
+                blockSelectModeActive: blockSelectModeActive,
+                spotPlacementActive: spotPlacementActive,
+                curbPlacementActive: curbPlacement != nil
+            ) else { return }
+            setOnboardingCoachMark(next)
+        }
+    }
+
+    /// Ends the current coach session (mark 3's "Done", the persistent Skip link, or a goal
+    /// tile tap during mark 3's — nonexistent — real-control path simply never calls this).
+    /// Writes `OnboardingCoachGate` ONLY for a genuine (non-replay) session, mirroring
+    /// `handleOnboardingStoryCoverDismissed`'s own replay guard.
+    private func finishOnboardingCoach() {
+        onboardingCoachMark = nil
+        let wasReplay = onboardingCoachIsReplay
+        onboardingCoachIsReplay = false
+        if !wasReplay {
+            OnboardingCoachGate().markShown()
+        }
+    }
+
+    /// §2.3: panning or zooming the map while a bubble is showing dismisses all remaining
+    /// bubbles outright — same "disappears on its own once the user interacts" precedent the
+    /// empty-map guard banner already sets. Deliberately does NOT write `OnboardingCoachGate`
+    /// (the design doc's own "Set when" column for that key lists only mark 3's "Done" and the
+    /// Skip link — exploring the map away mid-tour is not the same as dismissing it).
+    private func dismissOnboardingCoachForMapInteraction() {
+        if onboardingCoachMark != nil {
+            onboardingCoachMark = nil
+        }
+    }
+
+    /// Mark 3's anchor offset (§2.2): reuses `CurbSnapIndex.nearbyBlockfaces` — the same
+    /// VoiceOver-curb-list index, built fresh here since this is a one-shot, settle-delayed
+    /// event, not a per-frame query — bounded to a short search radius around the user's last
+    /// known fix. Falls back to `.zero` (anchor exactly at the map's visual center,
+    /// `OnboardingCoachOverlay`'s own documented fallback) whenever there is no fix, no loaded
+    /// segments, or nothing within range.
+    private func onboardingNearestCurbOffset() -> CGSize {
+        guard let userLocation = locationService.userLocation else { return .zero }
+        let segments = tileLoader.segments
+        guard !segments.isEmpty else { return .zero }
+        let index = CurbSnapIndex(segments: segments)
+        guard let nearest = index.nearbyBlockfaces(userLocation, radius: 75).first else {
+            return .zero
+        }
+        return onboardingCoachBearingOffset(from: userLocation, to: nearest.snappedCoordinate)
     }
 
     // MARK: - W8.5b/c: End Drive Mode
@@ -4988,6 +5269,15 @@ struct ContentView: View {
     /// reduce the expression complexity of ContentView.body (W8.5c-polish PR-1 fix).
     @MainActor
     private func performLaunchSetup() async {
+        // First-run onboarding (open item #41, `docs/design/first-run-onboarding-design.md`
+        // §4.2): the ONE flag-independent write this whole feature makes — runs on EVERY
+        // launch, unconditionally, regardless of `onboardingStoryEnabled`/
+        // `driveModeDefaultEnabled`, ahead of evaluating `showOnboardingStoryCover` below.
+        // Without this, every existing install would later be treated as a brand-new install
+        // the day these flags eventually flip (there would be no way, at flip time, to tell
+        // "has used this app for months" apart from "installed five minutes ago").
+        FirstLaunchSentinel().markLaunchedAndPreSeedIfUpgrading()
+
         // W5: Load persisted car pin on app launch.
         parkPinService.load()
 
@@ -5017,6 +5307,23 @@ struct ContentView: View {
             gateShouldShow: LocationPrimingCardGate().shouldShow(),
             authorizationStatus: locationService.authorizationStatus
         )
+
+        // First-run onboarding (open item #41, design doc §1.4/§4.2): the story deck runs
+        // BEFORE any permission ask — ordering holds by construction, since
+        // `showLocationPrimingCard`'s own `.notDetermined` check above only ever surfaces a
+        // card on the live ambient map, which doesn't render until this `.fullScreenCover`
+        // closes. An upgrading install's `OnboardingStoryGate` was already pre-seeded `true`
+        // by `FirstLaunchSentinel` above (so `showOnboardingStoryCover` resolves `false` for
+        // them here) — in that branch, go straight to scheduling the coach layer instead, with
+        // no cards in front of it (§4.2).
+        showOnboardingStoryCover = onboardingStoryShouldShow(
+            onboardingStoryEnabled: AppConstants.onboardingStoryEnabled,
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            gateShouldShow: OnboardingStoryGate().shouldShow()
+        )
+        if !showOnboardingStoryCover {
+            scheduleOnboardingCoach(isReplay: false)
+        }
 
         // Community 2.0 S14: fetches (or refreshes from cache) the zones table.
         // ⚠️ UNCONDITIONAL — deliberately NOT gated behind `AppConstants.communityEnabled`,
@@ -5242,6 +5549,12 @@ struct ContentView: View {
            let segment = tileLoader.segments.first(where: { $0.id == id }) {
             selectedSegmentID = id
             activeSheet = .blockDetail(segment)
+            // First-run onboarding §2.2/§2.3: tapping a real block IS mark 3's own real
+            // control ("Tap any block to see why") — finishes the coach layer the same as its
+            // "Done" button would, instead of advancing (there is no mark after the last one).
+            if onboardingCoachMark == .tapABlock {
+                finishOnboardingCoach()
+            }
         } else {
             dismissBlockDetail()
         }

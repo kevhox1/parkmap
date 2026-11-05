@@ -133,20 +133,35 @@ struct GoalSelectorView: View {
     /// never escalates on its own; picking a goal never does either (AC-30, §0.8.7).
     let onStartDriving: () -> Void
 
+    /// First-run onboarding (open item #41, `docs/design/first-run-onboarding-design.md` §2.2,
+    /// "do not hand-compute screen offsets against sibling views"): live frame readouts of the
+    /// goal-tile row and the currently-selected tile, in the shared
+    /// `onboardingCoachCoordinateSpaceName` coordinate space, for `OnboardingCoachOverlay`'s
+    /// mark 1/mark 2 bubble anchors. Defaulted no-ops so every existing call site (and the
+    /// `#Preview`s below) compiles unchanged — this view still never knows WHY its frame
+    /// matters, same "pure presentation, caller owns everything" contract this file's header
+    /// already commits to. Zero-cost while onboarding is flag-off: the closures simply never
+    /// get read by anything.
+    let onTileRowFrameChange: (CGRect) -> Void
+    let onSelectedTileFrameChange: (CGRect) -> Void
+
     /// Addendum 3 A3.3: at accessibility Dynamic Type sizes the three tiles reflow from a
     /// row to a vertical stack so labels never truncate.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     // Explicit init (rather than the synthesized memberwise one) so the private `@Environment`
     // property can never make the call site in `ContentView` inaccessible; parameter order =
-    // property declaration order.
+    // property declaration order. The two onboarding frame callbacks are appended LAST, both
+    // defaulted, so the existing positional/labeled call site in `ContentView` needs no change.
     init(
         selectedGoal: ParkingGoal,
         fullPaletteMode: Bool,
         emptyMapGuardKind: EmptyMapGuardKind?,
         onSelectGoal: @escaping (ParkingGoal) -> Void,
         onReturnToGoals: @escaping () -> Void,
-        onStartDriving: @escaping () -> Void
+        onStartDriving: @escaping () -> Void,
+        onTileRowFrameChange: @escaping (CGRect) -> Void = { _ in },
+        onSelectedTileFrameChange: @escaping (CGRect) -> Void = { _ in }
     ) {
         self.selectedGoal = selectedGoal
         self.fullPaletteMode = fullPaletteMode
@@ -154,6 +169,8 @@ struct GoalSelectorView: View {
         self.onSelectGoal = onSelectGoal
         self.onReturnToGoals = onReturnToGoals
         self.onStartDriving = onStartDriving
+        self.onTileRowFrameChange = onTileRowFrameChange
+        self.onSelectedTileFrameChange = onSelectedTileFrameChange
     }
 
     var body: some View {
@@ -170,6 +187,9 @@ struct GoalSelectorView: View {
                 pickGoalRow
             } else {
                 goalTileRow
+                    .onGeometryChange(for: CGRect.self, of: { proxy in
+                        proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+                    }) { onTileRowFrameChange($0) }
             }
         }
         .padding(.horizontal, 16)
@@ -230,12 +250,17 @@ struct GoalSelectorView: View {
         // `Hashable`, not the element type itself. `rawValue` (`String`) is Hashable for
         // free, so this avoids adding a conformance to a file this stream must not touch.
         ForEach(ParkingGoal.allCases, id: \.rawValue) { goal in
+            let isSelected = goal == selectedGoal
             GoalTile(
                 goal: goal,
-                isSelected: goal == selectedGoal,
+                isSelected: isSelected,
                 horizontalLayout: horizontalLayout,
                 onTap: { onSelectGoal(goal) }
             )
+            .modifier(OnboardingSelectedTileFrameReporter(
+                isSelected: isSelected,
+                onFrameChange: onSelectedTileFrameChange
+            ))
         }
     }
 
@@ -466,6 +491,27 @@ private struct EmptyMapGuardBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - OnboardingSelectedTileFrameReporter
+
+/// Reports this tile's frame in `onboardingCoachCoordinateSpaceName` ONLY while `isSelected` is
+/// true — `OnboardingCoachOverlay` mark 2 anchors to "the selected (Overnight) tile," not any
+/// particular index, so only the selected tile ever calls back. No-op cost while `isSelected`
+/// is false (the modifier still measures geometry, same as any `.onGeometryChange`, but the
+/// closure is simply never invoked for an unselected tile — see `action:` below).
+private struct OnboardingSelectedTileFrameReporter: ViewModifier {
+    let isSelected: Bool
+    let onFrameChange: (CGRect) -> Void
+
+    func body(content: Content) -> some View {
+        content.onGeometryChange(for: CGRect.self, of: { proxy in
+            proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+        }) { frame in
+            guard isSelected else { return }
+            onFrameChange(frame)
+        }
     }
 }
 
