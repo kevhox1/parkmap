@@ -22,10 +22,14 @@ import SwiftUI
 
 // MARK: - MoreMenuRow
 
-/// One row of the More sheet, in priority order (Addendum 3 A3.4 table).
+/// One row of the More sheet, in priority order (Addendum 3 A3.4 table, as amended by
+/// `docs/design/first-run-onboarding-design.md` §3.1: "How WePark works" and "Parking 101" are
+/// new rows 2 and 4, everything else renumbered but otherwise unchanged).
 enum MoreMenuRow: Equatable {
     case report
+    case howWeParkWorks
     case mapKey
+    case parking101
     case showAllRules
     case findMyCar
     case parkUntil
@@ -33,7 +37,9 @@ enum MoreMenuRow: Equatable {
     nonisolated var title: String {
         switch self {
         case .report: return "Report"
+        case .howWeParkWorks: return "How WePark works"
         case .mapKey: return "What the colors mean"
+        case .parking101: return "Parking 101"
         case .showAllRules: return "Show all parking rules"
         case .findMyCar: return "Find my car"
         case .parkUntil: return "Park until a set time"
@@ -43,7 +49,9 @@ enum MoreMenuRow: Equatable {
     nonisolated var subtitle: String {
         switch self {
         case .report: return "Tell neighbors what you see"
+        case .howWeParkWorks: return "Replay the quick tour"
         case .mapKey: return "Green, red, and the rest"
+        case .parking101: return "The full guide to NYC parking rules"
         case .showAllRules: return "See every kind of rule, not just one goal"
         case .findMyCar: return "Show where you parked"
         case .parkUntil: return "Pick your own time"
@@ -53,7 +61,9 @@ enum MoreMenuRow: Equatable {
     nonisolated var symbolName: String {
         switch self {
         case .report: return "flag.fill"
+        case .howWeParkWorks: return "sparkles"
         case .mapKey: return "questionmark.circle.fill"
+        case .parking101: return "book.closed.fill"
         case .showAllRules: return "paintpalette.fill"
         case .findMyCar: return "car.fill"
         case .parkUntil: return "clock.fill"
@@ -63,23 +73,33 @@ enum MoreMenuRow: Equatable {
 
 // MARK: - Row visibility (pure)
 
-/// Which More-sheet rows show, in priority order (Addendum 3 A3.4 table, "Shown when" column):
+/// Which More-sheet rows show, in priority order
+/// (`docs/design/first-run-onboarding-design.md` §3.1 table, which amends Addendum 3 A3.4):
 ///   1. Report                 — `communityEnabled`
-///   2. What the colors mean   — always
-///   3. Show all parking rules — always (a `Toggle` row bound to `fullPaletteMode`)
-///   4. Find my car            — only when a car is parked
-///   5. Park until a set time  — only in full-palette mode (the power-user `ParkUntilSheet`
+///   2. How WePark works       — `onboardingReplayAvailable` (both onboarding flags on; see
+///                               `AppConstants.onboardingExperienceEnabled(...)`) — replaying a
+///                               tour that explains a screen state the user can't reach is
+///                               meaningless, so this row never shows flag-off
+///   3. What the colors mean   — always
+///   4. Parking 101            — always (finally gives the existing deep guide a home outside
+///                               Search, design doc §3.1 — unrelated to the onboarding flags)
+///   5. Show all parking rules — always (a `Toggle` row bound to `fullPaletteMode`)
+///   6. Find my car            — only when a car is parked
+///   7. Park until a set time  — only in full-palette mode (the power-user `ParkUntilSheet`
 ///                               path, §0.8.9)
 /// Pure so every gate is directly unit-testable; `nonisolated` for the same sync-XCTest reason
 /// as the other pure decision functions in `ContentView.swift`.
 nonisolated func moreMenuVisibleRows(
     communityEnabled: Bool,
+    onboardingReplayAvailable: Bool,
     hasParkedCar: Bool,
     fullPaletteMode: Bool
 ) -> [MoreMenuRow] {
     var rows: [MoreMenuRow] = []
     if communityEnabled { rows.append(.report) }
+    if onboardingReplayAvailable { rows.append(.howWeParkWorks) }
     rows.append(.mapKey)
+    rows.append(.parking101)
     rows.append(.showAllRules)
     if hasParkedCar { rows.append(.findMyCar) }
     if fullPaletteMode { rows.append(.parkUntil) }
@@ -183,7 +203,12 @@ struct MoreMenuSheet: View {
 
 #Preview {
     MoreMenuSheet(
-        rows: moreMenuVisibleRows(communityEnabled: true, hasParkedCar: true, fullPaletteMode: false),
+        rows: moreMenuVisibleRows(
+            communityEnabled: true,
+            onboardingReplayAvailable: true,
+            hasParkedCar: true,
+            fullPaletteMode: false
+        ),
         fullPaletteMode: false,
         onSelect: { _ in },
         onToggleFullPalette: {},

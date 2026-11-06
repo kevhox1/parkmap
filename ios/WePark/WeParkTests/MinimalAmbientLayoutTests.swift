@@ -132,45 +132,65 @@ final class MinimalAmbientLayoutTests: XCTestCase {
 
     // MARK: - moreMenuVisibleRows (A3.4 "Shown when" column)
 
+    // First-run onboarding (open item #41) added `onboardingReplayAvailable` as a required
+    // parameter and an unconditional `.parking101` row — every call site below passes
+    // `onboardingReplayAvailable: false` (this file's own scope is the pre-onboarding A3.4
+    // row set, unrelated to the onboarding flags) and the two exact-array-equality
+    // assertions now include `.parking101` where the design doc's amended table places it
+    // (between `.mapKey` and `.showAllRules`) — see `MoreMenuSheetTests.swift` for the
+    // onboarding-specific row coverage (`.howWeParkWorks`/`.parking101` visibility).
+
     func testMoreRows_everythingOn_priorityOrder() {
         XCTAssertEqual(
-            moreMenuVisibleRows(communityEnabled: true, hasParkedCar: true, fullPaletteMode: true),
-            [.report, .mapKey, .showAllRules, .findMyCar, .parkUntil]
+            moreMenuVisibleRows(
+                communityEnabled: true, onboardingReplayAvailable: false,
+                hasParkedCar: true, fullPaletteMode: true
+            ),
+            [.report, .mapKey, .parking101, .showAllRules, .findMyCar, .parkUntil]
         )
     }
 
     func testMoreRows_minimal_alwaysRowsOnly() {
         XCTAssertEqual(
-            moreMenuVisibleRows(communityEnabled: false, hasParkedCar: false, fullPaletteMode: false),
-            [.mapKey, .showAllRules],
-            "What the colors mean and Show all parking rules are always shown."
+            moreMenuVisibleRows(
+                communityEnabled: false, onboardingReplayAvailable: false,
+                hasParkedCar: false, fullPaletteMode: false
+            ),
+            [.mapKey, .parking101, .showAllRules],
+            "What the colors mean, Parking 101, and Show all parking rules are always shown."
         )
     }
 
     func testMoreRows_reportRequiresCommunityFlag() {
         XCTAssertTrue(moreMenuVisibleRows(
-            communityEnabled: true, hasParkedCar: false, fullPaletteMode: false
+            communityEnabled: true, onboardingReplayAvailable: false,
+            hasParkedCar: false, fullPaletteMode: false
         ).contains(.report))
         XCTAssertFalse(moreMenuVisibleRows(
-            communityEnabled: false, hasParkedCar: true, fullPaletteMode: true
+            communityEnabled: false, onboardingReplayAvailable: false,
+            hasParkedCar: true, fullPaletteMode: true
         ).contains(.report))
     }
 
     func testMoreRows_findMyCarRequiresParkedCar() {
         XCTAssertTrue(moreMenuVisibleRows(
-            communityEnabled: false, hasParkedCar: true, fullPaletteMode: false
+            communityEnabled: false, onboardingReplayAvailable: false,
+            hasParkedCar: true, fullPaletteMode: false
         ).contains(.findMyCar))
         XCTAssertFalse(moreMenuVisibleRows(
-            communityEnabled: true, hasParkedCar: false, fullPaletteMode: true
+            communityEnabled: true, onboardingReplayAvailable: false,
+            hasParkedCar: false, fullPaletteMode: true
         ).contains(.findMyCar))
     }
 
     func testMoreRows_parkUntilRequiresFullPaletteMode() {
         XCTAssertTrue(moreMenuVisibleRows(
-            communityEnabled: false, hasParkedCar: false, fullPaletteMode: true
+            communityEnabled: false, onboardingReplayAvailable: false,
+            hasParkedCar: false, fullPaletteMode: true
         ).contains(.parkUntil))
         XCTAssertFalse(moreMenuVisibleRows(
-            communityEnabled: true, hasParkedCar: true, fullPaletteMode: false
+            communityEnabled: true, onboardingReplayAvailable: false,
+            hasParkedCar: true, fullPaletteMode: false
         ).contains(.parkUntil))
     }
 
@@ -179,7 +199,8 @@ final class MinimalAmbientLayoutTests: XCTestCase {
             for parked in [true, false] {
                 for palette in [true, false] {
                     let rows = moreMenuVisibleRows(
-                        communityEnabled: community, hasParkedCar: parked, fullPaletteMode: palette
+                        communityEnabled: community, onboardingReplayAvailable: false,
+                        hasParkedCar: parked, fullPaletteMode: palette
                     )
                     XCTAssertTrue(rows.contains(.mapKey))
                     XCTAssertTrue(rows.contains(.showAllRules))
@@ -189,7 +210,10 @@ final class MinimalAmbientLayoutTests: XCTestCase {
     }
 
     func testMoreRows_reportIsFirstWhenShown() {
-        let rows = moreMenuVisibleRows(communityEnabled: true, hasParkedCar: true, fullPaletteMode: true)
+        let rows = moreMenuVisibleRows(
+            communityEnabled: true, onboardingReplayAvailable: false,
+            hasParkedCar: true, fullPaletteMode: true
+        )
         XCTAssertEqual(rows.first, MoreMenuRow.report, "A3.4: Report is row 1.")
     }
 
