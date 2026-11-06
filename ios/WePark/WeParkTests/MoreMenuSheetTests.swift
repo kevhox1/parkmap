@@ -110,15 +110,16 @@ final class MoreMenuVisibleRowsTests: XCTestCase {
     }
 
     /// The minimal row set (every optional row hidden) is exactly the two always-on rows, in
-    /// order.
-    func testMinimalRowSet_isMapKeyThenParking101() {
+    /// order. `.showAllRules` is ALSO always-on (unchanged from pre-onboarding A3.4) — the
+    /// minimal set is all three always-on rows, not just the two new/renumbered ones.
+    func testMinimalRowSet_isMapKeyThenParking101ThenShowAllRules() {
         let rows = moreMenuVisibleRows(
             communityEnabled: false,
             onboardingReplayAvailable: false,
             hasParkedCar: false,
             fullPaletteMode: false
         )
-        XCTAssertEqual(rows, [.mapKey, .parking101])
+        XCTAssertEqual(rows, [.mapKey, .parking101, .showAllRules])
     }
 
     // MARK: - 2. Row content

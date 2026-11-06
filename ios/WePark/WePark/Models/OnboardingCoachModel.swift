@@ -145,13 +145,30 @@ nonisolated func onboardingCoachOverlayVisible(
 /// anchoring is wanted later (it would need a small, deliberate `MapViewRepresentable` seam,
 /// not a workaround here).
 ///
-/// Returns `.zero` (no offset — anchor exactly at map center) if `origin == target` or the
-/// computed bearing is non-finite.
+/// Returns `.zero` (no offset — anchor exactly at map center) if `origin` and `target` are the
+/// same point (within `coincidentEpsilonDegrees`) or the computed bearing is non-finite.
+///
+/// **Bug this guard fixes (caught by `testBearingOffset_identicalCoordinates_isZero`):**
+/// `atan2(0, 0)` is a real, finite, well-defined value (`0.0`, i.e. "due north") by IEEE 754
+/// convention — it is NOT `NaN`, so the old `bearing.isFinite` guard alone never caught the
+/// degenerate "origin == target" case. Falling through produced a real, non-zero `CGSize`
+/// (`(0, -maxOffset)`, "due north" of center) for two IDENTICAL coordinates, instead of the
+/// `.zero` the design doc's fallback explicitly calls for. Fixed by checking coincidence
+/// BEFORE computing any bearing — a defined, named 0 case, not a loosened assertion.
 nonisolated func onboardingCoachBearingOffset(
     from origin: CLLocationCoordinate2D,
     to target: CLLocationCoordinate2D,
     maxOffset: CGFloat = 70
 ) -> CGSize {
+    // Degrees, not metres — ~1e-9° is sub-millimetre at any latitude this app operates at
+    // (111_320 m/degree latitude), far below real GPS precision, so this only catches
+    // genuinely coincident/duplicate coordinates, never two real, distinct fixes.
+    let coincidentEpsilonDegrees = 1e-9
+    if abs(target.latitude - origin.latitude) < coincidentEpsilonDegrees,
+       abs(target.longitude - origin.longitude) < coincidentEpsilonDegrees {
+        return .zero
+    }
+
     let lat1 = origin.latitude * .pi / 180
     let lat2 = target.latitude * .pi / 180
     let deltaLng = (target.longitude - origin.longitude) * .pi / 180
