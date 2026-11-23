@@ -869,3 +869,32 @@ in one More sheet with 64pt rows and Report first, and full-palette mode keeps a
 button so nobody is stranded.
 
 File: `/root/repos/parkmap/docs/design/goal-first-ambient-design.md`
+
+
+
+---
+
+## Addendum — stepped-down banner copy, density sub-case (2026-11-22)
+
+**Trigger:** QA PR #133 pass-2 finding #4 (`docs/qa/pr133-dm2-goal-selector-ui.md`). `steppedDown` in
+`resolveParkAndForgetViewport` (`ContentView.swift`) now fires from two different conditions, but
+`EmptyMapGuardKind.steppedDown` (`GoalSelectorView.swift`) renders one string, "Nothing clear for a full
+week nearby — showing the best available." That string is true only for the first. Supersedes the soft-state
+row of §3.2's table; the true-empty row and all styling (icon, material, no dismiss) are unchanged.
+
+| Case | Code condition (`resolveParkAndForgetViewport`) | Icon | Exact copy |
+|---|---|---|---|
+| A. Real step-down | `pickedIndex > 0` (a lower rung was chosen) | `info.circle.fill` | "Nothing clear for a full week nearby — showing the best available." (unchanged) |
+| B. Density-only | `pickedIndex == 0 && density < bannerDensityThreshold` (top rung kept, but only a few blocks clear it) | `info.circle.fill` | "Only a few blocks nearby are clear for a full week." |
+| C. True empty | `counts` has no rung `> 0` -> `.empty` | `mappin.slash` | "No clear spots found very nearby — try Overnight, or pan the map." (unchanged) |
+
+No fourth case exists: `EmptyMapGuardKind` has only `.steppedDown` and `.empty`, and no banner shows
+when `pickedIndex == 0 && density >= threshold`.
+
+**Engineering note (not a design change):** `.resolved(offsetDays:steppedDown:)` carries one Bool, so A and B
+are indistinguishable downstream. Split it, e.g. add `EmptyMapGuardKind.sparse` (B) alongside `.steppedDown`
+(A), or replace the Bool with an enum. Same icon, styling, and position for both.
+
+**Why:** A admits the map changed ("showing the best available"); B must not, because the map still shows the
+full-week bar and simply has few green blocks. Plain words ("blocks", "clear", "full week"), no jargon, and
+B drops "Nothing" and "best available" so it never implies a step-down that did not happen.
