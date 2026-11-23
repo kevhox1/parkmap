@@ -942,3 +942,26 @@ Rejected (one line each): (a) height cap + internal scroll: two of three goals s
 2. Per-tile `onTileFrameChange` is only called for the visible tile(s); the card reports `selectedGoal`'s frame. Verify the frame readouts clear when the sheet covers the dock.
 3. Add `accessibilityLabel("\(primary), \(subLabel). Selected. Double tap to change goal.")` and `.accessibilityAddTraits(.isButton)` on the card.
 4. Verify: AX1/AX3/AX5 x SE/Pro Max x banner on/off x Recenter showing; Reduce Motion; VoiceOver opens sheet and returns focus to the card on dismiss.
+
+
+---
+
+### Amendment — AX dock as built (2026-11-23)
+
+PR #152 measured the spec on an iPhone 17 (402x874pt, 34pt bottom inset). Three spec corrections and one ruling follow. They supersede the matching lines above.
+
+**1. Min heights are unscaled floors (supersedes "scaled" min heights).** Start Driving is 64pt and the goal card is 112pt, both as plain minimums, not `@ScaledMetric`. Content grows past them, and the type still scales to the dock cap (AX3). Reason: `@ScaledMetric` at AX3 is about 2.35x, so 64pt becomes 150pt and 112pt becomes 263pt. That is a 450pt dock, 51% of the screen, which breaks the budget the spec set.
+
+**2. "Change" is dropped at AX3+ (supersedes the thresholds summary).** From AX3 up, the goal card shows the label and the chevron, with no "Change" word. With the word, "Park & Forget" wraps to 2 lines and the dock is 40.5%. Without it the dock is 29.5% (258pt). The chevron plus the VoiceOver label "Change goal" keep the affordance. AX1 and AX2 keep the word, unless a banner chip is showing (see 3).
+
+**3. Ruling: banner becomes a one-line chip at AX1+ (supersedes "Stays above Start Driving, no truncation").**
+The measured worst case with the full banner at the AX2 cap is 441/518/432/432pt (50/59/49/49%) at AX1/AX2/AX3/AX5. Capping the type cannot fix this, because AX2 leaves only about 49pt of headroom. Headroom is the 45% limit of 393pt minus the dock without a banner. The chip fixes it.
+- **Dynamic Type below AX1 (up to `.xxxLarge`):** unchanged. The full-sentence banner shows as it does today, with no cap.
+- **AX1 and up (`dynamicTypeSize.isAccessibilitySize`):** the banner renders as a chip. It has one line, `.lineLimit(1)`, `.footnote` text capped at `.xxxLarge` (about 16pt). The icon is the existing `bannerIcon`, plus a trailing `chevron.right`. The minimum height is 44pt and the gap above Start Driving is 4pt, so the total is at most 48pt.
+- **Chip strings.** These are complete short phrases, not clipped sentences. `.steppedDown`: "Showing best available". Density: "Only a few blocks clear". `.empty`: "No clear spots nearby". Each is 23 characters or fewer, about 190pt at 16pt, which fits the roughly 300pt of usable width.
+- **Tap.** Tapping the chip opens the goal sheet. The sheet's first row repeats the full original banner sentence and its icon, at the sheet's normal type size (it scales to AX5, wrapping freely). The three full sentences are unchanged, so the honesty message is one tap away. The chip's VoiceOver label is the full sentence. Its hint is "Opens goal options". It has `.isButton`.
+- **At AX2 only, with a chip showing,** also drop the "Change" word, as at AX3+. Reason: without this, AX2 dock (about 344pt) plus the chip (48pt) is 392pt, which sits on the 393pt limit.
+- **Arithmetic (projected, so verify).** The AX3 and AX5 dock without a banner is 258pt, plus the 48pt chip, is 306pt, or 35.0%. The AX2 dock with "Change" dropped is at most 258pt, plus 48pt, is 306pt, or 35.0%. The AX1 dock is about 290pt, plus 48pt, is about 338pt, or 38.7%. All are under the 393pt (45%) limit. The map keeps at least 65%, against the 30% floor. The chip is 48pt against the old banner's about 174pt, so coach mark 2 no longer collides with it. The coach mark still anchors to the measured dock height.
+- **Acceptance.** Measure AX1/AX2/AX3/AX5 x each of the three banner kinds on an iPhone 17 and an SE-class device. Dock must be 45% or less of screen height. The no-banner 40% budget is unchanged.
+
+**4. Sheet tiles.** The stacked layout is accepted, with the icon and checkmark on a top row and text below. Unselected tiles use `systemGray5`, accepted; selection must not rely on fill alone, because the checkmark plus the tint border carry it.
