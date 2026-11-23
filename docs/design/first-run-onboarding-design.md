@@ -260,7 +260,7 @@ serves neither.
 | Key | Set when | Checked by |
 |---|---|---|
 | `hasSeenOnboardingStory` | Tier 1's last Continue ("Let's go") or Skip tap | Gate for showing the story cover on cold launch |
-| `hasSeenOnboardingCoach` | Coach mark 3's "Done" tap, or the coach-layer Skip tap | Gate for mounting the coach overlay |
+| `hasSeenOnboardingCoach` | Coach mark 3's "Done" tap, the coach-layer Skip tap, or a USER pan/zoom that dismisses the coach (programmatic camera moves never dismiss it; More -> "How WePark works" is the way back). *2026-11-23 (orchestrator ruling, QA #8): user pan/zoom now consumes the gate, consistent with "never auto-replays".* | Gate for mounting the coach overlay |
 | `hasLaunchedWeParkBefore` | Unconditionally, on the very first render of the app's root view — ever, regardless of any feature flag | The fresh-install vs. upgrading-user detector, §4.2 |
 
 `LocationPrimingCard`'s own existing one-shot key is untouched.

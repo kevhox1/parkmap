@@ -28,14 +28,14 @@ final class OnboardingCoachOverlayRenderTests: XCTestCase {
         dock: CGRect,
         tileRow: CGRect,
         selectedTile: CGRect,
-        curbOffset: CGSize = .zero
+        curbPoint: CGPoint? = nil
     ) -> OnboardingCoachOverlay {
         OnboardingCoachOverlay(
             mark: mark,
             goalDockFrame: dock,
             tileRowFrame: tileRow,
             selectedTileFrame: selectedTile,
-            nearestCurbOffset: curbOffset,
+            nearestCurbScreenPoint: curbPoint,
             onPrimaryAction: {},
             onSkipAll: {}
         )
@@ -53,16 +53,16 @@ final class OnboardingCoachOverlayRenderTests: XCTestCase {
         XCTAssertNotNil(host.view)
     }
 
-    func testMark3_withCurbOffset_rendersWithoutCrash() {
+    func testMark3_withCurbPoint_rendersWithoutCrash() {
         let view = makeOverlay(
             mark: .tapABlock, dock: dockFrame, tileRow: tileRowFrame, selectedTile: selectedTileFrame,
-            curbOffset: CGSize(width: 40, height: -30)
+            curbPoint: CGPoint(x: 40, y: 300)
         )
         let host = UIHostingController(rootView: view)
         XCTAssertNotNil(host.view)
     }
 
-    func testMark3_withZeroCurbOffset_fallsBackToCenter_rendersWithoutCrash() {
+    func testMark3_withNoCurbPoint_noRing_rendersWithoutCrash() {
         let view = makeOverlay(mark: .tapABlock, dock: dockFrame, tileRow: tileRowFrame, selectedTile: selectedTileFrame)
         let host = UIHostingController(rootView: view)
         XCTAssertNotNil(host.view)

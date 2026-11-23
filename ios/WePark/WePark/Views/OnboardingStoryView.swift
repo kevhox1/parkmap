@@ -38,6 +38,11 @@ struct OnboardingStoryView: View {
     @State private var cardIndex: Int = 0
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// QA #9: extra space above the illustration that scales with Dynamic Type (the Skip pill's
+    /// footnote label grows, and at AX5 its bottom edge crossed the fixed 56pt clearance and
+    /// overlapped the illustration). 6pt base: +6 at standard size, ~+17 at AX5 (enough to clear the pill).
+    @ScaledMetric(relativeTo: .footnote) private var topBarExtraClearance: CGFloat = 6
+
     var body: some View {
         ZStack(alignment: .top) {
             Color(.systemBackground).ignoresSafeArea()
@@ -76,7 +81,7 @@ struct OnboardingStoryView: View {
 
     private func cardView(_ card: OnboardingStoryCard) -> some View {
         VStack(spacing: 0) {
-            Spacer(minLength: 56)
+            Spacer(minLength: 56 + topBarExtraClearance)
             illustration(for: card)
                 .frame(maxWidth: .infinity)
                 .frame(minHeight: 160, idealHeight: 260, maxHeight: 320)

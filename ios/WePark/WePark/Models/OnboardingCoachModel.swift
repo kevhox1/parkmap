@@ -4,10 +4,10 @@
 //
 //  First-run onboarding (open item #41, `docs/design/first-run-onboarding-design.md` §2) — the
 //  pure sequencing model behind `Views/OnboardingCoachOverlay.swift`'s 3-bubble live coach
-//  layer. Zero SwiftUI, zero UserDefaults, zero side effects, zero map/CoreLocation knowledge
-//  beyond the one small bearing helper at the bottom (needed to approximate mark 3's
-//  "near the nearest real curb" anchor without touching `MapViewRepresentable` — see that
-//  function's own doc comment for the full, flagged reasoning).
+//  layer. Zero SwiftUI, zero UserDefaults, zero side effects, zero map/CoreLocation knowledge.
+//  (Mark 3's anchor is a real ground->screen projection via
+//  `MapViewRepresentable.CoordinatorActions.screenPointForCoordinate`; the old bearing
+//  approximation was removed in the QA follow-up.)
 //
 //  Declared top-level (not nested) for the same "no == on nested enums in nonisolated code"
 //  reason `OnboardingStoryModel.swift`'s header documents.
@@ -16,7 +16,6 @@
 //
 
 import CoreGraphics
-import CoreLocation
 import Foundation
 
 /// The named `.coordinateSpace` both `GoalSelectorView`'s dock/tile-row/selected-tile geometry
@@ -117,77 +116,68 @@ nonisolated func onboardingCoachOverlayVisible(
     driveModeActive: Bool,
     blockSelectModeActive: Bool,
     spotPlacementActive: Bool,
-    curbPlacementActive: Bool
+    curbPlacementActive: Bool,
+    primingCardShowing: Bool = false
 ) -> Bool {
+    // QA #1: order is cards -> priming -> coach; the coach never mounts over LocationPrimingCard.
     activeSheetIsNil && !driveModeActive && !blockSelectModeActive
-        && !spotPlacementActive && !curbPlacementActive
+        && !spotPlacementActive && !curbPlacementActive && !primingCardShowing
 }
 
-// MARK: - Mark 3's anchor approximation
+// MARK: - Selected-tile frame (QA #5)
 
-/// Approximates a screen-space offset (in points, from the map's own center) pointing toward
-/// `target` from `origin`, for mark 3's "anchor near that segment's screen position" (§2.2).
-///
-/// **Flagged deviation from the design doc's literal text, not a silent one:** the design doc
-/// describes an exact screen anchor and a pulsing ring "traced along that one polyline" — both
-/// need a real ground-coordinate -> screen-point projection, which only `MapViewRepresentable`'s
-/// `MKMapView.convert(_:toPointTo:)` can do, and `MapViewRepresentable` is explicitly untouched
-/// by this PR (dispatch hard constraint). This function instead computes the GREAT-CIRCLE
-/// BEARING from `origin` to `target` and maps it directly to a screen-space unit vector
-/// (north = up), clamped to `maxOffset` points. That mapping is exact (not approximate) ONLY
-/// because the coach layer exclusively mounts in the ambient rest posture, which is always
-/// north-up at rest (`docs/drive-mode-default-spec.md` §0.1/A3.6.1: "heading fixed at 0
-/// (north-up)... until motion") — the one condition under which "bearing == screen direction"
-/// holds without consulting the map's own rotation. The coach layer is dismissed immediately on
-/// any pan/zoom (§2.3), so this never needs to track a moving/rotating viewport mid-display.
-/// No ring is traced along the polyline in this PR (a plain pulsing circle marks the anchor
-/// point instead) — flagged in the PR body as a follow-up if pixel-exact, rotation-aware
-/// anchoring is wanted later (it would need a small, deliberate `MapViewRepresentable` seam,
-/// not a workaround here).
-///
-/// Returns `.zero` (no offset — anchor exactly at map center) if `origin` and `target` are the
-/// same point (within `coincidentEpsilonDegrees`) or the computed bearing is non-finite.
-///
-/// **Bug this guard fixes (caught by `testBearingOffset_identicalCoordinates_isZero`):**
-/// `atan2(0, 0)` is a real, finite, well-defined value (`0.0`, i.e. "due north") by IEEE 754
-/// convention — it is NOT `NaN`, so the old `bearing.isFinite` guard alone never caught the
-/// degenerate "origin == target" case. Falling through produced a real, non-zero `CGSize`
-/// (`(0, -maxOffset)`, "due north" of center) for two IDENTICAL coordinates, instead of the
-/// `.zero` the design doc's fallback explicitly calls for. Fixed by checking coincidence
-/// BEFORE computing any bearing — a defined, named 0 case, not a loosened assertion.
-nonisolated func onboardingCoachBearingOffset(
-    from origin: CLLocationCoordinate2D,
-    to target: CLLocationCoordinate2D,
-    maxOffset: CGFloat = 70
-) -> CGSize {
-    // Degrees, not metres — ~1e-9° is sub-millimetre at any latitude this app operates at
-    // (111_320 m/degree latitude), far below real GPS precision, so this only catches
-    // genuinely coincident/duplicate coordinates, never two real, distinct fixes.
-    let coincidentEpsilonDegrees = 1e-9
-    if abs(target.latitude - origin.latitude) < coincidentEpsilonDegrees,
-       abs(target.longitude - origin.longitude) < coincidentEpsilonDegrees {
-        return .zero
-    }
+/// The selected goal tile's frame, derived from EVERY tile's last-reported frame so it can
+/// never go stale when only the selection (not the geometry) changes. `.zero` ("not measured")
+/// when the selected tile has not reported yet.
+nonisolated func onboardingSelectedTileFrame(
+    tileFrames: [String: CGRect],
+    selectedGoalRawValue: String
+) -> CGRect {
+    tileFrames[selectedGoalRawValue] ?? .zero
+}
 
-    let lat1 = origin.latitude * .pi / 180
-    let lat2 = target.latitude * .pi / 180
-    let deltaLng = (target.longitude - origin.longitude) * .pi / 180
+// MARK: - Bubble layout (QA #3/#4)
 
-    let y = sin(deltaLng) * cos(lat2)
-    let x = cos(lat1) * sin(lat2) - sin(lat1) * cos(lat2) * cos(deltaLng)
-    let bearing = atan2(y, x)
+/// Horizontal margin kept between a bubble and the safe-area edges.
+nonisolated let onboardingCoachBubbleHorizontalMargin: CGFloat = 20
 
-    guard bearing.isFinite else { return .zero }
+/// Maximum bubble width (matches the pre-fix `.frame(maxWidth: 320)`).
+nonisolated let onboardingCoachBubbleMaxWidth: CGFloat = 320
 
-    // North-up screen mapping: bearing 0 (north) -> straight up (negative y); bearing π/2
-    // (east) -> straight right (positive x).
-    let dx = sin(bearing)
-    let dy = -cos(bearing)
-    guard dx.isFinite, dy.isFinite else { return .zero }
+/// The bubble's width: capped at `onboardingCoachBubbleMaxWidth`, and never wider than the
+/// safe-area width minus both margins.
+nonisolated func onboardingCoachBubbleWidth(safeWidth: CGFloat) -> CGFloat {
+    max(0, min(onboardingCoachBubbleMaxWidth, safeWidth - 2 * onboardingCoachBubbleHorizontalMargin))
+}
 
-    // `dx`/`dy` are `Double` (the trig functions' return type); `maxOffset` is `CGFloat`.
-    // These are distinct numeric types in Swift (not interchangeable via a typealias on
-    // 64-bit platforms) — explicit `CGFloat(...)` conversion before multiplying, not a
-    // silent cross-type arithmetic op.
-    return CGSize(width: CGFloat(dx) * maxOffset, height: CGFloat(dy) * maxOffset)
+/// The bubble's horizontal CENTER: `anchorX` clamped so the whole bubble (width `bubbleWidth`)
+/// stays inside `[safeMinX + margin, safeMaxX - margin]`. A `nil` anchor centers it.
+nonisolated func onboardingCoachBubbleCenterX(
+    anchorX: CGFloat?,
+    bubbleWidth: CGFloat,
+    safeMinX: CGFloat,
+    safeMaxX: CGFloat
+) -> CGFloat {
+    let lower = safeMinX + onboardingCoachBubbleHorizontalMargin + bubbleWidth / 2
+    let upper = safeMaxX - onboardingCoachBubbleHorizontalMargin - bubbleWidth / 2
+    guard let anchorX else { return (safeMinX + safeMaxX) / 2 }
+    guard lower <= upper else { return (safeMinX + safeMaxX) / 2 }
+    return min(max(anchorX, lower), upper)
+}
+
+/// Whether mark 3's bubble sits ABOVE its anchor (true) or below it (false): above when there
+/// are at least `minimumHeight` points between `topLimit` and the gap above the anchor.
+nonisolated func onboardingCoachBubbleFitsAbove(
+    anchorY: CGFloat,
+    topLimit: CGFloat,
+    gap: CGFloat,
+    minimumHeight: CGFloat
+) -> Bool {
+    anchorY - gap - topLimit >= minimumHeight
+}
+
+/// Whether a projected screen point lies inside `bounds` (inset by `inset`) - mark 3 draws a
+/// ring only for an on-screen curb point; otherwise the bubble is placed with no ring.
+nonisolated func onboardingCoachPointIsOnScreen(_ point: CGPoint, in bounds: CGRect, inset: CGFloat = 24) -> Bool {
+    bounds.insetBy(dx: inset, dy: inset).contains(point)
 }

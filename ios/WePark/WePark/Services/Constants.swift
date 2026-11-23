@@ -599,6 +599,22 @@ struct OnboardingStoryGate {
     func markShown() {
         defaults.set(true, forKey: key)
     }
+
+    /// QA #7A (PR #149 follow-up): called at the moment a genuine (non-replay) deck is about
+    /// to be presented. Records the key as an EXPLICIT `false` (never overwrites an existing
+    /// value). Why: `FirstLaunchSentinel` flips `hasLaunchedWeParkBeforeKey` on the very first
+    /// render, so a fresh user who force-quits mid-deck relaunches as "not fresh"; with the
+    /// story key still ABSENT the sentinel would pre-seed it `true` (classify this install as
+    /// upgrading) and the cards would never show. An explicit `false` makes the sentinel's
+    /// "never clobber an already-written story flag" guard hold. Deliberately written here and
+    /// NOT by the sentinel: the sentinel runs flag-independently, and a user who first launches
+    /// the sentinel build with the flags OFF must still be pre-seeded as upgrading when the
+    /// flags eventually flip (the deck was never presented to them).
+    func markDeckBegun() {
+        if defaults.object(forKey: key) == nil {
+            defaults.set(false, forKey: key)
+        }
+    }
 }
 
 // MARK: - OnboardingCoachGate

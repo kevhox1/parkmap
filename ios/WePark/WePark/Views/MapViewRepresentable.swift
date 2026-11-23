@@ -910,6 +910,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// `MKMapView.convert`, which is correct under pitch/rotation. No mutation.
         var userDotOutsideCentralHalf: ((CLLocationCoordinate2D) -> Bool?)?
 
+        /// QA #6 (first-run onboarding follow-up): ground -> screen projection seam. Returns the
+        /// coordinate's position in WINDOW coordinates (`MKMapView.convert(_:toPointTo: nil)`,
+        /// correct under pitch/rotation), or nil when the map has no size/window yet or the
+        /// point is outside the map's bounds. Pure read, no mutation; called only from
+        /// ContentView handlers outside `updateUIView` (#31 invariant).
+        var screenPointForCoordinate: ((CLLocationCoordinate2D) -> CGPoint?)?
+
         /// Fired (async, main) when a settled camera change was caused by the user's own
         /// pan/pinch while NOT in drive mode and the flag is on. ContentView uses it to stop
         /// auto-tightening the look - never fight a gesture the user just made.
@@ -1537,6 +1544,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             // Single combined setCamera (center + pitch + heading + zoom): one
             // regionDidChangeAnimated, and no `setRegion` (which would flatten the pitch).
             mapView.setCamera(camera, animated: animated)
+        }
+        coordinatorActions.screenPointForCoordinate = { [weak mapView] coordinate in
+            guard let mapView, mapView.window != nil,
+                  mapView.bounds.width > 0, mapView.bounds.height > 0 else { return nil }
+            let local = mapView.convert(coordinate, toPointTo: mapView)
+            guard mapView.bounds.contains(local) else { return nil }
+            return mapView.convert(coordinate, toPointTo: nil)
         }
         coordinatorActions.userDotOutsideCentralHalf = { [weak mapView] coordinate in
             guard let mapView, mapView.bounds.width > 0, mapView.bounds.height > 0 else { return nil }

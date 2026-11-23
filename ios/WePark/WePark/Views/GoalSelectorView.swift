@@ -143,7 +143,12 @@ struct GoalSelectorView: View {
     /// already commits to. Zero-cost while onboarding is flag-off: the closures simply never
     /// get read by anything.
     let onTileRowFrameChange: (CGRect) -> Void
-    let onSelectedTileFrameChange: (CGRect) -> Void
+    /// QA #5 (PR #149 follow-up): EVERY tile reports its own frame, keyed by goal; the caller
+    /// picks the selected one. The old "only the selected tile reports" design went stale:
+    /// `onGeometryChange`'s action fires only when the measured value CHANGES, so tapping a
+    /// different tile (selection changes, geometry doesn't) never re-fired anything and the
+    /// ring kept framing the previously-selected tile.
+    let onTileFrameChange: (ParkingGoal, CGRect) -> Void
 
     /// Addendum 3 A3.3: at accessibility Dynamic Type sizes the three tiles reflow from a
     /// row to a vertical stack so labels never truncate.
@@ -161,7 +166,7 @@ struct GoalSelectorView: View {
         onReturnToGoals: @escaping () -> Void,
         onStartDriving: @escaping () -> Void,
         onTileRowFrameChange: @escaping (CGRect) -> Void = { _ in },
-        onSelectedTileFrameChange: @escaping (CGRect) -> Void = { _ in }
+        onTileFrameChange: @escaping (ParkingGoal, CGRect) -> Void = { _, _ in }
     ) {
         self.selectedGoal = selectedGoal
         self.fullPaletteMode = fullPaletteMode
@@ -170,7 +175,7 @@ struct GoalSelectorView: View {
         self.onReturnToGoals = onReturnToGoals
         self.onStartDriving = onStartDriving
         self.onTileRowFrameChange = onTileRowFrameChange
-        self.onSelectedTileFrameChange = onSelectedTileFrameChange
+        self.onTileFrameChange = onTileFrameChange
     }
 
     var body: some View {
@@ -257,10 +262,9 @@ struct GoalSelectorView: View {
                 horizontalLayout: horizontalLayout,
                 onTap: { onSelectGoal(goal) }
             )
-            .modifier(OnboardingSelectedTileFrameReporter(
-                isSelected: isSelected,
-                onFrameChange: onSelectedTileFrameChange
-            ))
+            .onGeometryChange(for: CGRect.self, of: { proxy in
+                proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+            }) { onTileFrameChange(goal, $0) }
         }
     }
 
@@ -495,25 +499,6 @@ private struct EmptyMapGuardBanner: View {
 }
 
 // MARK: - OnboardingSelectedTileFrameReporter
-
-/// Reports this tile's frame in `onboardingCoachCoordinateSpaceName` ONLY while `isSelected` is
-/// true — `OnboardingCoachOverlay` mark 2 anchors to "the selected (Overnight) tile," not any
-/// particular index, so only the selected tile ever calls back. No-op cost while `isSelected`
-/// is false (the modifier still measures geometry, same as any `.onGeometryChange`, but the
-/// closure is simply never invoked for an unselected tile — see `action:` below).
-private struct OnboardingSelectedTileFrameReporter: ViewModifier {
-    let isSelected: Bool
-    let onFrameChange: (CGRect) -> Void
-
-    func body(content: Content) -> some View {
-        content.onGeometryChange(for: CGRect.self, of: { proxy in
-            proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
-        }) { frame in
-            guard isSelected else { return }
-            onFrameChange(frame)
-        }
-    }
-}
 
 // MARK: - Preview
 

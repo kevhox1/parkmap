@@ -228,3 +228,72 @@ final class FirstLaunchSentinelTests: XCTestCase {
         }
     }
 }
+
+// MARK: - 4. Launch-flow simulation (QA #7A: force-quit mid-deck)
+
+/// Replays the real `performLaunchSetup` story-deck sequence against injected defaults:
+/// sentinel -> gate check -> `markDeckBegun()` when the deck is presented.
+final class OnboardingLaunchFlowTests: XCTestCase {
+
+    private let suiteName = "com.wepark.test.onboardinglaunchflow"
+    private var defaults: UserDefaults!
+
+    override func setUp() {
+        super.setUp()
+        defaults = UserDefaults(suiteName: suiteName)!
+        defaults.removePersistentDomain(forName: suiteName)
+    }
+
+    override func tearDown() {
+        defaults.removePersistentDomain(forName: suiteName)
+        defaults = nil
+        super.tearDown()
+    }
+
+    /// One cold launch. Returns whether the story deck is presented.
+    private func launch(flagsOn: Bool) -> Bool {
+        FirstLaunchSentinel(defaults: defaults).markLaunchedAndPreSeedIfUpgrading()
+        let gate = OnboardingStoryGate(defaults: defaults)
+        let show = onboardingStoryShouldShow(
+            onboardingStoryEnabled: flagsOn,
+            driveModeDefaultEnabled: flagsOn,
+            gateShouldShow: gate.shouldShow()
+        )
+        if show { gate.markDeckBegun() }
+        return show
+    }
+
+    func testFreshInstall_showsDeck_thenNeverAgainOnceDismissed() {
+        XCTAssertTrue(launch(flagsOn: true), "fresh install shows the deck")
+        OnboardingStoryGate(defaults: defaults).markShown()
+        XCTAssertFalse(launch(flagsOn: true), "dismissed deck never replays")
+    }
+
+    func testFreshInstall_forceQuitMidDeck_relaunchShowsDeckAgain() {
+        XCTAssertTrue(launch(flagsOn: true))
+        // Force-quit: markShown() never ran.
+        XCTAssertTrue(launch(flagsOn: true), "relaunch after a mid-deck force-quit shows the deck")
+        XCTAssertTrue(launch(flagsOn: true), "and again, until it is dismissed once")
+        OnboardingStoryGate(defaults: defaults).markShown()
+        XCTAssertFalse(launch(flagsOn: true))
+    }
+
+    func testUpgradingInstall_noDeck_coachOnly() {
+        defaults.set(true, forKey: AppConstants.hasLaunchedWeParkBeforeKey)
+        XCTAssertFalse(launch(flagsOn: true), "upgrading install never sees the deck")
+        XCTAssertTrue(OnboardingCoachGate(defaults: defaults).shouldShow(), "coach gate left open")
+    }
+
+    /// The sentinel build ships flags-OFF first; the user must still be classified as upgrading
+    /// when the flags flip later (the deck was never presented, so no `markDeckBegun`).
+    func testFlagsOffSentinelBuild_thenFlip_isTreatedAsUpgrading() {
+        XCTAssertFalse(launch(flagsOn: false))
+        XCTAssertFalse(launch(flagsOn: true), "flag flip: existing user gets no deck")
+    }
+
+    func testMarkDeckBegun_neverClobbersExistingValue() {
+        defaults.set(true, forKey: AppConstants.hasSeenOnboardingStoryKey)
+        OnboardingStoryGate(defaults: defaults).markDeckBegun()
+        XCTAssertTrue(defaults.bool(forKey: AppConstants.hasSeenOnboardingStoryKey))
+    }
+}

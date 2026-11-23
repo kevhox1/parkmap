@@ -808,14 +808,21 @@ struct ContentView: View {
     /// than crashing or guessing).
     @State private var onboardingGoalDockFrame: CGRect = .zero
     @State private var onboardingTileRowFrame: CGRect = .zero
-    @State private var onboardingSelectedTileFrame: CGRect = .zero
+    /// QA #5: every goal tile's frame, keyed by `ParkingGoal.rawValue`; the selected tile's frame
+    /// is derived (`onboardingSelectedTileFrame`) so it can never go stale across a selection change.
+    @State private var onboardingTileFrames: [String: CGRect] = [:]
 
-    /// Mark 3's already-resolved anchor offset (`onboardingNearestCurbOffset()`'s result),
-    /// computed ONCE at the moment `onboardingCoachMark` transitions to `.tapABlock` (via
-    /// `setOnboardingCoachMark(_:)` below) rather than on every `onboardingCoachOverlay`
-    /// re-render — building a fresh `CurbSnapIndex` is a real, if small, cost that has no
-    /// reason to repeat on every unrelated `ContentView` state change while mark 3 is showing.
-    @State private var onboardingCurbAnchorOffset: CGSize = .zero
+    /// Mark 3's anchor: the nearest curb's real ground->screen projection in WINDOW coordinates
+    /// (`onboardingNearestCurbScreenPoint()`), or nil when no curb is on-screen (bubble, no
+    /// ring). Resolved when mark 3 appears and re-resolved on every settled region change while
+    /// it shows (a programmatic recentre must not leave the ring on the old spot) - never
+    /// inside a render, since building a `CurbSnapIndex` is a real if small cost.
+    @State private var onboardingCurbScreenPoint: CGPoint? = nil
+
+    /// QA #1: set when the coach was due to start while `LocationPrimingCard` was still showing
+    /// (order is cards -> priming -> coach). Holds the deferred session's `isReplay`; consumed by
+    /// `dismissLocationPrimingCard(allowed:)`.
+    @State private var onboardingCoachPendingAfterPriming: Bool? = nil
 
     // MARK: - TF2-16: Drive Mode heading snap-to-street
 
@@ -3108,14 +3115,18 @@ struct ContentView: View {
                 driveModeActive: driveModeActive,
                 blockSelectModeActive: blockSelectModeActive,
                 spotPlacementActive: spotPlacementActive,
-                curbPlacementActive: curbPlacement != nil
+                curbPlacementActive: curbPlacement != nil,
+                primingCardShowing: showLocationPrimingCard
            ) {
             OnboardingCoachOverlay(
                 mark: mark,
                 goalDockFrame: onboardingGoalDockFrame,
                 tileRowFrame: onboardingTileRowFrame,
-                selectedTileFrame: onboardingSelectedTileFrame,
-                nearestCurbOffset: onboardingCurbAnchorOffset,
+                selectedTileFrame: onboardingSelectedTileFrame(
+                    tileFrames: onboardingTileFrames,
+                    selectedGoalRawValue: selectedGoal.rawValue
+                ),
+                nearestCurbScreenPoint: onboardingCurbScreenPoint,
                 onPrimaryAction: { advanceOnboardingCoach(from: mark) },
                 onSkipAll: { finishOnboardingCoach() }
             )
@@ -3354,9 +3365,13 @@ struct ContentView: View {
         // A3.6: re-measure the user's dot in screen space now that the camera has settled
         // (the ambient Recenter button reads it). No-op flag-off / while driving.
         refreshAmbientUserDotOffCenter()
-        // First-run onboarding §2.3: panning/zooming while a coach bubble is showing dismisses
-        // all remaining bubbles outright. No-op whenever nothing is showing.
-        dismissOnboardingCoachForMapInteraction()
+        // First-run onboarding QA #2: a region change does NOT dismiss the coach (it may be a
+        // programmatic recentre). Only a real user pan/pinch does - see
+        // `handleOnboardingCoachUserMapGesture`, fired from `onAmbientUserAdjusted`. Mark 3's
+        // projected anchor does follow the settled camera:
+        if onboardingCoachMark == .tapABlock {
+            onboardingCurbScreenPoint = onboardingNearestCurbScreenPoint()
+        }
     }
 
     /// Forwards community pin taps to the sheet presentation.
@@ -3613,7 +3628,7 @@ struct ContentView: View {
                         enterCruiseMode()
                     },
                     onTileRowFrameChange: { onboardingTileRowFrame = $0 },
-                    onSelectedTileFrameChange: { onboardingSelectedTileFrame = $0 }
+                    onTileFrameChange: { goal, frame in onboardingTileFrames[goal.rawValue] = frame }
                 )
                 .onGeometryChange(for: CGRect.self, of: { proxy in
                     proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
@@ -4283,6 +4298,11 @@ struct ContentView: View {
             recenterOnUserAtLaunch = true
             locationService.requestAndFetchLocation()
         }
+        // QA #1: order is cards -> priming -> coach. Start a coach session that was waiting.
+        if let pendingIsReplay = onboardingCoachPendingAfterPriming {
+            onboardingCoachPendingAfterPriming = nil
+            scheduleOnboardingCoach(isReplay: pendingIsReplay)
+        }
     }
 
     // MARK: - First-run onboarding (open item #41, `docs/design/first-run-onboarding-design.md`)
@@ -4322,6 +4342,11 @@ struct ContentView: View {
             driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
             gateShouldShow: OnboardingCoachGate().shouldShow()
         ) else { return }
+        // QA #1: never mount over LocationPrimingCard - wait for its dismissal.
+        if showLocationPrimingCard {
+            onboardingCoachPendingAfterPriming = isReplay
+            return
+        }
         onboardingCoachIsReplay = isReplay
         Task { @MainActor in
             try? await Task.sleep(nanoseconds: Self.onboardingCoachSettleDelayNanoseconds)
@@ -4330,7 +4355,8 @@ struct ContentView: View {
                 driveModeActive: driveModeActive,
                 blockSelectModeActive: blockSelectModeActive,
                 spotPlacementActive: spotPlacementActive,
-                curbPlacementActive: curbPlacement != nil
+                curbPlacementActive: curbPlacement != nil,
+                primingCardShowing: showLocationPrimingCard
             ) else { return }
             setOnboardingCoachMark(onboardingCoachFirstMark())
         }
@@ -4349,13 +4375,12 @@ struct ContentView: View {
     }
 
     /// Single assignment point for `onboardingCoachMark`'s non-nil transitions: resolves mark
-    /// 3's curb anchor offset ONCE, at the moment the mark actually becomes `.tapABlock`,
-    /// rather than on every `onboardingCoachOverlay` re-render (see `onboardingCurbAnchorOffset`'s
-    /// own doc comment).
+    /// 3's curb screen anchor when the mark becomes `.tapABlock`, rather than on every
+    /// `onboardingCoachOverlay` re-render (see `onboardingCurbScreenPoint`'s own doc comment).
     private func setOnboardingCoachMark(_ mark: OnboardingCoachMark) {
         onboardingCoachMark = mark
         if mark == .tapABlock {
-            onboardingCurbAnchorOffset = onboardingNearestCurbOffset()
+            onboardingCurbScreenPoint = onboardingNearestCurbScreenPoint()
         }
     }
 
@@ -4377,7 +4402,8 @@ struct ContentView: View {
                 driveModeActive: driveModeActive,
                 blockSelectModeActive: blockSelectModeActive,
                 spotPlacementActive: spotPlacementActive,
-                curbPlacementActive: curbPlacement != nil
+                curbPlacementActive: curbPlacement != nil,
+                primingCardShowing: showLocationPrimingCard
             ) else { return }
             setOnboardingCoachMark(next)
         }
@@ -4396,32 +4422,31 @@ struct ContentView: View {
         }
     }
 
-    /// §2.3: panning or zooming the map while a bubble is showing dismisses all remaining
-    /// bubbles outright — same "disappears on its own once the user interacts" precedent the
-    /// empty-map guard banner already sets. Deliberately does NOT write `OnboardingCoachGate`
-    /// (the design doc's own "Set when" column for that key lists only mark 3's "Done" and the
-    /// Skip link — exploring the map away mid-tour is not the same as dismissing it).
-    private func dismissOnboardingCoachForMapInteraction() {
-        if onboardingCoachMark != nil {
-            onboardingCoachMark = nil
-        }
+    /// §2.3 + QA #2/#8: a USER pan/pinch while a bubble is showing dismisses all remaining
+    /// bubbles outright - and (orchestrator ruling, 2026-11-23) CONSUMES the one-shot gate for a
+    /// genuine session, consistent with "never auto-replays" (More -> "How WePark works" is the
+    /// way back). `finishOnboardingCoach()` already skips the gate write for a replay. Programmatic
+    /// camera moves never reach here (`onAmbientUserAdjusted` fires only for real gestures).
+    /// No-op while no bubble is showing.
+    private func handleOnboardingCoachUserMapGesture() {
+        guard onboardingCoachMark != nil else { return }
+        finishOnboardingCoach()
     }
 
-    /// Mark 3's anchor offset (§2.2): reuses `CurbSnapIndex.nearbyBlockfaces` — the same
-    /// VoiceOver-curb-list index, built fresh here since this is a one-shot, settle-delayed
-    /// event, not a per-frame query — bounded to a short search radius around the user's last
-    /// known fix. Falls back to `.zero` (anchor exactly at the map's visual center,
-    /// `OnboardingCoachOverlay`'s own documented fallback) whenever there is no fix, no loaded
-    /// segments, or nothing within range.
-    private func onboardingNearestCurbOffset() -> CGSize {
-        guard let userLocation = locationService.userLocation else { return .zero }
+    /// Mark 3's anchor (§2.2, QA #6): the nearest curb to the user's last fix, via
+    /// `CurbSnapIndex.nearbyBlockfaces` (built fresh - a settle-delayed event, not per frame),
+    /// projected to the screen through the `screenPointForCoordinate` seam (`MKMapView.convert`).
+    /// Returns nil (bubble with no ring) when there is no fix, no loaded segments, nothing in
+    /// range, or the nearest curb is not on-screen - never a guess.
+    private func onboardingNearestCurbScreenPoint() -> CGPoint? {
+        guard let userLocation = locationService.userLocation else { return nil }
         let segments = tileLoader.segments
-        guard !segments.isEmpty else { return .zero }
+        guard !segments.isEmpty else { return nil }
         let index = CurbSnapIndex(segments: segments)
         guard let nearest = index.nearbyBlockfaces(userLocation, radius: 75).first else {
-            return .zero
+            return nil
         }
-        return onboardingCoachBearingOffset(from: userLocation, to: nearest.snappedCoordinate)
+        return coordinatorActions.screenPointForCoordinate?(nearest.snappedCoordinate)
     }
 
     // MARK: - W8.5b/c: End Drive Mode
@@ -4782,6 +4807,9 @@ struct ContentView: View {
         guard AppConstants.driveModeDefaultEnabled else { return }
         coordinatorActions.onAmbientUserAdjusted = {
             self.ambientLookUserAdjusted = true
+            // QA #2/#8: this closure fires only for a genuine user pan/pinch (never a
+            // programmatic camera move), so it is the one place the coach reacts to the map.
+            self.handleOnboardingCoachUserMapGesture()
         }
         coordinatorActions.applyDriveMapStyle?(true, nil)
         coordinatorActions.setShowsBuildings?(false)
@@ -5321,7 +5349,11 @@ struct ContentView: View {
             driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
             gateShouldShow: OnboardingStoryGate().shouldShow()
         )
-        if !showOnboardingStoryCover {
+        if showOnboardingStoryCover {
+            // QA #7A: a force-quit mid-deck must not let the sentinel classify this fresh
+            // install as upgrading on the next launch - see `markDeckBegun()`.
+            OnboardingStoryGate().markDeckBegun()
+        } else {
             scheduleOnboardingCoach(isReplay: false)
         }
 
