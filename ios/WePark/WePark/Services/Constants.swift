@@ -339,6 +339,47 @@ enum AppConstants {
     /// `wepark_<feature>_shown` convention.
     static let locationPrimingCardShownKey = "wepark_location_priming_shown"
 
+    // MARK: - First-run onboarding (open item #41, `docs/design/first-run-onboarding-design.md`)
+
+    /// DARK-SHIPS `false`. Its OWN flag, deliberately decoupled from `driveModeDefaultEnabled`
+    /// (design doc §6, "Implementation notes") so copy/illustration iterations can ship without
+    /// re-touching the big flag's own flip timeline. The EXPERIENCE this flag names (the 3-card
+    /// story deck + the 3-bubble live coach layer) is only ever meaningful in the flag-on
+    /// ambient world — every real call site ANDs this with `driveModeDefaultEnabled` via
+    /// `onboardingExperienceEnabled(...)` below, never checks this flag alone.
+    ///
+    /// Guard tests: `OnboardingGatingTests`.
+    static let onboardingStoryEnabled = false
+
+    /// The ONE pure gating function every onboarding call site routes through (design doc §6:
+    /// "Functionally AND'd with it at every call site... kept as a second boolean specifically
+    /// so QA/Kevin can smoke-test copy changes without touching the main flag's own flip
+    /// timeline"). Both arguments default to the real flags for production call sites; tests
+    /// pass explicit values to exercise all four combinations without mutating either
+    /// deliberately-immutable `let`. `nonisolated` for the same sync-XCTest reason every other
+    /// pure decision function in this codebase is.
+    nonisolated static func onboardingExperienceEnabled(
+        onboardingStoryEnabled: Bool = onboardingStoryEnabled,
+        driveModeDefaultEnabled: Bool = driveModeDefaultEnabled
+    ) -> Bool {
+        onboardingStoryEnabled && driveModeDefaultEnabled
+    }
+
+    /// UserDefaults key: set once Tier 1's last Continue ("Let's go") tap OR the story deck's
+    /// Skip tap fires (design doc §4.1). Gates whether the story cover shows on cold launch.
+    static let hasSeenOnboardingStoryKey = "wepark_has_seen_onboarding_story"
+
+    /// UserDefaults key: set once coach mark 3's "Done" tap OR the coach layer's Skip tap
+    /// fires (design doc §4.1). Gates whether the coach overlay mounts.
+    static let hasSeenOnboardingCoachKey = "wepark_has_seen_onboarding_coach"
+
+    /// UserDefaults key: set UNCONDITIONALLY on the very first render of the app's root view —
+    /// ever, regardless of any feature flag (design doc §4.1/§4.2). The fresh-install vs.
+    /// upgrading-user detector: see `FirstLaunchSentinel` below, the ONLY flag-independent
+    /// write this feature makes (justified in this PR's description — without it, every
+    /// existing install would later be treated as fresh the day these flags eventually flip).
+    static let hasLaunchedWeParkBeforeKey = "wepark_has_launched_before"
+
     // MARK: - Ambient-colors fix (2026-10-21 smoke): shared street-level span magnitude
 
     /// The street-level recenter radius, in meters, `ContentView.recenterMap(on:)` has used
@@ -529,5 +570,107 @@ struct LocationPrimingCardGate {
     /// Persists that the card has been shown. Subsequent `shouldShow()` calls return `false`.
     func markShown() {
         defaults.set(true, forKey: key)
+    }
+}
+
+// MARK: - OnboardingStoryGate
+
+/// One-time gate for the first-run story deck (`OnboardingStoryView`, 3 full-screen cards),
+/// `docs/design/first-run-onboarding-design.md` §4.1. Byte-for-byte the same shape as
+/// `LocationPrimingCardGate`/`BackgroundNoteGate` above — deliberately, the design doc's own
+/// "BackgroundNoteGate convention" instruction. `markShown()` fires on Tier 1's final Continue
+/// ("Let's go") tap OR the deck's own Skip tap — both count as "shown."
+struct OnboardingStoryGate {
+    private let defaults: UserDefaults
+    private let key: String
+
+    init(defaults: UserDefaults = .standard,
+         key: String = AppConstants.hasSeenOnboardingStoryKey) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    /// Returns `true` if the story deck has never been shown on this device.
+    func shouldShow() -> Bool {
+        !defaults.bool(forKey: key)
+    }
+
+    /// Persists that the deck has been shown. Subsequent `shouldShow()` calls return `false`.
+    func markShown() {
+        defaults.set(true, forKey: key)
+    }
+}
+
+// MARK: - OnboardingCoachGate
+
+/// One-time gate for the live coach layer (`OnboardingCoachOverlay`, 3 anchored bubbles),
+/// `docs/design/first-run-onboarding-design.md` §4.1. Same shape as `OnboardingStoryGate`
+/// above. `markShown()` fires on coach mark 3's "Done" tap OR the coach layer's own Skip tap.
+struct OnboardingCoachGate {
+    private let defaults: UserDefaults
+    private let key: String
+
+    init(defaults: UserDefaults = .standard,
+         key: String = AppConstants.hasSeenOnboardingCoachKey) {
+        self.defaults = defaults
+        self.key = key
+    }
+
+    /// Returns `true` if the coach layer has never been shown on this device.
+    func shouldShow() -> Bool {
+        !defaults.bool(forKey: key)
+    }
+
+    /// Persists that the coach layer has been shown. Subsequent `shouldShow()` calls return
+    /// `false`.
+    func markShown() {
+        defaults.set(true, forKey: key)
+    }
+}
+
+// MARK: - FirstLaunchSentinel
+
+/// The fresh-install vs. upgrading-user detector (`docs/design/first-run-onboarding-design.md`
+/// §4.2). `markLaunchedAndPreSeedIfUpgrading()` is called UNCONDITIONALLY on the very first
+/// render of the app's root view, every launch, regardless of `onboardingStoryEnabled` /
+/// `driveModeDefaultEnabled` — the ONE flag-independent write this whole feature makes. Without
+/// it, every existing install would later be treated as a brand-new install the day these flags
+/// eventually flip (there would be no way, at flip time, to tell "has used this app for months"
+/// apart from "installed five minutes ago").
+///
+/// Mechanism, verbatim from the design doc:
+///   1. Read `hasLaunchedWeParkBeforeKey`. Missing/`false` => this is the first render ever on
+///      this install (`isFreshInstall == true`).
+///   2. Write `hasLaunchedWeParkBeforeKey = true` unconditionally (idempotent on every later
+///      launch).
+///   3. If this was NOT a fresh install (an existing install encountering this code for the
+///      first time), and `hasSeenOnboardingStoryKey` has never been explicitly written, pre-seed
+///      it `true` — the 3 story cards sell the idea of WePark to someone who has never used it;
+///      an existing install already believes it and should never see them. `hasSeenOnboardingCoachKey`
+///      is deliberately left untouched in both branches: fresh installs get the coach after the
+///      cards, existing installs get it on their next cold launch with no cards in front of it.
+///
+/// Injectable `UserDefaults` for testability, same convention as every gate above.
+struct FirstLaunchSentinel {
+    private let defaults: UserDefaults
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
+    /// Returns `true` if this call observed a fresh install (the sentinel key was unset before
+    /// this call). Always has the pre-seed side effect described above as part of the SAME call
+    /// — there is no separate "read-only" variant, by design (the design doc's mechanism reads
+    /// and writes in one atomic step at the single call site that runs once per launch).
+    @discardableResult
+    func markLaunchedAndPreSeedIfUpgrading() -> Bool {
+        let isFreshInstall = !defaults.bool(forKey: AppConstants.hasLaunchedWeParkBeforeKey)
+        defaults.set(true, forKey: AppConstants.hasLaunchedWeParkBeforeKey)
+        if !isFreshInstall {
+            if defaults.object(forKey: AppConstants.hasSeenOnboardingStoryKey) == nil {
+                defaults.set(true, forKey: AppConstants.hasSeenOnboardingStoryKey)
+            }
+        }
+        return isFreshInstall
     }
 }
