@@ -180,7 +180,21 @@ Work-stream status as of 2026-05-11:
 
 `xcodebuild` clean builds of the iOS app are slow on memory-constrained machines (8 GB RAM observed at 10–15 min). The bundled 1,028 tile JSONs are processed as individual file copies under Xcode 16's `PBXFileSystemSynchronizedRootGroup`. On a 16 GB+ Mac, clean builds drop to 2–3 min and incremental builds to seconds. Folder-reference refactor (see "Carry-over deferrals" above) would also help. If a session reports slow builds, suggest: (a) close Chrome/Spotify/OneDrive/heavy apps, (b) Cmd+. between runs to release the running app's 1.8GB, (c) Cmd+R not Cmd+Shift+K+R (don't clean every time), (d) hardware upgrade to 16 GB long-term.
 
-## Environment split: Linux VPS vs Kevin's Mac (since 2026-08-10)
+## Environment split: Linux VPS vs Kevin's Mac (since 2026-08-10) — **MIGRATING TO MAC-PRIMARY, 2026-11-23**
+
+**Kevin is moving orchestration off the VPS onto his MacBook** (his call, 2026-11-23; the
+original reason for the split — no Swift toolchain where the agents run — is gone now that
+agents on the Mac get Xcode directly and GitHub Actions CI backstops every PR regardless).
+**A session finding itself on Darwin at `/Users/kevinhoxha/repos/parkmap` IS the primary
+environment**: engineering agents SHOULD build/test locally before pushing (the blind-build
+six-compile-failure-classes discipline becomes a nicety, not a survival rule), QA agents SHOULD
+run the live-UI simulator smokes themselves (screenshot + Read — the W8.5c-polish gate), and
+the paste-ready-command protocol below is only for any remaining VPS session. Mac constraints
+still apply: 16 GB RAM — keep the two-lane agent max, ONE simulator at a time
+(`memory/project_mac_simulators.md`), no build products in iCloud paths. The laptop sleeps:
+long-running background agents pause with the lid — prefer dispatching work while the Mac is
+awake/plugged in; CI remains the always-on safety net. The VPS stays reachable as a fallback
+until Kevin retires it.
 
 The repo runs in two places. **Detect where you are** (`uname` / hostname: `openclaw-sandbox` =
 the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's MacBook,
