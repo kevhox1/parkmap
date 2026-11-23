@@ -69,6 +69,11 @@ final class PlacementReticleView: UIView {
     private let tetherCoreLayer = CAShapeLayer()
 
     private var tip: CGPoint = .zero
+    /// The tip's height fraction, frozen for the session by the controller BEFORE the first
+    /// layout (card config selector, #37 item 8). Defaults to the standard 0.40.
+    var tipFraction: CGFloat = CurbPlacementMapPolicy.tipHeightFraction {
+        didSet { if tipFraction != oldValue { setNeedsLayout() } }
+    }
     private var ghostPoint: CGPoint?
     private(set) var isLifted = false
 
@@ -148,7 +153,7 @@ final class PlacementReticleView: UIView {
         // (PR #140 QA #13 - reachable on rotation mid-lift).
         needleView.bounds = CGRect(origin: .zero, size: bounds.size)
         needleView.center = CGPoint(x: bounds.midX, y: bounds.midY)
-        tip = CurbPlacementMapPolicy.tipPoint(in: bounds)
+        tip = CurbPlacementMapPolicy.tipPoint(in: bounds, tipFraction: tipFraction)
         rebuildStaticGeometry()
         applyGhost()
     }

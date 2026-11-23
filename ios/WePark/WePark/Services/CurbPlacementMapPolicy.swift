@@ -85,8 +85,12 @@ nonisolated enum CurbPlacementMapPolicy {
 
     /// The ONE definition of "where the pin is" - used by the reticle, the resolver, the settle
     /// nudge and the entry centring so they cannot disagree.
-    static func tipPoint(in bounds: CGRect) -> CGPoint {
-        CGPoint(x: bounds.midX, y: bounds.minY + tipHeightFraction * bounds.height)
+    ///
+    /// `tipFraction` defaults to the standard 0.40; the session passes the fraction the card
+    /// config selector froze at entry (#37 item 8: 0.40 / 0.36 / 0.30, so the 130 pt tip-to-card
+    /// clearance holds at accessibility sizes and on short phones).
+    static func tipPoint(in bounds: CGRect, tipFraction: CGFloat = tipHeightFraction) -> CGPoint {
+        CGPoint(x: bounds.midX, y: bounds.minY + tipFraction * bounds.height)
     }
 
     /// Where the screen point `ghost` must land so the ghost ends up under the pin tip: the
@@ -192,9 +196,10 @@ nonisolated enum CurbPlacementMapPolicy {
     /// that many metres SOUTH of the seed.
     static func entryCenter(
         seed: CLLocationCoordinate2D,
-        visibleHeightMeters: Double
+        visibleHeightMeters: Double,
+        tipFraction: CGFloat = tipHeightFraction
     ) -> CLLocationCoordinate2D {
-        let southMeters = (0.5 - Double(tipHeightFraction)) * visibleHeightMeters
+        let southMeters = (0.5 - Double(tipFraction)) * visibleHeightMeters
         return CLLocationCoordinate2D(
             latitude: seed.latitude - southMeters / metersPerDegreeLatitude,
             longitude: seed.longitude

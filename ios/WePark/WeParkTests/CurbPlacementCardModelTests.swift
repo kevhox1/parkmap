@@ -113,9 +113,9 @@ final class CurbPlacementCardSnappedTests: XCTestCase {
 
     func testTitle_isCanonicalStreetPlusSideDisplayName() {
         let model = cpcmMake(cpcmSnapped(cpcmBareSegment()), intent: .plant)
-        let expected = StreetNameNormalizer.canonical("STANTON STREET") + " \u{00B7} " + ReportSheet.sideDisplayName("S")
+        let expected = CurbPlacementCardModel.titleCased(StreetNameNormalizer.canonical("STANTON STREET")) + " \u{00B7} " + ReportSheet.sideDisplayName("S")
         XCTAssertEqual(model.title, expected)
-        XCTAssertEqual(model.title, "STANTON ST \u{00B7} South side")
+        XCTAssertEqual(model.title, "Stanton St \u{00B7} South side")
     }
 
     func testSubtitle_isCanonicalCrossStreets() {
@@ -152,9 +152,11 @@ final class CurbPlacementCardSnappedTests: XCTestCase {
         let segment = cpcmBareSegment()
         let label = ParkingRulesEngine().safetyLabel(for: segment, at: cpcmNow)
         let model = cpcmMake(cpcmSnapped(segment), intent: .plant)
+        // #37 item 8: the street + side moved to the LABEL; the value is the cross street + status.
+        XCTAssertEqual(model.voiceOverLabel, "Stanton Street, South side")
         XCTAssertEqual(
             model.voiceOverValue,
-            "Stanton Street, South side, between Bowery and Chrystie Street. \(label.text)."
+            "between Bowery and Chrystie Street. \(label.text)."
         )
     }
 }
@@ -388,50 +390,13 @@ final class CurbPlacementCardHeightTests: XCTestCase {
         XCTAssertEqual(cpcmMake(cpcmNoCurb, intent: .plant, data: .noData).statusSlot, .empty)
     }
 
-    func testLayoutHeight_hasNoStateInput_andIsStableForAnIntent() {
-        // The layout function takes no card state at all; the two things that DO change the
-        // height are the link row and Dynamic Type, both fixed for an intent.
-        let withLink = CurbPlacementCardLayout.naturalHeight(hasLink: true, primaryHeight: 60, linkHeight: 48)
-        let noLink = CurbPlacementCardLayout.naturalHeight(hasLink: false, primaryHeight: 60, linkHeight: 48)
-        for model in allModels(intent: .plant) {
-            XCTAssertEqual(model.secondaryTitle != nil, true)
-        }
-        for model in allModels(intent: .report) {
-            XCTAssertNil(model.secondaryTitle)
-        }
-        XCTAssertGreaterThan(withLink, noLink)
-        XCTAssertEqual(withLink - noLink, 12 + 48 + 8 - 16, accuracy: 0.001)
-    }
-
-    func testCappedHeight_neverCrossesTheClearanceBelowTheTip() {
-        // The card top must stay at least tip + 130 pt down the screen on every phone class,
-        // with and without the link row, even though the natural height can exceed the cap
-        // (the text rows then scroll while the buttons stay pinned).
-        let screens: [(height: Double, bottomInset: Double)] = [(667, 0), (852, 34), (932, 34)]
-        for screen in screens {
-            for hasLink in [true, false] {
-                let height = CurbPlacementCardLayout.cappedHeight(
-                    hasLink: hasLink,
-                    primaryHeight: 60,
-                    linkHeight: 48,
-                    fullScreenHeight: screen.height,
-                    bottomInset: screen.bottomInset,
-                    tipFraction: 0.40
-                )
-                let cardTop = screen.height - height
-                let tipY = 0.40 * screen.height
-                XCTAssertGreaterThanOrEqual(cardTop, tipY + 130 - 0.001, "screen \(screen.height) link \(hasLink)")
-            }
-        }
-    }
-
-    func testCappedHeight_isNaturalWherePhonesHaveRoom() {
-        let natural = CurbPlacementCardLayout.naturalHeight(hasLink: true, primaryHeight: 60, linkHeight: 48)
-        let capped = CurbPlacementCardLayout.cappedHeight(
-            hasLink: true, primaryHeight: 60, linkHeight: 48,
-            fullScreenHeight: 932, bottomInset: 34, tipFraction: 0.40
-        )
-        XCTAssertEqual(capped, natural + 34, accuracy: 0.001)
+    func testCardHeight_isIndependentOfState_forAnIntent() {
+        // The layout takes no card state at all: the only inputs are tier, phone and whether the
+        // intent has the link row, all fixed for a session.
+        let plant = allModels(intent: .plant)
+        let report = allModels(intent: .report)
+        XCTAssertTrue(plant.allSatisfy { $0.secondaryTitle != nil })
+        XCTAssertTrue(report.allSatisfy { $0.secondaryTitle == nil })
     }
 }
 
@@ -445,6 +410,7 @@ final class CurbPlacementCardFarCurbTests: XCTestCase {
         XCTAssertEqual(model.footnote, "Nearest curb with data")
         XCTAssertTrue(model.primaryEnabled)
         XCTAssertTrue(model.voiceOverValue.hasSuffix("Nearest curb with data."))
+        XCTAssertTrue(model.voiceOverValue.hasPrefix("between "), "cross street is in the value, not the label")
     }
 
     func testFarCurb_noFootnote_whenOppositeSideIsLoaded() {

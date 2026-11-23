@@ -424,7 +424,7 @@ final class CurbPlacementTeardownTests: XCTestCase {
             var live = false
             let actions = MapViewRepresentable.CoordinatorActions()
             actions.onQueryPlacementActive = { live }
-            actions.onBeginPlacement = { _, _, _ in live = true }
+            actions.onBeginPlacement = { _, _, _, _ in live = true }
             actions.onEndPlacement = { _ in live = false }
 
             actions.beginPlacement(seed: CLLocationCoordinate2D(latitude: 40.72, longitude: -73.99))
@@ -439,7 +439,7 @@ final class CurbPlacementTeardownTests: XCTestCase {
         var beginCount = 0
         let actions = MapViewRepresentable.CoordinatorActions()
         actions.onQueryPlacementActive = { live }
-        actions.onBeginPlacement = { _, _, _ in
+        actions.onBeginPlacement = { _, _, _, _ in
             live = true
             beginCount += 1
         }

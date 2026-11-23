@@ -119,6 +119,12 @@ nonisolated struct CurbPlacementSession {
     let incumbentBlockfaceKey: String?
     /// Whether the first-use hint pill shows this session (decided once, at entry).
     let showsHint: Bool
+    /// The pin tip's height fraction, chosen by the card config selector at entry and FROZEN
+    /// (#37 item 8: 0.40 / 0.36 / 0.30). The camera math, the reticle and the card read this.
+    let tipFraction: Double
+    /// Whether the ASP banner is hidden while this session is live (short phone or AX1+),
+    /// decided once at entry; the banner returns when the session ends.
+    let hidesASPBanner: Bool
 
     /// Set by a one-shot timer after entry: "Loading curbs..." is BOUNDED, never indefinite.
     var loadingExpired: Bool
@@ -135,7 +141,9 @@ nonisolated struct CurbPlacementSession {
         seed: CLLocationCoordinate2D,
         incumbentBlockfaceKey: String? = nil,
         showsHint: Bool = false,
-        seedInCoverage: Bool = true
+        seedInCoverage: Bool = true,
+        tipFraction: Double = Double(CurbPlacementMapPolicy.tipHeightFraction),
+        hidesASPBanner: Bool = false
     ) {
         self.id = UUID()
         self.entry = entry
@@ -144,6 +152,8 @@ nonisolated struct CurbPlacementSession {
         self.loadingExpired = false
         self.incumbentBlockfaceKey = incumbentBlockfaceKey
         self.showsHint = showsHint
+        self.tipFraction = tipFraction
+        self.hidesASPBanner = hidesASPBanner
         self.outcome = nil
         self.oppositeSideLoaded = false
         self.nearestCurb = nil
