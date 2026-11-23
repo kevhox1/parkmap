@@ -3703,8 +3703,8 @@ struct ContentView: View {
     /// `ParkingGoals`'s ladder offsets at all — pure presentation, per that file's own header.
     private var emptyMapGuardKind: EmptyMapGuardKind? {
         switch parkAndForgetGuardState {
-        case .resolved(_, let steppedDown):
-            return steppedDown ? .steppedDown : nil
+        case .resolved(_, let banner):
+            return banner
         case .empty:
             return .empty
         case nil:
@@ -7527,12 +7527,14 @@ nonisolated func ambientRecenterButtonVisible(
 /// loaded segments. `offsetDays` is always one of `ParkingGoals.parkAndForgetLadderOffsetDays`
 /// (8, 4, or 2) — the COLOR BUCKET's own target, unaffected by this fix (QA pass 1 on PR
 /// #133 confirmed the monotonic top-down "first rung anyone clears" walk is sound and
-/// should stay as-is). `steppedDown == true` means the "showing the best available" banner
-/// (§0.8.10) must show — see `resolveParkAndForgetViewport`'s doc comment for how this is
+/// should stay as-is). a non-nil `banner` means a banner (§0.8.10) must show — see `resolveParkAndForgetViewport`'s doc comment for how this is
 /// now computed (density-aware, not purely positional). `.empty` is the true worst case:
 /// even the bottom (easiest) rung has zero matches anywhere in the viewport.
 enum ParkAndForgetViewportResolution: Equatable {
-    case resolved(offsetDays: Int, steppedDown: Bool)
+    /// `banner` is `nil` (no banner), `.steppedDown` (case A: a lower rung was picked), or
+    /// `.sparse` (case B: top rung kept but only a few blocks clear it) — see
+    /// `docs/design/goal-first-ambient-design.md`'s 2026-11-22 addendum.
+    case resolved(offsetDays: Int, banner: EmptyMapGuardKind?)
     case empty
 
     /// §0.8.10 fast-follow (QA pass 1 on PR #133, Finding #1 — promoted to FIX-THEN-MERGE
@@ -7617,8 +7619,17 @@ nonisolated func resolveParkAndForgetViewport(
     // Monotonicity guarantees bottomCount >= pickedCount, so density is always in [0, 1].
     let density = bottomCount > 0 ? Double(pickedCount) / Double(bottomCount) : 0
 
-    let steppedDown = pickedIndex > 0 || density < bannerDensityThreshold
-    return .resolved(offsetDays: ladderOffsetDays[pickedIndex], steppedDown: steppedDown)
+    // Case A (real step-down) wins over case B (density-only): B is by definition the
+    // top-rung-kept case, so the two never overlap.
+    let banner: EmptyMapGuardKind?
+    if pickedIndex > 0 {
+        banner = .steppedDown
+    } else if density < bannerDensityThreshold {
+        banner = .sparse
+    } else {
+        banner = nil
+    }
+    return .resolved(offsetDays: ladderOffsetDays[pickedIndex], banner: banner)
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance
