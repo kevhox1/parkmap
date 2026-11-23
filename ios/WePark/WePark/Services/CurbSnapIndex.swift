@@ -62,12 +62,21 @@ import CoreLocation
 /// and `CurbSnapConfig.standard` behave exactly like the contract's all-defaults struct.
 nonisolated struct CurbSnapConfig: Equatable {
 
+    /// Default acquire radius, metres. Orchestrator ruling 2026-11-23 (curb-pin snap fix,
+    /// docs/qa/curbpin-snap-diagnosis-2026-11-23.md cause 2): 24 m -> 15 m, so a needle over a
+    /// building lot or a wide roadway shows the no-curb state instead of grabbing a far curb.
+    nonisolated static let defaultAcquireRadius: Double = 15.0
+
+    /// Default release radius, metres: 19 m = acquire x 1.25 rounded (was 30 = 24 x 1.25),
+    /// preserving the hysteresis ratio. Same 2026-11-23 ruling.
+    nonisolated static let defaultReleaseRadius: Double = 19.0
+
     /// A blockface becomes eligible to be ACQUIRED only within this many physical metres of
-    /// the pin. 24 m covers the centre of a ~48 m avenue (each side ~12-15 m away) and covers
-    /// nothing inside a building lot, by design.
+    /// the pin (default `defaultAcquireRadius`, 15 m). Reaches the nearer curb of a typical
+    /// avenue from its centreline only up to ~15 m; beyond that the no-curb state is shown.
     let acquireRadius: Double
 
-    /// The INCUMBENT blockface is kept while it stays within this many metres (1.25x acquire).
+    /// The INCUMBENT blockface is kept while it stays within this many metres (~1.25x acquire).
     /// Between `acquireRadius` and `releaseRadius` an incumbent is retained but nothing new
     /// is ever acquired.
     let releaseRadius: Double
@@ -83,8 +92,8 @@ nonisolated struct CurbSnapConfig: Equatable {
     let hysteresisMaxMeters: Double
 
     init(
-        acquireRadius: Double = 24.0,
-        releaseRadius: Double = 30.0,
+        acquireRadius: Double = CurbSnapConfig.defaultAcquireRadius,
+        releaseRadius: Double = CurbSnapConfig.defaultReleaseRadius,
         hysteresisPoints: Double = 14.0,
         hysteresisMinMeters: Double = 1.5,
         hysteresisMaxMeters: Double = 4.0
@@ -96,7 +105,7 @@ nonisolated struct CurbSnapConfig: Equatable {
         self.hysteresisMaxMeters = hysteresisMaxMeters
     }
 
-    /// The spec's starting values (24 m / 30 m / 14 pt clamped to 1.5-4 m).
+    /// The current values (15 m / 19 m per the 2026-11-23 ruling; 14 pt clamped to 1.5-4 m).
     ///
     /// 14 pt (orchestrator ruling on QA pass 1 of PR #137) rather than the 8 pt first
     /// sketched: a challenger flips at H/2 past the centreline, so §A.3's "commit to a side by
@@ -196,7 +205,7 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
 
     // Fixed projection origin (lower Manhattan). The repo's geometry helpers use the same
     // equirectangular approximation; over NYC's ~0.4 deg latitude span the longitude scale
-    // error is ~0.3%, i.e. < 0.1 m at the 24 m acquire radius.
+    // error is ~0.3%, i.e. < 0.1 m at the acquire radius.
     private static let originLatitude = 40.7128
     private static let originLongitude = -74.0060
     private static let metersPerDegreeLatitude = 111_320.0
@@ -241,6 +250,12 @@ nonisolated final class CurbSnapIndex: @unchecked Sendable {
 
     /// Number of straight edges indexed (after long-edge splitting).
     var edgeCount: Int { edges.count }
+
+    /// True when a segment with this tile id is in the index. O(n), called once per late index
+    /// swap (snap-fix ruling 6), never per frame.
+    func containsSegment(id: String) -> Bool {
+        segments.contains { $0.id == id }
+    }
 
     // MARK: - Build
 

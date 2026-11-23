@@ -204,6 +204,15 @@ nonisolated enum CurbPlacementHealAction: Equatable {
 
 nonisolated enum CurbPlacementPolicy {
 
+    // MARK: YOUR SQUARE overlay (snap-fix ruling 4, 2026-11-23)
+
+    /// The home-zone polygon ("YOUR SQUARE", dashed blue edge) is hidden while a placement
+    /// session is live - its edge read as part of the snap UI - and returns on exit
+    /// (`syncZoneBoundaries` re-adds it once `enabled` flips back).
+    static func showsZoneBoundaries(communityEnabled: Bool, driveModeActive: Bool, placementActive: Bool) -> Bool {
+        communityEnabled && !driveModeActive && !placementActive
+    }
+
     // MARK: Entry guard (spec A.3 "Entry")
 
     /// `!driveModeActive && !blockSelectModeActive && !spotPlacementActive && curbPlacement == nil`.

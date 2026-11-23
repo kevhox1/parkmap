@@ -761,3 +761,18 @@ final class CurbPlacementIndexCacheTests: XCTestCase {
         XCTAssertFalse(CurbPlacementPolicy.shouldRetryRefresh(sessionMatches: false, outcomeReceived: false))
     }
 }
+
+
+// MARK: - YOUR SQUARE visibility (snap-fix ruling 4, 2026-11-23)
+
+final class CurbPlacementZoneBoundaryVisibilityTests: XCTestCase {
+    func testZoneBoundaries_hiddenDuringPlacement_restoredAfter() {
+        XCTAssertTrue(CurbPlacementPolicy.showsZoneBoundaries(communityEnabled: true, driveModeActive: false, placementActive: false))
+        XCTAssertFalse(CurbPlacementPolicy.showsZoneBoundaries(communityEnabled: true, driveModeActive: false, placementActive: true))
+    }
+
+    func testZoneBoundaries_stillOffForDriveModeOrCommunityOff() {
+        XCTAssertFalse(CurbPlacementPolicy.showsZoneBoundaries(communityEnabled: true, driveModeActive: true, placementActive: false))
+        XCTAssertFalse(CurbPlacementPolicy.showsZoneBoundaries(communityEnabled: false, driveModeActive: false, placementActive: false))
+    }
+}

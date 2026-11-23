@@ -3547,7 +3547,11 @@ struct ContentView: View {
             // NB: argument order must match the memberwise init (declaration order) — both
             // are declared directly after `pendingParkCoordinate`, same convention as its own
             // comment above.
-            showZoneBoundaries: AppConstants.communityEnabled && !driveModeActive,
+            showZoneBoundaries: CurbPlacementPolicy.showsZoneBoundaries(
+                communityEnabled: AppConstants.communityEnabled,
+                driveModeActive: driveModeActive,
+                placementActive: curbPlacement != nil
+            ),
             // Community 2.0 S14: resolves the whole `Zone` object once here (was a plain
             // `homeZoneId: String?`) — `MapViewRepresentable` no longer has any
             // `ZoneStore`/`ZoneGeometry` dependency of its own.

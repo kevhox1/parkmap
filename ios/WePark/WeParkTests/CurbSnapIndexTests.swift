@@ -172,8 +172,12 @@ final class CurbSnapConfigTests: XCTestCase {
 
     func testConfig_defaults_matchSpec() {
         let config = CurbSnapConfig()
-        XCTAssertEqual(config.acquireRadius, 24.0)
-        XCTAssertEqual(config.releaseRadius, 30.0)
+        // Orchestrator ruling 2026-11-23: acquire 24 -> 15 m, release 30 -> 19 m (ratio kept).
+        XCTAssertEqual(config.acquireRadius, 15.0)
+        XCTAssertEqual(config.releaseRadius, 19.0)
+        XCTAssertEqual(CurbSnapConfig.defaultAcquireRadius, 15.0)
+        XCTAssertEqual(CurbSnapConfig.defaultReleaseRadius, 19.0)
+        XCTAssertEqual(CurbSnapConfig.defaultReleaseRadius / CurbSnapConfig.defaultAcquireRadius, 1.25, accuracy: 0.02)
         XCTAssertEqual(config.hysteresisPoints, 14.0)
         XCTAssertEqual(config.hysteresisMinMeters, 1.5)
         XCTAssertEqual(config.hysteresisMaxMeters, 4.0)
@@ -360,16 +364,16 @@ final class CurbSnapRadiiTests: XCTestCase {
     // A.11 A5
     func testResolve_beyondReleaseRadius_noCurbInRange_withNearestMeters() {
         let index = makeIndex()
-        let outcome = index.resolve(csiPoint(0, 31), incumbent: nil, metersPerPoint: 0.28, config: .standard)
+        let outcome = index.resolve(csiPoint(0, 21), incumbent: nil, metersPerPoint: 0.28, config: .standard)
         guard case .noCurbInRange(let nearest) = outcome else {
             XCTFail("expected .noCurbInRange, got \(outcome)")
             return
         }
-        // 31 m is inside the 3x3 cell neighbourhood (32 m), so the probe must report it.
-        XCTAssertEqual(nearest ?? -1, 31.0, accuracy: 0.1)
+        // 21 m is inside the 3x3 cell neighbourhood (32 m), so the probe must report it.
+        XCTAssertEqual(nearest ?? -1, 21.0, accuracy: 0.1)
 
-        // Even with the key as incumbent, 31 m is past the 30 m release radius.
-        let withIncumbent = index.resolve(csiPoint(0, 31), incumbent: csiKeyN, metersPerPoint: 0.28, config: .standard)
+        // Even with the key as incumbent, 21 m is past the 19 m release radius.
+        let withIncumbent = index.resolve(csiPoint(0, 21), incumbent: csiKeyN, metersPerPoint: 0.28, config: .standard)
         if case .snapped = withIncumbent { XCTFail("incumbent must be dropped beyond release radius") }
 
         // Far away: no curb, and no crash.
@@ -379,59 +383,57 @@ final class CurbSnapRadiiTests: XCTestCase {
 
     func testResolve_acquireBand_noIncumbent_doesNotAcquire() {
         let index = makeIndex()
-        // 23 m: inside acquire -> acquired.
-        let inside = index.resolve(csiPoint(0, 23), incumbent: nil, metersPerPoint: 0.28, config: .standard)
+        // 14 m: inside acquire -> acquired.
+        let inside = index.resolve(csiPoint(0, 14), incumbent: nil, metersPerPoint: 0.28, config: .standard)
         XCTAssertEqual(csiSnapped(inside)?.segment.id, "R1")
-        // 27 m: in the 24-30 band -> NOT acquired.
-        let band = index.resolve(csiPoint(0, 27), incumbent: nil, metersPerPoint: 0.28, config: .standard)
+        // 17 m: in the 15-19 band -> NOT acquired (snap-fix ruling 2: no far-curb grab).
+        let band = index.resolve(csiPoint(0, 17), incumbent: nil, metersPerPoint: 0.28, config: .standard)
         guard case .noCurbInRange(let nearest) = band else {
-            XCTFail("a curb in the 24-30 m band must not be acquired, got \(band)")
+            XCTFail("a curb in the 15-19 m band must not be acquired, got \(band)")
             return
         }
-        XCTAssertEqual(nearest ?? -1, 27.0, accuracy: 0.1)
+        XCTAssertEqual(nearest ?? -1, 17.0, accuracy: 0.1)
+        // 18 m (a needle over a building lot): no-curb, not a grab of the curb 18 m away.
+        if case .snapped = index.resolve(csiPoint(0, 18), incumbent: nil, metersPerPoint: 0.28, config: .standard) {
+            XCTFail("18 m is beyond the 15 m acquire radius")
+        }
     }
 
     func testResolve_acquireBand_incumbentRetainedInReleaseBand() {
         let index = makeIndex()
-        let retained = index.resolve(csiPoint(0, 27), incumbent: csiKeyN, metersPerPoint: 0.28, config: .standard)
+        let retained = index.resolve(csiPoint(0, 17), incumbent: csiKeyN, metersPerPoint: 0.28, config: .standard)
         XCTAssertEqual(csiSnapped(retained)?.segment.id, "R1")
-        XCTAssertEqual(csiSnapped(retained)?.distanceMeters ?? -1, 27.0, accuracy: 0.1)
+        XCTAssertEqual(csiSnapped(retained)?.distanceMeters ?? -1, 17.0, accuracy: 0.1)
     }
 
     func testResolve_incumbentBeyondRelease_isDropped() {
         let index = makeIndex()
-        let dropped = index.resolve(csiPoint(0, 33), incumbent: csiKeyN, metersPerPoint: 0.28, config: .standard)
-        if case .snapped = dropped { XCTFail("33 m is beyond the 30 m release radius") }
+        let dropped = index.resolve(csiPoint(0, 21), incumbent: csiKeyN, metersPerPoint: 0.28, config: .standard)
+        if case .snapped = dropped { XCTFail("21 m is beyond the 19 m release radius") }
     }
 
     func testResolve_releaseBand_challengerNotAcquirableInBand() {
-        // A at y=0, B at y=53. Pin at y=27: dA=27 (release band), dB=26 (also > 24).
+        // A at y=0, B at y=33. Pin at y=17: dA=17 (release band), dB=16 (> 15, not acquirable).
         let a = CurbSnapTestFixtures.eastWestCurb(id: "A", side: "S", y: 0)
-        let b = CurbSnapTestFixtures.eastWestCurb(id: "B", side: "N", y: 53)
+        let b = CurbSnapTestFixtures.eastWestCurb(id: "B", side: "N", y: 33)
         let index = CurbSnapIndex(segments: [a, b])
-        let pin = csiPoint(0, 27)
+        let pin = csiPoint(0, 17)
 
-        // Incumbent A: B is closer by ~1 m, but B is not acquirable at 26 m, and 1 m < H anyway.
+        // Incumbent A: B is closer by ~1 m, but B is not acquirable at 16 m, and 1 m < H anyway.
         let kept = index.resolve(pin, incumbent: csiKeyS, metersPerPoint: 0.28, config: .standard)
         XCTAssertEqual(csiSnapped(kept)?.segment.id, "A")
 
-        // Use a pin where B is closer by far more than the dead-band yet still outside acquire:
-        // y=28.5 => dA=28.5 (retained), dB=24.5 (> 24, not acquirable), gap 4 m > H.
-        let stillKept = index.resolve(csiPoint(0, 28.5), incumbent: csiKeyS, metersPerPoint: 0.28, config: .standard)
-        XCTAssertEqual(csiSnapped(stillKept)?.segment.id, "A",
-                       "a challenger outside the acquire radius must never take over, whatever the gap")
-
         // No incumbent at all there: neither is acquirable.
         let none = index.resolve(pin, incumbent: nil, metersPerPoint: 0.28, config: .standard)
-        if case .snapped = none { XCTFail("neither curb is within the 24 m acquire radius") }
+        if case .snapped = none { XCTFail("neither curb is within the 15 m acquire radius") }
     }
 
     func testResolve_releaseBand_acquirableChallengerBeyondDeadband_takesOver() {
         let a = CurbSnapTestFixtures.eastWestCurb(id: "A", side: "S", y: 0)
-        let b = CurbSnapTestFixtures.eastWestCurb(id: "B", side: "N", y: 53)
+        let b = CurbSnapTestFixtures.eastWestCurb(id: "B", side: "N", y: 31.5)
         let index = CurbSnapIndex(segments: [a, b])
-        // y=29.5 => dA=29.5 (still inside release), dB=23.5 (inside acquire), gap 6 m > H=3.92.
-        let outcome = index.resolve(csiPoint(0, 29.5), incumbent: csiKeyS, metersPerPoint: 0.28, config: .standard)
+        // y=18.5 => dA=18.5 (still inside release 19), dB=13 (inside acquire 15), gap 5.5 > H=3.92.
+        let outcome = index.resolve(csiPoint(0, 18.5), incumbent: csiKeyS, metersPerPoint: 0.28, config: .standard)
         XCTAssertEqual(csiSnapped(outcome)?.segment.id, "B")
     }
 
@@ -440,7 +442,7 @@ final class CurbSnapRadiiTests: XCTestCase {
         let outcome = index.resolve(csiPoint(0, 5), incumbent: "NOT|A|REAL|KEY", metersPerPoint: 0.28, config: .standard)
         XCTAssertEqual(csiSnapped(outcome)?.segment.id, "R1")
         // ...and it does not grant release-radius leniency.
-        let band = index.resolve(csiPoint(0, 27), incumbent: "NOT|A|REAL|KEY", metersPerPoint: 0.28, config: .standard)
+        let band = index.resolve(csiPoint(0, 17), incumbent: "NOT|A|REAL|KEY", metersPerPoint: 0.28, config: .standard)
         if case .snapped = band { XCTFail("unknown incumbent must not retain anything") }
     }
 }
@@ -781,14 +783,14 @@ final class CurbSnapCustomConfigTests: XCTestCase {
         // Partial override keeps the other defaults.
         let partial = CurbSnapConfig(acquireRadius: 50)
         XCTAssertEqual(partial.acquireRadius, 50)
-        XCTAssertEqual(partial.releaseRadius, 30.0)
+        XCTAssertEqual(partial.releaseRadius, CurbSnapConfig.defaultReleaseRadius)
         XCTAssertEqual(partial.hysteresisPoints, 14.0)
     }
 
     func testResolve_customSmallRadii_changeAcquireAndRelease() {
         let index = makeCurbIndex()
         let tight = CurbSnapConfig(acquireRadius: 10, releaseRadius: 12)
-        // 11 m: outside the custom acquire radius (the 24 m default would acquire it).
+        // 11 m: outside the custom acquire radius (the 15 m default would acquire it).
         let none = index.resolve(csiPoint(0, 11), incumbent: nil, metersPerPoint: 0.28, config: tight)
         if case .snapped = none { XCTFail("11 m is outside a 10 m acquire radius") }
         let standard = index.resolve(csiPoint(0, 11), incumbent: nil, metersPerPoint: 0.28, config: .standard)
@@ -826,7 +828,7 @@ final class CurbSnapCustomConfigTests: XCTestCase {
 
         // The default config cannot see (or acquire) it.
         let narrow = index.resolve(pin, incumbent: nil, metersPerPoint: 0.28, config: .standard)
-        if case .snapped = narrow { XCTFail("80 m is outside the default 24 m acquire radius") }
+        if case .snapped = narrow { XCTFail("80 m is outside the default 15 m acquire radius") }
 
         // The wide config returns the foot point and distance for the chip.
         let outcome = index.resolve(pin, incumbent: nil, metersPerPoint: 0.28, config: wide)
@@ -900,5 +902,16 @@ final class CurbSnapCustomConfigTests: XCTestCase {
         let nan = CurbSnapConfig(acquireRadius: .nan, releaseRadius: .nan)
         let nanOutcome = index.resolve(csiPoint(0, -5), incumbent: nil, metersPerPoint: 0.28, config: nan)
         if case .snapped = nanOutcome { XCTFail("NaN radii must not acquire anything") }
+    }
+}
+
+
+// MARK: - containsSegment (snap-fix ruling 6, 2026-11-23)
+
+final class CurbSnapContainsSegmentTests: XCTestCase {
+    func testContainsSegment_byTileId() {
+        let index = CurbSnapIndex(segments: [CurbSnapTestFixtures.eastWestCurb(id: "KEEP", side: "N", y: 0)])
+        XCTAssertTrue(index.containsSegment(id: "KEEP"))
+        XCTAssertFalse(index.containsSegment(id: "GONE"))
     }
 }
