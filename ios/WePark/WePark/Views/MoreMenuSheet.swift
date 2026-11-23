@@ -33,6 +33,7 @@ enum MoreMenuRow: Equatable {
     case showAllRules
     case findMyCar
     case parkUntil
+    case settings
 
     nonisolated var title: String {
         switch self {
@@ -43,6 +44,7 @@ enum MoreMenuRow: Equatable {
         case .showAllRules: return "Show all parking rules"
         case .findMyCar: return "Find my car"
         case .parkUntil: return "Park until a set time"
+        case .settings: return "Settings"
         }
     }
 
@@ -55,6 +57,7 @@ enum MoreMenuRow: Equatable {
         case .showAllRules: return "See every kind of rule, not just one goal"
         case .findMyCar: return "Show where you parked"
         case .parkUntil: return "Pick your own time"
+        case .settings: return "Reminders, help, and app info"
         }
     }
 
@@ -67,6 +70,7 @@ enum MoreMenuRow: Equatable {
         case .showAllRules: return "paintpalette.fill"
         case .findMyCar: return "car.fill"
         case .parkUntil: return "clock.fill"
+        case .settings: return "gearshape.fill"
         }
     }
 }
@@ -87,6 +91,8 @@ enum MoreMenuRow: Equatable {
 ///   6. Find my car            — only when a car is parked
 ///   7. Park until a set time  — only in full-palette mode (the power-user `ParkUntilSheet`
 ///                               path, §0.8.9)
+///   8. Settings               — always, LAST (open item #37 ⑦; flag-on, Settings was otherwise
+///                               reachable only via Search)
 /// Pure so every gate is directly unit-testable; `nonisolated` for the same sync-XCTest reason
 /// as the other pure decision functions in `ContentView.swift`.
 nonisolated func moreMenuVisibleRows(
@@ -103,6 +109,7 @@ nonisolated func moreMenuVisibleRows(
     rows.append(.showAllRules)
     if hasParkedCar { rows.append(.findMyCar) }
     if fullPaletteMode { rows.append(.parkUntil) }
+    rows.append(.settings)
     return rows
 }
 
