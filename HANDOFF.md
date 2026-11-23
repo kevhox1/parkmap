@@ -215,6 +215,29 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-11-23 — ✅ PRE-FLIP PIPELINE: PRs #150–#155 merged (all dark, each QA'd live on the sim by a non-builder with AXe). Build 26 still blocked on Apple's PLA.
+
+- **Merged today:**
+  - #150: onboarding QA fixes, coach ordering and gesture-only dismissal, plus a real curb anchor via a new `MapViewRepresentable.screenPointForCoordinate` seam.
+  - #151: #37 ① overlay dock clearance and ② the `.sparse` banner copy.
+  - #152 + #153: #37 ⑥, the accessibility-size goal dock. At AX1+ it is a goal card plus a local goal sheet, and the empty-map banner becomes a one-line chip. Dock is 27–30% without the banner and 35–42% with the chip.
+  - #154: #37 ⑦, the More → Settings row.
+  - #155: #37 ⑧, the curb-pin card. Legality never scrolls: rows are dropped by priority, card text is clamped at AX1, and the tip fraction is chosen by a selector that keeps the 130pt rule.
+- **Designer addenda landed:**
+  - `goal-first-ambient-design.md`: stepped-down copy, the AX dock, and "AX dock as built".
+  - `curb-pin-placement-design.md`: placement card at AX sizes and on SE.
+- **Orchestrator rulings, Kevin-reversible:**
+  - Card text is clamped (AX3 for the dock, AX1 for the curb card). The curb card's Report link is dropped at AX sizes.
+  - At AX sizes the goal choice is one tap deeper (card → sheet).
+  - A user pan consumes the coach one-shot.
+- **#37 status:** ①②⑤⑥⑦ closed and ⑧ fixed. Device/drive items remain, listed per item on the board. Still open: ③ (largely covered by ⑥), ④ Kevin's drive, and #44/#45 after the drive. Onboarding has its own flip list in #41, including the sentinel release rule.
+- **Process learnings:**
+  - The QA agents found real UI bugs that tests had missed in every PR (coach over the priming card, the recentre dismissal, AX legality hidden). The AXe-driven live smoke is now the norm.
+  - Disk is the binding constraint (5–9 GB free while a macOS update is staging). Dispatch briefs therefore say: build only (no local `xcodebuild test`) and let CI run the suite.
+  - `~/Library/Developer/XCTestDevices` holds about 18 GB (`du`) of test clones from today. An agent's delete was permission-denied, so the call is Kevin's.
+  - One agent died on an API 529 and was resumed via SendMessage with no lost work.
+- **Next for Kevin:** ① accept the Apple PLA, then the orchestrator uploads build 26 (internal-only export already configured) and adds it to the internal group via Chrome. ② The drive test (`docs/drive-test-build26.md`). ③ The Supabase ceremony QUICK PATH. ④ The XCTestDevices cleanup and the macOS update/restart.
+
 ### 2026-11-22 (first Mac-primary session) — ✅ PR #149 MERGED DARK; BUILD 26 ARCHIVED, UPLOAD BLOCKED ON APPLE PLA.
 
 - **#149 (first-run onboarding, open item #41) merged** as `5c3750ee` after a live, agent-run sim QA pass (`docs/qa/pr149-first-run-onboarding.md`, MERGE-WITH-FOLLOWUPS). This was the first QA to drive the sim itself with **AXe** (`/opt/homebrew/bin/axe`: tap/swipe/describe-ui; manual install because the Command Line Tools are outdated, see `memory/project_mac_disk_and_axe.md`). It found 6 🟡 flip-blockers that tests missed: the coach shows over the priming card, the first-grant recentre kills mark 1, bubbles clip at AX3/AX5 and on the left edge, the mark-2 ring lands on the wrong tile, and the mark-3 ring points at empty space. It also confirmed two sentinel gaps. The fix PR (`fix/onboarding-qa-followups`) was dispatched to @ios-engineer and authorizes a minimal `MapViewRepresentable` seam (user-gesture flag + coordinate converter). Orchestrator ruling on QA #8: a user pan that dismisses the coach consumes its one-shot gate.
