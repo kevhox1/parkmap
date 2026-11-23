@@ -898,3 +898,47 @@ are indistinguishable downstream. Split it, e.g. add `EmptyMapGuardKind.sparse` 
 **Why:** A admits the map changed ("showing the best available"); B must not, because the map still shows the
 full-week bar and simply has few green blocks. Plain words ("blocks", "clear", "full week"), no jargon, and
 B drops "Nothing" and "best available" so it never implies a step-down that did not happen.
+
+
+---
+
+## Addendum — accessibility-size goal dock (2026-11-23)
+
+Closes open item #37 (6), PR #136 QA 🟡 #1, PR #149/#150 QA N1. Scope: flag-on ambient dock (`GoalSelectorView`) when `dynamicTypeSize >= .accessibility1`. Below that threshold nothing changes (three-across tiles, A3.3 sizes).
+
+### 1. Why the current AX layout fails (arithmetic)
+The A3.3 vertical stack is 3 tiles x 128pt min + Start Driving + gaps + bottom inset = roughly 510pt at AX1 and 600pt+ at AX5 on a 874pt-tall iPhone, so 58-70% of the screen. Any text-scaling fix inside that stack still leaves 3 x 128pt of tile. The row itself is the problem, not the type size.
+
+### 2. Recommendation: collapse to "current goal" card + goal sheet
+At `dynamicTypeSize >= .accessibility1` (`isAccessibilitySize`), the dock is exactly two rows, bottom-anchored, replacing the three-tile row:
+1. **Start Driving** (top row, unchanged position vs. A3.3: above the goal control).
+2. **Current-goal card** (closest to thumb): ONE full-width tile showing the SELECTED goal. Tapping it opens the goal sheet.
+
+Rejected (one line each): (a) height cap + internal scroll: two of three goals sit offscreen, a scroll view over a pannable map fights map gestures, and it still eats 45%+ of the map; (b) a generic "Pick a goal" button: loses the at-a-glance "what is the map showing me" answer, which is the whole point of goal-first; (c) a bespoke AX layout that keeps all three tiles (compact rows): still ~45% of height at AX1, worse above.
+
+### 3. Exact layout rules
+- **Dock type cap.** Apply `.dynamicTypeSize(...DynamicTypeSize.accessibility3)` to the dock's own content only (Start Driving, goal card, empty-map banner). Everything else (sheet, coach bubble, cards, rest of app) scales to AX5. This is the one deliberate deviation from "scale everything": the dock is a bounded bottom overlay, AX3 is already ~2.3x default, nothing truncates, and the full-size text lives in the sheet. Do not clamp lower.
+- **Start Driving.** Full width, `minHeight` = `@ScaledMetric(relativeTo: .headline)` 64pt (not 56), icon leading, label wraps (`lineLimit(nil)`, `fixedSize(horizontal: false, vertical: true)`). Always in the dock, never inside a scroll view, so the primary action is always reachable.
+- **Goal card.** Full width, `minHeight` 112pt scaled, 20pt radius, the A3.3 selected style (blue fill, white text, icon leading = existing `GoalTile` `horizontalLayout: true`). Content: icon, primary name (`.headline.bold`, no line limit), trailing `chevron.up` plus the word "Change" (`.footnote`) so it reads as a picker, not a status. Sub-label ("Won't need to move it" etc.) shows at `.accessibility1`/`.accessibility2` and is dropped from the CARD at `>= .accessibility3` (it is always shown in the sheet, and stays in the card's `accessibilityLabel`). Dropping is not truncation.
+- **Selected indication.** Card = selected tile, by construction (blue fill + white). In the sheet, selected tile = blue fill AND a `checkmark.circle.fill` at trailing edge AND `.isSelected` trait, so color is never the only signal. Never green (sacred palette).
+- **Goal sheet.** Local `@State` inside `GoalSelectorView` (NOT `ContentView.activeSheet`, or `goalSelectorDockVisible` hides the dock under it). `.sheet` with `.presentationDetents([.medium, .large])`, visible drag indicator, `ScrollView` of the three existing horizontal tiles at FULL Dynamic Type (to AX5), 128pt min height, 12pt spacing, nav title "Pick a parking goal" and a trailing Done. Tap on a tile: selection haptic (existing `.sensoryFeedback`), `onSelectGoal`, auto-dismiss so the user sees the map change. Open sheet: no haptic.
+- **Full-palette mode.** Unchanged ("Pick a parking goal" row replaces the card; same 64pt min, same type cap).
+- **Empty-map banner.** Stays above Start Driving, text capped at `.accessibility2` (inside the dock cap), no truncation. Budget in section 4.
+- **Thresholds summary.** `< .accessibility1`: A3.3 as shipped. `.accessibility1...2`: card with sub-label, full scaling. `>= .accessibility3`: card without sub-label. `>= .accessibility4`: dock frozen at AX3 sizing; sheet keeps scaling.
+
+### 4. Map budget (testable)
+- Dock height (measured, incl. bottom safe inset) <= 40% of screen height; with the empty-map banner showing, <= 45%.
+- The visible map band (below top chrome/search, above dock top) >= 35% of screen height normally, >= 30% with the banner. Expected at AX3 on a 874pt screen: dock ~300pt (~35%), map band ~50%. Acceptance: iPhone SE-size and Pro Max at AX1, AX3, AX5, cold launch, flag on, with and without the banner and with Recenter visible. If a device fails the number, the first thing dropped is the card's sub-label (already hidden at AX3+), then the card's "Change" word. Never Start Driving, never the goal name.
+
+### 5. Overlays, cards, coach bubble
+- **Rule.** Anything that coexists with the dock sits ABOVE the dock's measured top edge minus 12pt (use the existing `onboardingGoalDockFrame` readout), is capped at 40% of screen height, and scrolls its own text internally with its primary button pinned (the pattern `OnboardingCoachOverlay.bubbleCard` already uses). Cards must never overlap the dock.
+- **Replace the PR #151 45% stopgap** with that measured clearance. Keep 45% only as a safety clamp (dock <= 40%, so it no longer binds). The rail (Recenter, More) rides above the dock as today.
+- **Confirm cards** that hide the dock already (`goalSelectorDockVisible` excludes spot placement, curb placement, block-select, any sheet) take the full bottom; no change.
+- **Onboarding coach bubble.** At AX, `tileRowFrame` and `selectedTileFrame` both report the goal card's frame. Mark 1 ("Pick what you need") highlights the card; its real-control dismissal fires on goal SELECTION inside the sheet (same `onSelectGoal` closure), and tapping the card to open the sheet does not dismiss it (the bubble hides while the sheet is up and returns if the user closes without choosing). Mark 2 sits above the card; bubble region = safe top + Skip band to dock top - 12pt, which is >= 170pt scaled by construction at the 40% dock cap, so the "overlap the top of the dock" fallback should never trigger. Fixes N1 (bubble covering 2 of 3 tiles): only one tile exists on screen.
+- **First-time comprehension.** The three-goal choice is now one tap deeper at AX. Mitigation: first-run mark 1 copy for AX names the control ("Tap the goal card to pick what you need"); the sheet is the full three-tile surface the existing comprehension walkthrough (section 5) validated.
+
+### 6. Flags for @ios-engineer
+1. Branch inside `goalTileRow` on `dynamicTypeSize.isAccessibilitySize`; add `goalCard` + local sheet; keep `ForEach` tiles for the sheet and the non-AX row.
+2. Per-tile `onTileFrameChange` is only called for the visible tile(s); the card reports `selectedGoal`'s frame. Verify the frame readouts clear when the sheet covers the dock.
+3. Add `accessibilityLabel("\(primary), \(subLabel). Selected. Double tap to change goal.")` and `.accessibilityAddTraits(.isButton)` on the card.
+4. Verify: AX1/AX3/AX5 x SE/Pro Max x banner on/off x Recenter showing; Reduce Motion; VoiceOver opens sheet and returns focus to the card on dismiss.
