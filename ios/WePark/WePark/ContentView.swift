@@ -811,6 +811,10 @@ struct ContentView: View {
     /// QA #5: every goal tile's frame, keyed by `ParkingGoal.rawValue`; the selected tile's frame
     /// is derived (`onboardingSelectedTileFrame`) so it can never go stale across a selection change.
     @State private var onboardingTileFrames: [String: CGRect] = [:]
+    /// #37 6: true while `GoalSelectorView`'s LOCAL AX goal sheet is up (it is deliberately not
+    /// `activeSheet`). The coach bubble hides while it shows and returns if the user closes it
+    /// without choosing.
+    @State private var goalSheetPresented: Bool = false
 
     /// Mark 3's anchor: the nearest curb's real ground->screen projection in WINDOW coordinates
     /// (`onboardingNearestCurbScreenPoint()`), or nil when no curb is on-screen (bubble, no
@@ -3135,6 +3139,7 @@ struct ContentView: View {
     @ViewBuilder
     private var onboardingCoachOverlay: some View {
         if let mark = onboardingCoachMark,
+           !goalSheetPresented,
            onboardingCoachOverlayVisible(
                 activeSheetIsNil: activeSheet == nil,
                 driveModeActive: driveModeActive,
@@ -3653,7 +3658,8 @@ struct ContentView: View {
                         enterCruiseMode()
                     },
                     onTileRowFrameChange: { onboardingTileRowFrame = $0 },
-                    onTileFrameChange: { goal, frame in onboardingTileFrames[goal.rawValue] = frame }
+                    onTileFrameChange: { goal, frame in onboardingTileFrames[goal.rawValue] = frame },
+                    onGoalSheetPresentedChange: { goalSheetPresented = $0 }
                 )
                 .onGeometryChange(for: CGRect.self, of: { proxy in
                     proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
@@ -7715,8 +7721,10 @@ func communityMapChromeBottomPadding(browseSheetPeekHeight: CGFloat) -> CGFloat 
 /// `browseSheetPeekHeight + 12`. Dock visible: clears the dock's measured height + 12pt, but
 /// never LESS than the legacy value (an unmeasured `.zero` frame falls back to it).
 /// The dock's bottom edge is the container's bottom edge (it is the bottom `.safeAreaInset`),
-/// so its height is the clearance, capped at 45% of `containerHeight` (0 = no cap) so the
-/// card can't be pushed off-screen when the dock overflows at AX5.
+/// so its height is the clearance. #37 6: the AX goal-card dock is budgeted to <= 40% of the
+/// screen (45% with the empty-map banner), so the measured clearance no longer binds the cap;
+/// 45% of `containerHeight` (0 = no cap) stays ONLY as a safety clamp so a card can never be
+/// pushed off-screen if the dock ever overflows (replaces PR #151's interim stopgap role).
 nonisolated func ambientOverlayBottomPadding(
     goalDockVisible: Bool,
     measuredDockHeight: CGFloat,
