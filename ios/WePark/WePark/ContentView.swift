@@ -1193,6 +1193,31 @@ struct ContentView: View {
         communityMapChromeBottomPadding(browseSheetPeekHeight: browseSheetPeekHeight)
     }
 
+    /// Pre-flip fix (#37 ①): bottom clearance for the three floating cards that can co-occur
+    /// with the goal-first ambient dock (`confirmPromptOverlay`, `longPressParkConfirmOverlay`,
+    /// `parkingGuideBannerOverlay`). They live in `mapZStack` as siblings of the dock's
+    /// `.safeAreaInset`, so they know nothing of its height. When the dock is mounted (same
+    /// `goalSelectorDockVisible` inputs `bottomSafeAreaContent` uses) they rise above its
+    /// MEASURED frame (`onboardingGoalDockFrame`, live — correct at every Dynamic Type size,
+    /// unlike PR #134's hardcoded 326pt sum). Dock hidden / flag off: exactly the legacy
+    /// `browseSheetPeekHeight + 12` (byte-identical).
+    private var ambientOverlayBottomPaddingValue: CGFloat {
+        ambientOverlayBottomPadding(
+            goalDockVisible: goalSelectorDockVisible(
+                driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+                activeSheetIsNil: activeSheet == nil,
+                driveModeActive: driveModeActive,
+                blockSelectModeActive: blockSelectModeActive,
+                spotPlacementActive: spotPlacementActive,
+                curbPlacementActive: curbPlacement != nil
+            ),
+            measuredDockHeight: onboardingGoalDockFrame.height,
+            // The dock is the bottom inset, so its measured maxY IS the container's height.
+            containerHeight: onboardingGoalDockFrame.maxY,
+            browseSheetPeekHeight: browseSheetPeekHeight
+        )
+    }
+
     private var selectedSegment: Segment? {
         guard let id = selectedSegmentID else { return nil }
         return tileLoader.segments.first { $0.id == id }
@@ -2903,7 +2928,7 @@ struct ContentView: View {
                     onDismiss: { handleConfirmPromptDismiss() }
                 )
                 .padding(.horizontal, 16)
-                .padding(.bottom, browseSheetPeekHeight + 12)
+                .padding(.bottom, ambientOverlayBottomPaddingValue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -2946,7 +2971,7 @@ struct ContentView: View {
                     }
                 )
                 .padding(.horizontal, 16)
-                .padding(.bottom, browseSheetPeekHeight + 12)
+                .padding(.bottom, ambientOverlayBottomPaddingValue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -3262,7 +3287,7 @@ struct ContentView: View {
                     onDismiss: { dismissParkingGuideBanner(openGuide: false) }
                 )
                 .padding(.horizontal, 16)
-                .padding(.bottom, browseSheetPeekHeight + 12)
+                .padding(.bottom, ambientOverlayBottomPaddingValue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -7683,6 +7708,31 @@ func recenterPillBottomPadding(showApproachStrip: Bool, parkUntilVisible: Bool) 
 /// function post-refactor: directly testable without a live `ContentView`.
 func communityMapChromeBottomPadding(browseSheetPeekHeight: CGFloat) -> CGFloat {
     browseSheetPeekHeight + 12
+}
+
+/// Pre-flip fix (#37 ①): bottom padding for the floating cards that share the screen with the
+/// goal-first ambient dock. Dock hidden (always, flag off): the legacy
+/// `browseSheetPeekHeight + 12`. Dock visible: clears the dock's measured height + 12pt, but
+/// never LESS than the legacy value (an unmeasured `.zero` frame falls back to it).
+/// The dock's bottom edge is the container's bottom edge (it is the bottom `.safeAreaInset`),
+/// so its height is the clearance, capped at 45% of `containerHeight` (0 = no cap) so the
+/// card can't be pushed off-screen when the dock overflows at AX5.
+nonisolated func ambientOverlayBottomPadding(
+    goalDockVisible: Bool,
+    measuredDockHeight: CGFloat,
+    containerHeight: CGFloat = 0,
+    browseSheetPeekHeight: CGFloat
+) -> CGFloat {
+    let legacy = browseSheetPeekHeight + 12
+    guard goalDockVisible else { return legacy }
+    var clearance = measuredDockHeight + 12
+    // At the largest accessibility sizes the dock itself outgrows the screen; chasing its top
+    // would push the card off-screen (unreachable Park here / Cancel). Cap so the card always
+    // stays on-screen, overlapping the (already overflowing) dock instead.
+    if containerHeight > 0 {
+        clearance = min(clearance, containerHeight * 0.45)
+    }
+    return max(legacy, clearance)
 }
 
 #Preview {

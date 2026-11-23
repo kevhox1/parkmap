@@ -54,4 +54,77 @@ final class DM2AmbientDockLayoutTests: XCTestCase {
         let b = communityMapChromeBottomPadding(browseSheetPeekHeight: 200)
         XCTAssertEqual(b - a, 150, "the function must be exactly peekHeight + 12 — no other branch left.")
     }
+
+    // MARK: - ambientOverlayBottomPadding (#37 ①: confirm prompt / long-press card / guide banner)
+
+    /// Flag off / dock hidden: byte-identical to the legacy clearance, whatever the (stale)
+    /// measured dock height says.
+    func testAmbientOverlayBottomPadding_dockHidden_isLegacyRegardlessOfMeasuredHeight() {
+        for measured: CGFloat in [0, 120, 600] {
+            XCTAssertEqual(
+                ambientOverlayBottomPadding(goalDockVisible: false, measuredDockHeight: measured, browseSheetPeekHeight: 64),
+                76
+            )
+        }
+    }
+
+    func testAmbientOverlayBottomPadding_dockHidden_tracksPeekHeight() {
+        XCTAssertEqual(
+            ambientOverlayBottomPadding(goalDockVisible: false, measuredDockHeight: 300, browseSheetPeekHeight: 120),
+            132
+        )
+    }
+
+    /// Dock visible: clears the measured dock height + 12pt gap, standard size and AX5-scale.
+    func testAmbientOverlayBottomPadding_dockVisible_clearsMeasuredDock() {
+        XCTAssertEqual(
+            ambientOverlayBottomPadding(goalDockVisible: true, measuredDockHeight: 230, browseSheetPeekHeight: 64),
+            242
+        )
+        XCTAssertEqual(
+            ambientOverlayBottomPadding(goalDockVisible: true, measuredDockHeight: 520, browseSheetPeekHeight: 64),
+            532,
+            "a tall dock must still be cleared — the value is measured, not a frozen constant"
+        )
+    }
+
+    /// Unmeasured dock (`.zero`) never yields LESS than the legacy clearance.
+    func testAmbientOverlayBottomPadding_dockVisibleButUnmeasured_fallsBackToLegacy() {
+        XCTAssertEqual(
+            ambientOverlayBottomPadding(goalDockVisible: true, measuredDockHeight: 0, browseSheetPeekHeight: 64),
+            76
+        )
+    }
+
+    /// Flag-off wiring: with `driveModeDefaultEnabled == false` the dock-visible input is
+    /// false for every combination of the other inputs, so the padding is always legacy.
+    func testAmbientOverlayBottomPadding_flagOff_dockInputAlwaysFalse() {
+        XCTAssertFalse(AppConstants.driveModeDefaultEnabled)
+        for sheetNil in [true, false] {
+            for drive in [true, false] {
+                XCTAssertFalse(goalSelectorDockVisible(
+                    driveModeDefaultEnabled: false,
+                    activeSheetIsNil: sheetNil,
+                    driveModeActive: drive,
+                    blockSelectModeActive: false,
+                    spotPlacementActive: false,
+                    curbPlacementActive: false
+                ))
+            }
+        }
+    }
+
+    /// AX5: the dock outgrows the screen; the card must stay on-screen (capped at 45% of the
+    /// container), not chase the dock's off-screen top.
+    func testAmbientOverlayBottomPadding_overflowingDock_isCappedToKeepCardOnScreen() {
+        XCTAssertEqual(
+            ambientOverlayBottomPadding(goalDockVisible: true, measuredDockHeight: 1100, containerHeight: 800, browseSheetPeekHeight: 64),
+            360
+        )
+        // Standard size: cap does not bite.
+        XCTAssertEqual(
+            ambientOverlayBottomPadding(goalDockVisible: true, measuredDockHeight: 230, containerHeight: 800, browseSheetPeekHeight: 64),
+            242
+        )
+    }
 }
