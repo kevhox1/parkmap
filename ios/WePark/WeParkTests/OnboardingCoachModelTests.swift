@@ -12,7 +12,7 @@
 //    3. `onboardingCoachShouldShow(...)` — every combination.
 //    4. `onboardingCoachOverlayVisible(...)` — the rest-posture-only exclusion list, every
 //       combination.
-//    5. `onboardingCoachBearingOffset(...)` — the mark-3 anchor approximation.
+//    5/6. Selected-tile frame derivation and bubble layout clamping (QA follow-up).
 //
 //  [COMPILE-UNVERIFIED] Written with no Xcode/simulator on this machine — Kevin verifies
 //  compile + test pass on his Mac per HANDOFF.md's environment split.
@@ -122,49 +122,70 @@ final class OnboardingCoachModelTests: XCTestCase {
         }
     }
 
-    // MARK: - 5. onboardingCoachBearingOffset(...)
-
-    /// Due north from the origin should map to a straight-up (negative-y) screen offset with
-    /// no horizontal component.
-    func testBearingOffset_due_north_pointsUp() {
-        let origin = CLLocationCoordinate2D(latitude: 40.730, longitude: -73.990)
-        let target = CLLocationCoordinate2D(latitude: 40.735, longitude: -73.990)
-        let offset = onboardingCoachBearingOffset(from: origin, to: target, maxOffset: 70)
-        XCTAssertEqual(offset.width, 0, accuracy: 0.5)
-        XCTAssertLessThan(offset.height, 0, "north must map to a negative (upward) screen y offset")
-        XCTAssertEqual(abs(offset.height), 70, accuracy: 0.5)
+    /// QA #1: the coach never mounts while LocationPrimingCard is showing.
+    func testOverlayVisible_falseWhilePrimingCardShowing() {
+        XCTAssertFalse(onboardingCoachOverlayVisible(
+            activeSheetIsNil: true, driveModeActive: false, blockSelectModeActive: false,
+            spotPlacementActive: false, curbPlacementActive: false, primingCardShowing: true
+        ))
+        XCTAssertTrue(onboardingCoachOverlayVisible(
+            activeSheetIsNil: true, driveModeActive: false, blockSelectModeActive: false,
+            spotPlacementActive: false, curbPlacementActive: false, primingCardShowing: false
+        ))
     }
 
-    /// Due east should map to a rightward (positive-x) offset with no vertical component.
-    func testBearingOffset_due_east_pointsRight() {
-        let origin = CLLocationCoordinate2D(latitude: 40.730, longitude: -73.990)
-        let target = CLLocationCoordinate2D(latitude: 40.730, longitude: -73.980)
-        let offset = onboardingCoachBearingOffset(from: origin, to: target, maxOffset: 70)
-        XCTAssertGreaterThan(offset.width, 0, "east must map to a positive (rightward) screen x offset")
-        XCTAssertEqual(offset.height, 0, accuracy: 0.5)
-    }
+    // MARK: - 5. Selected-tile frame (QA #5)
 
-    /// Identical origin/target — the design doc's own named fallback ("no segment is within
-    /// range") must resolve to exactly zero, anchoring at the map's visual center.
-    func testBearingOffset_identicalCoordinates_isZero() {
-        let point = CLLocationCoordinate2D(latitude: 40.730, longitude: -73.990)
-        let offset = onboardingCoachBearingOffset(from: point, to: point, maxOffset: 70)
-        XCTAssertEqual(offset.width, 0)
-        XCTAssertEqual(offset.height, 0)
-    }
-
-    /// The returned offset's magnitude never exceeds `maxOffset`, at a few different bearings.
-    func testBearingOffset_neverExceedsMaxOffset() {
-        let origin = CLLocationCoordinate2D(latitude: 40.730, longitude: -73.990)
-        let targets = [
-            CLLocationCoordinate2D(latitude: 40.731, longitude: -73.991),
-            CLLocationCoordinate2D(latitude: 40.729, longitude: -73.989),
-            CLLocationCoordinate2D(latitude: 40.7305, longitude: -73.9905)
+    func testSelectedTileFrame_followsSelection_notLastReporter() {
+        let frames: [String: CGRect] = [
+            "a": CGRect(x: 0, y: 0, width: 100, height: 50),
+            "b": CGRect(x: 110, y: 0, width: 100, height: 50),
+            "c": CGRect(x: 220, y: 0, width: 100, height: 50)
         ]
-        for target in targets {
-            let offset = onboardingCoachBearingOffset(from: origin, to: target, maxOffset: 40)
-            let magnitude = (offset.width * offset.width + offset.height * offset.height).squareRoot()
-            XCTAssertLessThanOrEqual(magnitude, 40.5, "offset magnitude must not exceed maxOffset")
+        XCTAssertEqual(onboardingSelectedTileFrame(tileFrames: frames, selectedGoalRawValue: "a").minX, 0)
+        XCTAssertEqual(onboardingSelectedTileFrame(tileFrames: frames, selectedGoalRawValue: "b").minX, 110)
+        XCTAssertEqual(onboardingSelectedTileFrame(tileFrames: frames, selectedGoalRawValue: "c").minX, 220)
+    }
+
+    func testSelectedTileFrame_missing_isZero() {
+        XCTAssertEqual(onboardingSelectedTileFrame(tileFrames: [:], selectedGoalRawValue: "a"), .zero)
+    }
+
+    // MARK: - 6. Bubble layout (QA #3/#4)
+
+    func testBubbleWidth_cappedAndSafeAreaBound() {
+        XCTAssertEqual(onboardingCoachBubbleWidth(safeWidth: 393), 320)
+        XCTAssertEqual(onboardingCoachBubbleWidth(safeWidth: 300), 260)
+        XCTAssertEqual(onboardingCoachBubbleWidth(safeWidth: 10), 0)
+    }
+
+    func testBubbleCenterX_clampsLeftAndRight() {
+        // Width 320 in a 393-wide safe area: center must stay within [180, 213].
+        XCTAssertEqual(onboardingCoachBubbleCenterX(anchorX: 0, bubbleWidth: 320, safeMinX: 0, safeMaxX: 393), 180)
+        XCTAssertEqual(onboardingCoachBubbleCenterX(anchorX: 400, bubbleWidth: 320, safeMinX: 0, safeMaxX: 393), 213)
+        XCTAssertEqual(onboardingCoachBubbleCenterX(anchorX: 200, bubbleWidth: 320, safeMinX: 0, safeMaxX: 393), 200)
+        XCTAssertEqual(onboardingCoachBubbleCenterX(anchorX: nil, bubbleWidth: 320, safeMinX: 0, safeMaxX: 393), 196.5)
+    }
+
+    func testBubbleCenterX_neverLeavesSafeArea_atAnyAnchor() {
+        for anchor in stride(from: CGFloat(-50), through: 450, by: 25) {
+            let w = onboardingCoachBubbleWidth(safeWidth: 393)
+            let c = onboardingCoachBubbleCenterX(anchorX: anchor, bubbleWidth: w, safeMinX: 0, safeMaxX: 393)
+            XCTAssertGreaterThanOrEqual(c - w / 2, 20)
+            XCTAssertLessThanOrEqual(c + w / 2, 373)
         }
+    }
+
+    func testBubbleFitsAbove() {
+        XCTAssertTrue(onboardingCoachBubbleFitsAbove(anchorY: 500, topLimit: 100, gap: 40, minimumHeight: 140))
+        XCTAssertFalse(onboardingCoachBubbleFitsAbove(anchorY: 200, topLimit: 100, gap: 40, minimumHeight: 140))
+    }
+
+    func testPointOnScreen() {
+        let bounds = CGRect(x: 0, y: 0, width: 393, height: 852)
+        XCTAssertTrue(onboardingCoachPointIsOnScreen(CGPoint(x: 200, y: 400), in: bounds))
+        XCTAssertFalse(onboardingCoachPointIsOnScreen(CGPoint(x: -5, y: 400), in: bounds))
+        XCTAssertFalse(onboardingCoachPointIsOnScreen(CGPoint(x: 200, y: 900), in: bounds))
+        XCTAssertFalse(onboardingCoachPointIsOnScreen(CGPoint(x: 5, y: 400), in: bounds))
     }
 }

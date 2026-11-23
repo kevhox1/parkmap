@@ -33,9 +33,16 @@
 //  The requirement the design doc actually cares about — "track the real layout for free,
 //  including at different Dynamic Type sizes" — holds identically either way.
 //
-//  Mark 3's anchor is a bearing-based approximation, not an exact MapKit screen projection —
-//  see `Models/OnboardingCoachModel.swift`'s `onboardingCoachBearingOffset(...)` doc comment
-//  for the full, flagged reasoning (this PR's dispatch holds `MapViewRepresentable` untouched).
+//  Mark 3's anchor is a real ground->screen projection (QA follow-up to PR #149):
+//  `ContentView` resolves the nearest curb's coordinate through
+//  `MapViewRepresentable.CoordinatorActions.screenPointForCoordinate` (`MKMapView.convert`) and
+//  hands this view a point in WINDOW (global) coordinates, or nil when no curb is on-screen
+//  (then the bubble is placed with no ring - never pointing at empty space).
+//
+//  Layout (QA #3/#4): every bubble is clamped to the SAFE AREA at every Dynamic Type size -
+//  width capped (`onboardingCoachBubbleWidth`), horizontal center clamped
+//  (`onboardingCoachBubbleCenterX`), and the headline/body scroll inside a bounded region so
+//  "Got it"/"Done" and Skip always stay visible and tappable.
 //
 
 import SwiftUI
@@ -58,10 +65,9 @@ struct OnboardingCoachOverlay: View {
     /// The currently-selected goal tile's own frame (mark 2's bubble clearance + ring target).
     let selectedTileFrame: CGRect
 
-    /// Mark 3's already-resolved anchor offset (points, from this view's own center) toward the
-    /// nearest real curb segment, or `.zero` to anchor exactly at center — the design doc's own
-    /// named fallback for "no segment is within range."
-    let nearestCurbOffset: CGSize
+    /// Mark 3's anchor: the nearest real curb's projected position in WINDOW (global)
+    /// coordinates, or `nil` when no curb is on-screen (bubble placed without a ring).
+    let nearestCurbScreenPoint: CGPoint?
 
     /// Fired by the bubble's own "Got it"/"Done" button.
     let onPrimaryAction: () -> Void
@@ -72,13 +78,32 @@ struct OnboardingCoachOverlay: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var pulseOn = false
 
+    /// Vertical band reserved at the top for the persistent Skip pill (pill + padding). The
+    /// pill's footnote label grows with Dynamic Type, so part of the band scales with it
+    /// (60pt at standard size, ~86pt at AX5) - otherwise the bubble would overlap the pill.
+    @ScaledMetric(relativeTo: .footnote) private var skipBandScaledPart: CGFloat = 14
+    private var skipBandHeight: CGFloat { 46 + skipBandScaledPart }
+
     var body: some View {
         GeometryReader { proxy in
             let bounds = CGRect(origin: .zero, size: proxy.size)
-            ZStack(alignment: .top) {
-                ringOverlay(in: bounds)
-                bubbleLayer(in: bounds)
-                skipLink
+            let insets = proxy.safeAreaInsets
+            // The usable rect: `bounds` minus whatever safe-area insets apply to this view
+            // (zero on any side where this view already sits inside the safe area).
+            let safe = CGRect(
+                x: insets.leading,
+                y: insets.top,
+                width: max(0, proxy.size.width - insets.leading - insets.trailing),
+                height: max(0, proxy.size.height - insets.top - insets.bottom)
+            )
+            let globalOrigin = proxy.frame(in: .global).origin
+            let curbPoint = nearestCurbScreenPoint.map {
+                CGPoint(x: $0.x - globalOrigin.x, y: $0.y - globalOrigin.y)
+            }
+            ZStack(alignment: .topLeading) {
+                ringOverlay(curbPoint: curbPoint, in: bounds)
+                bubbleLayer(curbPoint: curbPoint, bounds: bounds, safe: safe)
+                skipLink(safe: safe)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
@@ -91,7 +116,7 @@ struct OnboardingCoachOverlay: View {
     // MARK: - Pulsing ring (§2.2)
 
     @ViewBuilder
-    private func ringOverlay(in bounds: CGRect) -> some View {
+    private func ringOverlay(curbPoint: CGPoint?, in bounds: CGRect) -> some View {
         switch mark {
         case .goalTiles:
             if tileRowFrame != .zero {
@@ -102,7 +127,10 @@ struct OnboardingCoachOverlay: View {
                 pulsingRing(frame: selectedTileFrame, cornerRadius: 20)
             }
         case .tapABlock:
-            pulsingCircle(center: curbAnchorPoint(in: bounds))
+            // No ring unless a real curb projected on-screen: never point at empty space.
+            if let curbPoint, onboardingCoachPointIsOnScreen(curbPoint, in: bounds) {
+                pulsingCircle(center: curbPoint)
+            }
         }
     }
 
@@ -122,9 +150,7 @@ struct OnboardingCoachOverlay: View {
             .allowsHitTesting(false)
     }
 
-    /// Mark 3's ring is a plain pulsing circle at the approximate anchor point — NOT traced
-    /// along the real polyline (flagged deviation, see this file's header + the model's own
-    /// doc comment on `onboardingCoachBearingOffset`).
+    /// Mark 3's ring: a plain pulsing circle on the projected nearest-curb point.
     private func pulsingCircle(center: CGPoint) -> some View {
         Circle()
             .stroke(Color.white, lineWidth: 3)
@@ -138,54 +164,82 @@ struct OnboardingCoachOverlay: View {
             .allowsHitTesting(false)
     }
 
-    private func curbAnchorPoint(in bounds: CGRect) -> CGPoint {
-        CGPoint(x: bounds.midX + nearestCurbOffset.width, y: bounds.midY + nearestCurbOffset.height)
-    }
-
     // MARK: - Bubble (§2.2/§2.3)
 
+    /// Every bubble is laid out inside a bounded REGION (inside the safe area, below the Skip
+    /// band, above whatever it must clear) and aligned to one edge of it; the card itself
+    /// scrolls its text if the region is too short (AX sizes), so it can never leave the screen.
     @ViewBuilder
-    private func bubbleLayer(in bounds: CGRect) -> some View {
+    private func bubbleLayer(curbPoint: CGPoint?, bounds: CGRect, safe: CGRect) -> some View {
+        let topLimit = safe.minY + skipBandHeight
+        let width = onboardingCoachBubbleWidth(safeWidth: safe.width)
+        let centerX = onboardingCoachBubbleCenterX(
+            anchorX: nil, bubbleWidth: width, safeMinX: safe.minX, safeMaxX: safe.maxX
+        )
         switch mark {
         case .goalTiles:
-            bottomAnchoredBubble(clearance: clearance(above: goalDockFrame, in: bounds))
+            bubbleRegion(
+                x: centerX, width: width, top: topLimit,
+                bottom: bottomLimit(above: goalDockFrame, safe: safe), alignment: .bottom, safeMaxY: safe.maxY
+            )
         case .colorMeaning:
-            bottomAnchoredBubble(clearance: clearance(above: selectedTileFrame, in: bounds))
+            bubbleRegion(
+                x: centerX, width: width, top: topLimit,
+                bottom: bottomLimit(above: selectedTileFrame, safe: safe), alignment: .bottom, safeMaxY: safe.maxY
+            )
         case .tapABlock:
-            centerAnchoredBubble(at: curbAnchorPoint(in: bounds), in: bounds)
+            let anchor = curbPoint.flatMap { onboardingCoachPointIsOnScreen($0, in: bounds) ? $0 : nil }
+            let x = onboardingCoachBubbleCenterX(
+                anchorX: anchor?.x, bubbleWidth: width, safeMinX: safe.minX, safeMaxX: safe.maxX
+            )
+            let dockTop = bottomLimit(above: goalDockFrame, safe: safe)
+            if let anchor {
+                // Keep clear of the 56pt ring (28pt radius) plus a gap.
+                let gap: CGFloat = 40
+                if onboardingCoachBubbleFitsAbove(anchorY: anchor.y, topLimit: topLimit, gap: gap, minimumHeight: 140) {
+                    bubbleRegion(x: x, width: width, top: topLimit, bottom: anchor.y - gap, alignment: .bottom, safeMaxY: safe.maxY)
+                } else {
+                    bubbleRegion(x: x, width: width, top: anchor.y + gap, bottom: dockTop, alignment: .top, safeMaxY: safe.maxY)
+                }
+            } else {
+                // No on-screen curb: place the bubble in the upper-middle, no ring.
+                bubbleRegion(
+                    x: x, width: width, top: topLimit,
+                    bottom: max(topLimit + 140, safe.midY), alignment: .bottom, safeMaxY: safe.maxY
+                )
+            }
         }
     }
 
-    /// The vertical space between `bounds`'s bottom edge and the TOP of `frame` — pinning a
-    /// bubble just above `frame` is then a plain `Spacer()` + a fixed-height clear reservation,
-    /// not a hand-computed offset. `.zero` (not yet measured) reserves zero clearance so the
-    /// bubble still renders (near the very bottom) rather than vanishing.
-    private func clearance(above frame: CGRect, in bounds: CGRect) -> CGFloat {
-        guard frame != .zero else { return 0 }
-        return max(0, bounds.maxY - frame.minY)
+    /// The bottom edge of the region above `frame` (12pt gap), or the safe-area bottom when the
+    /// frame is not measured yet.
+    private func bottomLimit(above frame: CGRect, safe: CGRect) -> CGFloat {
+        guard frame != .zero else { return safe.maxY - 12 }
+        return min(safe.maxY - 12, frame.minY - 12)
     }
 
-    private func bottomAnchoredBubble(clearance: CGFloat) -> some View {
-        VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            bubbleCard
-                .padding(.horizontal, 20)
-                .padding(.bottom, 12)
-            Color.clear.frame(height: clearance)
-        }
-    }
+    /// Minimum region height before the bubble is allowed to overlap whatever it would otherwise
+    /// clear. At accessibility Dynamic Type sizes the dock fills most of the screen, leaving no
+    /// room above it - the bubble then overlaps the top of the dock (still fully on-screen and
+    /// tappable) instead of collapsing to nothing and clipping.
+    @ScaledMetric(relativeTo: .headline) private var minimumBubbleRegionHeight: CGFloat = 170
 
-    private func centerAnchoredBubble(at point: CGPoint, in bounds: CGRect) -> some View {
-        bubbleCard
-            .padding(.horizontal, 20)
-            .frame(maxWidth: bounds.width)
-            .position(x: point.x, y: max(bounds.minY + 90, point.y - 70))
+    private func bubbleRegion(
+        x: CGFloat, width: CGFloat, top: CGFloat, bottom: CGFloat, alignment: Alignment,
+        safeMaxY: CGFloat
+    ) -> some View {
+        let effectiveBottom = min(max(bottom, top + minimumBubbleRegionHeight), safeMaxY - 12)
+        let height = max(1, effectiveBottom - top)
+        return bubbleCard(width: width)
+            .frame(width: width, height: height, alignment: alignment)
+            .position(x: x, y: top + height / 2)
     }
 
     /// `.regularMaterial` callout — same card family `LocationPrimingCard`/
-    /// `SpotPlacementConfirmCard` already use, not a new chrome idiom.
-    private var bubbleCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    /// `SpotPlacementConfirmCard` already use, not a new chrome idiom. The text block scrolls
+    /// (only when it does not fit); the primary button stays pinned below it.
+    private func bubbleCard(width: CGFloat) -> some View {
+        let text = VStack(alignment: .leading, spacing: 10) {
             Text(mark.title)
                 .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
@@ -194,6 +248,13 @@ struct OnboardingCoachOverlay: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        return VStack(alignment: .leading, spacing: 10) {
+            ViewThatFits(in: .vertical) {
+                text
+                ScrollView { text }
             }
             Button(action: onPrimaryAction) {
                 Text(mark.primaryActionLabel)
@@ -205,33 +266,30 @@ struct OnboardingCoachOverlay: View {
             .tint(.blue)
         }
         .padding(16)
-        .frame(maxWidth: 320, alignment: .leading)
+        .frame(width: width, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(mark.subtitle.map { "\(mark.title). \($0)" } ?? mark.title)
+        .accessibilityElement(children: .contain)
     }
 
     // MARK: - Persistent Skip link (§2.3: same screen position on every mark)
 
-    private var skipLink: some View {
-        VStack {
-            HStack {
-                Spacer()
-                Button(action: onSkipAll) {
-                    Text("Skip")
-                        .font(.footnote.weight(.semibold))
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 10)
-                        .background(.ultraThinMaterial, in: Capsule())
-                }
-                .frame(minWidth: 44, minHeight: 44)
-                .accessibilityLabel("Skip")
-                .accessibilityHint("Skips the tour and leaves the live map exactly as it is.")
-                Spacer()
+    private func skipLink(safe: CGRect) -> some View {
+        HStack {
+            Spacer()
+            Button(action: onSkipAll) {
+                Text("Skip")
+                    .font(.footnote.weight(.semibold))
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background(.ultraThinMaterial, in: Capsule())
             }
-            .padding(.top, 60)
-            Spacer(minLength: 0)
+            .frame(minWidth: 44, minHeight: 44)
+            .accessibilityLabel("Skip")
+            .accessibilityHint("Skips the tour and leaves the live map exactly as it is.")
+            Spacer()
         }
+        .frame(width: safe.width)
+        .offset(x: safe.minX, y: safe.minY + 8)
     }
 }
 
@@ -245,7 +303,7 @@ struct OnboardingCoachOverlay: View {
             goalDockFrame: CGRect(x: 16, y: 560, width: 361, height: 220),
             tileRowFrame: CGRect(x: 16, y: 640, width: 361, height: 128),
             selectedTileFrame: CGRect(x: 16, y: 640, width: 115, height: 128),
-            nearestCurbOffset: .zero,
+            nearestCurbScreenPoint: nil,
             onPrimaryAction: {},
             onSkipAll: {}
         )
