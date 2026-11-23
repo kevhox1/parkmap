@@ -112,8 +112,34 @@ nonisolated func goalCardShowsSubLabel(dynamicTypeSize: DynamicTypeSize) -> Bool
 /// threshold as the sub-label; the `chevron.up` stays so it still reads as a picker. Measured:
 /// with the word, "Park & Forget" wraps to two lines at AX3 and the dock lands at 40.5% of an
 /// 874pt screen (over the 40% budget); without it, 29.5%.
-nonisolated func goalCardShowsChangeWord(dynamicTypeSize: DynamicTypeSize) -> Bool {
-    dynamicTypeSize < .accessibility3
+///
+/// Follow-up (design amendment section 3): at AX2 with the banner chip showing, the word also
+/// goes (dock ~344pt + 48pt chip would sit on the 45% limit). AX1 with a chip keeps it (~38.7%).
+nonisolated func goalCardShowsChangeWord(
+    dynamicTypeSize: DynamicTypeSize,
+    bannerChipShowing: Bool = false
+) -> Bool {
+    guard dynamicTypeSize < .accessibility3 else { return false }
+    return !(bannerChipShowing && dynamicTypeSize >= .accessibility2)
+}
+
+/// Amendment section 3: at AX1+ the empty-map banner collapses to a one-line chip (the full
+/// sentence moves to the goal sheet's first row). Below AX1 the full banner is unchanged.
+/// Tied to the goal-card layout because the chip opens the same local sheet the card does.
+nonisolated func goalDockUsesBannerChip(dynamicTypeSize: DynamicTypeSize, fullPaletteMode: Bool) -> Bool {
+    goalDockUsesGoalCard(dynamicTypeSize: dynamicTypeSize, fullPaletteMode: fullPaletteMode)
+}
+
+/// Gap between the chip and Start Driving (amendment section 3).
+nonisolated let goalBannerChipGapAboveStartDriving: CGFloat = 4
+
+/// Minimum chip height (big touch target; amendment section 3).
+nonisolated let goalBannerChipMinHeight: CGFloat = 44
+
+/// QA #5 (PR #152): the medium detent shows one full tile at AX4+, so the sheet opens at
+/// `.large` there. Pure so it is testable.
+nonisolated func goalSheetOpensLarge(dynamicTypeSize: DynamicTypeSize) -> Bool {
+    dynamicTypeSize >= .accessibility4
 }
 
 extension ParkingGoal {
@@ -183,6 +209,17 @@ enum EmptyMapGuardKind: Equatable {
         switch self {
         case .steppedDown, .sparse: return "info.circle.fill"
         case .empty: return "mappin.slash"
+        }
+    }
+
+    /// One-line chip copy for the AX dock (amendment section 3). Complete short phrases, not
+    /// clipped sentences; the full sentence (`bannerCopy`) is the chip's VoiceOver label and the
+    /// goal sheet's first row.
+    nonisolated var chipCopy: String {
+        switch self {
+        case .steppedDown: return "Showing best available"
+        case .sparse: return "Only a few blocks clear"
+        case .empty: return "No clear spots nearby"
         }
     }
 
@@ -256,6 +293,8 @@ struct GoalSelectorView: View {
 
     /// Addendum 4: local sheet state (deliberately NOT `ContentView.activeSheet`).
     @State private var goalSheetPresented = false
+    /// QA #5: current sheet detent; set to `.large` on open at AX4+ (`goalSheetOpensLarge`).
+    @State private var goalSheetDetent: PresentationDetent = .medium
 
     /// Addendum 3 A3.3: at accessibility Dynamic Type sizes the three tiles reflow from a
     /// row to a vertical stack so labels never truncate.
@@ -297,12 +336,21 @@ struct GoalSelectorView: View {
         // has real side effects, so it earns the extra reach); the tiles / the full-palette
         // "Pick a parking goal" row are the centerpiece, closest to the thumb.
         VStack(spacing: 10) {
-            if let kind = emptyMapGuardKind {
-                EmptyMapGuardBanner(kind: kind)
-                    // Addendum 4: banner text capped at AX2 inside the dock cap.
-                    .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+            if let kind = emptyMapGuardKind,
+               goalDockUsesBannerChip(dynamicTypeSize: dynamicTypeSize, fullPaletteMode: fullPaletteMode) {
+                // Amendment section 3: chip + Start Driving share a 4pt gap.
+                VStack(spacing: goalBannerChipGapAboveStartDriving) {
+                    EmptyMapGuardChip(kind: kind, onTap: presentGoalSheet)
+                    startDrivingRow
+                }
+            } else {
+                if let kind = emptyMapGuardKind {
+                    EmptyMapGuardBanner(kind: kind)
+                        // Addendum 4: banner text capped at AX2 inside the dock cap.
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                }
+                startDrivingRow
             }
-            StartDrivingRow(accessibilityLayout: dynamicTypeSize.isAccessibilitySize, action: onStartDriving)
             if fullPaletteMode {
                 pickGoalRow
             } else if usesGoalCard {
@@ -327,13 +375,14 @@ struct GoalSelectorView: View {
         .sheet(isPresented: $goalSheetPresented) {
             GoalPickerSheet(
                 selectedGoal: selectedGoal,
+                guardKind: emptyMapGuardKind,
                 onSelect: { goal in
                     onSelectGoal(goal)
                     goalSheetPresented = false
                 },
                 onDone: { goalSheetPresented = false }
             )
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.medium, .large], selection: $goalSheetDetent)
             .presentationDragIndicator(.visible)
         }
         .onChange(of: goalSheetPresented) { _, presented in onGoalSheetPresentedChange(presented) }
@@ -345,12 +394,25 @@ struct GoalSelectorView: View {
 
     // MARK: - Accessibility-size goal card (Addendum 4)
 
+    private var startDrivingRow: some View {
+        StartDrivingRow(accessibilityLayout: dynamicTypeSize.isAccessibilitySize, action: onStartDriving)
+    }
+
+    /// Opens the local goal sheet (card tap or chip tap). At AX4+ it opens at `.large`.
+    private func presentGoalSheet() {
+        goalSheetDetent = goalSheetOpensLarge(dynamicTypeSize: dynamicTypeSize) ? .large : .medium
+        goalSheetPresented = true
+    }
+
     private var goalCard: some View {
         GoalCard(
             goal: selectedGoal,
             showsSubLabel: goalCardShowsSubLabel(dynamicTypeSize: dynamicTypeSize),
-            showsChangeWord: goalCardShowsChangeWord(dynamicTypeSize: dynamicTypeSize),
-            onTap: { goalSheetPresented = true }
+            showsChangeWord: goalCardShowsChangeWord(
+                dynamicTypeSize: dynamicTypeSize,
+                bannerChipShowing: emptyMapGuardKind != nil
+            ),
+            onTap: presentGoalSheet
         )
         // The card IS both the "row" and the "selected tile" for the coach: one tile exists.
         .onGeometryChange(for: GoalCardFrameReport.self, of: { [selectedGoal] proxy in
@@ -639,6 +701,9 @@ private struct GoalCard: View {
 /// Selecting fires the selection through `onSelect` (caller dismisses), Done just closes.
 private struct GoalPickerSheet: View {
     let selectedGoal: ParkingGoal
+    /// Amendment section 3: the AX chip's full original sentence + icon, repeated as the first
+    /// row at the sheet's own (uncapped) Dynamic Type. `nil` = no banner showing.
+    let guardKind: EmptyMapGuardKind?
     let onSelect: (ParkingGoal) -> Void
     let onDone: () -> Void
 
@@ -646,6 +711,9 @@ private struct GoalPickerSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 12) {
+                    if let guardKind {
+                        EmptyMapGuardBanner(kind: guardKind)
+                    }
                     ForEach(ParkingGoal.allCases, id: \.rawValue) { goal in
                         GoalTile(
                             goal: goal,
@@ -760,6 +828,39 @@ private struct EmptyMapGuardBanner: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// The AX one-line banner chip (amendment section 3): `.footnote` capped at `.xxxLarge`, one
+/// line, banner icon + trailing `chevron.right`, 44pt minimum height. Tapping opens the goal
+/// sheet, whose first row repeats the full sentence. VoiceOver reads the FULL sentence.
+private struct EmptyMapGuardChip: View {
+    let kind: EmptyMapGuardKind
+    let onTap: () -> Void
+
+    var body: some View {
+        Button(action: onTap) {
+            HStack(spacing: 8) {
+                Image(systemName: kind.bannerIcon)
+                Text(kind.chipCopy)
+                    .font(.footnote)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .accessibilityHidden(true)
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 14)
+            .frame(maxWidth: .infinity, minHeight: goalBannerChipMinHeight, alignment: .leading)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+            .contentShape(RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.plain)
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityLabel(kind.bannerCopy)
+        .accessibilityHint("Opens goal options")
+        .accessibilityAddTraits(.isButton)
     }
 }
 

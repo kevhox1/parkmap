@@ -109,15 +109,37 @@ final class AXGoalDockTests: XCTestCase {
         }
     }
 
-    /// KNOWN SPEC GAP (flagged in the PR): the addendum's 45%-with-banner budget is not
-    /// reachable with the banner text at its specified AX2 cap on an 874pt screen (measured
-    /// 441/518/432pt = 50/59/49% at AX1/AX2/AX3 for Park & Forget + the longest banner). This
-    /// only pins that the dock never outgrows 62%, so a regression is still caught.
-    func testBudget_withLongestBanner_staysBounded_specGapFlagged() {
-        for size in [DynamicTypeSize.accessibility1, .accessibility3, .accessibility5] {
-            let h = dockHeight(size, goal: .parkAndForget, banner: .empty)
-            XCTAssertLessThanOrEqual(h, screenHeight * 0.62, "\(size): dock \(h)pt with banner")
+    /// Amendment section 3: with the banner chip, the dock stays within 45% at every AX size for
+    /// every banner kind and every goal (the full-sentence banner measured 49-59%).
+    func testBudget_withBannerChip_dockAtMostFortyFivePercent() {
+        let kinds: [EmptyMapGuardKind] = [.steppedDown, .sparse, .empty]
+        for size in [DynamicTypeSize.accessibility1, .accessibility2, .accessibility3, .accessibility4, .accessibility5] {
+            for kind in kinds {
+                for goal in ParkingGoal.allCases {
+                    let h = dockHeight(size, goal: goal, banner: kind)
+                    XCTAssertLessThanOrEqual(h, screenHeight * 0.45, "\(size) \(kind) \(goal): dock \(h)pt")
+                }
+            }
         }
+    }
+
+    /// The chip adds at most 44pt + the 4pt gap above Start Driving (48pt) to the no-banner dock
+    /// (AX1 keeps "Change" with a chip, so the like-for-like comparison is at AX1 and AX3+).
+    func testChip_addsAtMostFortyEightPoints() {
+        for size in [DynamicTypeSize.accessibility1, .accessibility3, .accessibility5] {
+            let delta = dockHeight(size, banner: .empty) - dockHeight(size)
+            XCTAssertLessThanOrEqual(delta, 48.5, "\(size): chip delta \(delta)")
+            XCTAssertGreaterThanOrEqual(delta, 47.5, "\(size): chip delta \(delta)")
+        }
+    }
+
+    /// Below AX1 the full banner is unchanged (far taller than the 48pt chip).
+    func testBelowAX1_fullBannerStillRenders_notTheChip() {
+        let delta = dockHeight(.large, banner: .empty) - dockHeight(.large)
+        XCTAssertGreaterThan(delta, 48.5)
+        XCTAssertFalse(goalDockUsesBannerChip(dynamicTypeSize: .xxxLarge, fullPaletteMode: false))
+        XCTAssertTrue(goalDockUsesBannerChip(dynamicTypeSize: .accessibility1, fullPaletteMode: false))
+        XCTAssertFalse(goalDockUsesBannerChip(dynamicTypeSize: .accessibility1, fullPaletteMode: true))
     }
 
     /// Dock type cap: AX4 and AX5 freeze at AX3 sizing, so the dock stops growing.
@@ -207,6 +229,132 @@ final class AXGoalDockTests: XCTestCase {
             for goal in ParkingGoal.allCases {
                 XCTAssertGreaterThan(dockHeight(size, goal: goal), 0)
             }
+        }
+    }
+
+    // MARK: - Banner chip (follow-up, amendment section 3)
+
+    func testChipCopy_perKind_isTheSpecifiedShortPhrase() {
+        XCTAssertEqual(EmptyMapGuardKind.steppedDown.chipCopy, "Showing best available")
+        XCTAssertEqual(EmptyMapGuardKind.sparse.chipCopy, "Only a few blocks clear")
+        XCTAssertEqual(EmptyMapGuardKind.empty.chipCopy, "No clear spots nearby")
+        for kind in [EmptyMapGuardKind.steppedDown, .sparse, .empty] {
+            XCTAssertLessThanOrEqual(kind.chipCopy.count, 23)
+            XCTAssertNotEqual(kind.chipCopy, kind.bannerCopy)
+        }
+    }
+
+    func testFullSentencesAreUnchanged() {
+        XCTAssertEqual(EmptyMapGuardKind.steppedDown.bannerCopy, "Nothing clear for a full week nearby \u{2014} showing the best available.")
+        XCTAssertEqual(EmptyMapGuardKind.sparse.bannerCopy, "Only a few blocks nearby are clear for a full week.")
+        XCTAssertEqual(EmptyMapGuardKind.empty.bannerCopy, "No clear spots found very nearby \u{2014} try Overnight, or pan the map.")
+    }
+
+    func testChipConstants() {
+        XCTAssertEqual(goalBannerChipMinHeight, 44)
+        XCTAssertEqual(goalBannerChipGapAboveStartDriving, 4)
+    }
+
+    /// AX2-only rule: with a chip showing, "Change" goes at AX2 too. AX1 keeps it; no chip keeps
+    /// the shipped thresholds.
+    func testChangeWord_dropsAtAX2OnlyWhenChipShowing() {
+        XCTAssertTrue(goalCardShowsChangeWord(dynamicTypeSize: .accessibility1, bannerChipShowing: true))
+        XCTAssertFalse(goalCardShowsChangeWord(dynamicTypeSize: .accessibility2, bannerChipShowing: true))
+        XCTAssertTrue(goalCardShowsChangeWord(dynamicTypeSize: .accessibility2, bannerChipShowing: false))
+        XCTAssertFalse(goalCardShowsChangeWord(dynamicTypeSize: .accessibility3, bannerChipShowing: true))
+        XCTAssertTrue(goalCardShowsChangeWord(dynamicTypeSize: .large, bannerChipShowing: false))
+    }
+
+    func testGoalSheetOpensLarge_onlyAtAX4Up() {
+        XCTAssertFalse(goalSheetOpensLarge(dynamicTypeSize: .accessibility3))
+        XCTAssertTrue(goalSheetOpensLarge(dynamicTypeSize: .accessibility4))
+        XCTAssertTrue(goalSheetOpensLarge(dynamicTypeSize: .accessibility5))
+        XCTAssertFalse(goalSheetOpensLarge(dynamicTypeSize: .large))
+    }
+
+    // MARK: - Coach bubble region (follow-up, pure math)
+
+    func testSkipTop_belowAX1_isLegacy_atAXDropsBelowBanner() {
+        XCTAssertEqual(onboardingCoachSkipTop(safeMinY: 62, topChromeBottom: 203, accessibilityLayout: false), 70)
+        XCTAssertEqual(onboardingCoachSkipTop(safeMinY: 62, topChromeBottom: 203, accessibilityLayout: true), 207)
+        // A short banner never moves Skip above the legacy position.
+        XCTAssertEqual(onboardingCoachSkipTop(safeMinY: 62, topChromeBottom: 40, accessibilityLayout: true), 70)
+    }
+
+    func testRegionTop_equalsLegacyWhenSkipUnmoved() {
+        let band: CGFloat = 60
+        XCTAssertEqual(onboardingCoachRegionTop(safeMinY: 62, skipTop: 70, skipBandHeight: band), 62 + band)
+        XCTAssertEqual(onboardingCoachRegionTop(safeMinY: 62, skipTop: 207, skipBandHeight: 86), 285)
+    }
+
+    /// AX5 geometry from the QA repro: 203pt ASP banner, dock top 568 (chip showing). The
+    /// region must start below the banner + Skip and end at dock top - 12, never overlapping.
+    func testVerticalBounds_ax5_regionBetweenChromeAndDockMinus12() {
+        let skipTop = onboardingCoachSkipTop(safeMinY: 62, topChromeBottom: 203, accessibilityLayout: true)
+        let top = onboardingCoachRegionTop(safeMinY: 62, skipTop: skipTop, skipBandHeight: 86)
+        let dockTop: CGFloat = 568
+        let b = onboardingCoachBubbleVerticalBounds(
+            top: top, bottom: dockTop - 12, safeMaxY: 840, minimumHeight: 170, accessibilityLayout: true
+        )
+        XCTAssertGreaterThanOrEqual(b.top, 203 + 4 + 44)   // below banner and the 44pt Skip
+        XCTAssertEqual(b.bottom, dockTop - 12)
+        XCTAssertGreaterThan(b.bottom - b.top, 140)
+    }
+
+    /// Below AX1 the legacy "may extend to the minimum height" behavior is unchanged.
+    func testVerticalBounds_belowAX1_keepsLegacyMinimumExtension() {
+        let b = onboardingCoachBubbleVerticalBounds(
+            top: 120, bottom: 150, safeMaxY: 840, minimumHeight: 170, accessibilityLayout: false
+        )
+        XCTAssertEqual(b.bottom, 290)
+    }
+
+    /// At AX a short region is NOT stretched over the dock (only the hard floor applies).
+    func testVerticalBounds_ax_doesNotStretchPastTheDockWhenRegionIsUsable() {
+        let b = onboardingCoachBubbleVerticalBounds(
+            top: 300, bottom: 480, safeMaxY: 840, minimumHeight: 400, accessibilityLayout: true
+        )
+        XCTAssertEqual(b.bottom, 480)
+    }
+
+    // MARK: - Rail clearance (follow-up, pure math)
+
+    func testRailClearance_pullsTrailingEdgeLeftOfRail_whenVerticallyOverlapping() {
+        let rail = CGRect(x: 330, y: 100, width: 56, height: 124)   // Search + More
+        let maxX = onboardingCoachRailAdjustedSafeMaxX(
+            safeMaxX: 402, railFrame: rail, regionTop: 200, regionBottom: 500
+        )
+        let width = onboardingCoachBubbleWidth(safeWidth: maxX - 0)
+        let centerX = onboardingCoachBubbleCenterX(anchorX: nil, bubbleWidth: width, safeMinX: 0, safeMaxX: maxX)
+        let rightEdge = centerX + width / 2
+        XCTAssertLessThanOrEqual(rightEdge, rail.minX - 8 + 0.001)
+        XCTAssertGreaterThanOrEqual(centerX - width / 2, 20)
+    }
+
+    func testRailClearance_noChangeWithoutOverlapOrMeasurement() {
+        let rail = CGRect(x: 330, y: 100, width: 56, height: 124)
+        XCTAssertEqual(onboardingCoachRailAdjustedSafeMaxX(safeMaxX: 402, railFrame: rail, regionTop: 300, regionBottom: 600), 402)
+        XCTAssertEqual(onboardingCoachRailAdjustedSafeMaxX(safeMaxX: 402, railFrame: .zero, regionTop: 100, regionBottom: 600), 402)
+    }
+
+    func testRailClearance_neverWidensPastSafeArea() {
+        let rail = CGRect(x: 500, y: 100, width: 56, height: 124)
+        XCTAssertEqual(onboardingCoachRailAdjustedSafeMaxX(safeMaxX: 402, railFrame: rail, regionTop: 100, regionBottom: 600), 402)
+    }
+
+    func testOverlayRenders_atAX5_withMeasuredChromeAndRail() {
+        let dock = CGRect(x: 0, y: 568, width: 402, height: 306)
+        let card = CGRect(x: 16, y: 700, width: 370, height: 140)
+        for mark in [OnboardingCoachMark.goalTiles, .colorMeaning, .tapABlock] {
+            let view = OnboardingCoachOverlay(
+                mark: mark, goalDockFrame: dock, tileRowFrame: card, selectedTileFrame: card,
+                nearestCurbScreenPoint: nil,
+                topChromeBottom: 203,
+                railFrame: CGRect(x: 330, y: 100, width: 56, height: 124),
+                onPrimaryAction: {}, onSkipAll: {}
+            )
+            .environment(\.dynamicTypeSize, .accessibility5)
+            XCTAssertNotNil(UIHostingController(rootView: view).view)
         }
     }
 }

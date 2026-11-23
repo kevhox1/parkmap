@@ -815,6 +815,11 @@ struct ContentView: View {
     /// `activeSheet`). The coach bubble hides while it shows and returns if the user closes it
     /// without choosing.
     @State private var goalSheetPresented: Bool = false
+    /// #37 6 follow-up: measured bottom of the top chrome (ASP banner) and the trailing rail's
+    /// frame, in `onboardingCoachCoordinateSpaceName`; the coach overlay's AX bubble region +
+    /// Skip placement read them (ignored below AX1).
+    @State private var onboardingTopChromeBottom: CGFloat = 0
+    @State private var onboardingRailFrame: CGRect = .zero
 
     /// Mark 3's anchor: the nearest curb's real ground->screen projection in WINDOW coordinates
     /// (`onboardingNearestCurbScreenPoint()`), or nil when no curb is on-screen (bubble, no
@@ -2749,7 +2754,12 @@ struct ContentView: View {
             ZStack(alignment: .topTrailing) {
                 mapRepresentable
                     .ignoresSafeArea()
-                    .safeAreaInset(edge: .top) { ASPBanner(state: bannerState) }
+                    .safeAreaInset(edge: .top) {
+                        ASPBanner(state: bannerState)
+                            .onGeometryChange(for: CGFloat.self, of: { proxy in
+                                proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
+                            }) { onboardingTopChromeBottom = $0 }
+                    }
                     .safeAreaInset(edge: .bottom) { bottomSafeAreaContent }
                 // FT-18: the browse-mode toolbar (Find me / Find my car / Park Until) and
                 // the isolated Drive Mode "End" control share this top-trailing corner but
@@ -2774,6 +2784,9 @@ struct ContentView: View {
                     curbPlacementActive: curbPlacement != nil
                 ) {
                     recenterButtonStack
+                        .onGeometryChange(for: CGRect.self, of: { proxy in
+                            proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+                        }) { onboardingRailFrame = $0 }
                         .padding(.top, 100)
                         // Addendum 3 A3.2: flag-on rail uses a 16pt trailing margin; flag off
                         // keeps the pre-DM-2 12pt.
@@ -3157,6 +3170,8 @@ struct ContentView: View {
                     selectedGoalRawValue: selectedGoal.rawValue
                 ),
                 nearestCurbScreenPoint: onboardingCurbScreenPoint,
+                topChromeBottom: onboardingTopChromeBottom,
+                railFrame: onboardingRailFrame,
                 onPrimaryAction: { advanceOnboardingCoach(from: mark) },
                 onSkipAll: { finishOnboardingCoach() }
             )
