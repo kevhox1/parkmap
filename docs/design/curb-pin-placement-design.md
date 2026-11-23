@@ -263,3 +263,50 @@ The reticle and highlight drawing are `isAccessibilityElement = false` (decorati
 5. VoiceOver: entry announcement, adjustable swipe cycles curbs, debounced announcement on pan, Park/Report/Cancel labels.
 6. Reduce Motion on: no fly-in, no needle lift, instant nudge.
 7. Kevin outdoors, dark scheme: needle, highlight band, card text, and in particular a red "No parking" chip.
+
+---
+
+## Addendum — placement card at accessibility sizes and SE (2026-11-23)
+
+Closes flip-smoke findings #1 (AX, blocking), #2 (SE), #3, #4, #6 (`docs/qa/curbpin-flip-smoke-2026-11-23.md`). Supersedes section 3.4/3.5 where they differ. Code: `CurbPlacementCard.swift` (`card(...)`, `textRows`, `CurbPlacementCardLayout`), `CurbPlacementMapPolicy.tipHeightFraction`.
+
+**Root cause.** The card is a `ViewThatFits { textRows ; ScrollView }` above a pinned primary + link. The pinned rows scale (`@ScaledMetric` primary 60 -> 99 at AX1, 186 at AX5) and eat the cap, so the legality rows are the ones that scroll. At Large on the 17 the card is 396 pt (= the cap, not the ~350 natural), so the ScrollView branch is already being chosen. **Rule: no ScrollView in the card, ever.** Legality never scrolls; rows are dropped by priority instead.
+
+### 1. Row priority (top to bottom on screen; first = last to be dropped)
+P1 status slot (status chip, or the nearest-curb chip / spinner in non-snapped states). P2 title (street + side). P3 primary button. P4 subtitle (cross street, or the no-curb / no-data instruction). P5 Report link. P6 far-curb footnote. P7 hint pill. Screen order: title, status slot, subtitle, primary, link. (Chip moves above the cross-street line.)
+- **Footnote row is deleted.** In `.farCurb` the footnote ("Nearest curb with data", info icon) REPLACES the subtitle text in the subtitle slot. Saves 24 pt at every size; cross street is absent only in that rare state.
+- Card height is an explicit `.frame(height:)` from a pure function (config below), not emergent. It stays constant across states and keeps the card-never-covers-ghost rule: **card top >= tip + 130 at every size (the 130 is NOT shrunk)**. We move the tip instead. Cap/gap computed on unrounded values and the card is `min(spec, cap)`, which fixes the 128/129 shortfall.
+
+### 2. Size tiers and type clamp
+T0 = up to Large. T1 = XL..XXXL. T2 = AX1 and above. **Clamp the card subtree to `.dynamicTypeSize(...accessibility1)`** (apply on the overlay in `ContentView`, because `@ScaledMetric` and `\.dynamicTypeSize` read the outer environment, not a modifier inside). AX2..AX5 therefore render exactly as AX1: type stays 1.6-2x default (title2 34 pt, headline 28 pt), same pattern as Cancel/hint (3.4). VoiceOver is unaffected. Remove the 4-line title reservation.
+Metrics (estimates, +-3 pt; the engineer re-measures once): title line 28 / 34 / 41; chip min 44 / 48 / 88 (2 lines, `minimumScaleFactor(0.8)` allows a 3rd); subtitle line 20 / 25 / 30; primary `min(scaled, 92)` = 60 / 80 / 92; link `min(scaled, 56)` = 44-48 / 56 / not shown. Title reserves 2 lines at all tiers (82 pt at T2), `minimumScaleFactor(0.75)` before a 3rd line, never truncate the side. At T1/T2 the no-curb primary reads "Save car here" + line break + "(no parking info)" (2 lines fit in 92), never clipped.
+
+### 3. Config selection (pure, unit-tested, margin 12 pt)
+Content height = sum of rows + 16 top + 16 bottom (8 with link); cap = `H - (tip + 130)` minus bottom inset. Take the FIRST that fits with >= 12 pt slack, in this order (tip fraction, rows): (0.40 full) (0.36 full) (0.40 no link) (0.36 no link) (0.30 no link) (0.36 no link, no subtitle) (0.30 no link, no subtitle). Never scroll; DEBUG-assert if none fits. Tip fraction is chosen at session entry and frozen (#147 camera math reads it once).
+
+### 4. Arithmetic (content pt; cap excludes the 34 pt home inset on the 17, 0 on SE)
+| Device / size | Tip | Rows shown | Content | Cap | Slack | Card top / gap |
+|---|---|---|---|---|---|---|
+| 17 Large | .40 = 350 | all | 16+56+8+44+4+20+16+60+12+48+8 = 292 | 360 | 68 | 548 / 198 |
+| 17 XXXL | .40 | all | 16+68+8+48+4+25+16+80+12+56+8 = 341 | 360 | 19 | 499 / 149 |
+| 17 AX1, AX3, AX5 (identical) | .36 = 315 | no link | 16+82+8+88+4+30+16+92+16 = 352 | 395 | 43 | 488 / 173 |
+| SE Large | .36 = 240 | all | 16+56+8+44+4+20+16+60+8+44+8 = 284 | 297 | 13 | 383 / 143 |
+| SE XXXL | .36 | no link | 16+68+8+48+4+25+16+80+16 = 281 | 297 | 16 | 386 / 146 |
+| SE AX1, AX3, AX5 | .30 = 200 | no link, no subtitle | 16+82+8+88+16+92+16 = 318 | 337 | 19 | 349 / 149 |
+(17 AX1 at .40 would leave 8 pt of slack, so the selector moves the tip to .36. SE AX is 2 pages of scroll today; now 0.) Legality (title + chip) ends at y = card top + 16+82+8+88 = +194 on SE AX, always above the primary. Pro Max / 16: more room, selector lands on .40 full at T0-T1.
+Trade-offs, explicit: the Report link is absent at T2 (all phones) and at XXXL on SE; the cross-street is absent at T2 on SE (no-curb instruction then lives in the nearest-curb chip, title and VoiceOver value); the tip rises 40 -> 36% (SE 30%) so the map shows less ground above the pin.
+
+### 5. AX5 self-overlap (cause and fix)
+Pinned rows (primary 186, link) exceeded the cap, `textCap` floored at 44, and the VStack overflowed its own background (title under the button, chip on the link, needle 18 pt above the card top). Fixed by the clamp (section 2), no ScrollView, explicit height, and the selector. Add a unit test over {667, 812, 874, 932} x {Large, XXXL, AX1, AX5} x {all states}: content + 12 <= cap and `cardTop - tipY >= 130`.
+
+### 6. Cancel, Locate, hint
+- **ASP banner is hidden while placement is active when the phone is short (<700 pt) or the tier is T2**; it returns on exit (the chip already carries the pin's rules). Cancel then sits at `safeTop + 8`, no longer driven by `paddingForBannerState`.
+- **T2: Locate moves from above the card to the top row, trailing, 56x56**, mirroring Cancel; this removes the car-pin collision and the card-top coupling. T0/T1 keep the current bottom-trailing Locate (thumb reach rationale stands). Cancel at T2 keeps min 56 pt height.
+- Hint pill: head offset 64 -> 72 (the 5 pt pin-head overlap on SE), bottom 12 pt above it. If pill top < Cancel bottom + 8 it is suppressed for that session, never clamped onto the pin (SE AX: head top 128, pill 80-116 vs Cancel bottom 84, so suppressed; SE Large: pill 120-156, shown).
+
+### 7. Copy and VoiceOver
+- Title case: lowercase, capitalise each word, but tokens starting with a digit stay lowercase ("31st", "8 Ave" not "1St"), single N/S/E/W stay capital. Keep abbreviations ("Stanton St", "8 Ave") for width; do NOT use `String.capitalized` (it yields "1St Ave"). Voiceover keeps `expandedStreetName`.
+- Replace `.accessibilityLabel("Parking spot")` with the visible title: label = spoken street + side ("Stanton Street, South side"); value = "between X and Y. <status text>." (street removed from the value; far-curb adds the footnote). Non-snapped: label "No curb here" / "No parking data here" / "Loading curbs", value = the instruction. Label-in-name (WCAG 2.5.3): visible text must be inside the label. Hint unchanged.
+
+### 8. Verify (Mac smoke)
+SE and 17 at Large, XXXL, AX1, AX3, AX5, in snapped, no-curb and noData states: street+side line and chip fully on screen with no scroll, primary below, `card.minY - tipY >= 130`, hint not on the pin, Cancel/Locate clear of the car pin and any banner. SE hardware check stays on Kevin's list.
