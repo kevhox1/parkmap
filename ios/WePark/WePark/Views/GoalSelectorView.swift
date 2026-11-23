@@ -622,6 +622,19 @@ extension GoalTile {
     @ViewBuilder
     fileprivate var tileTitle: some View {
         let name = goal.dockPrimary
+        // Reserve exactly two unscaled headline lines (what the old `lineLimit(2)` title could
+        // occupy) so the dock's measured height below AX1 does not change.
+        ZStack {
+            Text("A\nA")
+                .font(.headline.bold())
+                .lineLimit(2)
+                .hidden()
+                .accessibilityHidden(true)
+            titleFit(name)
+        }
+    }
+
+    private func titleFit(_ name: String) -> some View {
         ViewThatFits(in: .horizontal) {
             Text(name)
                 .font(.headline.bold())
