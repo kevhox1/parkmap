@@ -94,10 +94,35 @@ enum EmptyMapGuardKind: Equatable {
     /// The ladder stepped down from the top rung but still found SOME match at a lower rung.
     /// Design doc §3.2: "Nothing clear for a full week nearby — showing the best available."
     case steppedDown
+    /// Density-only sub-case (design doc addendum 2026-11-22): the top rung was KEPT but only a
+    /// few blocks clear it. Must not claim a step-down happened. Same icon/styling as
+    /// `.steppedDown`.
+    case sparse
     /// Even the bottom (easiest) rung found zero matches anywhere in the viewport — the
     /// true-empty state. Design doc §3.2: "No clear spots found very nearby — try Overnight,
     /// or pan the map."
     case empty
+
+    /// Banner icon (SF Symbol). `nonisolated` so sync XCTests can read it.
+    nonisolated var bannerIcon: String {
+        switch self {
+        case .steppedDown, .sparse: return "info.circle.fill"
+        case .empty: return "mappin.slash"
+        }
+    }
+
+    /// Banner copy, locked in `docs/design/goal-first-ambient-design.md` (§3.2 + 2026-11-22
+    /// addendum).
+    nonisolated var bannerCopy: String {
+        switch self {
+        case .steppedDown:
+            return "Nothing clear for a full week nearby — showing the best available."
+        case .sparse:
+            return "Only a few blocks nearby are clear for a full week."
+        case .empty:
+            return "No clear spots found very nearby — try Overnight, or pan the map."
+        }
+    }
 }
 
 // MARK: - GoalSelectorView
@@ -467,26 +492,10 @@ struct GoalParkUntilPill: View {
 private struct EmptyMapGuardBanner: View {
     let kind: EmptyMapGuardKind
 
-    private var icon: String {
-        switch kind {
-        case .steppedDown: return "info.circle.fill"
-        case .empty: return "mappin.slash"
-        }
-    }
-
-    private var copy: String {
-        switch kind {
-        case .steppedDown:
-            return "Nothing clear for a full week nearby — showing the best available."
-        case .empty:
-            return "No clear spots found very nearby — try Overnight, or pan the map."
-        }
-    }
-
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: icon)
-            Text(copy)
+            Image(systemName: kind.bannerIcon)
+            Text(kind.bannerCopy)
                 .font(.subheadline)
                 .fixedSize(horizontal: false, vertical: true)
         }

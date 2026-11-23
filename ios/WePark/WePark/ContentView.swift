@@ -1193,6 +1193,31 @@ struct ContentView: View {
         communityMapChromeBottomPadding(browseSheetPeekHeight: browseSheetPeekHeight)
     }
 
+    /// Pre-flip fix (#37 ①): bottom clearance for the three floating cards that can co-occur
+    /// with the goal-first ambient dock (`confirmPromptOverlay`, `longPressParkConfirmOverlay`,
+    /// `parkingGuideBannerOverlay`). They live in `mapZStack` as siblings of the dock's
+    /// `.safeAreaInset`, so they know nothing of its height. When the dock is mounted (same
+    /// `goalSelectorDockVisible` inputs `bottomSafeAreaContent` uses) they rise above its
+    /// MEASURED frame (`onboardingGoalDockFrame`, live — correct at every Dynamic Type size,
+    /// unlike PR #134's hardcoded 326pt sum). Dock hidden / flag off: exactly the legacy
+    /// `browseSheetPeekHeight + 12` (byte-identical).
+    private var ambientOverlayBottomPaddingValue: CGFloat {
+        ambientOverlayBottomPadding(
+            goalDockVisible: goalSelectorDockVisible(
+                driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+                activeSheetIsNil: activeSheet == nil,
+                driveModeActive: driveModeActive,
+                blockSelectModeActive: blockSelectModeActive,
+                spotPlacementActive: spotPlacementActive,
+                curbPlacementActive: curbPlacement != nil
+            ),
+            measuredDockHeight: onboardingGoalDockFrame.height,
+            // The dock is the bottom inset, so its measured maxY IS the container's height.
+            containerHeight: onboardingGoalDockFrame.maxY,
+            browseSheetPeekHeight: browseSheetPeekHeight
+        )
+    }
+
     private var selectedSegment: Segment? {
         guard let id = selectedSegmentID else { return nil }
         return tileLoader.segments.first { $0.id == id }
@@ -2903,7 +2928,7 @@ struct ContentView: View {
                     onDismiss: { handleConfirmPromptDismiss() }
                 )
                 .padding(.horizontal, 16)
-                .padding(.bottom, browseSheetPeekHeight + 12)
+                .padding(.bottom, ambientOverlayBottomPaddingValue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -2946,7 +2971,7 @@ struct ContentView: View {
                     }
                 )
                 .padding(.horizontal, 16)
-                .padding(.bottom, browseSheetPeekHeight + 12)
+                .padding(.bottom, ambientOverlayBottomPaddingValue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -3262,7 +3287,7 @@ struct ContentView: View {
                     onDismiss: { dismissParkingGuideBanner(openGuide: false) }
                 )
                 .padding(.horizontal, 16)
-                .padding(.bottom, browseSheetPeekHeight + 12)
+                .padding(.bottom, ambientOverlayBottomPaddingValue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -3703,8 +3728,8 @@ struct ContentView: View {
     /// `ParkingGoals`'s ladder offsets at all — pure presentation, per that file's own header.
     private var emptyMapGuardKind: EmptyMapGuardKind? {
         switch parkAndForgetGuardState {
-        case .resolved(_, let steppedDown):
-            return steppedDown ? .steppedDown : nil
+        case .resolved(_, let banner):
+            return banner
         case .empty:
             return .empty
         case nil:
@@ -7527,12 +7552,14 @@ nonisolated func ambientRecenterButtonVisible(
 /// loaded segments. `offsetDays` is always one of `ParkingGoals.parkAndForgetLadderOffsetDays`
 /// (8, 4, or 2) — the COLOR BUCKET's own target, unaffected by this fix (QA pass 1 on PR
 /// #133 confirmed the monotonic top-down "first rung anyone clears" walk is sound and
-/// should stay as-is). `steppedDown == true` means the "showing the best available" banner
-/// (§0.8.10) must show — see `resolveParkAndForgetViewport`'s doc comment for how this is
+/// should stay as-is). a non-nil `banner` means a banner (§0.8.10) must show — see `resolveParkAndForgetViewport`'s doc comment for how this is
 /// now computed (density-aware, not purely positional). `.empty` is the true worst case:
 /// even the bottom (easiest) rung has zero matches anywhere in the viewport.
 enum ParkAndForgetViewportResolution: Equatable {
-    case resolved(offsetDays: Int, steppedDown: Bool)
+    /// `banner` is `nil` (no banner), `.steppedDown` (case A: a lower rung was picked), or
+    /// `.sparse` (case B: top rung kept but only a few blocks clear it) — see
+    /// `docs/design/goal-first-ambient-design.md`'s 2026-11-22 addendum.
+    case resolved(offsetDays: Int, banner: EmptyMapGuardKind?)
     case empty
 
     /// §0.8.10 fast-follow (QA pass 1 on PR #133, Finding #1 — promoted to FIX-THEN-MERGE
@@ -7617,8 +7644,17 @@ nonisolated func resolveParkAndForgetViewport(
     // Monotonicity guarantees bottomCount >= pickedCount, so density is always in [0, 1].
     let density = bottomCount > 0 ? Double(pickedCount) / Double(bottomCount) : 0
 
-    let steppedDown = pickedIndex > 0 || density < bannerDensityThreshold
-    return .resolved(offsetDays: ladderOffsetDays[pickedIndex], steppedDown: steppedDown)
+    // Case A (real step-down) wins over case B (density-only): B is by definition the
+    // top-rung-kept case, so the two never overlap.
+    let banner: EmptyMapGuardKind?
+    if pickedIndex > 0 {
+        banner = .steppedDown
+    } else if density < bannerDensityThreshold {
+        banner = .sparse
+    } else {
+        banner = nil
+    }
+    return .resolved(offsetDays: ladderOffsetDays[pickedIndex], banner: banner)
 }
 
 // MARK: - TF2-18 P1-3: Recenter pill bottom clearance
@@ -7672,6 +7708,31 @@ func recenterPillBottomPadding(showApproachStrip: Bool, parkUntilVisible: Bool) 
 /// function post-refactor: directly testable without a live `ContentView`.
 func communityMapChromeBottomPadding(browseSheetPeekHeight: CGFloat) -> CGFloat {
     browseSheetPeekHeight + 12
+}
+
+/// Pre-flip fix (#37 ①): bottom padding for the floating cards that share the screen with the
+/// goal-first ambient dock. Dock hidden (always, flag off): the legacy
+/// `browseSheetPeekHeight + 12`. Dock visible: clears the dock's measured height + 12pt, but
+/// never LESS than the legacy value (an unmeasured `.zero` frame falls back to it).
+/// The dock's bottom edge is the container's bottom edge (it is the bottom `.safeAreaInset`),
+/// so its height is the clearance, capped at 45% of `containerHeight` (0 = no cap) so the
+/// card can't be pushed off-screen when the dock overflows at AX5.
+nonisolated func ambientOverlayBottomPadding(
+    goalDockVisible: Bool,
+    measuredDockHeight: CGFloat,
+    containerHeight: CGFloat = 0,
+    browseSheetPeekHeight: CGFloat
+) -> CGFloat {
+    let legacy = browseSheetPeekHeight + 12
+    guard goalDockVisible else { return legacy }
+    var clearance = measuredDockHeight + 12
+    // At the largest accessibility sizes the dock itself outgrows the screen; chasing its top
+    // would push the card off-screen (unreachable Park here / Cancel). Cap so the card always
+    // stays on-screen, overlapping the (already overflowing) dock instead.
+    if containerHeight > 0 {
+        clearance = min(clearance, containerHeight * 0.45)
+    }
+    return max(legacy, clearance)
 }
 
 #Preview {

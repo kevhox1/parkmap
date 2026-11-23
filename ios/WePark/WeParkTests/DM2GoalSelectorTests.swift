@@ -197,7 +197,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         let from = et(2026, 6, 4, 10, 0)  // Thursday
         let segment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let result = resolveParkAndForgetViewport(segments: [segment], from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+        XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
                        "a viewport where SOMEONE clears the top rung must resolve to the top rung with no step-down banner")
     }
 
@@ -207,7 +207,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         let from = et(2026, 6, 4, 10, 0)  // Thursday
         let segment = seg(rules: [r(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])])
         let result = resolveParkAndForgetViewport(segments: [segment], from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 4, steppedDown: true),
+        XCTAssertEqual(result, .resolved(offsetDays: 4, banner: .steppedDown),
                        "when nobody in the viewport clears the top rung but someone clears the middle rung, the banner must show (steppedDown == true)")
     }
 
@@ -217,7 +217,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         let from = et(2026, 6, 7, 10, 0)  // Sunday
         let segment = seg(rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
         let result = resolveParkAndForgetViewport(segments: [segment], from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 2, steppedDown: true))
+        XCTAssertEqual(result, .resolved(offsetDays: 2, banner: .steppedDown))
     }
 
     func testResolveParkAndForgetViewport_empty_whenEvenBottomRungFails() {
@@ -246,7 +246,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let badSegment = seg(id: "BAD", rules: [r(category: .noParking, days: [], anytime: true)])
         let result = resolveParkAndForgetViewport(segments: [badSegment, goodSegment], from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+        XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
                        "the top rung is still picked, and the banner correctly stays silent here — this fixture's 'bad' segment clears nothing at ANY rung, so it can't create a density mismatch")
     }
 
@@ -254,7 +254,7 @@ final class DM2GoalSelectorTests: XCTestCase {
     /// one metered-only/unregulated segment (§0.8.2's own cited 9.2% of parkable curb,
     /// present in nearly every real viewport) clears the TOP rung, but several OTHER
     /// segments only clear the BOTTOM (easiest) rung. Before this fix, the lonely top-rung
-    /// clearer would silently suppress the banner (`steppedDown: false`) even though the
+    /// clearer would silently suppress the banner (no banner) even though the
     /// map renders mostly red against an 8-day bar almost nothing else can clear. After the
     /// fix: picked rung (the color bucket) is UNCHANGED — still the top rung, one segment is
     /// enough — but the banner now fires because only 1 of 5 loaded segments (20%) clear it,
@@ -265,7 +265,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
         let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 4)  // 1 of 5 clears top → density 0.2
         let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: true),
+        XCTAssertEqual(result, .resolved(offsetDays: 8, banner: .sparse),
                        "the picked rung stays the top rung (color bucket unchanged), but the banner must fire — only 1/5 (20%) of the viewport clears it, below the 25% density threshold")
     }
 
@@ -278,7 +278,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         let goodSegment1 = seg(id: "GOOD1", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let goodSegment2 = seg(id: "GOOD2", rules: [])  // no rules at all — always free, clears every rung
         let result = resolveParkAndForgetViewport(segments: [goodSegment1, goodSegment2], from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+        XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
                        "both loaded segments clear the top rung (density 1.0) — the banner must not fire in the genuinely healthy case")
     }
 
@@ -292,7 +292,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
         let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 3)  // 1 of 4 clears top → density exactly 0.25
         let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)
-        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+        XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
                        "density exactly at the threshold (1/4 = 0.25) must NOT fire — only density strictly BELOW the threshold does")
     }
 
@@ -307,8 +307,43 @@ final class DM2GoalSelectorTests: XCTestCase {
         let result = resolveParkAndForgetViewport(
             segments: segments, from: from, engine: engine, bannerDensityThreshold: 0.1
         )
-        XCTAssertEqual(result, .resolved(offsetDays: 8, steppedDown: false),
+        XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
                        "density 0.2 is below the default 0.25 threshold (fires, see the lonely-outlier test above) but ABOVE an explicitly-passed 0.1 threshold — must not fire here, proving the parameter is actually read")
+    }
+
+    /// Addendum 2026-11-22 case A vs B: a real step-down (picked rung is not the top) maps to
+    /// `.steppedDown`; a density-only trigger (top rung kept) maps to `.sparse`. Never both.
+    func testResolveParkAndForgetViewport_caseA_realStepDown_isSteppedDownNotSparse() {
+        let from = et(2026, 6, 7, 10, 0)
+        let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
+        let result = resolveParkAndForgetViewport(segments: [bottomOnlySegment], from: from, engine: engine)
+        guard case .resolved(let offsetDays, let banner) = result else {
+            return XCTFail("expected .resolved, got \(result)")
+        }
+        XCTAssertNotEqual(offsetDays, 8, "fixture must force a lower rung")
+        XCTAssertEqual(banner, .steppedDown)
+    }
+
+    func testResolveParkAndForgetViewport_caseB_densityOnly_isSparseNotSteppedDown() {
+        let from = et(2026, 6, 7, 10, 0)
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
+        let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 4)
+        let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)
+        XCTAssertEqual(result, .resolved(offsetDays: 8, banner: .sparse))
+    }
+
+    /// Locked copy + icon (design doc addendum 2026-11-22). A and B share the icon; C differs.
+    func testEmptyMapGuardKind_copyAndIcon_matchLockedAddendum() {
+        XCTAssertEqual(EmptyMapGuardKind.steppedDown.bannerCopy,
+                       "Nothing clear for a full week nearby — showing the best available.")
+        XCTAssertEqual(EmptyMapGuardKind.sparse.bannerCopy,
+                       "Only a few blocks nearby are clear for a full week.")
+        XCTAssertEqual(EmptyMapGuardKind.empty.bannerCopy,
+                       "No clear spots found very nearby — try Overnight, or pan the map.")
+        XCTAssertEqual(EmptyMapGuardKind.steppedDown.bannerIcon, "info.circle.fill")
+        XCTAssertEqual(EmptyMapGuardKind.sparse.bannerIcon, "info.circle.fill")
+        XCTAssertEqual(EmptyMapGuardKind.empty.bannerIcon, "mappin.slash")
     }
 
     func testResolveParkAndForgetViewport_emptySegmentsArray_resolvesEmpty() {
