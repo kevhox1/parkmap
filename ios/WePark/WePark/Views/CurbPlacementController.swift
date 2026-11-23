@@ -98,6 +98,10 @@ final class CurbPlacementController {
     // MARK: Owned UIKit objects
 
     private let reticle = PlacementReticleView()
+    /// The pin tip's height fraction, chosen once at session entry (card config selector, #37
+    /// item 8) and never changed: every tip read, the reticle and the entry centring use THIS, so
+    /// they cannot disagree and the entry lands the seed exactly under the needle (#147).
+    let tipFraction: CGFloat
     private let selectionHaptic = UISelectionFeedbackGenerator()
     private var displayLink: CADisplayLink?
     private var highlightOverlay: PlacementHighlightOverlay?
@@ -142,8 +146,10 @@ final class CurbPlacementController {
         seed: CLLocationCoordinate2D,
         incumbentKey: String?,
         hooks: CurbPlacementHooks,
+        tipFraction: CGFloat = CurbPlacementMapPolicy.tipHeightFraction,
         replacing previous: CurbPlacementController? = nil
     ) {
+        self.tipFraction = tipFraction
         self.mapView = mapView
         self.seed = seed
         self.incumbentKey = incumbentKey
@@ -162,6 +168,7 @@ final class CurbPlacementController {
             self.snapshotZoomRange = mapView.cameraZoomRange
             self.marginSnapshot = nil
         }
+        reticle.tipFraction = tipFraction
     }
 
     deinit {
@@ -219,7 +226,7 @@ final class CurbPlacementController {
         // position permanently, with no second chance. That is the root cause of the 2026-10-26
         // "pin lands mid-building" report. `setRegion` removes the approximation (and the nudge
         // it required) entirely, so there is no second step left to skip.
-        let center = CurbPlacementMapPolicy.entryCenter(seed: seed, visibleHeightMeters: clampedHeightMeters)
+        let center = CurbPlacementMapPolicy.entryCenter(seed: seed, visibleHeightMeters: clampedHeightMeters, tipFraction: tipFraction)
         entryTargetCenter = center
         let widthMeters = CurbPlacementMapPolicy.clampedVisibleWidthMeters(
             boundsSize: mapView.bounds.size,
@@ -281,7 +288,7 @@ final class CurbPlacementController {
 
     func tick() {
         guard !isEnded, !entryInProgress, let mapView else { return }
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let pin = mapView.convert(tip, toCoordinateFrom: mapView)
 
         var moved: Double?
@@ -487,7 +494,7 @@ final class CurbPlacementController {
         nudgeSafetyWork?.cancel()
         nudgeSafetyWork = nil
 
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let pin = mapView.convert(tip, toCoordinateFrom: mapView)
         // Final resolve; the settle callback (below / after the nudge) carries the result.
         resolve(
@@ -524,7 +531,7 @@ final class CurbPlacementController {
         guard let mapView else { return }
         setLinkRunning(false)
         isProgrammaticNudge = false
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let pin = mapView.convert(tip, toCoordinateFrom: mapView)
         resolve(
             pin: pin,
@@ -562,7 +569,7 @@ final class CurbPlacementController {
     private func performNudge(toward coordinate: CLLocationCoordinate2D, nudge: PlacementNudge) {
         guard let mapView else { return }
         let bounds = mapView.bounds
-        let tip = CurbPlacementMapPolicy.tipPoint(in: bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: bounds, tipFraction: tipFraction)
         let ghost = mapView.convert(coordinate, toPointTo: mapView)
         let target = CurbPlacementMapPolicy.nudgeTargetScreenPoint(
             ghost: ghost,
@@ -628,7 +635,7 @@ final class CurbPlacementController {
     /// firing only if the blockface / outcome kind changed (spec A13 "Loading curbs...").
     func refresh() {
         guard !isEnded, !entryInProgress, let mapView else { return }
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let pin = mapView.convert(tip, toCoordinateFrom: mapView)
         resolve(
             pin: pin,
@@ -649,7 +656,7 @@ final class CurbPlacementController {
     /// curbs of a street but cannot walk a longer, distance-ordered list at a corner.
     func cycleNearbyCurb() {
         guard !isEnded, !entryInProgress, let mapView, let index = hooks.index() else { return }
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let pin = mapView.convert(tip, toCoordinateFrom: mapView)
         let metersPerPoint = measuredMetersPerPoint(in: mapView, tip: tip, pin: pin)
 
@@ -680,7 +687,7 @@ final class CurbPlacementController {
     /// and fires `onPlacementOutcome`. No-op during the entry flight or when already there.
     func focus(on coordinate: CLLocationCoordinate2D) {
         guard !isEnded, !entryInProgress, let mapView else { return }
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let point = mapView.convert(coordinate, toPointTo: mapView)
         let offset = Double(hypot(point.x - tip.x, point.y - tip.y))
         guard let nudge = CurbPlacementMapPolicy.settleNudge(
@@ -758,7 +765,7 @@ final class CurbPlacementController {
             return
         }
         // Read what the exit camera needs BEFORE tearing anything down.
-        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds)
+        let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let pin = mapView.convert(tip, toCoordinateFrom: mapView)
         let currentDistance = mapView.camera.centerCoordinateDistance
 
@@ -814,7 +821,12 @@ final class CurbPlacementController {
 /// call these.
 extension MapViewRepresentable.Coordinator {
 
-    func beginPlacement(seed: CLLocationCoordinate2D, incumbentKey: String?, animated: Bool) {
+    func beginPlacement(
+        seed: CLLocationCoordinate2D,
+        incumbentKey: String?,
+        animated: Bool,
+        tipFraction: CGFloat = CurbPlacementMapPolicy.tipHeightFraction
+    ) {
         guard let mapView else { return }
         let previous = placementController
         let hooks = CurbPlacementHooks(
@@ -843,6 +855,7 @@ extension MapViewRepresentable.Coordinator {
             seed: seed,
             incumbentKey: incumbentKey,
             hooks: hooks,
+            tipFraction: tipFraction,
             replacing: previous
         )
         // QA #4: begin-while-live REPLACES the session (the old one ends WITHOUT restoring its

@@ -927,7 +927,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Called from ContentView `.onChange` handlers, OUTSIDE `updateUIView` (#31). The
         // closures are installed in `makeUIView` (block marked "A2 curb-pin placement").
 
-        var onBeginPlacement: ((CLLocationCoordinate2D, String?, Bool) -> Void)?
+        var onBeginPlacement: ((CLLocationCoordinate2D, String?, Bool, CGFloat) -> Void)?
         var onEndPlacement: ((Bool) -> Void)?
         var onRefreshPlacement: (() -> Void)?
         var onCyclePlacementCurb: (() -> Void)?
@@ -956,9 +956,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         func beginPlacement(
             seed: CLLocationCoordinate2D,
             incumbentBlockfaceKey: String? = nil,
-            animated: Bool = true
+            animated: Bool = true,
+            tipFraction: CGFloat = CurbPlacementMapPolicy.tipHeightFraction
         ) {
-            onBeginPlacement?(seed, incumbentBlockfaceKey, animated)
+            onBeginPlacement?(seed, incumbentBlockfaceKey, animated, tipFraction)
         }
 
         /// Leaves placement. `restore: true` = Cancel (exact prior centre / zoom; zoom window
@@ -1567,8 +1568,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         // only does flag-on). Nothing is created here: no observer, overlay, link or subview
         // exists until `beginPlacement`. All camera work happens inside `CurbPlacementController`,
         // reached only from ContentView's own non-`updateUIView` handlers (#31 invariant).
-        coordinatorActions.onBeginPlacement = { [weak coordinator] seed, incumbentKey, animated in
-            coordinator?.beginPlacement(seed: seed, incumbentKey: incumbentKey, animated: animated)
+        coordinatorActions.onBeginPlacement = { [weak coordinator] seed, incumbentKey, animated, tipFraction in
+            coordinator?.beginPlacement(seed: seed, incumbentKey: incumbentKey, animated: animated, tipFraction: tipFraction)
         }
         coordinatorActions.onEndPlacement = { [weak coordinator] restore in
             coordinator?.endPlacement(restore: restore)
@@ -1590,10 +1591,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         // PR #143 QA #1: the pin tip's ground coordinate, nil unless a session is live.
         coordinatorActions.onQueryPlacementPin = { [weak coordinator] in
-            guard let coordinator, coordinator.placementController != nil,
+            guard let coordinator, let controller = coordinator.placementController,
                   let mapView = coordinator.mapView else { return nil }
             return mapView.convert(
-                CurbPlacementMapPolicy.tipPoint(in: mapView.bounds),
+                CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: controller.tipFraction),
                 toCoordinateFrom: mapView
             )
         }

@@ -2758,10 +2758,15 @@ struct ContentView: View {
                 mapRepresentable
                     .ignoresSafeArea()
                     .safeAreaInset(edge: .top) {
-                        ASPBanner(state: bannerState)
-                            .onGeometryChange(for: CGFloat.self, of: { proxy in
-                                proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
-                            }) { onboardingTopChromeBottom = $0 }
+                        // #37 item 8: hidden while a placement session on a short phone / at AX1+
+                        // is live (`hidesASPBanner`, frozen at entry); always shown otherwise
+                        // (flag-off: `curbPlacement` is never non-nil, so this is unchanged).
+                        if curbPlacement?.hidesASPBanner != true {
+                            ASPBanner(state: bannerState)
+                                .onGeometryChange(for: CGFloat.self, of: { proxy in
+                                    proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
+                                }) { onboardingTopChromeBottom = $0 }
+                        }
                     }
                     .safeAreaInset(edge: .bottom) { bottomSafeAreaContent }
                 // FT-18: the browse-mode toolbar (Find me / Find my car / Park Until) and
@@ -5810,16 +5815,55 @@ struct ContentView: View {
         // replay after the session and yank the camera (PR #143 QA #7). The explicit "Find me"
         // flag is kept and deferred.
         recenterOnUserAtLaunch = false
+        let plan = curbPlacementEntryPlan(for: entry)
         let session = CurbPlacementSession(
             entry: entry,
             seed: seed,
             incumbentBlockfaceKey: incumbentBlockfaceKey,
             showsHint: showsHint,
-            seedInCoverage: AppConstants.isInManhattanCoverage(seed)
+            seedInCoverage: AppConstants.isInManhattanCoverage(seed),
+            tipFraction: plan.tipFraction,
+            hidesASPBanner: plan.hidesASPBanner
         )
         curbPlacement = session
         if activeSheet != nil { activeSheet = nil }
         scheduleCurbPlacementLoadingTimeout(sessionID: session.id)
+    }
+
+    /// #37 item 8: the card config selector, run ONCE at entry. The tip fraction it picks is frozen
+    /// into the session (the camera math reads it once, #147) and the banner decision rides with
+    /// it. Reads the live window and the preferred content size category; falls back to the
+    /// standard 0.40 / banner-shown when no window exists (never reachable with a live map).
+    private func curbPlacementEntryPlan(for entry: CurbPlacementEntry) -> (tipFraction: Double, hidesASPBanner: Bool) {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+        let scene = scenes.first(where: { $0.activationState == .foregroundActive }) ?? scenes.first
+        guard let window = scene?.keyWindow ?? scene?.windows.first else {
+            return (Double(CurbPlacementMapPolicy.tipHeightFraction), false)
+        }
+        let tier = CurbPlacementSizeTier.tier(for: UIApplication.shared.preferredContentSizeCategory)
+        let fullHeight = Double(window.bounds.height)
+        let wantsLink: Bool
+        switch entry.intent {
+        case .plant:
+            wantsLink = AppConstants.communityEnabled
+        case .park, .report, .parkBlock:
+            wantsLink = false
+        }
+        let selection = CurbPlacementCardLayout.select(
+            tier: tier,
+            fullHeight: fullHeight,
+            bottomInset: Double(window.safeAreaInsets.bottom),
+            wantsLink: wantsLink
+        )
+        #if DEBUG
+        if !selection.fits {
+            assertionFailure("CurbPlacementCardLayout: no candidate fits (height \(fullHeight), tier \(tier))")
+        }
+        #endif
+        return (
+            selection.config.tipFraction,
+            CurbPlacementCardLayout.hidesASPBanner(fullHeight: fullHeight, tier: tier)
+        )
     }
 
     /// Bounds "Loading curbs..." (PR #143 QA #2): after the timeout the card states the truth
@@ -5842,7 +5886,8 @@ struct ContentView: View {
             coordinatorActions.beginPlacement(
                 seed: session.seed,
                 incumbentBlockfaceKey: session.incumbentBlockfaceKey,
-                animated: session.animatedEntry
+                animated: session.animatedEntry,
+                tipFraction: CGFloat(session.tipFraction)
             )
             // The map view is not ready (no controller was created): abort rather than leave a
             // card up over a map that is not in the mode.
@@ -6199,8 +6244,8 @@ struct ContentView: View {
                 model: model,
                 showsHint: session.showsHint,
                 usesMetricSystem: usesMetric,
-                topPadding: paddingForBannerState(bannerState),
-                tipFraction: CurbPlacementMapPolicy.tipHeightFraction,
+                topPadding: session.hidesASPBanner ? 8 : paddingForBannerState(bannerState),
+                tipFraction: CGFloat(session.tipFraction),
                 onPrimary: { action in performCurbPlacementPrimary(action) },
                 onSecondary: {
                     // Read the LIVE session (the outcome may have settled since this body ran).
@@ -6215,6 +6260,10 @@ struct ContentView: View {
                     applyCurbPlacementBottomInset(height)
                 }
             )
+            // #37 item 8: clamp HERE, on the overlay, not inside it - the overlay's own
+            // `\.dynamicTypeSize` read sees the OUTER environment, so a modifier on its inner
+            // views would not change the tier it lays out for. AX2..AX5 render exactly as AX1.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
         }
     }
 

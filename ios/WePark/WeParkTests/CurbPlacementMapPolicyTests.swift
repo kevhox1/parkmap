@@ -924,8 +924,10 @@ final class CurbPlacementFlagOffGuardTests: XCTestCase {
     func testBeginPlacementSeamForms() {
         let actions = MapViewRepresentable.CoordinatorActions()
         var received: [(Double, String?, Bool)] = []
-        actions.onBeginPlacement = { seed, incumbent, animated in
+        var tipFractions: [CGFloat] = []
+        actions.onBeginPlacement = { seed, incumbent, animated, tipFraction in
             received.append((seed.latitude, incumbent, animated))
+            tipFractions.append(tipFraction)
         }
         actions.beginPlacement(seed: CLLocationCoordinate2D(latitude: 40.75, longitude: -73.99))
         actions.beginPlacement(
@@ -938,6 +940,12 @@ final class CurbPlacementFlagOffGuardTests: XCTestCase {
         XCTAssertEqual(received[0].2, true, "Default: animated entry.")
         XCTAssertEqual(received[1].1, "MAIN ST|A ST|B ST|S")
         XCTAssertEqual(received[1].2, false)
+        XCTAssertEqual(tipFractions[0], CurbPlacementMapPolicy.tipHeightFraction, "Default: the standard 0.40 tip.")
+        actions.beginPlacement(
+            seed: CLLocationCoordinate2D(latitude: 40.77, longitude: -73.99),
+            tipFraction: 0.30
+        )
+        XCTAssertEqual(tipFractions[2], 0.30, "The frozen session fraction is forwarded verbatim.")
     }
 
     func testEndPlacementSeamForwardsRestoreFlag() {
