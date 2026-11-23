@@ -218,6 +218,8 @@ other "learn" rows ahead of the settings/utility ones:
 | 3 | What the colors mean | Green, red, and the rest | `questionmark.circle.fill` | *(existing row, renumbered)* |
 | 4 | **Parking 101** | The full guide to NYC parking rules | `book.closed.fill` | Opens `ParkingGuideView`, unchanged content. |
 
+*2026-11-23 (#37 ⑦): a final row 8, **Settings** (`gearshape.fill`, "Reminders, help, and app info"), always visible, opens the existing `.settings` sheet (same path as Search's gear).*
+
 (Row 1, Report, stays first — unchanged. Rows 5+ — Show all parking rules, Find my car, Park until a
 set time — follow, renumbered, unchanged behavior.)
 

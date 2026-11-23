@@ -31,7 +31,7 @@ final class MoreMenuVisibleRowsTests: XCTestCase {
             fullPaletteMode: true
         )
         XCTAssertEqual(rows, [
-            .report, .howWeParkWorks, .mapKey, .parking101, .showAllRules, .findMyCar, .parkUntil
+            .report, .howWeParkWorks, .mapKey, .parking101, .showAllRules, .findMyCar, .parkUntil, .settings
         ])
     }
 
@@ -61,6 +61,9 @@ final class MoreMenuVisibleRowsTests: XCTestCase {
                         )
                         XCTAssertTrue(rows.contains(.mapKey))
                         XCTAssertTrue(rows.contains(.parking101))
+                        // #37 ⑦: Settings is always visible AND always last.
+                        XCTAssertTrue(rows.contains(.settings))
+                        XCTAssertEqual(rows.last, .settings)
                     }
                 }
             }
@@ -119,7 +122,13 @@ final class MoreMenuVisibleRowsTests: XCTestCase {
             hasParkedCar: false,
             fullPaletteMode: false
         )
-        XCTAssertEqual(rows, [.mapKey, .parking101, .showAllRules])
+        XCTAssertEqual(rows, [.mapKey, .parking101, .showAllRules, .settings])
+    }
+
+    func testSettingsRow_content() {
+        XCTAssertEqual(MoreMenuRow.settings.title, "Settings")
+        XCTAssertEqual(MoreMenuRow.settings.subtitle, "Reminders, help, and app info")
+        XCTAssertEqual(MoreMenuRow.settings.symbolName, "gearshape.fill")
     }
 
     // MARK: - 2. Row content

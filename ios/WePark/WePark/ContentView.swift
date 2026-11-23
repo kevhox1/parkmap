@@ -2113,6 +2113,9 @@ struct ContentView: View {
             recenterOnCar()
         case .parkUntil:
             activeSheet = .parkUntil
+        case .settings:
+            // Same destination as Search's gear (`onSettingsTapped: { activeSheet = .settings }`).
+            activeSheet = .settings
         }
     }
 

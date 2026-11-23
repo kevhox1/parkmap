@@ -146,7 +146,7 @@ final class MinimalAmbientLayoutTests: XCTestCase {
                 communityEnabled: true, onboardingReplayAvailable: false,
                 hasParkedCar: true, fullPaletteMode: true
             ),
-            [.report, .mapKey, .parking101, .showAllRules, .findMyCar, .parkUntil]
+            [.report, .mapKey, .parking101, .showAllRules, .findMyCar, .parkUntil, .settings]
         )
     }
 
@@ -156,8 +156,8 @@ final class MinimalAmbientLayoutTests: XCTestCase {
                 communityEnabled: false, onboardingReplayAvailable: false,
                 hasParkedCar: false, fullPaletteMode: false
             ),
-            [.mapKey, .parking101, .showAllRules],
-            "What the colors mean, Parking 101, and Show all parking rules are always shown."
+            [.mapKey, .parking101, .showAllRules, .settings],
+            "What the colors mean, Parking 101, Show all parking rules, and Settings are always shown."
         )
     }
 
