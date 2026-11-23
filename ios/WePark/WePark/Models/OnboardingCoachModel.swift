@@ -47,6 +47,16 @@ enum OnboardingCoachMark: Int, CaseIterable, Equatable {
         }
     }
 
+    /// #37 6 (goal-first design doc, 2026-11-23 addendum section 5): at accessibility Dynamic
+    /// Type sizes the three tiles collapse to one goal card, so mark 1 names that control.
+    /// Every other mark/size keeps the verbatim `title`.
+    nonisolated func title(accessibilityLayout: Bool) -> String {
+        if accessibilityLayout, self == .goalTiles {
+            return "Tap the goal card to pick what you need"
+        }
+        return title
+    }
+
     /// Exact bubble sub-copy, §2.2. `nil` for marks with no second line (mark 3 is one line).
     nonisolated var subtitle: String? {
         switch self {

@@ -76,6 +76,12 @@ struct OnboardingCoachOverlay: View {
     let onSkipAll: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// #37 6: this overlay is NOT inside the dock's type cap, so this is the real size. At
+    /// accessibility sizes the dock shows one goal card (`tileRowFrame == selectedTileFrame ==`
+    /// the card), so mark 1 uses the card copy and mark 2's bubble clears the whole dock, not
+    /// just the card (Start Driving sits between them).
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    private var goalCardLayout: Bool { dynamicTypeSize.isAccessibilitySize }
     @State private var pulseOn = false
 
     /// Vertical band reserved at the top for the persistent Skip pill (pill + padding). The
@@ -185,7 +191,8 @@ struct OnboardingCoachOverlay: View {
         case .colorMeaning:
             bubbleRegion(
                 x: centerX, width: width, top: topLimit,
-                bottom: bottomLimit(above: selectedTileFrame, safe: safe), alignment: .bottom, safeMaxY: safe.maxY
+                bottom: bottomLimit(above: goalCardLayout ? goalDockFrame : selectedTileFrame, safe: safe),
+                alignment: .bottom, safeMaxY: safe.maxY
             )
         case .tapABlock:
             let anchor = curbPoint.flatMap { onboardingCoachPointIsOnScreen($0, in: bounds) ? $0 : nil }
@@ -240,7 +247,7 @@ struct OnboardingCoachOverlay: View {
     /// (only when it does not fit); the primary button stays pinned below it.
     private func bubbleCard(width: CGFloat) -> some View {
         let text = VStack(alignment: .leading, spacing: 10) {
-            Text(mark.title)
+            Text(mark.title(accessibilityLayout: goalCardLayout))
                 .font(.headline)
                 .fixedSize(horizontal: false, vertical: true)
             if let subtitle = mark.subtitle {

@@ -83,7 +83,82 @@
 //  row is replaced by a "Pick a parking goal" row so the user is never stranded.
 //
 
+//  Addendum 4 (2026-11-23, open item #37 6, `docs/design/goal-first-ambient-design.md`
+//  "Addendum - accessibility-size goal dock"): at `dynamicTypeSize >= .accessibility1` the
+//  three-tile row collapses to ONE full-width current-goal card (`GoalCard`) that opens a
+//  LOCAL goal sheet (`GoalPickerSheet`, state lives here, NOT in `ContentView.activeSheet`,
+//  because `goalSelectorDockVisible` hides the dock whenever `activeSheet != nil`). The dock's
+//  own content is capped at `.accessibility3`; the sheet scales to AX5. Below
+//  `.accessibility1` nothing here changes.
+//
+
 import SwiftUI
+
+// MARK: - Accessibility-size dock rules (Addendum 4)
+
+/// True when the dock should render the collapsed two-row layout (Start Driving + goal card).
+/// Full-palette mode keeps its own "Pick a parking goal" row at every size.
+nonisolated func goalDockUsesGoalCard(dynamicTypeSize: DynamicTypeSize, fullPaletteMode: Bool) -> Bool {
+    dynamicTypeSize.isAccessibilitySize && !fullPaletteMode
+}
+
+/// The card shows its sub-label at AX1/AX2 only; `>= .accessibility3` drops it from the CARD
+/// (it stays in the sheet and in the card's accessibility label). Dropping is not truncation.
+nonisolated func goalCardShowsSubLabel(dynamicTypeSize: DynamicTypeSize) -> Bool {
+    dynamicTypeSize < .accessibility3
+}
+
+/// Budget fallback #2 (design addendum section 4): the card's "Change" word goes at the same
+/// threshold as the sub-label; the `chevron.up` stays so it still reads as a picker. Measured:
+/// with the word, "Park & Forget" wraps to two lines at AX3 and the dock lands at 40.5% of an
+/// 874pt screen (over the 40% budget); without it, 29.5%.
+nonisolated func goalCardShowsChangeWord(dynamicTypeSize: DynamicTypeSize) -> Bool {
+    dynamicTypeSize < .accessibility3
+}
+
+extension ParkingGoal {
+    /// Dock copy/icons, locked by `docs/design/goal-first-ambient-design.md` section 1 (hoisted
+    /// out of `GoalTile` so the card, the sheet and tests share ONE source).
+    nonisolated var dockIcon: String {
+        switch self {
+        case .freeOvernight: return "moon.stars.fill"
+        case .freeFewHours: return "hourglass"
+        case .parkAndForget: return "parkingsign.circle.fill"
+        }
+    }
+
+    nonisolated var dockPrimary: String {
+        switch self {
+        case .freeOvernight: return "Overnight"
+        case .freeFewHours: return "A Few Hours"
+        case .parkAndForget: return "Park & Forget"
+        }
+    }
+
+    nonisolated var dockSubLabel: String {
+        switch self {
+        case .freeOvernight: return "Won't need to move it"
+        case .freeFewHours: return "No meter, no cost"
+        case .parkAndForget: return "Go days without moving it"
+        }
+    }
+
+    /// The goal card's VoiceOver label (Addendum 4 flag 3). Always carries the sub-label, even
+    /// when the card hides it visually.
+    nonisolated var goalCardAccessibilityLabel: String {
+        "\(dockPrimary), \(dockSubLabel). Selected. Double tap to change goal."
+    }
+}
+
+/// Frame report from the AX goal card. Carries the selected goal so a selection change with an
+/// unchanged frame still re-fires `onGeometryChange` (the tile dictionary key must follow the
+/// selection).
+private nonisolated struct GoalCardFrameReport: Equatable {
+    let frame: CGRect
+    /// `ParkingGoal.rawValue` (a plain `String`) rather than the enum, so this value type is
+    /// freely `Sendable`/`Equatable` for `onGeometryChange` under MainActor default isolation.
+    let goalRawValue: String
+}
 
 // MARK: - EmptyMapGuardKind
 
@@ -175,6 +250,13 @@ struct GoalSelectorView: View {
     /// ring kept framing the previously-selected tile.
     let onTileFrameChange: (ParkingGoal, CGRect) -> Void
 
+    /// Addendum 4: fires when the LOCAL goal sheet opens/closes, so the caller can hide the
+    /// onboarding coach bubble while it is up. Defaulted no-op.
+    let onGoalSheetPresentedChange: (Bool) -> Void
+
+    /// Addendum 4: local sheet state (deliberately NOT `ContentView.activeSheet`).
+    @State private var goalSheetPresented = false
+
     /// Addendum 3 A3.3: at accessibility Dynamic Type sizes the three tiles reflow from a
     /// row to a vertical stack so labels never truncate.
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
@@ -191,7 +273,8 @@ struct GoalSelectorView: View {
         onReturnToGoals: @escaping () -> Void,
         onStartDriving: @escaping () -> Void,
         onTileRowFrameChange: @escaping (CGRect) -> Void = { _ in },
-        onTileFrameChange: @escaping (ParkingGoal, CGRect) -> Void = { _, _ in }
+        onTileFrameChange: @escaping (ParkingGoal, CGRect) -> Void = { _, _ in },
+        onGoalSheetPresentedChange: @escaping (Bool) -> Void = { _ in }
     ) {
         self.selectedGoal = selectedGoal
         self.fullPaletteMode = fullPaletteMode
@@ -201,6 +284,11 @@ struct GoalSelectorView: View {
         self.onStartDriving = onStartDriving
         self.onTileRowFrameChange = onTileRowFrameChange
         self.onTileFrameChange = onTileFrameChange
+        self.onGoalSheetPresentedChange = onGoalSheetPresentedChange
+    }
+
+    private var usesGoalCard: Bool {
+        goalDockUsesGoalCard(dynamicTypeSize: dynamicTypeSize, fullPaletteMode: fullPaletteMode)
     }
 
     var body: some View {
@@ -211,10 +299,14 @@ struct GoalSelectorView: View {
         VStack(spacing: 10) {
             if let kind = emptyMapGuardKind {
                 EmptyMapGuardBanner(kind: kind)
+                    // Addendum 4: banner text capped at AX2 inside the dock cap.
+                    .dynamicTypeSize(...DynamicTypeSize.accessibility2)
             }
-            startDrivingRow
+            StartDrivingRow(accessibilityLayout: dynamicTypeSize.isAccessibilitySize, action: onStartDriving)
             if fullPaletteMode {
                 pickGoalRow
+            } else if usesGoalCard {
+                goalCard
             } else {
                 goalTileRow
                     .onGeometryChange(for: CGRect.self, of: { proxy in
@@ -224,37 +316,54 @@ struct GoalSelectorView: View {
         }
         .padding(.horizontal, 16)
         .padding(.bottom, 8)
+        // Addendum 4: dock type cap. Reads of `dynamicTypeSize` above/below use the REAL
+        // environment size (this modifier only changes what the children see); the sheet is
+        // attached AFTER this modifier so it inherits the uncapped size and scales to AX5.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         // Addendum 3 A3.3: the one haptic on this screen. Picking a goal is a mode change a
         // driver may make without looking; a light tick confirms it. None on Start Driving,
         // Search, or More.
         .sensoryFeedback(.selection, trigger: selectedGoal)
+        .sheet(isPresented: $goalSheetPresented) {
+            GoalPickerSheet(
+                selectedGoal: selectedGoal,
+                onSelect: { goal in
+                    onSelectGoal(goal)
+                    goalSheetPresented = false
+                },
+                onDone: { goalSheetPresented = false }
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
+        .onChange(of: goalSheetPresented) { _, presented in onGoalSheetPresentedChange(presented) }
+        // The card (and so the sheet) disappears if Dynamic Type drops below AX1 or the dock
+        // unmounts: never strand a presented sheet or a "sheet is up" flag in the caller.
+        .onChange(of: usesGoalCard) { _, uses in if !uses { goalSheetPresented = false } }
+        .onDisappear { if goalSheetPresented { onGoalSheetPresentedChange(false) } }
     }
 
-    // MARK: - "Start Driving" row (§2.3)
+    // MARK: - Accessibility-size goal card (Addendum 4)
 
-    /// Live-smoke fix (Kevin, 2026-10-20, PR #133 flag-on cold launch): design doc §2.3 calls
-    /// for `.buttonStyle(.bordered)` alone, no explicit background. On a live map that style's
-    /// own tinted fill read as "blue text straight on the dark map, barely readable" — not a
-    /// visible control. Adding an explicit `.regularMaterial` backdrop (same mechanism §2.4
-    /// already mandates for `fullPaletteToggleRow`, and the same family every other floating
-    /// control in this app uses per that section's own rationale) guarantees a legible
-    /// backdrop regardless of map color underneath, independent of `.bordered`'s own fill
-    /// rendering. `.buttonStyle(.bordered)` is kept — this is additive, not a style swap — so
-    /// the outline-not-filled "demoted" visual weight §2.3 specifies is unchanged, it just now
-    /// sits on a guaranteed-visible backdrop instead of a possibly-invisible one. Flagged as a
-    /// one-line deviation from the design doc's literal §2.3 text, not a silent one.
-    private var startDrivingRow: some View {
-        Button(action: onStartDriving) {
-            Label("Start Driving", systemImage: "location.north.circle.fill")
-                .font(.headline)
-                .frame(maxWidth: .infinity, minHeight: 56)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+    private var goalCard: some View {
+        GoalCard(
+            goal: selectedGoal,
+            showsSubLabel: goalCardShowsSubLabel(dynamicTypeSize: dynamicTypeSize),
+            showsChangeWord: goalCardShowsChangeWord(dynamicTypeSize: dynamicTypeSize),
+            onTap: { goalSheetPresented = true }
+        )
+        // The card IS both the "row" and the "selected tile" for the coach: one tile exists.
+        .onGeometryChange(for: GoalCardFrameReport.self, of: { [selectedGoal] proxy in
+            GoalCardFrameReport(
+                frame: proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)),
+                goalRawValue: selectedGoal.rawValue
+            )
+        }) { report in
+            onTileRowFrameChange(report.frame)
+            if let goal = ParkingGoal(rawValue: report.goalRawValue) {
+                onTileFrameChange(goal, report.frame)
+            }
         }
-        .buttonStyle(.bordered)
-        .tint(.blue)
-        .clipShape(RoundedRectangle(cornerRadius: 14))
-        .accessibilityLabel("Start Driving")
-        .accessibilityHint("Enters the full heading-up driving view, lit up for whichever goal is currently selected.")
     }
 
     // MARK: - Goal tile row (§2.2)
@@ -303,7 +412,7 @@ struct GoalSelectorView: View {
         Button(action: onReturnToGoals) {
             Label("Pick a parking goal", systemImage: "rectangle.split.3x1.fill")
                 .font(.headline)
-                .frame(maxWidth: .infinity, minHeight: 56)
+                .modifier(DockButtonFrame(accessibilityLayout: dynamicTypeSize.isAccessibilitySize))
         }
         .buttonStyle(.borderedProminent)
         .tint(.blue)
@@ -316,79 +425,111 @@ struct GoalSelectorView: View {
 
 /// One of the three big square-ish goal tiles (§2.2). Selected-state idiom ported from
 /// `ReportSheet.sweeperDirectionRow`/`CrewFeedSection.zoneChip` (filled `Color.blue` +
-/// white text when selected, `Color(.systemGray6)` + secondary when not — no separate
-/// checkmark glyph, the fill itself IS the selected state).
+/// white text when selected, `Color(.systemGray6)` + secondary when not).
 ///
 /// Deliberately NOT green for the selected state, even though green reads as "good/active"
 /// elsewhere in this app — green/red on THIS screen already mean something sacred (the
 /// map's binary filtered answer); reusing it for button-selection chrome would blur two
 /// different channels that must stay visually separate (design doc §2.2).
 private struct GoalTile: View {
+    /// Addendum 4: extra trailing content for the horizontal layout.
+    enum Accessory: Equatable {
+        case none
+        /// Sheet tile: `checkmark.circle.fill` when selected, so color is never the only signal.
+        case selectedCheckmark
+        /// AX goal card: "Change" + `chevron.up`, so it reads as a picker, not a status.
+        case changeChevron
+    }
+
     let goal: ParkingGoal
     let isSelected: Bool
     /// Addendum 3 A3.3: true for the accessibility-size full-width stack (icon leading, text
     /// trailing, no line limits); false for the normal three-across square-ish tile.
     let horizontalLayout: Bool
+    var accessory: Accessory = .none
+    /// Addendum 4: the card drops its sub-label at `>= .accessibility3`.
+    var showsSubLabel: Bool = true
+    /// Addendum 4 section 4 fallback: the word "Change" is dropped (chevron stays) at >= AX3.
+    var showsChangeWord: Bool = true
+    var minHeight: CGFloat = 128
+    /// Addendum 4: the card's own label ("..., Selected. Double tap to change goal.").
+    var accessibilityLabelOverride: String? = nil
     let onTap: () -> Void
-
-    /// Copy/icons locked by `docs/design/goal-first-ambient-design.md` §1 — "Free" is
-    /// deliberately dropped from both ambiguous primary labels (§0 of that doc); the actual
-    /// promise is stated plainly in each sub-label instead.
-    private var icon: String {
-        switch goal {
-        case .freeOvernight: return "moon.stars.fill"
-        case .freeFewHours: return "hourglass"
-        case .parkAndForget: return "parkingsign.circle.fill"
-        }
-    }
-
-    private var primary: String {
-        switch goal {
-        case .freeOvernight: return "Overnight"
-        case .freeFewHours: return "A Few Hours"
-        case .parkAndForget: return "Park & Forget"
-        }
-    }
-
-    private var subLabel: String {
-        switch goal {
-        case .freeOvernight: return "Won't need to move it"
-        case .freeFewHours: return "No meter, no cost"
-        case .parkAndForget: return "Go days without moving it"
-        }
-    }
 
     var body: some View {
         Button(action: onTap) {
             tileContent
-                .frame(maxWidth: .infinity, minHeight: 128)
+                .frame(maxWidth: .infinity, minHeight: minHeight)
                 .foregroundStyle(isSelected ? Color.white : Color.secondary)
                 .background(
                     RoundedRectangle(cornerRadius: 20)
-                        .fill(isSelected ? Color.blue : Color(.systemGray6))
+                        .fill(isSelected ? Color.blue : (accessory == .selectedCheckmark ? Color(.systemGray5) : Color(.systemGray6)))
                 )
         }
         .buttonStyle(.plain)
         .contentShape(Rectangle())
-        .accessibilityLabel("\(primary), \(subLabel.lowercased())")
+        .accessibilityLabel(accessibilityLabelOverride ?? "\(goal.dockPrimary), \(goal.dockSubLabel.lowercased())")
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
     @ViewBuilder
     private var tileContent: some View {
-        if horizontalLayout {
+        if accessory == .selectedCheckmark {
+            // Sheet tile (full Dynamic Type to AX5): icon + checkmark share a top row so the
+            // name gets the FULL tile width and wraps only at word boundaries (a leading icon
+            // plus a trailing checkmark left ~200pt, which broke "Overnight" mid-word at AX3).
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: goal.dockIcon)
+                        .font(.title)
+                    Spacer(minLength: 0)
+                    if isSelected {
+                        Image(systemName: "checkmark.circle.fill")
+                            .font(.title)
+                            .accessibilityHidden(true)
+                    }
+                }
+                Text(goal.dockPrimary)
+                    .font(.headline.bold())
+                    .multilineTextAlignment(.leading)
+                Text(goal.dockSubLabel)
+                    .font(.footnote)
+                    .multilineTextAlignment(.leading)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 20)
+            .padding(.vertical, 16)
+        } else if horizontalLayout {
             HStack(spacing: 16) {
-                Image(systemName: icon)
+                Image(systemName: goal.dockIcon)
                     .font(.title)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(primary)
+                    Text(goal.dockPrimary)
                         .font(.headline.bold())
                         .multilineTextAlignment(.leading)
-                    Text(subLabel)
-                        .font(.footnote)
-                        .multilineTextAlignment(.leading)
+                    if showsSubLabel {
+                        Text(goal.dockSubLabel)
+                            .font(.footnote)
+                            .multilineTextAlignment(.leading)
+                    }
                 }
                 Spacer(minLength: 0)
+                switch accessory {
+                case .none:
+                    EmptyView()
+                case .selectedCheckmark:
+                    EmptyView()  // handled by the stacked sheet layout above
+                case .changeChevron:
+                    VStack(spacing: 2) {
+                        Image(systemName: "chevron.up")
+                            .font(.footnote.weight(.semibold))
+                        if showsChangeWord {
+                            Text("Change")
+                                .font(.footnote)
+                        }
+                    }
+                    .accessibilityHidden(true)
+                }
             }
             .padding(.horizontal, 20)
             .padding(.vertical, 16)
@@ -397,19 +538,134 @@ private struct GoalTile: View {
             // to 2 lines, sub-label `.footnote` up to 3 lines (was `.caption` / 2 — too small
             // for a glance at a stoplight).
             VStack(spacing: 6) {
-                Image(systemName: icon)
+                Image(systemName: goal.dockIcon)
                     .font(.title)
-                Text(primary)
+                Text(goal.dockPrimary)
                     .font(.headline.bold())
                     .multilineTextAlignment(.center)
                     .lineLimit(2)
-                Text(subLabel)
+                Text(goal.dockSubLabel)
                     .font(.footnote)
                     .multilineTextAlignment(.center)
                     .lineLimit(3)
             }
             .padding(.horizontal, 8)
             .padding(.vertical, 12)
+        }
+    }
+}
+
+// MARK: - Addendum 4 pieces
+
+/// Full-width dock button frame: 56pt below AX1 (unchanged), a 64pt MINIMUM at AX that the
+/// content grows past with Dynamic Type. Deliberately not `@ScaledMetric`: scaling 64pt (and the
+/// card's 112pt) by the AX3 factor (~2.35x) put the dock at ~51% of an 874pt screen, over the
+/// 40% budget the addendum makes testable.
+private struct DockButtonFrame: ViewModifier {
+    let accessibilityLayout: Bool
+    private let scaledMinHeight: CGFloat = 64
+
+    func body(content: Content) -> some View {
+        content.frame(maxWidth: .infinity, minHeight: accessibilityLayout ? scaledMinHeight : 56)
+    }
+}
+
+/// "Start Driving" (§2.3).
+///
+/// Live-smoke fix (Kevin, 2026-10-20, PR #133 flag-on cold launch): design doc §2.3 calls for
+/// `.buttonStyle(.bordered)` alone. On a live map that style's own tinted fill read as "blue
+/// text straight on the dark map" — so an explicit `.regularMaterial` backdrop is added (same
+/// mechanism §2.4 mandates for floating controls). Additive, not a style swap.
+///
+/// Addendum 4: at AX the label wraps and the minimum height is 64pt scaled.
+private struct StartDrivingRow: View {
+    let accessibilityLayout: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            label
+                .modifier(DockButtonFrame(accessibilityLayout: accessibilityLayout))
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+        }
+        .buttonStyle(.bordered)
+        .tint(.blue)
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .accessibilityLabel("Start Driving")
+        .accessibilityHint("Enters the full heading-up driving view, lit up for whichever goal is currently selected.")
+    }
+
+    @ViewBuilder
+    private var label: some View {
+        if accessibilityLayout {
+            Label("Start Driving", systemImage: "location.north.circle.fill")
+                .font(.headline)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        } else {
+            Label("Start Driving", systemImage: "location.north.circle.fill")
+                .font(.headline)
+        }
+    }
+}
+
+/// The AX-size current-goal card: the SELECTED goal as one full-width tile (blue + white),
+/// `minHeight` 112pt (NOT `@ScaledMetric`, see `DockButtonFrame`; the content itself still
+/// grows with Dynamic Type up to the AX3 cap), tapping opens the goal sheet.
+private struct GoalCard: View {
+    let goal: ParkingGoal
+    let showsSubLabel: Bool
+    let showsChangeWord: Bool
+    let onTap: () -> Void
+    private let scaledMinHeight: CGFloat = 112
+
+    var body: some View {
+        GoalTile(
+            goal: goal,
+            isSelected: true,
+            horizontalLayout: true,
+            accessory: .changeChevron,
+            showsSubLabel: showsSubLabel,
+            showsChangeWord: showsChangeWord,
+            minHeight: scaledMinHeight,
+            accessibilityLabelOverride: goal.goalCardAccessibilityLabel,
+            onTap: onTap
+        )
+        .accessibilityAddTraits(.isButton)
+    }
+}
+
+/// The LOCAL goal sheet: three horizontal tiles at full Dynamic Type in a `ScrollView`.
+/// Selecting fires the selection through `onSelect` (caller dismisses), Done just closes.
+private struct GoalPickerSheet: View {
+    let selectedGoal: ParkingGoal
+    let onSelect: (ParkingGoal) -> Void
+    let onDone: () -> Void
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 12) {
+                    ForEach(ParkingGoal.allCases, id: \.rawValue) { goal in
+                        GoalTile(
+                            goal: goal,
+                            isSelected: goal == selectedGoal,
+                            horizontalLayout: true,
+                            accessory: .selectedCheckmark,
+                            onTap: { onSelect(goal) }
+                        )
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+            .navigationTitle("Pick a parking goal")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done", action: onDone)
+                }
+            }
         }
     }
 }
