@@ -191,3 +191,71 @@ nonisolated func onboardingCoachBubbleFitsAbove(
 nonisolated func onboardingCoachPointIsOnScreen(_ point: CGPoint, in bounds: CGRect, inset: CGFloat = 24) -> Bool {
     bounds.insetBy(dx: inset, dy: inset).contains(point)
 }
+
+// MARK: - AX bubble region (#37 6 follow-up: PR #152 QA #3/#4)
+
+/// Where the persistent Skip pill's top edge sits. Below AX1 it is the legacy `safeMinY + 8`
+/// (unchanged). At AX sizes the measured top chrome (the ASP banner grows to ~200pt at AX5) can
+/// extend past that, so Skip drops below it (`topChromeBottom + 4`) instead of drawing on the
+/// banner copy.
+nonisolated func onboardingCoachSkipTop(
+    safeMinY: CGFloat,
+    topChromeBottom: CGFloat,
+    accessibilityLayout: Bool
+) -> CGFloat {
+    let legacy = safeMinY + 8
+    guard accessibilityLayout else { return legacy }
+    return max(legacy, topChromeBottom + 4)
+}
+
+/// The TOP of the bubble region: below the Skip band. `skipBandHeight` is the band measured from
+/// `safeMinY` (Skip's 8pt inset + pill + padding), so the region starts at `skipTop - 8 +
+/// skipBandHeight`, which equals the legacy `safeMinY + skipBandHeight` when Skip is unmoved.
+nonisolated func onboardingCoachRegionTop(
+    safeMinY: CGFloat,
+    skipTop: CGFloat,
+    skipBandHeight: CGFloat
+) -> CGFloat {
+    skipTop - 8 + skipBandHeight
+}
+
+/// Vertical bounds actually used for the bubble. Legacy (below AX1): the bubble may extend down
+/// to `top + minimumHeight` (overlapping what it would clear) so it never collapses. At AX sizes
+/// the bubble must NOT overlap Start Driving/the dock: the region is exactly
+/// `[top, bottom]` (bottom = dock top - 12) and the body scrolls inside it with the primary
+/// button pinned. Only when the region is below `hardFloor` (pathological: not enough room for
+/// one body line plus the 44pt button) is it grown to `hardFloor`.
+nonisolated func onboardingCoachBubbleVerticalBounds(
+    top: CGFloat,
+    bottom: CGFloat,
+    safeMaxY: CGFloat,
+    minimumHeight: CGFloat,
+    accessibilityLayout: Bool,
+    hardFloor: CGFloat = 140
+) -> (top: CGFloat, bottom: CGFloat) {
+    let effectiveBottom: CGFloat
+    if accessibilityLayout {
+        effectiveBottom = min(max(bottom, top + hardFloor), safeMaxY - 12)
+    } else {
+        effectiveBottom = min(max(bottom, top + minimumHeight), safeMaxY - 12)
+    }
+    return (top, effectiveBottom)
+}
+
+/// Rail clearance (QA #4): when the bubble region overlaps the trailing rail (Recenter, More)
+/// vertically, the bubble's allowed trailing edge is pulled in so its right edge sits at least
+/// `gap` left of the rail. Returned as a replacement `safeMaxX` for
+/// `onboardingCoachBubbleWidth`/`onboardingCoachBubbleCenterX` (they apply the 20pt margin
+/// themselves, so the margin is added back here). `.zero` rail or no vertical overlap: unchanged.
+nonisolated func onboardingCoachRailAdjustedSafeMaxX(
+    safeMaxX: CGFloat,
+    railFrame: CGRect,
+    regionTop: CGFloat,
+    regionBottom: CGFloat,
+    gap: CGFloat = 8
+) -> CGFloat {
+    guard railFrame != .zero, railFrame.width > 0, railFrame.height > 0 else { return safeMaxX }
+    guard railFrame.minY < regionBottom, railFrame.maxY > regionTop else { return safeMaxX }
+    let allowedRightEdge = railFrame.minX - gap
+    return min(safeMaxX, allowedRightEdge + onboardingCoachBubbleHorizontalMargin)
+}

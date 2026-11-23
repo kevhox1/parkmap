@@ -69,6 +69,12 @@ struct OnboardingCoachOverlay: View {
     /// coordinates, or `nil` when no curb is on-screen (bubble placed without a ring).
     let nearestCurbScreenPoint: CGPoint?
 
+    /// QA #3/#4 (PR #152): the measured bottom edge of the top chrome (ASP banner) and the
+    /// trailing rail's frame (Recenter, More), same coordinate space as the dock frames. Only
+    /// consulted at accessibility sizes (below AX1 nothing changes). `0`/`.zero` = not measured.
+    var topChromeBottom: CGFloat = 0
+    var railFrame: CGRect = .zero
+
     /// Fired by the bubble's own "Got it"/"Done" button.
     let onPrimaryAction: () -> Void
 
@@ -177,42 +183,37 @@ struct OnboardingCoachOverlay: View {
     /// scrolls its text if the region is too short (AX sizes), so it can never leave the screen.
     @ViewBuilder
     private func bubbleLayer(curbPoint: CGPoint?, bounds: CGRect, safe: CGRect) -> some View {
-        let topLimit = safe.minY + skipBandHeight
-        let width = onboardingCoachBubbleWidth(safeWidth: safe.width)
-        let centerX = onboardingCoachBubbleCenterX(
-            anchorX: nil, bubbleWidth: width, safeMinX: safe.minX, safeMaxX: safe.maxX
+        let topLimit = onboardingCoachRegionTop(
+            safeMinY: safe.minY, skipTop: skipTop(safe: safe), skipBandHeight: skipBandHeight
         )
         switch mark {
         case .goalTiles:
             bubbleRegion(
-                x: centerX, width: width, top: topLimit,
-                bottom: bottomLimit(above: goalDockFrame, safe: safe), alignment: .bottom, safeMaxY: safe.maxY
+                anchorX: nil, safe: safe, top: topLimit,
+                bottom: bottomLimit(above: goalDockFrame, safe: safe), alignment: .bottom
             )
         case .colorMeaning:
             bubbleRegion(
-                x: centerX, width: width, top: topLimit,
+                anchorX: nil, safe: safe, top: topLimit,
                 bottom: bottomLimit(above: goalCardLayout ? goalDockFrame : selectedTileFrame, safe: safe),
-                alignment: .bottom, safeMaxY: safe.maxY
+                alignment: .bottom
             )
         case .tapABlock:
             let anchor = curbPoint.flatMap { onboardingCoachPointIsOnScreen($0, in: bounds) ? $0 : nil }
-            let x = onboardingCoachBubbleCenterX(
-                anchorX: anchor?.x, bubbleWidth: width, safeMinX: safe.minX, safeMaxX: safe.maxX
-            )
             let dockTop = bottomLimit(above: goalDockFrame, safe: safe)
             if let anchor {
                 // Keep clear of the 56pt ring (28pt radius) plus a gap.
                 let gap: CGFloat = 40
                 if onboardingCoachBubbleFitsAbove(anchorY: anchor.y, topLimit: topLimit, gap: gap, minimumHeight: 140) {
-                    bubbleRegion(x: x, width: width, top: topLimit, bottom: anchor.y - gap, alignment: .bottom, safeMaxY: safe.maxY)
+                    bubbleRegion(anchorX: anchor.x, safe: safe, top: topLimit, bottom: anchor.y - gap, alignment: .bottom)
                 } else {
-                    bubbleRegion(x: x, width: width, top: anchor.y + gap, bottom: dockTop, alignment: .top, safeMaxY: safe.maxY)
+                    bubbleRegion(anchorX: anchor.x, safe: safe, top: anchor.y + gap, bottom: dockTop, alignment: .top)
                 }
             } else {
                 // No on-screen curb: place the bubble in the upper-middle, no ring.
                 bubbleRegion(
-                    x: x, width: width, top: topLimit,
-                    bottom: max(topLimit + 140, safe.midY), alignment: .bottom, safeMaxY: safe.maxY
+                    anchorX: nil, safe: safe, top: topLimit,
+                    bottom: max(topLimit + 140, safe.midY), alignment: .bottom
                 )
             }
         }
@@ -232,14 +233,26 @@ struct OnboardingCoachOverlay: View {
     @ScaledMetric(relativeTo: .headline) private var minimumBubbleRegionHeight: CGFloat = 170
 
     private func bubbleRegion(
-        x: CGFloat, width: CGFloat, top: CGFloat, bottom: CGFloat, alignment: Alignment,
-        safeMaxY: CGFloat
+        anchorX: CGFloat?, safe: CGRect, top: CGFloat, bottom: CGFloat, alignment: Alignment
     ) -> some View {
-        let effectiveBottom = min(max(bottom, top + minimumBubbleRegionHeight), safeMaxY - 12)
-        let height = max(1, effectiveBottom - top)
+        let bounds = onboardingCoachBubbleVerticalBounds(
+            top: top, bottom: bottom, safeMaxY: safe.maxY,
+            minimumHeight: minimumBubbleRegionHeight, accessibilityLayout: goalCardLayout
+        )
+        let height = max(1, bounds.bottom - bounds.top)
+        // QA #4: keep clear of the trailing rail (Recenter, More) at AX sizes only.
+        let safeMaxX = goalCardLayout
+            ? onboardingCoachRailAdjustedSafeMaxX(
+                safeMaxX: safe.maxX, railFrame: railFrame, regionTop: bounds.top, regionBottom: bounds.bottom
+            )
+            : safe.maxX
+        let width = onboardingCoachBubbleWidth(safeWidth: safeMaxX - safe.minX)
+        let x = onboardingCoachBubbleCenterX(
+            anchorX: anchorX, bubbleWidth: width, safeMinX: safe.minX, safeMaxX: safeMaxX
+        )
         return bubbleCard(width: width)
             .frame(width: width, height: height, alignment: alignment)
-            .position(x: x, y: top + height / 2)
+            .position(x: x, y: bounds.top + height / 2)
     }
 
     /// `.regularMaterial` callout — same card family `LocationPrimingCard`/
@@ -280,6 +293,13 @@ struct OnboardingCoachOverlay: View {
 
     // MARK: - Persistent Skip link (§2.3: same screen position on every mark)
 
+    /// Skip's top edge: legacy `safe.minY + 8`; at AX sizes below the measured top chrome (ASP banner).
+    private func skipTop(safe: CGRect) -> CGFloat {
+        onboardingCoachSkipTop(
+            safeMinY: safe.minY, topChromeBottom: topChromeBottom, accessibilityLayout: goalCardLayout
+        )
+    }
+
     private func skipLink(safe: CGRect) -> some View {
         HStack {
             Spacer()
@@ -296,7 +316,7 @@ struct OnboardingCoachOverlay: View {
             Spacer()
         }
         .frame(width: safe.width)
-        .offset(x: safe.minX, y: safe.minY + 8)
+        .offset(x: safe.minX, y: skipTop(safe: safe))
     }
 }
 
