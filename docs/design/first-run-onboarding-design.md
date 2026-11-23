@@ -476,6 +476,16 @@ new test target that touches these views, per this project's own named gotcha li
 
 ---
 
+## As-built note (2026-11-23): tapping another goal tile during mark 2
+
+During mark 2 ("Green means you're covered..."), tapping a different goal tile than the selected
+one is intended to advance straight to mark 3, exactly as tapping the selected tile does. Both
+taps count as "tapping the real control the bubble points at" (`dismissedByGoalTileTap` is true
+for marks 1 and 2, section 2.3), so the coach does not wait for the originally-selected tile
+specifically. This is the confirmed as-built behavior from the PR #149 QA pass (N2), not a bug.
+
+---
+
 ## Summary for the orchestrator
 
 Three full-screen story cards (`OnboardingStoryView`, new) tell the honest arc — the twice-a-week

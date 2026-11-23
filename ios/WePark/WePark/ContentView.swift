@@ -2077,7 +2077,7 @@ struct ContentView: View {
             },
             onDone: { activeSheet = dismissTargetOutsideBrowseNav }
         )
-        .presentationDetents([.medium])
+        .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
         .presentationBackground(.regularMaterial)
         .presentationCornerRadius(20)
@@ -3179,6 +3179,7 @@ struct ContentView: View {
                 ),
                 nearestCurbScreenPoint: onboardingCurbScreenPoint,
                 topChromeBottom: onboardingTopChromeBottom,
+                userDotScreenPoint: mark == .goalTiles ? onboardingUserDotScreenPoint() : nil,
                 railFrame: onboardingRailFrame,
                 onPrimaryAction: { advanceOnboardingCoach(from: mark) },
                 onSkipAll: { finishOnboardingCoach() }
@@ -4485,6 +4486,14 @@ struct ContentView: View {
     private func handleOnboardingCoachUserMapGesture() {
         guard onboardingCoachMark != nil else { return }
         finishOnboardingCoach()
+    }
+
+    /// Mark 1's user-dot exclusion point: the user's last fix projected through the same
+    /// `screenPointForCoordinate` seam mark 3 uses (read-only `MKMapView.convert`; nil when there
+    /// is no fix or the seam is not attached yet, in which case mark 1 keeps its legacy placement).
+    private func onboardingUserDotScreenPoint() -> CGPoint? {
+        guard let userLocation = locationService.userLocation else { return nil }
+        return coordinatorActions.screenPointForCoordinate?(userLocation)
     }
 
     /// Mark 3's anchor (§2.2, QA #6): the nearest curb to the user's last fix, via
