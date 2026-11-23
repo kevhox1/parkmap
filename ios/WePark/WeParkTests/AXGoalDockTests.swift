@@ -317,6 +317,18 @@ final class AXGoalDockTests: XCTestCase {
         XCTAssertEqual(b.bottom, 480)
     }
 
+    // MARK: - Goal tile titles never break mid-word (SE XXXL)
+
+    func testGoalTitleLines_breakOnlyAtWordBoundaries() {
+        XCTAssertEqual(goalTitleLines("Overnight"), ["Overnight"])
+        XCTAssertEqual(goalTitleLines("A Few Hours"), ["A Few", "Hours"])
+        XCTAssertEqual(goalTitleLines("Park & Forget"), ["Park &", "Forget"])
+        for goal in ParkingGoal.allCases {
+            let rejoined = goalTitleLines(goal.dockPrimary).joined(separator: " ")
+            XCTAssertEqual(rejoined, goal.dockPrimary)
+        }
+    }
+
     // MARK: - Mark 1 user-dot avoidance (open item #41 (c) / N4, pure math)
 
     func testUserDotAvoidance_raisesBottomAboveCoveredDot() {

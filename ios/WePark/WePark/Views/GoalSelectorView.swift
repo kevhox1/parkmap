@@ -602,10 +602,7 @@ private struct GoalTile: View {
             VStack(spacing: 6) {
                 Image(systemName: goal.dockIcon)
                     .font(.title)
-                Text(goal.dockPrimary)
-                    .font(.headline.bold())
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
+                tileTitle
                 Text(goal.dockSubLabel)
                     .font(.footnote)
                     .multilineTextAlignment(.center)
@@ -615,6 +612,54 @@ private struct GoalTile: View {
             .padding(.vertical, 12)
         }
     }
+}
+
+
+extension GoalTile {
+    /// The three-across tile title. A goal name must never break INSIDE a word ("Overnig / ht"
+    /// on an SE at XXXL): try the whole name on one line, else break only at a word boundary
+    /// (`goalTitleLines`) with each line shrinking (down to 0.6x) rather than wrapping mid-word.
+    @ViewBuilder
+    fileprivate var tileTitle: some View {
+        let name = goal.dockPrimary
+        ViewThatFits(in: .horizontal) {
+            Text(name)
+                .font(.headline.bold())
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+            VStack(spacing: 0) {
+                ForEach(Array(goalTitleLines(name).enumerated()), id: \.offset) { _, line in
+                    Text(line)
+                        .font(.headline.bold())
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                }
+            }
+            .multilineTextAlignment(.center)
+        }
+    }
+}
+
+/// Splits a goal name into at most two lines at a WORD boundary (never inside a word), choosing
+/// the boundary that best balances the character counts. A single-word name stays one line.
+nonisolated func goalTitleLines(_ name: String) -> [String] {
+    let words = name.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    guard words.count > 1 else { return [name] }
+    var best = 1
+    var bestDiff = Int.max
+    for split in 1..<words.count {
+        let left = words[..<split].joined(separator: " ").count
+        let right = words[split...].joined(separator: " ").count
+        let diff = abs(left - right)
+        if diff < bestDiff {
+            bestDiff = diff
+            best = split
+        }
+    }
+    return [
+        words[..<best].joined(separator: " "),
+        words[best...].joined(separator: " ")
+    ]
 }
 
 // MARK: - Addendum 4 pieces
