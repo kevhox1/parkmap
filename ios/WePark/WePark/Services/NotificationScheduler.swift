@@ -504,17 +504,25 @@ final class NotificationScheduler {
     /// Notification category for reminders whose body includes the verified address.
     nonisolated static let addressCategoryID = "wepark_parked_car_address"
 
-    /// Registers the category with a hidden-previews placeholder. Call once at launch, flag-on
-    /// only. WePark has no other notification categories, so replacing the set is safe.
-    static func registerAddressCategory() {
-        let category = UNNotificationCategory(
+    /// The address category: a hidden-previews placeholder keeps the verified address off the
+    /// lock screen when previews are off.
+    static func addressCategory() -> UNNotificationCategory {
+        UNNotificationCategory(
             identifier: addressCategoryID,
             actions: [],
             intentIdentifiers: [],
             hiddenPreviewsBodyPlaceholder: "Parking reminder",
             options: []
         )
-        UNUserNotificationCenter.current().setNotificationCategories([category])
+    }
+
+    /// Registers the category, MERGING with whatever is already registered
+    /// (`setNotificationCategories` replaces the whole set, and Spot Pass registers its own
+    /// category too). Call once at launch, flag-on only. The launch path itself goes through
+    /// `NotificationCategoryRegistry.registerLaunchCategories`, which registers address and Spot
+    /// Pass categories in a single merge; this entry point remains for direct callers.
+    static func registerAddressCategory() {
+        Task { await NotificationCategoryRegistry.register([addressCategory()]) }
     }
 
     // MARK: - Badge clearing (fix: badge never cleared)

@@ -99,8 +99,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         UNUserNotificationCenter.current().delegate = self
         // Address-anchored parking: the category whose hidden-previews placeholder keeps the
         // verified address off the lock screen when previews are off. Inert flag-off.
-        if AppConstants.addressAnchoredParkingEnabled {
-            NotificationScheduler.registerAddressCategory()
+        // Spot Pass adds a seeker category behind its own flag; both register in ONE merge so
+        // neither clobbers the other (setNotificationCategories replaces the whole set). With
+        // both flags off nothing is registered, exactly as before.
+        if AppConstants.addressAnchoredParkingEnabled || AppConstants.spotHandoffEnabled {
+            Task { await NotificationCategoryRegistry.registerLaunchCategories() }
         }
         return true
     }
@@ -114,6 +117,13 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         willPresent notification: UNNotification,
         withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
     ) {
+        // Spot Pass (flag-gated, inert off): a seeker alert in the foreground triggers a refresh.
+        if AppConstants.spotHandoffEnabled {
+            let spotPassInfo = notification.request.content.userInfo
+            DispatchQueue.main.async {
+                SpotPassPushRouter.handle(userInfo: spotPassInfo, opened: false)
+            }
+        }
         // Display the notification banner + sound even when the app is in the foreground.
         completionHandler([.banner, .sound, .badge])
     }
@@ -128,6 +138,12 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         defer { completionHandler() }
 
         let userInfo = response.notification.request.content.userInfo
+        // Spot Pass (flag-gated, inert off): tapping a seeker alert opens the pass.
+        if AppConstants.spotHandoffEnabled {
+            DispatchQueue.main.async {
+                SpotPassPushRouter.handle(userInfo: userInfo, opened: true)
+            }
+        }
         guard
             let action = userInfo["wepark_action"] as? String,
             action == "show_car_detail",
@@ -195,6 +211,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         fetchCompletionHandler completionHandler: @escaping (UIBackgroundFetchResult) -> Void
     ) {
         DispatchQueue.main.async {
+            // Spot Pass (flag-gated, inert off): a silent/background seeker push refreshes the pass.
+            if SpotPassPushRouter.handle(userInfo: userInfo, opened: false) {
+                completionHandler(.newData)
+                return
+            }
             guard AppConstants.communityEnabled else {
                 completionHandler(.noData)
                 return

@@ -27,6 +27,7 @@ import SwiftUI
 /// new rows 2 and 4, everything else renumbered but otherwise unchanged).
 enum MoreMenuRow: Equatable {
     case report
+    case spotPass
     case howWeParkWorks
     case mapKey
     case parking101
@@ -38,6 +39,7 @@ enum MoreMenuRow: Equatable {
     nonisolated var title: String {
         switch self {
         case .report: return "Report"
+        case .spotPass: return SpotPassCopy.rowTitle
         case .howWeParkWorks: return "How WePark works"
         case .mapKey: return "What the colors mean"
         case .parking101: return "Parking 101"
@@ -51,6 +53,7 @@ enum MoreMenuRow: Equatable {
     nonisolated var subtitle: String {
         switch self {
         case .report: return "Tell neighbors what you see"
+        case .spotPass: return SpotPassCopy.rowSubtitle
         case .howWeParkWorks: return "Replay the quick tour"
         case .mapKey: return "Green, red, and the rest"
         case .parking101: return "The full guide to NYC parking rules"
@@ -64,6 +67,7 @@ enum MoreMenuRow: Equatable {
     nonisolated var symbolName: String {
         switch self {
         case .report: return "flag.fill"
+        case .spotPass: return "ticket.fill"
         case .howWeParkWorks: return "sparkles"
         case .mapKey: return "questionmark.circle.fill"
         case .parking101: return "book.closed.fill"
@@ -80,6 +84,9 @@ enum MoreMenuRow: Equatable {
 /// Which More-sheet rows show, in priority order
 /// (`docs/design/first-run-onboarding-design.md` §3.1 table, which amends Addendum 3 A3.4):
 ///   1. Report                 — `communityEnabled`
+///   1b. Spot Pass             — `spotPassEnabled` (`AppConstants.spotHandoffEnabled`; design
+///                               `docs/design/spot-pass-design.md` §9.1: directly below Report,
+///                               never displacing it; hidden entirely while the flag is off)
 ///   2. How WePark works       — `onboardingReplayAvailable` (both onboarding flags on; see
 ///                               `AppConstants.onboardingExperienceEnabled(...)`) — replaying a
 ///                               tour that explains a screen state the user can't reach is
@@ -99,10 +106,12 @@ nonisolated func moreMenuVisibleRows(
     communityEnabled: Bool,
     onboardingReplayAvailable: Bool,
     hasParkedCar: Bool,
-    fullPaletteMode: Bool
+    fullPaletteMode: Bool,
+    spotPassEnabled: Bool = false
 ) -> [MoreMenuRow] {
     var rows: [MoreMenuRow] = []
     if communityEnabled { rows.append(.report) }
+    if spotPassEnabled { rows.append(.spotPass) }
     if onboardingReplayAvailable { rows.append(.howWeParkWorks) }
     rows.append(.mapKey)
     rows.append(.parking101)
