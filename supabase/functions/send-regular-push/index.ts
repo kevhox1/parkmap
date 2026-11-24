@@ -84,6 +84,7 @@
  * extraction) — same hardened code send-community-push now also calls, not a fork of it.
  */
 
+import { requireServiceRole } from "../_shared/service_auth.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   APNS_HOSTS,
@@ -147,6 +148,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
+  // SECURITY: service-role-only (verify_jwt alone accepts the public anon key). Runs before the body is touched.
+  const denied = requireServiceRole(req, serviceRoleKey);
+  if (denied) return denied;
+
   if (!apnsKeyId || !apnsTeamId || !apnsPrivateKey || !apnsTopic) {
     // Loud, but does not throw — a misconfigured-secrets deploy must not crash the Postgres trigger
     // that invoked this function (fail-open posture, matching send-community-push's identical
