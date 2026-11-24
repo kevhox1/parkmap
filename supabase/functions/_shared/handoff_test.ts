@@ -167,20 +167,27 @@ Deno.test("seeker alerts: coarse minutes, never a clock time, never location", (
   const dep = seekerAlertBody("departed", row({ status: "departed" }), now) as { aps: { alert: { body: string } }; kind: string };
   assertEquals(dep.aps.alert.body, "Your neighbor is pulling out now.");
   assertEquals(dep.kind, "departed");
+  // Seeker visible alerts carry the iOS-registered category; kind/handoff_id unchanged.
+  const armedObj = seekerAlertBody("armed", row(), now) as { aps: Record<string, unknown>; kind: string; handoff_id: string };
+  assertEquals(armedObj.aps.category, "wepark_spot_pass_seeker");
+  assertEquals((dep.aps as Record<string, unknown>).category, "wepark_spot_pass_seeker");
+  assertEquals(Object.keys(armedObj).sort(), ["aps", "handoff_id", "kind"]);
 });
 
 Deno.test("driver payloads: thanks alert (clip adds target-content-id), silent ended, ActivityKit end", () => {
   const app = driverThanksAlertBody(row(), false, "https://getwepark.com/p") as { aps: Record<string, unknown> };
   assertEquals(app.aps["target-content-id"], undefined);
+  assertEquals(app.aps.category, undefined); // driver thanks is not a seeker alert
   const clip = driverThanksAlertBody(row({ seeker_display_name: "Maya" }), true, "https://getwepark.com/p") as {
     aps: { alert: { body: string }; "target-content-id": string };
   };
   assertEquals(clip.aps["target-content-id"], "https://getwepark.com/p");
   assertEquals(clip.aps.alert.body, "Maya got your spot.");
   const silent = silentEndedBody(row()) as { aps: Record<string, unknown> };
-  assertEquals(silent.aps, { "content-available": 1 }); // no alert, no sound
+  assertEquals(silent.aps, { "content-available": 1 }); // no alert, no sound, no category
   const la = liveActivityEndBody("thanks", row(), 1000) as { aps: Record<string, unknown> };
   assertEquals(la.aps.event, "end");
+  assertEquals(la.aps.category, undefined);
   assertEquals((la.aps["content-state"] as { phase: string }).phase, "thanks");
   const ended = liveActivityEndBody("handoff_ended", row(), 1000) as { aps: Record<string, unknown> };
   assertEquals(ended.aps["dismissal-date"], 1000);
