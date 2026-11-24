@@ -793,6 +793,16 @@ struct ContentView: View {
     /// consumed it.
     @State private var onboardingStoryIsReplay: Bool = false
 
+    // MARK: - Spot Pass seeker flow (C1, `docs/specs/qr-spot-handoff.md`; flag-gated)
+
+    /// The seeker store. `nil` until the first time the feature is used, and ALWAYS `nil` while
+    /// `AppConstants.spotHandoffEnabled` is false (it is only built by `spotPassStoreIfEnabled()`).
+    @State private var spotPassStore: SpotPassSeekerStore? = nil
+
+    /// Drives the full-screen Spot Pass cover: its own presentation layer, independent of the
+    /// `.sheet(item: $activeSheet)` host, same shape as `showOnboardingStoryCover`.
+    @State private var showSpotPassCover: Bool = false
+
     /// The coach layer's current bubble (Tier 3, §2), or `nil` when nothing is showing. `nil`
     /// is both "never started" and "the session ended" (finished, skipped, Start-Driving-
     /// escalated, or dismissed by a pan/zoom) — there is no separate "paused" state.
@@ -1374,6 +1384,24 @@ struct ContentView: View {
             }) {
                 OnboardingStoryView(onFinish: { showOnboardingStoryCover = false })
             }
+            // Spot Pass seeker flow (C1). Never presented while the flag is off: the only trigger
+            // is the More-sheet row, which does not exist flag-off.
+            .fullScreenCover(isPresented: $showSpotPassCover) {
+                if let store = spotPassStore {
+                    SpotPassFlowView(store: store, onClose: { showSpotPassCover = false })
+                }
+            }
+            // Spot Pass: auto-end an open/armed pass when the seeker parks (spec §3). Inert while
+            // `spotPassStore` is nil (always, flag-off).
+            .onChange(of: parkPinService.parkedCar?.id) { oldID, newID in
+                guard newID != nil, newID != oldID else { return }
+                endSpotPassBecauseParked()
+            }
+            // Spot Pass: seeker push alerts (armed / departed) refresh the pass; a tap opens it.
+            .onReceive(NotificationCenter.default.publisher(for: .spotPassPushReceived)) { note in
+                guard let event = note.object as? SpotPassPushEvent else { return }
+                handleSpotPassPush(event)
+            }
             // First-run onboarding §2.3: escalating into Drive Mode (manual tap OR, later,
             // sustained-motion auto-engage) dismisses any showing coach bubble outright —
             // "escalating is a real, deliberate action; nothing should compete with it." The
@@ -1382,6 +1410,9 @@ struct ContentView: View {
             // catch for any OTHER path that flips `driveModeActive` true.
             .onChange(of: driveModeActive) { _, active in
                 if active { onboardingCoachMark = nil }
+                // Spot Pass (spec §3): ending drive mode ends an open/armed pass. Inert while
+                // `spotPassStore` is nil (always, flag-off).
+                if !active { endSpotPassBecauseDriveEnded() }
             }
             .alert("Keep WePark in Front", isPresented: $showDriveModeBackgroundNote) {
                 Button("Got It", role: .cancel) {}
@@ -2069,7 +2100,8 @@ struct ContentView: View {
                 communityEnabled: AppConstants.communityEnabled,
                 onboardingReplayAvailable: AppConstants.onboardingExperienceEnabled(),
                 hasParkedCar: parkPinService.parkedCar != nil,
-                fullPaletteMode: fullPaletteMode
+                fullPaletteMode: fullPaletteMode,
+                spotPassEnabled: AppConstants.spotHandoffEnabled
             ),
             fullPaletteMode: fullPaletteMode,
             onSelect: { row in handleMoreMenuSelection(row) },
@@ -2095,6 +2127,11 @@ struct ContentView: View {
         switch row {
         case .report:
             handleReportPillTap()
+        case .spotPass:
+            // Spot Pass (C1): dismiss More to the rest state and present the full-screen flow in
+            // the same tap (independent presentation layers, same shape as the onboarding replay).
+            activeSheet = dismissTargetOutsideBrowseNav
+            presentSpotPass()
         case .howWeParkWorks:
             // First-run onboarding §3.1/§3.2: dismiss More to the rest state AND present the
             // story deck as a REPLAY in the same tap — the deck's own `.fullScreenCover` and
@@ -2119,6 +2156,48 @@ struct ContentView: View {
         case .settings:
             // Same destination as Search's gear (`onSettingsTapped: { activeSheet = .settings }`).
             activeSheet = .settings
+        }
+    }
+
+    // MARK: - Spot Pass seeker flow (C1)
+
+    /// Builds the seeker store on first use. Returns nil while the flag is off, so every Spot
+    /// Pass code path below is a no-op flag-off.
+    private func spotPassStoreIfEnabled() -> SpotPassSeekerStore? {
+        guard AppConstants.spotHandoffEnabled else { return nil }
+        if let spotPassStore { return spotPassStore }
+        let store = SpotPassComposition.makeStore(authService: authService)
+        spotPassStore = store
+        return store
+    }
+
+    private func presentSpotPass() {
+        guard spotPassStoreIfEnabled() != nil else { return }
+        showSpotPassCover = true
+    }
+
+    private func endSpotPassBecauseParked() {
+        guard let store = spotPassStore else { return }
+        Task {
+            if await store.endBecauseSeekerParked() {
+                ToastService.shared.show(message: SpotPassCopy.parkedToast)
+            }
+        }
+    }
+
+    private func endSpotPassBecauseDriveEnded() {
+        guard let store = spotPassStore else { return }
+        Task { await store.endBecauseDriveEnded() }
+    }
+
+    /// A Spot Pass push arrived (or was buffered across a cold launch). Refresh the pass; if the
+    /// user tapped the alert, bring up the pass.
+    private func handleSpotPassPush(_ event: SpotPassPushEvent) {
+        guard let store = spotPassStoreIfEnabled() else { return }
+        SpotPassPushInbox.shared.pending = nil
+        Task { await store.handlePush(event) }
+        if event.opened, event.kind == .armed || event.kind == .departed {
+            showSpotPassCover = true
         }
     }
 
@@ -5375,6 +5454,12 @@ struct ContentView: View {
         // the day these flags eventually flip (there would be no way, at flip time, to tell
         // "has used this app for months" apart from "installed five minutes ago").
         FirstLaunchSentinel().markLaunchedAndPreSeedIfUpgrading()
+
+        // Spot Pass: a seeker alert tapped on a cold launch was buffered by the AppDelegate.
+        // Inert flag-off (nothing is ever buffered).
+        if AppConstants.spotHandoffEnabled, let pending = SpotPassPushInbox.shared.pending {
+            handleSpotPassPush(pending)
+        }
 
         // W5: Load persisted car pin on app launch.
         parkPinService.load()
