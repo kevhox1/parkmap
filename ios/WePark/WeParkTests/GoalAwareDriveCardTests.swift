@@ -224,11 +224,9 @@ final class GoalAwareChipSeverityTests: XCTestCase {
         XCTAssertEqual(result, .restricted)
     }
 
-    // ALL-must-pass semantics: a side backed by two physical segments, one of which fails
-    // the goal, must read red overall — mirrors aggregateSideDetail's own conservative-min
-    // philosophy (a side you may have to touch the car for, even if a different physical
-    // piece of the same curb would clear).
-    func testMultipleSegmentsOnSide_onePasses_oneFails_overallRestricted() {
+    // ANY-passes semantics (PR #179 follow-up): a side with a qualifying segment that clears
+    // the goal window has a real spot, so it reads green even if another segment fails.
+    func testMultipleSegmentsOnSide_onePasses_oneFails_overallFree() {
         let passing = gacSegment(side: "N", rules: [gacRule(category: .aspTueFri, days: [2, 5])])
         let failing = gacSegment(side: "N", rules: [gacRule(category: .aspMonThu, days: [1, 4])])
         let result = DrivingContextService.goalAwareChipSeverity(
@@ -239,7 +237,7 @@ final class GoalAwareChipSeverityTests: XCTestCase {
             from: now,
             engine: engine
         )
-        XCTAssertEqual(result, .restricted, "Any failing segment on the side must make the whole side red")
+        XCTAssertEqual(result, .free, "One passing qualifying segment is a legal spot for the window")
     }
 
     func testMultipleSegmentsOnSide_allPass_overallFree() {
@@ -310,9 +308,10 @@ final class GoalAwareDriveCardIntegrationTests: XCTestCase {
         )
         let ctx = service.currentContext
         XCTAssertNotNil(ctx)
-        // Legacy classification: unaffected by this fix — both free right now.
-        XCTAssertEqual(ctx?.leftLabel.severity, .free, "Legacy severity must be untouched by this fix")
-        XCTAssertEqual(ctx?.rightLabel.severity, .free, "Legacy severity must be untouched by this fix")
+        // Left fails the goal: its text no longer claims "Free until ..." (chip text, color
+        // and map agree); right passes, so its label stays the free label.
+        XCTAssertEqual(ctx?.leftLabel.severity, .restricted, "Failing side must not read 'Free until'")
+        XCTAssertEqual(ctx?.rightLabel.severity, .free)
         // The fix: override disagrees with legacy on the left, matching the map's goal bucket.
         XCTAssertEqual(ctx?.leftChipColorOverride, .restricted, "Left must read red — it fails the Overnight goal")
         XCTAssertEqual(ctx?.rightChipColorOverride, .free, "Right must read green — it passes the Overnight goal")

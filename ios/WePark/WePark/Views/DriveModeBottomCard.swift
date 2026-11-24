@@ -54,6 +54,7 @@ import SwiftUI
 // MARK: - DriveModeBottomCard
 
 struct DriveModeBottomCard: View {
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     // MARK: - Inputs
 
@@ -199,8 +200,11 @@ struct DriveModeBottomCard: View {
             Text(hasData ? safetyLabel.text : "\u{2014}")
                 .font(.subheadline)
                 .fontWeight(.medium)
-                .lineLimit(2)
-                .minimumScaleFactor(0.9)
+                // Standard sizes: compact (2 lines max). Accessibility sizes: wrap fully,
+                // never truncate the date ("Free until Mon 1...").
+                .lineLimit(dynamicTypeSize.isAccessibilitySize ? nil : 2)
+                .minimumScaleFactor(dynamicTypeSize.isAccessibilitySize ? 1.0 : 0.9)
+                .fixedSize(horizontal: false, vertical: true)
                 .foregroundStyle(chipTextColor(for: displaySeverity))
         }
         .padding(.horizontal, 12)

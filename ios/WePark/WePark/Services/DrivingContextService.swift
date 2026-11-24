@@ -387,7 +387,7 @@ final class DrivingContextService {
         // comment for why this intentionally does NOT touch `leftLabel`/`rightLabel`.
         let leftSideSegments: [Segment] = leftCardinalSide.map { s in blockSegments.filter { $0.side == s } } ?? []
         let rightSideSegments: [Segment] = rightCardinalSide.map { s in blockSegments.filter { $0.side == s } } ?? []
-        let leftChipColorOverride = DrivingContextService.goalAwareChipSeverity(
+        let leftChip = DrivingContextService.goalAwareChip(
             sideSegments: leftSideSegments,
             parkUntilMode: parkUntilMode,
             target: parkUntilTarget,
@@ -395,7 +395,7 @@ final class DrivingContextService {
             from: date,
             engine: engine
         )
-        let rightChipColorOverride = DrivingContextService.goalAwareChipSeverity(
+        let rightChip = DrivingContextService.goalAwareChip(
             sideSegments: rightSideSegments,
             parkUntilMode: parkUntilMode,
             target: parkUntilTarget,
@@ -403,13 +403,15 @@ final class DrivingContextService {
             from: date,
             engine: engine
         )
+        let leftChipColorOverride = leftChip?.severity
+        let rightChipColorOverride = rightChip?.severity
 
         let context = DrivingContext(
             street: block.street,
             from: block.from,
             to: block.to,
-            leftLabel: leftLabel,
-            rightLabel: rightLabel,
+            leftLabel: leftChip?.labelOverride ?? leftLabel,
+            rightLabel: rightChip?.labelOverride ?? rightLabel,
             leftChipColorOverride: leftChipColorOverride,
             rightChipColorOverride: rightChipColorOverride
         )
@@ -709,17 +711,10 @@ final class DrivingContextService {
     /// fix's PR description for the alternative considered (gating on the flag) and why it
     /// was rejected.
     ///
-    /// "Side passes" = EVERY segment on this side individually passes `isFree(...)` — a
-    /// deliberately safety-biased rule: a side with ANY move-forcing segment is a side you
-    /// may have to touch the car for, even if some other physical piece of the same curb
-    /// would clear on its own. (NOTE: this is intentionally STRICTER than
-    /// `aggregateSideDetail`'s opportunity bucket, which is optimistic/ANY-wins for its
-    /// "free parking available" purpose — the two answer different questions, see the
-    /// PR #146 QA report. A multi-segment side can therefore read red here while parts of
-    /// the painted curb are green; the map stays the per-segment source of truth.) Returns
-    /// `nil` (defer to the legacy severity, unchanged) when
-    /// `parkUntilMode` is `false`, `target` is `nil`, or there are no segments for this side
-    /// (mirrors `aggregateSideDetail`'s own `.unknown` early return for an empty side).
+    /// "Side passes" = ANY qualifying segment (free now, >= 6 m) passes `isFree(...)` for the
+    /// whole window - see `goalAwareChip`. Returns `nil` (defer to the legacy severity,
+    /// unchanged) when `parkUntilMode` is `false`, `target` is `nil`, or there are no
+    /// segments for this side.
     ///
     /// Pure, `nonisolated static` — no stored state, no side effects. Does NOT read
     /// `SafetyLabel`/`SideOpportunity` at all; this answers the SAME binary question the
@@ -733,18 +728,54 @@ final class DrivingContextService {
         from: Date,
         engine: ParkingRulesEngine
     ) -> SafetyLabel.Severity? {
+        return goalAwareChip(
+            sideSegments: sideSegments,
+            parkUntilMode: parkUntilMode,
+            target: target,
+            ignoringMeteredPayment: ignoringMeteredPayment,
+            from: from,
+            engine: engine
+        )?.severity
+    }
+
+    /// Chip color plus (when the color would otherwise contradict it) the chip text.
+    struct GoalAwareChip: Equatable {
+        /// `.free` iff a driver can find a legal spot on this side for the whole window.
+        let severity: SafetyLabel.Severity
+        /// Replacement label, or `nil` to keep the legacy `aggregateSideDetail` label.
+        let labelOverride: SafetyLabel?
+    }
+
+    /// Owner rule: the chip is GREEN iff a driver can actually find a legal spot on this
+    /// side for the whole goal window. Chip color, text and map must agree.
+    ///
+    /// Qualifying set (what a driver could pull into): free-now segments at least
+    /// `minimumSubjectLengthMeters` long; else merely long enough; else all. The side is
+    /// green iff ANY qualifying segment passes `engine.isFree(...)` for the whole window
+    /// (`contains(where:)`) - the same call the map overlay makes. (Was `allSatisfy`, which
+    /// let one 13.7 m NO STANDING Tue-Sat 7AM-4PM stub turn E 2nd St red above six green
+    /// ASP segments.)
+    ///
+    /// Text: when green, the "Free until ..." text is recomputed from the PASSING segments
+    /// only (`aggregateSideDetail`'s earliest-next-restriction ranking, restricted to that
+    /// set), so it never describes a segment that fails the window. We keep the existing
+    /// conservative-earliest policy rather than "longest" so the claim holds for every spot
+    /// the green line shows. When red and the legacy label would still say "Free until ..."
+    /// (free now, but every spot fails the window), the text becomes "Not free through your
+    /// window" instead of a misleading "Free until" for a segment that fails.
+    nonisolated static func goalAwareChip(
+        sideSegments: [Segment],
+        parkUntilMode: Bool,
+        target: Date?,
+        ignoringMeteredPayment: Bool,
+        from: Date,
+        engine: ParkingRulesEngine
+    ) -> GoalAwareChip? {
         guard parkUntilMode, let target, !sideSegments.isEmpty else { return nil }
-        // Bug A (build 27 smoke, finding 12): judge the SAME segments the chip's TEXT is
-        // about. `aggregateSideDetail` builds "Free until X" only from segments that are
-        // free right now AND at least `minimumSubjectLengthMeters` long; the tile data also
-        // carries clipped NO STANDING stubs (hydrants, crosswalks, bus stops) on nearly
-        // every block side, which fail any window but are not the curb the text describes.
-        // Letting them veto the color made chips red under "Free until Monday".
-        // Subject set, in order: free-now and long enough; else merely long enough; else all.
         let longEnough = sideSegments.filter { segmentLengthMeters($0) >= minimumSubjectLengthMeters }
         let freeNow = longEnough.filter { engine.safetyLabel(for: $0, at: from).severity == .free }
         let subject = !freeNow.isEmpty ? freeNow : (!longEnough.isEmpty ? longEnough : sideSegments)
-        let allPass = subject.allSatisfy {
+        let passing = subject.filter {
             engine.isFree(
                 segment: $0,
                 from: from,
@@ -752,7 +783,18 @@ final class DrivingContextService {
                 ignoringMeteredPayment: ignoringMeteredPayment
             )
         }
-        return allPass ? .free : .restricted
+        if passing.isEmpty {
+            // Red. Only the free-now case needs a text fix; "No parking"/"Metered" already agree.
+            return GoalAwareChip(
+                severity: .restricted,
+                labelOverride: freeNow.isEmpty ? nil
+                    : SafetyLabel(text: "Not free through your window", severity: .restricted)
+            )
+        }
+        // Green. Text from the passing set (only meaningful when they are free-now segments).
+        guard !freeNow.isEmpty else { return GoalAwareChip(severity: .free, labelOverride: nil) }
+        let agg = aggregateSideDetail(segments: passing, side: passing[0].side, engine: engine, date: from)
+        return GoalAwareChip(severity: .free, labelOverride: SafetyLabel(for: agg))
     }
 
     /// Computes the haversine length of a segment's polyline in meters.
