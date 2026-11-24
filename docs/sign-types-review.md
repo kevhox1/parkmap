@@ -90,3 +90,15 @@
 2. **School days (#7, #20):** keep showing red on every weekday (safe), or add the DOE school calendar?
 3. **Construction (#31):** ignore, or warn?
 4. **Colors:** today there's red / yellow (metered) / green. Do you want more kinds (e.g. "loading only", "permit only") shown differently, or keep it simple: can I leave my car here, yes or no?
+
+## Kevin's decisions (2026-11-24 evening)
+
+**Principle:** "We CANNOT make it confusing and cannot assist people in finding a spot that is not actually a spot. They will instantly be off the app." Keep the real sign data underneath, but the base map is clean red/green. "WE WANT everyONE USING THIS APP, and most importantly people who have a car in NYC and live here."
+
+1. **Every plate-only, vehicle-type-only, loading-only, taxi, bus-layover and similar sign = RED** for a private car during its hours (#14 commercial-only meters, #18, #21, #23–#30). Commercial vehicles only = red, not metered.
+2. **Overnight = from NOW until the morning**, not "tonight". Default end 7:00 AM, shown explicitly in the app (e.g. "Now → 7:00 AM"), and adjustable with a lever (e.g. 7/8/9 AM).
+3. **A Few Hours = exactly that:** now + a few hours. It must always be EASIER to find than Overnight (strictly the more permissive map). Show the end time too.
+4. **Meters (orchestrator's recommendation, adopted under the principle; Kevin's Q1 was unclear):** a running meter is NOT free in any goal. With one consistent rule and windows that all start now, green(A Few Hours) ⊇ green(Overnight) ⊇ green(Park & Forget) always holds. Enforce this with a test.
+5. **School-day signs:** use the real DOE school calendar.
+6. **Construction:** do NOT ignore. More info is better: show it, labeled as temporary. Folds into the community "Waze-style" reports idea: "street blocked for filming / construction / parking blocked", with a pin or a drag over the blocked part of the block (future feature; film permits are already ingested by the `ingest-film-permits` cron).
+7. **Colors:** as simple as possible for the base/onboarding (red/green). Keep the "show all signs/colors" detail as an option for experienced users, not the default.
