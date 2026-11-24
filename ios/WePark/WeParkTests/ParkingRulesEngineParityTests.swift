@@ -144,7 +144,7 @@ final class R2BoundaryCaseTests: XCTestCase {
         // Should say "Free until Monday 7:00 AM" (using getNextRestrictionTimeLabel format)
         XCTAssertEqual(label.severity, .free)
         XCTAssertTrue(label.text.hasPrefix("Free until"), "Label should be 'Free until ...'")
-        XCTAssertTrue(label.text.contains("Monday"), "Label should reference Monday")
+        XCTAssertTrue(label.text.contains("Mon 5/11"), "Label should reference Monday")
         XCTAssertTrue(label.text.contains("7:00 AM"), "Label should reference 7:00 AM")
     }
 
@@ -184,7 +184,7 @@ final class R2BoundaryCaseTests: XCTestCase {
         let label = engine.safetyLabel(for: seg, at: now)
         XCTAssertEqual(label.severity, .free)
         // Feb 2 is Monday, 2 days away — should be "Monday" not "Tomorrow"
-        XCTAssertTrue(label.text.contains("Monday"), "Should say Monday, got: \(label.text)")
+        XCTAssertTrue(label.text.contains("Mon 2/2"), "Should say Monday, got: \(label.text)")
         XCTAssertFalse(label.text.contains("Tomorrow"), "Should NOT say Tomorrow, got: \(label.text)")
     }
 
@@ -392,7 +392,7 @@ final class HappyPathParityTests: XCTestCase {
         // Should be "Free until Monday 7:00 AM" — the rule isn't active Sat but applies Mon
         XCTAssertEqual(label.severity, .free)
         XCTAssertTrue(label.text.hasPrefix("Free until"), "Got: \(label.text)")
-        XCTAssertTrue(label.text.contains("Monday"), "Got: \(label.text)")
+        XCTAssertTrue(label.text.contains("Mon 5/11"), "Got: \(label.text)")
     }
 
     // MARK: HP-4: ASP_MON_THU currently free (not active, far from next restriction)
@@ -422,7 +422,7 @@ final class HappyPathParityTests: XCTestCase {
         let label = engine.safetyLabel(for: seg, at: now)
         XCTAssertEqual(label.severity, .free)
         XCTAssertTrue(label.text.hasPrefix("Free until"))
-        XCTAssertTrue(label.text.contains("Monday"), "Got: \(label.text)")
+        XCTAssertTrue(label.text.contains("Mon 5/11"), "Got: \(label.text)")
     }
 
     // MARK: HP-5: ASP_MON_THU active now
@@ -1042,8 +1042,20 @@ final class TimeLabelFormatTests: XCTestCase {
         // Now: Friday May 8 noon. Restriction in 67h = Monday May 11 7am.
         let now = etDate(year: 2026, month: 5, day: 8, hour: 12)
         let label = engine.nextRestrictionTimeLabel(hours: 67, now: now)
-        XCTAssertTrue(label.contains("Monday"), "Got: \(label)")
+        XCTAssertTrue(label.contains("Mon 5/11"), "Got: \(label)")
         XCTAssertTrue(label.contains("7:00 AM"), "Got: \(label)")
+    }
+
+    /// Owner build-27 smoke: weekday labels carry the date ("Mon 5/11 7:00 AM"), no full name.
+    func testWeekdayLabelExactFormatIncludesDate() {
+        let now = etDate(year: 2026, month: 5, day: 8, hour: 12)
+        XCTAssertEqual(engine.nextRestrictionTimeLabel(hours: 67, now: now), "Mon 5/11 7:00 AM")
+    }
+
+    /// Month rollover: Jan 31 11pm + 32h = Mon Feb 2 7am, shown with the new month.
+    func testWeekdayLabelMonthRolloverUsesTargetMonth() {
+        let now = etDate(year: 2026, month: 1, day: 31, hour: 23)
+        XCTAssertEqual(engine.nextRestrictionTimeLabel(hours: 32, now: now), "Mon 2/2 7:00 AM")
     }
 
     /// Time with non-zero minutes: "9:30 AM"

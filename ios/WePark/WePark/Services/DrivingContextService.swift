@@ -682,6 +682,9 @@ final class DrivingContextService {
 
     // MARK: - fix/goal-aware-drive-card: goal-aware chip-color override
 
+    /// Same one-car-length threshold `aggregateSideDetail` uses for its free-stretch text.
+    nonisolated static let minimumSubjectLengthMeters: Double = 6.0
+
     /// Computes the goal-aware (or clock-set Park Until) chip-color OVERRIDE for one side
     /// of the current block (Kevin smoke, 2026-10-26: an escalated-Cruise session with the
     /// Overnight goal active showed BOTH side chips green via the legacy `aggregateSideDetail`
@@ -731,7 +734,17 @@ final class DrivingContextService {
         engine: ParkingRulesEngine
     ) -> SafetyLabel.Severity? {
         guard parkUntilMode, let target, !sideSegments.isEmpty else { return nil }
-        let allPass = sideSegments.allSatisfy {
+        // Bug A (build 27 smoke, finding 12): judge the SAME segments the chip's TEXT is
+        // about. `aggregateSideDetail` builds "Free until X" only from segments that are
+        // free right now AND at least `minimumSubjectLengthMeters` long; the tile data also
+        // carries clipped NO STANDING stubs (hydrants, crosswalks, bus stops) on nearly
+        // every block side, which fail any window but are not the curb the text describes.
+        // Letting them veto the color made chips red under "Free until Monday".
+        // Subject set, in order: free-now and long enough; else merely long enough; else all.
+        let longEnough = sideSegments.filter { segmentLengthMeters($0) >= minimumSubjectLengthMeters }
+        let freeNow = longEnough.filter { engine.safetyLabel(for: $0, at: from).severity == .free }
+        let subject = !freeNow.isEmpty ? freeNow : (!longEnough.isEmpty ? longEnough : sideSegments)
+        let allPass = subject.allSatisfy {
             engine.isFree(
                 segment: $0,
                 from: from,
@@ -750,7 +763,7 @@ final class DrivingContextService {
     /// Internal (not private) so `TF27Tests` can verify the threshold behaviour directly
     /// without needing to construct a full `ParkingRulesEngine` context.
     /// Accessibility note: `@testable import WePark` exposes `internal` to tests.
-    static func segmentLengthMeters(_ segment: Segment) -> Double {
+    nonisolated static func segmentLengthMeters(_ segment: Segment) -> Double {
         let coords = segment.line
         guard coords.count >= 2 else { return 0 }
         var total = 0.0
@@ -766,7 +779,7 @@ final class DrivingContextService {
     /// Static haversine helper for use by `aggregateSide` and `segmentLengthMeters`.
     /// Mirrors the instance `haversineMeters(from:to:)` method; kept static so `aggregateSide`
     /// (which is static) can call it without a service instance.
-    private static func staticHaversineMeters(
+    nonisolated private static func staticHaversineMeters(
         from a: CLLocationCoordinate2D,
         to b: CLLocationCoordinate2D
     ) -> Double {

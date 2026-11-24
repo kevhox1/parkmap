@@ -555,7 +555,7 @@ final class ParkingRulesEngine {
 
     // MARK: - Private: time label formatting
 
-    /// Formats hours-from-now into a "Today 9:30 AM" / "Tomorrow 7:00 AM" / "Thursday 9:30 AM" label.
+    /// Formats hours-from-now into a "Today 9:30 AM" / "Tomorrow 7:00 AM" / "Thu 11/26 9:30 AM" label.
     /// Port of getNextRestrictionTimeLabel(hours) at index.html:5429.
     ///
     /// Output format: uses en-US locale with hour:numeric, minute:2-digit, hour12:true in ET.
@@ -577,7 +577,7 @@ final class ParkingRulesEngine {
         let etDay      = (etComps.weekday ?? 1) - 1      // 0=Sun
         let targetDay  = (targetComps.weekday ?? 1) - 1  // 0=Sun
 
-        let dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+        let dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
 
         let dayLabel: String
         // "Today" if same calendar date AND same weekday (same as JS).
@@ -589,7 +589,11 @@ final class ParkingRulesEngine {
             // when the month changes, e.g., Jan 31 → Feb 1).
             dayLabel = "Tomorrow"
         } else {
-            dayLabel = dayNames[targetDay]
+            // Owner build-27 smoke: a bare weekday ("Monday 9:00 AM") is ambiguous a week
+            // out, so 2+ days away reads "Mon 11/30 9:00 AM" — short enough for the stacked
+            // chip at accessibility sizes. Today/Tomorrow wording is unchanged.
+            let month = targetComps.month ?? 1
+            dayLabel = "\(dayNames[targetDay]) \(month)/\(targetDate)"
         }
 
         // Format the time string — must match JS toLocaleTimeString en-US output exactly.
