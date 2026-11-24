@@ -300,10 +300,18 @@ struct DriverChoosingView: View {
         }
     }
 
+    private static func armFailureMessage(_ failure: DriverArmFailure) -> String {
+        switch failure {
+        case .busy: return ClipCopy.busyBody
+        case .offline: return ClipCopy.offlineBody
+        case .saveFailed: return "\(ClipCopy.saveFailedTitle) \(ClipCopy.saveFailedBody)"
+        }
+    }
+
     private var pinnedCTA: some View {
         VStack(spacing: 6) {
             if let failure = controller.armFailure {
-                Text(failure == .busy ? ClipCopy.busyBody : ClipCopy.offlineBody)
+                Text(Self.armFailureMessage(failure))
                     .font(.footnote).foregroundStyle(.white).multilineTextAlignment(.center)
             }
             Button {

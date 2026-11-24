@@ -124,9 +124,16 @@ private let driverLink = SpotPassLink(url: URL(string: "https://getwepark.com/p#
 private let driverPassID = UUID(uuidString: "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE") ?? UUID()
 
 @MainActor
+private final class DriverFailingSecretStore: HandoffSecretStoring {
+    func save(_ secret: ClaimerSecret, passID: UUID) -> Bool { false }
+    func secret(for passID: UUID) -> ClaimerSecret? { nil }
+    func clear() {}
+}
+
+@MainActor
 private final class DriverHarness {
     let api = DriverScriptedAPI()
-    let secrets = InMemoryHandoffSecretStore()
+    let secrets: any HandoffSecretStoring
     let passes = InMemoryHandoffPassStore()
     let session = DriverStubSession()
     let reminders = DriverRecordingReminders()
@@ -136,7 +143,8 @@ private final class DriverHarness {
     var clock = Date(timeIntervalSince1970: 1_800_000_000)
     private(set) var controller: DriverFlowController!
 
-    init() {
+    init(secrets: (any HandoffSecretStoring)? = nil) {
+        self.secrets = secrets ?? InMemoryHandoffSecretStore()
         controller = makeController()
     }
 
@@ -275,6 +283,17 @@ final class DriverFlowControllerTests: XCTestCase {
         await h.armed(.now)
         XCTAssertEqual(h.controller.phase, .pullingOut)
         XCTAssertFalse(h.api.calls.contains("depart"), "Now arms; it never departs by itself")
+    }
+
+    func testArm_failedSecretSave_armsNothing_cancelsClaim_andEndsActivity() async {
+        let h = DriverHarness(secrets: DriverFailingSecretStore())
+        await h.armed()
+        XCTAssertEqual(h.controller.phase, .choosing)
+        XCTAssertEqual(h.controller.armFailure, .saveFailed)
+        XCTAssertNil(h.controller.pass)
+        XCTAssertNil(h.passes.pass, "stores nothing")
+        XCTAssertTrue(h.api.calls.contains("cancel"), "best-effort release of the server claim")
+        XCTAssertEqual(h.activity.ended.last, .ended)
     }
 
     func testArm_failures() async {

@@ -28,10 +28,10 @@ final class DriverKeychainSecretStore: HandoffSecretStoring {
     /// Distinct label from the clip's `wepark-appclip` items (spec 6.2).
     nonisolated static let label = "wepark-spotpass"
 
-    func save(_ secret: ClaimerSecret, passID: UUID) {
+    @discardableResult func save(_ secret: ClaimerSecret, passID: UUID) -> Bool {
         clear()
-        guard let data = secret.rawValue.data(using: .utf8) else { return }
-        SecItemAdd(Self.addAttributes(passID: passID, data: data) as CFDictionary, nil)
+        guard let data = secret.rawValue.data(using: .utf8) else { return false }
+        return SecItemAdd(Self.addAttributes(passID: passID, data: data) as CFDictionary, nil) == errSecSuccess
     }
 
     func secret(for passID: UUID) -> ClaimerSecret? {

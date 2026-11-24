@@ -51,6 +51,8 @@ nonisolated enum DriverPhase: Equatable, Sendable {
 nonisolated enum DriverArmFailure: Equatable, Sendable {
     case offline
     case busy
+    /// The claimer secret could not be stored (keychain refused): nothing was armed.
+    case saveFailed
 }
 
 // MARK: - Collaborators
@@ -329,7 +331,17 @@ final class DriverFlowController {
     }
 
     private func finishArming(grant: HandoffArmedGrant, passID: UUID, name: String, startedAt: Date) async {
-        deps.secrets.save(grant.secret, passID: passID)
+        guard deps.secrets.save(grant.secret, passID: passID) else {
+            // Without the secret the driver could never depart/extend/cancel: do not look armed.
+            // Best-effort release of the server-side claim (we still hold the secret in memory) so the
+            // neighbor is not left waiting, then back to choosing with a calm message. Nothing stored.
+            _ = try? await deps.api.cancel(id: passID, secret: grant.secret)
+            await endActivityIfStarted(.ended)
+            deps.secrets.clear()
+            armFailure = .saveFailed
+            phase = .choosing
+            return
+        }
         let armed = HandoffActivePass(
             id: passID, alias: preview?.alias ?? name, glyph: preview?.glyph ?? SpotPassGlyph.fallbackSymbol,
             displayName: preview?.displayName, armedAt: startedAt, leaveAt: grant.leaveAt,
