@@ -490,7 +490,7 @@ final class DriverFlowControllerTests: XCTestCase {
         XCTAssertNil(relaunched.pass)
         XCTAssertNil(h.passes.pass)
         await h.settle()
-        XCTAssertEqual(h.api.calls.filter { $0 == "peek" }.count, 1)
+        XCTAssertEqual(h.api.calls.filter { $0 == "peek" }.count, 2, "one peek for the first pass, one for the NEW token")
     }
 
     func testNewToken_afterDone_startsFresh() async {
