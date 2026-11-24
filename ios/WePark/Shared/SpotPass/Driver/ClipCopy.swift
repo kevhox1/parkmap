@@ -112,7 +112,9 @@ nonisolated enum ClipCopy {
     static let disabledTitle = "Spot Pass isn't live yet."
     static let disabledBody = "Thanks for scanning, neighbor. Check back soon."
     static let openAppTitle = "Open the WePark app to finish."
-    static let openAppBody = "We couldn't set up your reminder here. Get WePark and scan again."
+    static let openAppBody = "We couldn't finish setting this up here. Get WePark and scan again."
+    static let saveFailedTitle = "We couldn't save this on your phone."
+    static let saveFailedBody = "Nothing was set up. Get WePark and scan again."
     static let landingTitle = "Pass the spot"
     static let landingBody = "Looking for a spot? Open WePark and tap Spot Pass."
 

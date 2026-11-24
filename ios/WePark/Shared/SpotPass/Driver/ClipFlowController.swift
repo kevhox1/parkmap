@@ -34,6 +34,8 @@ nonisolated enum ClipPhase: Equatable, Sendable {
     case disabled
     /// The server armed the pass but did not return its id (old backend): the clip cannot manage it.
     case openApp
+    /// The pass secret could not be stored (e.g. keychain unavailable): nothing was armed.
+    case saveFailed
     case dismissed
     case cancelled
     case ended
@@ -279,11 +281,11 @@ final class ClipFlowController {
         guard deps.secrets.save(grant.secret, passID: passID) else {
             // Without the secret the clip could never depart/extend/cancel: do not look armed. Best-effort
             // release of the server-side claim (we still hold the secret in memory) so the neighbor is
-            // not left waiting on a pass nobody can complete, then the same calm fallback as `noID`.
+            // not left waiting on a pass nobody can complete, then a calm "nothing was set up" screen.
             _ = try? await deps.api.cancel(id: passID, secret: grant.secret)
             await endActivityIfStarted(.ended)
             deps.secrets.clear()
-            phase = .openApp
+            phase = .saveFailed
             return
         }
         let armed = HandoffActivePass(

@@ -27,6 +27,8 @@ nonisolated struct ClipMessageContent: Equatable, Sendable {
             return .init(symbol: "clock", title: ClipCopy.disabledTitle, body: ClipCopy.disabledBody)
         case .openApp:
             return .init(symbol: "arrow.down.app", title: ClipCopy.openAppTitle, body: ClipCopy.openAppBody, showsWhatsWePark: true)
+        case .saveFailed:
+            return .init(symbol: "exclamationmark.lock", title: ClipCopy.saveFailedTitle, body: ClipCopy.saveFailedBody, showsWhatsWePark: true)
         case .dismissed:
             return .init(symbol: "hand.wave", title: ClipCopy.dismissedLine, body: "", showsWhatsWePark: true)
         case .cancelled:
