@@ -470,6 +470,18 @@ struct ParkedCarDetailView: View {
                     .foregroundStyle(.primary)
                     .accessibilityHidden(true)
 
+                // Address-anchored parking (flag `addressAnchoredParkingEnabled`): the human
+                // anchor as the headline above the rules. Reads the live car so an address that
+                // resolves while the sheet is open appears; nothing at all when there is none.
+                if AppConstants.addressAnchoredParkingEnabled,
+                   let address = (parkPinService.parkedCar?.id == parkedCar.id ? parkPinService.parkedCar?.address : nil)
+                    ?? parkedCar.address {
+                    Text(ParkingAddressCopy.line(address))
+                        .font(.headline)
+                        .foregroundStyle(.primary)
+                        .accessibilityLabel(ParkingAddressCopy.spoken(address))
+                }
+
                 Text(blockSubtitle)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
@@ -495,21 +507,21 @@ struct ParkedCarDetailView: View {
         guard let seg = resolvedSegment else {
             // Try to use cached street metadata from the ParkedCar itself.
             if let street = parkedCar.street, let side = parkedCar.detectedSide {
-                let canonical = StreetNameNormalizer.canonical(street)
+                let canonical = StreetNameFormatter.displayCanonical(street)
                 let sideStr = sideLabel(side)
                 if let from = parkedCar.fromStreet, let to = parkedCar.toStreet {
-                    let fromStr = StreetNameNormalizer.canonical(from)
-                    let toStr = StreetNameNormalizer.canonical(to)
+                    let fromStr = StreetNameFormatter.displayCanonical(from)
+                    let toStr = StreetNameFormatter.displayCanonical(to)
                     return "\(canonical) \u{2014} \(sideStr) · between \(fromStr) and \(toStr)"
                 }
                 return "\(canonical) \u{2014} \(sideStr)"
             }
             return "Location saved (no parking data)"
         }
-        let street = StreetNameNormalizer.canonical(seg.street)
+        let street = StreetNameFormatter.displayCanonical(seg.street)
         let side = sideLabel(seg.side)
-        let from = StreetNameNormalizer.canonical(seg.fromStreet)
-        let to = StreetNameNormalizer.canonical(seg.to)
+        let from = StreetNameFormatter.displayCanonical(seg.fromStreet)
+        let to = StreetNameFormatter.displayCanonical(seg.to)
         return "\(street) \u{2014} \(side) · between \(from) and \(to)"
     }
 

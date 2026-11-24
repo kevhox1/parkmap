@@ -454,8 +454,8 @@ final class NotificationScheduler {
         let content = UNMutableNotificationContent()
 
         // Title: "Move your car — <street> (<side>)" (unchanged from W6)
-        let streetDisplay = car.street.map { StreetNameNormalizer.canonical($0) }
-            ?? StreetNameNormalizer.canonical(segment.street)
+        let streetDisplay = car.street.map { StreetNameFormatter.displayCanonical($0) }
+            ?? StreetNameFormatter.displayCanonical(segment.street)
         let sideDisplay = car.detectedSide ?? segment.side
         content.title = "Move your car \u{2014} \(streetDisplay) (\(sideDisplay))"
 
@@ -477,6 +477,16 @@ final class NotificationScheduler {
             content.body = "\(label) starts tomorrow at \(moveByTime). Move your car by then."
         }
 
+        // Address-anchored parking: a VERIFIED address (only) rides in the body, under a category
+        // whose hidden-previews placeholder replaces the whole body when previews are off, so the
+        // lock-screen default stays the block text. Approximate addresses never go in a
+        // notification. Flag-off: byte-identical content.
+        if AppConstants.addressAnchoredParkingEnabled,
+           let sentence = ParkingAddressCopy.notificationSentence(car.address) {
+            content.body += " " + sentence
+            content.categoryIdentifier = Self.addressCategoryID
+        }
+
         content.sound = .default
         content.badge = 1
 
@@ -487,6 +497,24 @@ final class NotificationScheduler {
         ]
 
         return content
+    }
+
+    // MARK: - Address-anchored parking category
+
+    /// Notification category for reminders whose body includes the verified address.
+    nonisolated static let addressCategoryID = "wepark_parked_car_address"
+
+    /// Registers the category with a hidden-previews placeholder. Call once at launch, flag-on
+    /// only. WePark has no other notification categories, so replacing the set is safe.
+    static func registerAddressCategory() {
+        let category = UNNotificationCategory(
+            identifier: addressCategoryID,
+            actions: [],
+            intentIdentifiers: [],
+            hiddenPreviewsBodyPlaceholder: "Parking reminder",
+            options: []
+        )
+        UNUserNotificationCenter.current().setNotificationCategories([category])
     }
 
     // MARK: - Badge clearing (fix: badge never cleared)

@@ -69,8 +69,8 @@ enum SpotPlacementCopy {
     /// Boundary values (exactly 0.4 or 0.6) fall through to "mid-block" — same strict
     /// `<`/`>` comparisons as the JS source, not `<=`/`>=`.
     nonisolated static func nearLabel(fraction: Double, fromStreet: String, toStreet: String) -> String {
-        if fraction < 0.4 { return "near \(StreetNameNormalizer.canonical(fromStreet))" }
-        if fraction > 0.6 { return "near \(StreetNameNormalizer.canonical(toStreet))" }
+        if fraction < 0.4 { return "near \(StreetNameFormatter.displayCanonical(fromStreet))" }
+        if fraction > 0.6 { return "near \(StreetNameFormatter.displayCanonical(toStreet))" }
         return "mid-block"
     }
 
@@ -80,14 +80,14 @@ enum SpotPlacementCopy {
     /// duplicating the N/S/E/W → "North side"/etc. switch a second time — only the
     /// `.lowercased()` step is new here.
     nonisolated static func confirmTitle(segment: Segment) -> String {
-        "\(StreetNameNormalizer.canonical(segment.street)) (\(ReportSheet.sideDisplayName(segment.side).lowercased()))"
+        "\(StreetNameFormatter.displayCanonical(segment.street)) (\(ReportSheet.sideDisplayName(segment.side).lowercased()))"
     }
 
     /// Port of the prototype's `placeSub` (`design/prototype.html:1013`):
     /// `nearLabel(...) + ' · btwn ' + tc(between[0]) + ' & ' + tc(between[1])`.
     nonisolated static func confirmSubtitle(segment: Segment, positionFraction: Double) -> String {
         let near = nearLabel(fraction: positionFraction, fromStreet: segment.fromStreet, toStreet: segment.to)
-        return "\(near) · btwn \(StreetNameNormalizer.canonical(segment.fromStreet)) & \(StreetNameNormalizer.canonical(segment.to))"
+        return "\(near) · btwn \(StreetNameFormatter.displayCanonical(segment.fromStreet)) & \(StreetNameFormatter.displayCanonical(segment.to))"
     }
 
     /// Verbatim, `design/prototype.html:821` — shown when a tap lands farther than the

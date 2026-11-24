@@ -1062,10 +1062,10 @@ struct ReportSheet: View {
         } label: {
             HStack(spacing: 10) {
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("\(StreetNameNormalizer.canonical(candidate.street)) — \(ReportSheet.sideDisplayName(candidate.side))")
+                    Text("\(StreetNameFormatter.displayCanonical(candidate.street)) — \(ReportSheet.sideDisplayName(candidate.side))")
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
-                    Text("btwn \(StreetNameNormalizer.canonical(candidate.fromStreet)) & \(StreetNameNormalizer.canonical(candidate.to))")
+                    Text("btwn \(StreetNameFormatter.displayCanonical(candidate.fromStreet)) & \(StreetNameFormatter.displayCanonical(candidate.to))")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -1086,8 +1086,8 @@ struct ReportSheet: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(
-            "\(StreetNameNormalizer.canonical(candidate.street)), \(ReportSheet.sideDisplayName(candidate.side)), "
-            + "between \(StreetNameNormalizer.canonical(candidate.fromStreet)) and \(StreetNameNormalizer.canonical(candidate.to))"
+            "\(StreetNameFormatter.displayCanonical(candidate.street)), \(ReportSheet.sideDisplayName(candidate.side)), "
+            + "between \(StreetNameFormatter.displayCanonical(candidate.fromStreet)) and \(StreetNameFormatter.displayCanonical(candidate.to))"
         )
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }

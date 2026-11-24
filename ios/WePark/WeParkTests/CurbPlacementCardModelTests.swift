@@ -123,18 +123,18 @@ final class CurbPlacementCardSnappedTests: XCTestCase {
         XCTAssertEqual(model.subtitle, "between Bowery & Chrystie St")
     }
 
-    func testSubtitle_crossStreets_areTitleCased_ordinalsAndAcronyms() {
+    func testSubtitle_crossStreets_areTitleCased_ordinalsRestoredAndAcronyms() {
         let model = cpcmMake(
             cpcmSnapped(cpcmBareSegment(from: "W 42ND STREET", to: "FDR DRIVE")), intent: .plant
         )
-        XCTAssertEqual(model.subtitle, "between W 42 St & FDR Dr")
+        XCTAssertEqual(model.subtitle, "between W 42nd St & FDR Dr")
     }
 
     func testSubtitle_crossStreets_firstOrdinalAndAvenue() {
         let model = cpcmMake(
             cpcmSnapped(cpcmBareSegment(from: "1ST AVENUE", to: "2ND AVENUE")), intent: .plant
         )
-        XCTAssertEqual(model.subtitle, "between 1 Ave & 2 Ave")
+        XCTAssertEqual(model.subtitle, "between 1st Ave & 2nd Ave")
     }
 
     func testStatusText_isByteEqualToEngineSafetyLabel_forRestrictedSegment() {

@@ -249,13 +249,33 @@ final class ParkPinService {
             fromStreet: car.fromStreet,
             toStreet: car.toStreet,
             parkedAt: car.parkedAt,
-            notifyOnRestriction: enabled
+            notifyOnRestriction: enabled,
+            address: car.address
         )
         let envelope = SyncedCarEnvelope(kind: .parked, updatedAt: .nowET, car: updated)
         guard writeEnvelope(envelope) else { return }
 
         currentUpdatedAt = envelope.updatedAt
         parkedCar = updated
+    }
+
+    // MARK: - Address-anchored parking: fill in the address later
+
+    /// Attaches (or clears) the resolved address on the CURRENT car, but only if `carID` still
+    /// matches it (a stale async resolution for a replaced car must never land on the new one).
+    /// Same `id`, so this is an edit, not a re-park: it bumps `updatedAt` for last-write-wins and
+    /// syncs through iCloud KVS like `updateNotifyOnRestriction`. Returns the updated car, or nil
+    /// when nothing was written. Must be called from the main thread.
+    @discardableResult
+    func updateAddress(_ address: ParkingAddress?, forCarID carID: UUID) -> ParkedCar? {
+        guard let car = parkedCar, car.id == carID else { return nil }
+        let updated = car.withAddress(address)
+        let envelope = SyncedCarEnvelope(kind: .parked, updatedAt: .nowET, car: updated)
+        guard writeEnvelope(envelope) else { return nil }
+
+        currentUpdatedAt = envelope.updatedAt
+        parkedCar = updated
+        return updated
     }
 
     // MARK: - Build 19: Remote change handling
