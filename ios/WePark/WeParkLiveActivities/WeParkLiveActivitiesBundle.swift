@@ -201,8 +201,16 @@ struct SpotPassLockScreenView: View {
                         symbolName: SpotPassGlyph.symbolName(for: attributes.glyph),
                         tintIndex: SpotPassGlyph.tintIndex(forAlias: attributes.alias), size: 44
                     )
-                    Text(ClipCopy.activityCaption(name: attributes.alias))
-                        .font(.footnote).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(ClipCopy.activityCaption(name: attributes.alias))
+                            .font(.footnote).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                        if state.autoDetect == true {
+                            // C4 (design 5.4): visible-by-design while the armed-window auto-detect runs.
+                            Label(ClipCopy.autoDetectCaption, systemImage: "location.fill")
+                                .font(.caption2).foregroundStyle(.white.opacity(0.8)).lineLimit(1)
+                                .labelStyle(.titleAndIcon)
+                        }
+                    }
                 }
                 Spacer(minLength: 8)
                 SpotPassTextIntentButton(title: ClipCopy.notLeaving, intent: NotLeavingIntent(passID: state.passID))

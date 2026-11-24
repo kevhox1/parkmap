@@ -43,12 +43,19 @@ nonisolated struct SpotPassActivityAttributes: ActivityAttributes {
         /// carry it so a stale button can never act on a newer pass. nil for the clip and in
         /// push-to-end updates.
         var passID: String?
+        /// C4 (full app only): the armed-window auto-detect is running, so the caption says "auto
+        /// heads-up on" (design 5.4). nil/false everywhere else and in push-to-end updates.
+        var autoDetect: Bool?
 
-        init(phase: Phase = .counting, leaveAt: Date? = nil, startedAt: Date? = nil, passID: String? = nil) {
+        init(
+            phase: Phase = .counting, leaveAt: Date? = nil, startedAt: Date? = nil, passID: String? = nil,
+            autoDetect: Bool? = nil
+        ) {
             self.phase = phase
             self.leaveAt = leaveAt
             self.startedAt = startedAt
             self.passID = passID
+            self.autoDetect = autoDetect
         }
 
         init(from decoder: Decoder) throws {
@@ -57,6 +64,7 @@ nonisolated struct SpotPassActivityAttributes: ActivityAttributes {
             leaveAt = try container.decodeIfPresent(Date.self, forKey: .leaveAt)
             startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
             passID = try container.decodeIfPresent(String.self, forKey: .passID)
+            autoDetect = try container.decodeIfPresent(Bool.self, forKey: .autoDetect)
         }
     }
 

@@ -77,11 +77,23 @@ final class AppActivityController: DriverActivityControlling {
 
     var onRemotePhase: ((SpotPassActivityAttributes.Phase) -> Void)?
     private var observer: Task<Void, Never>?
+    /// C4: carried on every state this controller pushes while the auto-detect window is open.
+    private var autoDetectOn = false
 
     var areActivitiesEnabled: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
 
     private var current: Activity<SpotPassActivityAttributes>? {
         Activity<SpotPassActivityAttributes>.activities.first
+    }
+
+    func setAutoDetect(_ on: Bool) async {
+        autoDetectOn = on
+        guard let activity = current else { return }
+        var state = activity.content.state
+        // Only a live countdown carries the caption; a sent/ended state is never rewritten.
+        guard state.phase == .counting || state.phase == .timeToGo else { return }
+        state.autoDetect = on ? true : nil
+        await activity.update(ActivityContent(state: state, staleDate: activity.content.staleDate))
     }
 
     func adoptExisting() -> Bool {
@@ -109,13 +121,15 @@ final class AppActivityController: DriverActivityControlling {
     func update(phase: SpotPassActivityAttributes.Phase, leaveAt: Date?, startedAt: Date?, passID: UUID?) async {
         guard let activity = current else { return }
         let state = SpotPassActivityAttributes.ContentState(
-            phase: phase, leaveAt: leaveAt, startedAt: startedAt, passID: passID?.uuidString.lowercased()
+            phase: phase, leaveAt: leaveAt, startedAt: startedAt, passID: passID?.uuidString.lowercased(),
+            autoDetect: (autoDetectOn && (phase == .counting || phase == .timeToGo)) ? true : nil
         )
         await activity.update(ActivityContent(state: state, staleDate: HandoffActivityContent.staleDate(phase: phase, leaveAt: leaveAt)))
     }
 
     func end(phase: SpotPassActivityAttributes.Phase, now: Date) async {
         observer?.cancel()
+        autoDetectOn = false
         guard let activity = current else { return }
         let state = HandoffActivityContent.state(phase: phase, leaveAt: nil, startedAt: nil)
         let policy: ActivityUIDismissalPolicy = phase == .cancelled || phase == .ended

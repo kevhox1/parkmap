@@ -80,6 +80,7 @@ struct DriverArmedView: View {
                         .buttonStyle(SpotPassButtonStyle(kind: .secondary))
                         .accessibilityHint("Tells \(controller.displayName ?? "your neighbor") you are leaving. Only tap right before you go.")
                 }
+                AutoDetectRow(controller: controller)
                 autoPingRow
                 SpotPassTextButton(
                     title: ClipCopy.notLeavingAfterAll,
@@ -91,6 +92,13 @@ struct DriverArmedView: View {
             .padding(.bottom, 24)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .task {
+            // Expires a lapsed pass and (C4) opens the auto-detect window once the leave time is near.
+            while !Task.isCancelled {
+                await controller.tick()
+                try? await Task.sleep(nanoseconds: 20_000_000_000)
+            }
+        }
         .sheet(isPresented: $showAutoPingGuide) { CarAutoPingGuideView() }
         .confirmationDialog(ClipCopy.reportTitle, isPresented: $showReport, titleVisibility: .visible) {
             ForEach(ClipCopy.reportReasons, id: \.0) { reason, title in

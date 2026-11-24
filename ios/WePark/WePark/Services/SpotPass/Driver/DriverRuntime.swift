@@ -108,7 +108,9 @@ final class SpotPassDriverRuntime {
             reminders: DriverReminderScheduler(),
             activity: AppActivityController(),
             pushToken: AppNotificationPushToken(tokenHex: { [weak self] in self?.pushTokenProvider?() }),
-            feedback: SystemHandoffFeedback()
+            feedback: SystemHandoffFeedback(),
+            // nil while `spotHandoffAutoDetectEnabled` is false: no location object is ever built.
+            autoDetect: AutoDetectController.makeLive()
         )
         return DriverFlowController(dependencies: dependencies)
     }

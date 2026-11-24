@@ -76,9 +76,15 @@ protocol DriverActivityControlling: AnyObject {
     func start(name: String, glyph: String, leaveAt: Date, startedAt: Date) async -> (didStart: Bool, token: String?)
     func update(phase: SpotPassActivityAttributes.Phase, leaveAt: Date?, startedAt: Date?, passID: UUID?) async
     func end(phase: SpotPassActivityAttributes.Phase, now: Date) async
+    /// C4: shows or hides the "auto heads-up on" caption on the lock screen. Default no-op (fakes, flag off).
+    func setAutoDetect(_ on: Bool) async
     /// A process that did not start the activity (a background intent launch, a relaunch) re-attaches
     /// to the live one. Returns true if an activity exists.
     func adoptExisting() -> Bool
+}
+
+extension DriverActivityControlling {
+    func setAutoDetect(_ on: Bool) async {}
 }
 
 struct DriverDependencies {
@@ -93,6 +99,8 @@ struct DriverDependencies {
     var now: () -> Date = { Date() }
     /// How long the "Sent" confirmation shows before the celebration (design 3.6: 1.2 s).
     var sentDwell: TimeInterval = 1.2
+    /// C4 armed-window auto-detect. nil while `spotHandoffAutoDetectEnabled` is false: nothing runs.
+    var autoDetect: (any AutoDetectControlling)?
 }
 
 // A finished (departed) pass may come back onto the screen once after a relaunch, and never past its
@@ -142,8 +150,17 @@ final class DriverFlowController {
     init(dependencies: DriverDependencies) {
         deps = dependencies
         deps.activity.onRemotePhase = { [weak self] phase in self?.handleRemotePhase(phase) }
+        deps.autoDetect?.onDetected = { [weak self] in
+            Task { await self?.autoDetected() }
+        }
+        deps.autoDetect?.onRunningChanged = { [weak self] running, reason in
+            self?.autoDetectRunningChanged(running, reason: reason)
+        }
         restore()
     }
+
+    /// C4: nil unless the feature flag is on and the controller was built.
+    var autoDetect: (any AutoDetectControlling)? { deps.autoDetect }
 
     var now: Date { deps.now() }
 
@@ -169,6 +186,7 @@ final class DriverFlowController {
                 pass = saved
                 phase = .armed
                 activityStarted = deps.activity.adoptExisting()
+                openAutoDetectIfEligible()
             }
         case .departed:
             // A finished pass is terminal: it may come back onto the screen ONCE after a relaunch (e.g. a
@@ -195,6 +213,8 @@ final class DriverFlowController {
             await endPass(phase: .ended)
             return
         }
+        // Foregrounded with an armed pass: a window that could not start in the background starts now.
+        openAutoDetectIfEligible()
         guard pass == nil, phase == .landing || phase == .dismissed || phase == .ended || phase == .cancelled else { return }
         restore()
     }
@@ -377,6 +397,7 @@ final class DriverFlowController {
         // "Now" opens straight on the Time-to-go screen and never departs by itself (design F7).
         phase = choice.isNow ? .pullingOut : .armed
         deps.feedback.announce(ClipCopy.armedHeadline)
+        openAutoDetectIfEligible()
     }
 
     private func pushTokenIfWanted() async -> String? {
@@ -445,6 +466,7 @@ final class DriverFlowController {
         deps.passStore.save(current)
         deps.secrets.clear()
         deps.reminders.cancelAll(passID: current.id)
+        deps.autoDetect?.close(.departed)
         deps.feedback.success()
         phase = .sent
         deps.feedback.announce(ClipCopy.sentLine(name: current.name))
@@ -472,6 +494,7 @@ final class DriverFlowController {
             pass = current
             deps.passStore.save(current)
             await scheduleReminders(for: current)
+            deps.autoDetect?.passExtended(expiresAt: current.expiresAt)
             if activityStarted {
                 await deps.activity.update(phase: .counting, leaveAt: current.leaveAt, startedAt: current.armedAt, passID: current.id)
             }
@@ -548,8 +571,13 @@ final class DriverFlowController {
     // MARK: - Expiry / remote events
 
     func tick() async {
-        guard let current = pass, current.status == .armed, deps.now() >= current.expiresAt else { return }
-        await endPass(phase: .ended)
+        guard let current = pass, current.status == .armed else { return }
+        if deps.now() >= current.expiresAt {
+            await endPass(phase: .ended)
+            return
+        }
+        // The window opens once the leave time is within 30 min (only ever from the foreground).
+        openAutoDetectIfEligible()
     }
 
     /// The seeker said thanks. Returns true if this call settled the karma (false: already settled
@@ -619,6 +647,35 @@ final class DriverFlowController {
         }
     }
 
+    // MARK: - Auto-detect (C4)
+
+    private func openAutoDetectIfEligible() {
+        guard let current = pass, current.status == .armed, deps.now() < current.expiresAt else { return }
+        deps.autoDetect?.openIfEligible(passID: current.id, leaveAt: current.leaveAt, expiresAt: current.expiresAt)
+    }
+
+    /// The detector fired and already stopped location: depart once, with source `auto`.
+    func autoDetected() async {
+        _ = await leavingNow(source: .auto)
+    }
+
+    private func autoDetectRunningChanged(_ running: Bool, reason: AutoDetectEndReason?) {
+        if activityStarted { Task { await deps.activity.setAutoDetect(running) } }
+        if !running, let reason, reason.showsToast { toast = DriverCopy.autoDetectOffToast }
+    }
+
+    /// The purpose screen's primary action. On success a window opens at once if the leave time is near.
+    func enableAutoDetect() async -> AutoDetectEnableResult {
+        guard let autoDetect = deps.autoDetect else { return .unavailable }
+        let result = await autoDetect.enable()
+        if result == .enabled { openAutoDetectIfEligible() }
+        return result
+    }
+
+    func turnOffAutoDetect() {
+        deps.autoDetect?.turnOff()
+    }
+
     // MARK: - Report
 
     func report(_ reason: HandoffReportReason) async {
@@ -676,6 +733,7 @@ final class DriverFlowController {
     }
 
     private func cleanupLocal(passID: UUID) {
+        deps.autoDetect?.close(.passEnded)
         deps.reminders.cancelAll(passID: passID)
         deps.secrets.clear()
         deps.passStore.clear()

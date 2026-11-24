@@ -30,6 +30,38 @@ nonisolated enum DriverCopy {
     /// a user who is already in the app). Nothing was armed.
     static let saveFailedFootnote = "We couldn't save this on your phone, so nothing was set up. Try scanning the pass again."
     static let startDrivingNote = "Tapping Start Driving also tells them you're leaving."
+
+    // MARK: Armed-window auto-detect (C4, design 5.4). "auto heads-up", never "ping".
+    static let autoDetectOffToast = "Auto heads-up is off."
+    static let autoDetectOnTitle = "Auto heads-up is on"
+    static func autoDetectOnSub(name: String) -> String {
+        "We'll tell \(name) when you drive off. This stops after 60 minutes or when you cancel."
+    }
+    static let autoDetectTurnOff = "Turn off"
+    static let autoDetectTurnOffHint = "Stops auto heads-up. You can still tap Leaving now."
+    static let autoDetectOfferTitle = "Let WePark tell them when you drive off"
+    static let autoDetectOfferSub = "Uses your location on this phone only while this pass is active."
+    static let autoDetectWaitingTitle = "Auto heads-up is ready"
+    static let autoDetectWaitingSub = "It starts when you open WePark within 30 minutes of your leave time."
+    static let autoDetectNeedsCarTitle = "Auto heads-up needs your car"
+    static let autoDetectNeedsCarSub = "Save your car's spot on the map first, then come back."
+    static let autoDetectDeniedTitle = "Auto heads-up needs location"
+    static let autoDetectDeniedSub = "Turn on location for WePark in Settings."
+
+    // Purpose screen (one-time second opt-in, spec 9 item 1).
+    static let purposeTitle = "Let WePark tell your neighbor for you"
+    static let purposeBullet1Lead = "Only while a Spot Pass is active."
+    static let purposeBullet1Rest = "Up to 60 minutes, then it stops."
+    static let purposeBullet2Lead = "Your location stays on your phone."
+    static let purposeBullet2Rest = "WePark only sends \u{201C}leaving\u{201D}, never where."
+    static let purposeBullet3Lead = "You'll see a blue pill at the top"
+    static let purposeBullet3Rest = "while it's on. Cancel anytime."
+    static let purposePrimary = "Turn on auto heads-up"
+    static let purposeSecondary = "Not now"
+    static let purposeNoCarPrimary = "Save your car's spot first"
+    static let purposeNoCarHelper = "Auto heads-up needs to know where your car is parked."
+    static let purposeDeniedHelper = "Location is off for WePark. Turn it on in Settings to use auto heads-up."
+    static let purposeSettings = "Open Settings"
 }
 
 // MARK: - Terminal / error screens (pure content)
