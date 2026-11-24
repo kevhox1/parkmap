@@ -555,6 +555,7 @@
 		C0C000000000000000000071 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Support/ClipLiveActivities.entitlements;
 				INFOPLIST_FILE = Support/ClipLiveActivities-Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "WePark Clip Live Activities";
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -583,6 +584,7 @@
 		C0C000000000000000000072 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Support/ClipLiveActivities.entitlements;
 				INFOPLIST_FILE = Support/ClipLiveActivities-Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = "WePark Clip Live Activities";
 				LD_RUNPATH_SEARCH_PATHS = (
