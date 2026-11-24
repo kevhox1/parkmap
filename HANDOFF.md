@@ -215,6 +215,16 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-11-24 (late) — ✅ BUILD 27 UPLOADED (internal TestFlight only): first build with the App Clip
+
+- Kevin OK'd build 27 ("OK build 27"). `CURRENT_PROJECT_VERSION=27` on all targets (`61cbd11a`). Archived with `-allowProvisioningUpdates`, which registered the Clip and Live Activities App IDs plus the App Group. Exported with `testFlightInternalTestingOnly=true`. Archive: `~/Library/Developer/Xcode/Archives/2026-11-24/WePark-27-flagon.xcarchive`.
+- **Flag-on for internal evaluation only** (local worktree, discarded, so main stays dark): `driveModeDefaultEnabled`, `curbPinPlacementEnabled`, `addressAnchoredParkingEnabled`, `spotHandoffEnabled`, `spotHandoffAutoDetectEnabled`, `SPOT_PASS_AUTODETECT=YES` (UIBackgroundModes = remote-notification + location, verified), the `#if SPOT_PASS_SHORTCUTS` gate removed, and `LeavingNowIntent.isDiscoverable=true`.
+- **Gotchas:**
+  - Do NOT pass `SWIFT_ACTIVE_COMPILATION_CONDITIONS=` on the xcodebuild command line. It clobbers SPM package defines (swift-crypto failed with "unable to resolve module dependency CCryptoBoringSSL"). Edit the source instead.
+  - App Store Connect rejected the first upload: `ClipLiveActivities.appex` needs `com.apple.developer.on-demand-install-capable`. Fixed in PR #175 (`Support/ClipLiveActivities.entitlements`).
+  - Disk dropped from 14 GB to 3 GB mid-build, mostly a 5.8 GB `com.google.Chrome.code_sign_clone` in /var/folders. Restarting Chrome frees it.
+- **Next:** processing, then confirm the internal group; the TestFlight App Clip experience; Kevin clicks Run on `HANDOFF_ENABLED=true` for the phone tests; Kevin runs `docs/phone-test-build27.md` (needs two iPhones).
+
 ### 2026-11-24 (night) — ✅ SPOT PASS iOS COMPLETE except C4 (all dark): seeker, App Clip, full-app driver, web fallback
 
 **Merged.** Each PR was QA'd live in the sim by a non-builder; CI was green. Fake-mode flags (DEBUG only) are `-spotPassUseFakeAPI YES` and `-spotPassClipURL`.
