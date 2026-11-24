@@ -1845,7 +1845,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         private var carPinAnnotation: CarPinAnnotation? = nil
         /// The UUID of the currently-rendered car pin (nil if none).
         /// Used to detect when the pin changes identity (new pin, clear, or replace).
-        private var renderedCarPinID: UUID? = nil
+        private var renderedCarPinKey: CarPinKey? = nil
 
         // W8.5b: Route polyline + destination pin state.
         static let destinationPinReuseID = "DestinationPinAnnotation"
@@ -2072,10 +2072,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// than 35m from any loaded segment (sparse tile coverage, no tiles loaded yet)
         /// degrades to raw rather than snapping across the map to an unrelated curb.
         func syncCarPin(_ car: ParkedCar?, segments: [Segment], on mapView: MKMapView) {
-            let newID = car?.id
+            let newKey = car.map { CarPinKey(id: $0.id, latitude: $0.latitude, longitude: $0.longitude) }
 
-            // Fast path: nothing changed.
-            if renderedCarPinID == newID { return }
+            // Fast path: nothing changed AND the annotation is still on the map. Build 27 smoke
+            // finding 13: keying on the id alone never noticed a same-id change or an annotation
+            // removed behind our back, so the car icon could stay gone. See `CarPinSyncPolicy`.
+            let onMap = carPinAnnotation.map { existing in
+                mapView.annotations.contains { $0 === existing }
+            } ?? false
+            guard CarPinSyncPolicy.action(rendered: renderedCarPinKey, desired: newKey, annotationOnMap: onMap) == .rebuild else { return }
 
             // Remove old annotation if present.
             if let old = carPinAnnotation {
@@ -2100,7 +2105,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 mapView.addAnnotation(annotation)
             }
 
-            renderedCarPinID = newID
+            renderedCarPinKey = newKey
         }
 
         // MARK: - W8.5b: Route polyline management
@@ -2824,6 +2829,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             view.markerTintColor = .systemBlue
             view.glyphImage = UIImage(systemName: "car.fill")
             view.alpha = 1.0
+            // The parked car is the user's primary object: never let MapKit's collision culling
+            // hide it behind POI labels, community pins or the user dot (finding 13).
+            view.displayPriority = .required
 
             // Accessibility: read as a distinct tap target.
             view.isAccessibilityElement = true
