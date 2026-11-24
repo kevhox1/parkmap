@@ -2,10 +2,13 @@
 //  WeParkClipApp.swift
 //  WePark Clip (com.kevinhoxha.wepark.Clip)
 //
-//  Spot Pass C0 scaffold: a placeholder entry that only proves the invocation plumbing. It
-//  receives the QR / link invocation (NSUserActivityTypeBrowsingWeb) and parses it into a
-//  `SpotPassLink`. No network, no permission requests, no background work. C3 builds the real
-//  clip UI on top of this entry.
+//  Spot Pass C3: the real App Clip. Receives the QR / link invocation (NSUserActivityTypeBrowsingWeb),
+//  hands it to `ClipFlowController`, and renders `ClipRootView`. No background modes, no App Intents
+//  dependency, no Always location (spec 5.1).
+//
+//  QA (DEBUG only): `-spotPassClipURL <url>` or the `_XCAppClipURL` env var inject an invocation URL
+//  at launch, because `simctl launch` sets `_XCAppClipURL` but never delivers the browsing activity.
+//  See ClipDebugSupport.swift.
 //
 
 import SwiftUI
@@ -13,40 +16,35 @@ import SwiftUI
 @main
 struct WeParkClipApp: App {
 
-    /// The most recent invocation, if it was a Spot Pass link.
-    @State private var invocation: SpotPassLink?
+    @UIApplicationDelegateAdaptor(ClipAppDelegate.self) private var appDelegate
+    @State private var composition = ClipComposition.make()
 
     var body: some Scene {
         WindowGroup {
-            ClipPlaceholderView(hasToken: invocation?.token != nil)
+            ClipRootView(controller: composition.controller, block: composition.block)
                 .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
                     guard let url = activity.webpageURL else { return }
-                    invocation = SpotPassLink(url: url)
+                    composition.controller.handle(url: url)
                 }
-                .preferredColorScheme(.dark)
+                .task {
+                    let controller = composition.controller
+                    ClipEventBridge.shared.handler = { identifier, userInfo in
+                        controller.handleNotification(actionIdentifier: identifier, userInfo: userInfo)
+                    }
+                    #if DEBUG
+                    if let url = composition.options.injectedURL { controller.handle(url: url) }
+                    #endif
+                }
+                #if DEBUG
+                .onChange(of: composition.controller.phase) { _, phase in
+                    // QA: simulate the seeker's "Got it, thanks!" arriving some seconds after the pass.
+                    guard phase == .celebration, let delay = composition.options.fakeThanksAfter else { return }
+                    Task {
+                        try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+                        composition.controller.receiveThanks()
+                    }
+                }
+                #endif
         }
-    }
-}
-
-/// Static placeholder. The token is deliberately never rendered.
-private struct ClipPlaceholderView: View {
-    let hasToken: Bool
-
-    var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "parkingsign.circle")
-                .font(.system(size: 64))
-                .accessibilityHidden(true)
-            Text("Pass the spot")
-                .font(.largeTitle.bold())
-            Text(hasToken
-                 ? "Spot Pass is almost ready."
-                 : "Looking for a spot? Open WePark and tap Spot Pass.")
-                .font(.body)
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-        }
-        .padding(24)
-        .accessibilityElement(children: .combine)
     }
 }
