@@ -157,7 +157,7 @@ final class MinimalAmbientLayoutTests: XCTestCase {
                 hasParkedCar: false, fullPaletteMode: false
             ),
             [.mapKey, .parking101, .showAllRules, .settings],
-            "What the colors mean, Parking 101, Show all parking rules, and Settings are always shown."
+            "What the colors mean, Parking 101, Show all sign details, and Settings are always shown."
         )
     }
 
@@ -228,8 +228,8 @@ final class MinimalAmbientLayoutTests: XCTestCase {
         XCTAssertEqual(MoreMenuRow.mapKey.subtitle, "Green, red, and the rest")
         XCTAssertEqual(MoreMenuRow.mapKey.symbolName, "questionmark.circle.fill")
 
-        XCTAssertEqual(MoreMenuRow.showAllRules.title, "Show all parking rules")
-        XCTAssertEqual(MoreMenuRow.showAllRules.subtitle, "See every kind of rule, not just one goal")
+        XCTAssertEqual(MoreMenuRow.showAllRules.title, "Show all sign details")
+        XCTAssertEqual(MoreMenuRow.showAllRules.subtitle, "Full color detail: metered, street cleaning soon, and more")
         XCTAssertEqual(MoreMenuRow.showAllRules.symbolName, "paintpalette.fill")
 
         XCTAssertEqual(MoreMenuRow.findMyCar.title, "Find my car")
