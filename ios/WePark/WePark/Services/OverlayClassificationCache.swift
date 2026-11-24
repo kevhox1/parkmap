@@ -25,6 +25,8 @@ nonisolated struct OverlayClassificationKey: Equatable {
     enum Mode: Equatable {
         case currentState
         case parkUntil(target: Date, ignoringMeteredPayment: Bool)
+        /// Plan a Trip window (separate from `parkUntil` so a trip never shares cached answers).
+        case trip(arrival: Date, departure: Date)
     }
 
     let now: Date

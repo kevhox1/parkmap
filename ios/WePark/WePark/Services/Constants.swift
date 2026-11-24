@@ -261,6 +261,13 @@ enum AppConstants {
     /// "4 dark-ship guard tests transformed into launched-world assertions").
     static let driveModeDefaultEnabled = false
 
+    /// Plan a Trip (`docs/specs/goals-rework.md` section 3): a future what-if map for visitors,
+    /// day-trippers and weekenders (More sheet > "Plan a trip"). DARK-SHIPS `false` until Kevin
+    /// smokes it. Independent of `driveModeDefaultEnabled`. While a trip plan is active the goal
+    /// dock (and so Start Driving) is replaced by the TRIP PLAN banner, and entering Drive Mode by
+    /// any other path exits the plan first, so the trip window never reaches the drive card/voice.
+    static let planTripEnabled = false
+
     // MARK: - Account deletion + "Suggest a neighborhood" (open items #38 / #39)
 
     /// DARK-SHIPS `false` (same playbook as `communityEnabled` / `regularsEnabled` /
