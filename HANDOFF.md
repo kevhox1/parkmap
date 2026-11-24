@@ -215,6 +215,18 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-11-24 (evening) — ✅ PROD: Regulars 07/09/08 + Spot Pass 14 applied; push functions secured; getwepark.com/p live
+
+- **Push-function security hole closed.** `send-community-push` (live) accepted the PUBLIC anon key. PR #163 now requires a gateway-verified JWT with `role=service_role`, or an exact env-key match. The first design was exact-compare only, and a pre-deploy prod probe caught that it would have broken live community push: the Vault `service_role_key` is a valid service_role JWT but is NOT byte-equal to the runtime `SUPABASE_SERVICE_ROLE_KEY`. All three push functions are deployed (verify_jwt=true) and probed: the anon key gets 401, and the Vault-bearer pg_net call is non-401 with no push sent. **They must never be deployed with `--no-verify-jwt`.**
+- **Spot Pass backend.**
+  - #164 adds the seeker push `aps.category`.
+  - #167 plus migration 14: `handoff-claim` now returns `id`. Without it depart/extend/cancel were impossible, a contract miss caught by the web-fallback builder. 14 is applied and verified, and handoff-claim is redeployed. Spot Pass is still `HANDOFF_ENABLED=false`.
+- **Spot Pass iOS.** #162 (seeker flow) and #165 (own rationale, token registration when the spot flag is on, AX layout) are merged, both dark.
+- **Web fallback #166 is LIVE at https://getwepark.com/p.** It shows "isn't live yet" while disabled. The CSP covers `/p` and `/p/`.
+- **Regulars backend applied** in QA's order (`docs/qa/regulars-07-09-prod-apply-gate.md`): 07, then 09 (cron job #4, `sweep-leaving-soon-zone-push`, 30 s), then deploy `send-regular-push`, then 08. The 15-row verify was all OK. `regularsEnabled` stays false in iOS.
+- **Process.** Auto mode blocks the orchestrator from clicking Run on prod SQL, so Kevin clicks Run and the orchestrator pastes and verifies. Supabase CLI deploys work from this Mac (`--use-api`).
+- **In flight:** the C3 App Clip (`feat/spot-pass-c3-clip`). C2 (full-app driver) and C4 (auto-detect) are next.
+
 ### 2026-11-24 (later) — ✅ SUPABASE: migrations 10/11/12 + Spot Pass 13 APPLIED to prod; 7 handoff edge functions DEPLOYED (flag OFF)
 
 The orchestrator ran these through Chrome (SQL Editor) and the CLI. Kevin clicked Run on each migration, because auto mode blocks the orchestrator from clicking Run on prod. The CLI is logged in on the Mac; Kevin ran `supabase login` in Terminal.app, since the `!` prefix is non-TTY.
