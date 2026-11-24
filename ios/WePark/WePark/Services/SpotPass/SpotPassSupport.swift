@@ -96,7 +96,7 @@ nonisolated enum SpotPassNameFilter {
     /// Authority/impersonation and urgency words from design §10.3 (substring check). Deliberately
     /// short: this is a courtesy mirror, not the moderation boundary.
     private static let blockedSubstrings = [
-        "cop", "police", "warden", "agent", "inspector", "ticket", "admin",
+        "cop", "officer", "police", "warden", "agent", "inspector", "ticket", "admin",
         "hurry", "rush", "steal", "grab", "snatch", "wepark"
     ]
 
