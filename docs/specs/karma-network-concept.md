@@ -412,3 +412,17 @@ Network acceptance criteria belong in the Phase B spec once Kevin confirms scope
 - Ford / Civic Hall Labs: https://www.fordfoundation.org/work/our-grants/awarded-grants/grants-database/civic-hall-labs-inc-136880
 - Apple App Review Guidelines (3.1.1, 5.3): https://developer.apple.com/app-store/review/guidelines/ (forum threads on gift-card redemption and sweepstakes are indicative only)
 - NY Dept. of State Games of Chance: https://dos.ny.gov/games-chance-registration ; GBL 369-e: https://www.nysenate.gov/legislation/laws/GBS/369-E
+
+---
+
+## Kevin's decisions (2026-11-23)
+
+1. **Redeemable reward: YES, eventually.** A merchant-funded perk redeemed in person ("absolutely, that would be great"). The sequencing still holds: one clean season of points-only karma, plus a one-hour consult with a NY attorney before the first redeemable perk.
+2. **For-profit vs fiscal sponsor: UNDECIDED.** Don't build anything that depends on Council or foundation money. Revisit before the ~January 2027 Council window.
+3. **Leaderboards: on by default, shown under the alias, with a one-switch opt-out.**
+4. **Pilot square: Kevin's own home neighborhood.** Recruiting cafe owners comes later, so the pilot starts points-only and cosmetic, with no merchant perk.
+5. **Network v0: Regulars-only "home in ~30", as recommended.** Kevin wants the scaling path designed now, not left implicit. Before building B, the spec has to cover how the network grows past Regulars:
+   - the opt-in home-square pool;
+   - matching load and notification budgets at 100, 1k and 10k active users per square;
+   - cold-start vs dense-area behaviour;
+   - the server-side cost of intents and offers.
