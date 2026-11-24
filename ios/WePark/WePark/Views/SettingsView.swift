@@ -80,6 +80,9 @@ struct SettingsView: View {
     /// CFBundleVersion (e.g., "42")
     let buildNumber: String
 
+    /// Standard sheet dismissal for the toolbar Done button.
+    @Environment(\.dismiss) private var dismiss
+
     // MARK: - Body
 
     var body: some View {
@@ -175,6 +178,11 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
             .onChange(of: offsets) { _, newOffsets in
                 ReminderOffsets.save(newOffsets, to: .standard)
                 onOffsetsChange()

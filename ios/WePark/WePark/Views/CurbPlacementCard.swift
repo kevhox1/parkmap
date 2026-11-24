@@ -304,7 +304,7 @@ nonisolated struct CurbPlacementCardModel: Equatable {
         return CurbPlacementCardModel(
             state: isFar ? .farCurb : .snapped,
             title: "\(titleCased(streetCanonical)) \u{00B7} \(sideName)",
-            subtitle: "between \(fromCanonical) & \(toCanonical)",
+            subtitle: "between \(titleCased(fromCanonical)) & \(titleCased(toCanonical))",
             statusText: label.text,
             statusTone: CurbPlacementStatusTone.tone(for: label.severity),
             footnote: isFar ? CurbPlacementCardCopy.farCurbFootnote : nil,

@@ -516,6 +516,7 @@ private struct GoalTile: View {
     var minHeight: CGFloat = 128
     /// Addendum 4: the card's own label ("..., Selected. Double tap to change goal.").
     var accessibilityLabelOverride: String? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let onTap: () -> Void
 
     var body: some View {
@@ -602,10 +603,7 @@ private struct GoalTile: View {
             VStack(spacing: 6) {
                 Image(systemName: goal.dockIcon)
                     .font(.title)
-                Text(goal.dockPrimary)
-                    .font(.headline.bold())
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
+                tileTitle
                 Text(goal.dockSubLabel)
                     .font(.footnote)
                     .multilineTextAlignment(.center)
@@ -615,6 +613,53 @@ private struct GoalTile: View {
             .padding(.vertical, 12)
         }
     }
+}
+
+
+extension GoalTile {
+    /// The three-across tile title. Below `.xxLarge` it is the original `lineLimit(2)` Text,
+    /// byte-for-byte (the dock's measured height at `.large` is pinned by a test). From `.xxLarge`
+    /// up a goal name must never break INSIDE a word ("Overnig / ht" on an SE at XXXL): the name
+    /// is pre-broken at a word boundary (`goalTitleLines`) and the line limit equals the line
+    /// count, so an over-wide line shrinks (down to 0.6x) instead of wrapping mid-word.
+    @ViewBuilder
+    fileprivate var tileTitle: some View {
+        if dynamicTypeSize < .xxLarge {
+            Text(goal.dockPrimary)
+                .font(.headline.bold())
+                .multilineTextAlignment(.center)
+                .lineLimit(2)
+        } else {
+            let lines = goalTitleLines(goal.dockPrimary)
+            Text(lines.joined(separator: "\n"))
+                .font(.headline.bold())
+                .multilineTextAlignment(.center)
+                .lineLimit(lines.count)
+                .minimumScaleFactor(0.6)
+        }
+    }
+}
+
+/// Splits a goal name into at most two lines at a WORD boundary (never inside a word), choosing
+/// the boundary that best balances the character counts. A single-word name stays one line.
+nonisolated func goalTitleLines(_ name: String) -> [String] {
+    let words = name.split(separator: " ", omittingEmptySubsequences: true).map(String.init)
+    guard words.count > 1 else { return [name] }
+    var best = 1
+    var bestDiff = Int.max
+    for split in 1..<words.count {
+        let left = words[..<split].joined(separator: " ").count
+        let right = words[split...].joined(separator: " ").count
+        let diff = abs(left - right)
+        if diff < bestDiff {
+            bestDiff = diff
+            best = split
+        }
+    }
+    return [
+        words[..<best].joined(separator: " "),
+        words[best...].joined(separator: " ")
+    ]
 }
 
 // MARK: - Addendum 4 pieces

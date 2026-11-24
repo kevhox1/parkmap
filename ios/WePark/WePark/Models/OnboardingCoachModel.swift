@@ -259,3 +259,38 @@ nonisolated func onboardingCoachRailAdjustedSafeMaxX(
     let allowedRightEdge = railFrame.minX - gap
     return min(safeMaxX, allowedRightEdge + onboardingCoachBubbleHorizontalMargin)
 }
+
+// MARK: - User-dot avoidance (mark 1; open item #41 (c) / QA #149 N4)
+
+/// Radius of the exclusion zone drawn around the user-location dot (the dot is ~22pt with its
+/// halo; a little margin keeps the bubble edge from kissing it).
+nonisolated let onboardingCoachUserDotExclusionRadius: CGFloat = 24
+
+/// Mark 1's bubble is bottom-aligned just above the goal dock, which is also where the user's
+/// blue dot usually sits (map centered on the user), so the bubble hid the dot's lower half.
+/// Returns the bubble region's bottom edge, raised to sit above the dot when the bubble would
+/// otherwise cover it. Unchanged (returns `bottom`) when: no dot point, the dot is below the
+/// bubble's bottom edge or horizontally outside the bubble, the dot is above where the bubble
+/// can reach (`minimumHeight` over `bottom`), or raising the bottom would leave less than
+/// `minimumHeight` of region (never squeeze the bubble to avoid the dot). Callers skip this at
+/// accessibility sizes (PR #153 region rules stand).
+nonisolated func onboardingCoachBottomAvoidingUserDot(
+    bottom: CGFloat,
+    top: CGFloat,
+    dot: CGPoint?,
+    bubbleMinX: CGFloat,
+    bubbleMaxX: CGFloat,
+    minimumHeight: CGFloat,
+    radius: CGFloat = onboardingCoachUserDotExclusionRadius,
+    gap: CGFloat = 8
+) -> CGFloat {
+    guard let dot else { return bottom }
+    guard dot.x + radius > bubbleMinX, dot.x - radius < bubbleMaxX else { return bottom }
+    let dotTop = dot.y - radius
+    let dotBottom = dot.y + radius
+    // The bubble occupies roughly [bottom - minimumHeight, bottom].
+    guard dotTop < bottom, dotBottom > bottom - minimumHeight else { return bottom }
+    let raised = dotTop - gap
+    guard raised - top >= minimumHeight else { return bottom }
+    return min(bottom, raised)
+}

@@ -73,6 +73,9 @@ struct OnboardingCoachOverlay: View {
     /// trailing rail's frame (Recenter, More), same coordinate space as the dock frames. Only
     /// consulted at accessibility sizes (below AX1 nothing changes). `0`/`.zero` = not measured.
     var topChromeBottom: CGFloat = 0
+    /// The user-location dot's projected position in WINDOW (global) coordinates, or `nil` when
+    /// unknown/off-screen. Mark 1's bubble is raised to clear it (below AX sizes only).
+    var userDotScreenPoint: CGPoint? = nil
     var railFrame: CGRect = .zero
 
     /// Fired by the bubble's own "Got it"/"Done" button.
@@ -114,7 +117,7 @@ struct OnboardingCoachOverlay: View {
             }
             ZStack(alignment: .topLeading) {
                 ringOverlay(curbPoint: curbPoint, in: bounds)
-                bubbleLayer(curbPoint: curbPoint, bounds: bounds, safe: safe)
+                bubbleLayer(curbPoint: curbPoint, globalOrigin: globalOrigin, bounds: bounds, safe: safe)
                 skipLink(safe: safe)
             }
             .frame(width: proxy.size.width, height: proxy.size.height)
@@ -182,15 +185,15 @@ struct OnboardingCoachOverlay: View {
     /// band, above whatever it must clear) and aligned to one edge of it; the card itself
     /// scrolls its text if the region is too short (AX sizes), so it can never leave the screen.
     @ViewBuilder
-    private func bubbleLayer(curbPoint: CGPoint?, bounds: CGRect, safe: CGRect) -> some View {
+    private func bubbleLayer(curbPoint: CGPoint?, globalOrigin: CGPoint, bounds: CGRect, safe: CGRect) -> some View {
         let topLimit = onboardingCoachRegionTop(
             safeMinY: safe.minY, skipTop: skipTop(safe: safe), skipBandHeight: skipBandHeight
         )
         switch mark {
         case .goalTiles:
+            let bottom = markOneBottom(topLimit: topLimit, globalOrigin: globalOrigin, safe: safe)
             bubbleRegion(
-                anchorX: nil, safe: safe, top: topLimit,
-                bottom: bottomLimit(above: goalDockFrame, safe: safe), alignment: .bottom
+                anchorX: nil, safe: safe, top: topLimit, bottom: bottom, alignment: .bottom
             )
         case .colorMeaning:
             bubbleRegion(
@@ -217,6 +220,23 @@ struct OnboardingCoachOverlay: View {
                 )
             }
         }
+    }
+
+    /// Mark 1's bubble bottom edge: above the dock, raised further to clear the user-location dot
+    /// (below AX sizes only; the AX region rules from PR #153 are untouched).
+    private func markOneBottom(topLimit: CGFloat, globalOrigin: CGPoint, safe: CGRect) -> CGFloat {
+        let dockBottom = bottomLimit(above: goalDockFrame, safe: safe)
+        guard !goalCardLayout, let global = userDotScreenPoint else { return dockBottom }
+        let bubbleWidth = onboardingCoachBubbleWidth(safeWidth: safe.width)
+        let centerX = onboardingCoachBubbleCenterX(
+            anchorX: nil, bubbleWidth: bubbleWidth, safeMinX: safe.minX, safeMaxX: safe.maxX
+        )
+        return onboardingCoachBottomAvoidingUserDot(
+            bottom: dockBottom, top: topLimit,
+            dot: CGPoint(x: global.x - globalOrigin.x, y: global.y - globalOrigin.y),
+            bubbleMinX: centerX - bubbleWidth / 2, bubbleMaxX: centerX + bubbleWidth / 2,
+            minimumHeight: minimumBubbleRegionHeight
+        )
     }
 
     /// The bottom edge of the region above `frame` (12pt gap), or the safe-area bottom when the

@@ -317,6 +317,58 @@ final class AXGoalDockTests: XCTestCase {
         XCTAssertEqual(b.bottom, 480)
     }
 
+    // MARK: - Goal tile titles never break mid-word (SE XXXL)
+
+    func testGoalTitleLines_breakOnlyAtWordBoundaries() {
+        XCTAssertEqual(goalTitleLines("Overnight"), ["Overnight"])
+        XCTAssertEqual(goalTitleLines("A Few Hours"), ["A Few", "Hours"])
+        XCTAssertEqual(goalTitleLines("Park & Forget"), ["Park &", "Forget"])
+        for goal in ParkingGoal.allCases {
+            let rejoined = goalTitleLines(goal.dockPrimary).joined(separator: " ")
+            XCTAssertEqual(rejoined, goal.dockPrimary)
+        }
+    }
+
+    // MARK: - Mark 1 user-dot avoidance (open item #41 (c) / N4, pure math)
+
+    func testUserDotAvoidance_raisesBottomAboveCoveredDot() {
+        // Bubble region bottom 600, dot at (196, 590): the dot is under the bubble's footprint.
+        let bottom = onboardingCoachBottomAvoidingUserDot(
+            bottom: 600, top: 100, dot: CGPoint(x: 196, y: 590),
+            bubbleMinX: 36, bubbleMaxX: 356, minimumHeight: 170
+        )
+        XCTAssertEqual(bottom, 590 - 24 - 8)
+    }
+
+    func testUserDotAvoidance_unchangedWhenNoDotOrDotElsewhere() {
+        XCTAssertEqual(onboardingCoachBottomAvoidingUserDot(
+            bottom: 600, top: 100, dot: nil, bubbleMinX: 36, bubbleMaxX: 356, minimumHeight: 170
+        ), 600)
+        // Dot below the bubble bottom (inside the dock).
+        XCTAssertEqual(onboardingCoachBottomAvoidingUserDot(
+            bottom: 600, top: 100, dot: CGPoint(x: 196, y: 700), bubbleMinX: 36, bubbleMaxX: 356, minimumHeight: 170
+        ), 600)
+        // Dot far above the bubble's reach.
+        XCTAssertEqual(onboardingCoachBottomAvoidingUserDot(
+            bottom: 600, top: 100, dot: CGPoint(x: 196, y: 300), bubbleMinX: 36, bubbleMaxX: 356, minimumHeight: 170
+        ), 600)
+        // Dot horizontally outside the bubble.
+        XCTAssertEqual(onboardingCoachBottomAvoidingUserDot(
+            bottom: 600, top: 100, dot: CGPoint(x: 10, y: 590), bubbleMinX: 100, bubbleMaxX: 300, minimumHeight: 170
+        ), 600)
+    }
+
+    func testUserDotAvoidance_neverSqueezesBubbleBelowMinimumHeight() {
+        // Raising would leave only 590-24-8-300 = 258 >= 170 here, so it moves...
+        XCTAssertEqual(onboardingCoachBottomAvoidingUserDot(
+            bottom: 600, top: 300, dot: CGPoint(x: 196, y: 590), bubbleMinX: 36, bubbleMaxX: 356, minimumHeight: 170
+        ), 558)
+        // ...but with the region top at 450 it would leave 108 < 170, so the legacy bottom stays.
+        XCTAssertEqual(onboardingCoachBottomAvoidingUserDot(
+            bottom: 600, top: 450, dot: CGPoint(x: 196, y: 590), bubbleMinX: 36, bubbleMaxX: 356, minimumHeight: 170
+        ), 600)
+    }
+
     // MARK: - Rail clearance (follow-up, pure math)
 
     func testRailClearance_pullsTrailingEdgeLeftOfRail_whenVerticallyOverlapping() {
