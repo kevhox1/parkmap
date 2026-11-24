@@ -110,13 +110,105 @@ enum CandidateSegmentSearch {
     /// trying to avoid the other way around. Both copies are independently unit-tested; if
     /// they ever need to diverge,
     /// that's a sign that one of the two use cases actually needs different matching rules.
+    ///
+    /// 2026-11-23 snap-fix ruling 3: when no identical-pair match exists, fall back to a
+    /// GEOMETRIC match (`geometricOppositeSide`), because DOT labels the two sides of one
+    /// physical block with different cross streets in places (E Houston 1 Ave-2 Ave: the north
+    /// side says "1ST AVENUE | 2ND AVENUE", the south side names ALLEN/ELDRIDGE/...).
+    /// The identical-pair match is still the first preference.
     nonisolated static func oppositeSideCandidate(of segment: Segment, in segments: [Segment]) -> Segment? {
         let crossPair: Set<String> = [segment.fromStreet, segment.to]
-        return segments.first { candidate in
+        if let exact = segments.first(where: { candidate in
             candidate.side != segment.side &&
             candidate.street == segment.street &&
             Set([candidate.fromStreet, candidate.to]) == crossPair
+        }) {
+            return exact
         }
+        return geometricOppositeSide(of: segment, in: segments)
+    }
+
+    /// Minimum fraction of the snapped segment's span (along the street axis) that a
+    /// candidate must overlap to count as "the same block, other side".
+    nonisolated static let oppositeSideMinOverlapFraction: Double = 0.5
+
+    /// Maximum lateral separation (metres) between the two curbs' centre lines. A 4-lane
+    /// avenue with medians is ~35-45 m curb to curb; beyond this it is a different street.
+    nonisolated static let oppositeSideMaxLateralMeters: Double = 60
+
+    /// Minimum cosine between the two segments' axes (rejects a bend / perpendicular stub).
+    nonisolated static let oppositeSideMinParallelCosine: Double = 0.9
+
+    /// The opposite-side blockface of the same street, found by geometry: same street name,
+    /// a different side, roughly parallel, within `oppositeSideMaxLateralMeters` laterally,
+    /// and overlapping at least `oppositeSideMinOverlapFraction` of `segment`'s span when both
+    /// are projected onto `segment`'s street axis. The largest overlap wins (ties: nearer).
+    nonisolated static func geometricOppositeSide(of segment: Segment, in segments: [Segment]) -> Segment? {
+        let base = segment.coordinates
+        guard base.count >= 2 else { return nil }
+
+        // Local flat-earth frame in metres around the segment's first vertex.
+        let originLat = base[0].latitude
+        let originLng = base[0].longitude
+        let metersPerDegLat = 111_320.0
+        let metersPerDegLng = 111_320.0 * cos(originLat * .pi / 180)
+        func project(_ c: CLLocationCoordinate2D) -> (x: Double, y: Double) {
+            ((c.longitude - originLng) * metersPerDegLng, (c.latitude - originLat) * metersPerDegLat)
+        }
+
+        let basePts = base.map(project)
+        guard let first = basePts.first, let last = basePts.last else { return nil }
+        var ax = last.x - first.x
+        var ay = last.y - first.y
+        let axisLength = hypot(ax, ay)
+        guard axisLength > 1 else { return nil }
+        ax /= axisLength
+        ay /= axisLength
+
+        // u = along the axis, v = lateral (left of the axis).
+        func uv(_ p: (x: Double, y: Double)) -> (u: Double, v: Double) {
+            (p.x * ax + p.y * ay, -p.x * ay + p.y * ax)
+        }
+        let baseU = basePts.map { uv($0).u }
+        guard let baseMin = baseU.min(), let baseMax = baseU.max(), baseMax - baseMin > 1 else { return nil }
+        let baseSpan = baseMax - baseMin
+        let baseMeanV = basePts.map { uv($0).v }.reduce(0, +) / Double(basePts.count)
+
+        var best: (segment: Segment, overlap: Double, lateral: Double)?
+        for candidate in segments {
+            guard candidate.side != segment.side,
+                  candidate.street == segment.street,
+                  candidate.id != segment.id else { continue }
+            let coords = candidate.coordinates
+            guard coords.count >= 2 else { continue }
+            let pts = coords.map(project)
+            guard let cFirst = pts.first, let cLast = pts.last else { continue }
+
+            let cdx = cLast.x - cFirst.x
+            let cdy = cLast.y - cFirst.y
+            let cLen = hypot(cdx, cdy)
+            guard cLen > 1 else { continue }
+            let cosine = abs((cdx * ax + cdy * ay) / cLen)
+            guard cosine >= oppositeSideMinParallelCosine else { continue }
+
+            let cUV = pts.map(uv)
+            guard let cMin = cUV.map(\.u).min(), let cMax = cUV.map(\.u).max() else { continue }
+            let overlap = min(baseMax, cMax) - max(baseMin, cMin)
+            guard overlap / baseSpan >= oppositeSideMinOverlapFraction else { continue }
+
+            let meanV = cUV.map(\.v).reduce(0, +) / Double(cUV.count)
+            let lateral = abs(meanV - baseMeanV)
+            guard lateral <= oppositeSideMaxLateralMeters else { continue }
+
+            if let current = best {
+                if overlap > current.overlap + 0.5 || (abs(overlap - current.overlap) <= 0.5 && lateral < current.lateral) {
+                    best = (candidate, overlap, lateral)
+                }
+            } else {
+                best = (candidate, overlap, lateral)
+            }
+        }
+        return best?.segment
     }
 
     /// A same-street, same-side block whose own cross-street pair includes `crossStreet` —

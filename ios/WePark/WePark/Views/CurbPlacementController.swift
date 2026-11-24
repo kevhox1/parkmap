@@ -483,7 +483,7 @@ final class CurbPlacementController {
 
     // MARK: - Settle
 
-    /// The map has stopped: final resolve, drop the needle, then nudge (user move only) or fire.
+    /// The map has stopped: final resolve, drop the needle, then fire (no nudge after a user drag, ruling 1).
     private func settle() {
         guard let mapView else { return }
         setLinkRunning(false)
@@ -512,17 +512,10 @@ final class CurbPlacementController {
             return
         }
 
-        if userInitiated, let snapped = lastSnapped {
-            let ghost = mapView.convert(snapped.snappedCoordinate, toPointTo: mapView)
-            let offset = Double(hypot(ghost.x - tip.x, ghost.y - tip.y))
-            if let nudge = CurbPlacementMapPolicy.settleNudge(
-                ghostOffsetPoints: offset,
-                reduceMotion: hooks.reduceMotion()
-            ) {
-                scheduleNudge(toward: snapped.snappedCoordinate, nudge: nudge)
-                return
-            }
-        }
+        // Snap-fix ruling 1 (2026-11-23): a user drag never nudges the camera on release
+        // (`CurbPlacementMapPolicy.shouldNudgeOnSettle(trigger: .userDrag)` is false). The ghost +
+        // tether show where "Park here" will save; the map stays where the user put it. The
+        // programmatic paths (`focus(on:)`, `cycleNearbyCurb()`) call `performNudge` directly.
         fireSettle()
     }
 
@@ -541,25 +534,6 @@ final class CurbPlacementController {
         )
         refreshReticle()
         fireSettle()
-    }
-
-    private func scheduleNudge(toward coordinate: CLLocationCoordinate2D, nudge: PlacementNudge) {
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, !self.isEnded else { return }
-            // A touch during the dwell abandons the nudge (design Finding 9). If that touch
-            // never moves the map no region callback follows, so emit the settle now (QA #7);
-            // a touch that does move the map settles again, which is harmless.
-            if self.hooks.touchDown() {
-                self.fireSettle()
-                return
-            }
-            self.performNudge(toward: coordinate, nudge: nudge)
-        }
-        dwellWork = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + CurbPlacementMapPolicy.nudgeDwellSeconds,
-            execute: work
-        )
     }
 
     /// Moves the map so `coordinate` ends up under the pin tip. Duration is distance-scaled via
@@ -635,6 +609,20 @@ final class CurbPlacementController {
     /// firing only if the blockface / outcome kind changed (spec A13 "Loading curbs...").
     func refresh() {
         guard !isEnded, !entryInProgress, let mapView else { return }
+        // Snap-fix ruling 6: a late index swap must not change a snap that is still valid.
+        if let current = lastSnapped, let index = hooks.index() {
+            let action = CurbPlacementMapPolicy.lateIndexSwapAction(
+                currentSegmentID: current.segment.id,
+                newIndexContainsCurrent: index.containsSegment(id: current.segment.id)
+            )
+            switch action {
+            case .keepCurrentSnap:
+                refreshReticle()
+                return
+            case .reResolve:
+                break
+            }
+        }
         let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let pin = mapView.convert(tip, toCoordinateFrom: mapView)
         resolve(
@@ -690,10 +678,11 @@ final class CurbPlacementController {
         let tip = CurbPlacementMapPolicy.tipPoint(in: mapView.bounds, tipFraction: tipFraction)
         let point = mapView.convert(coordinate, toPointTo: mapView)
         let offset = Double(hypot(point.x - tip.x, point.y - tip.y))
-        guard let nudge = CurbPlacementMapPolicy.settleNudge(
-            ghostOffsetPoints: offset,
-            reduceMotion: hooks.reduceMotion()
-        ) else { return }
+        guard CurbPlacementMapPolicy.shouldNudgeOnSettle(trigger: .programmatic),
+              let nudge = CurbPlacementMapPolicy.settleNudge(
+                ghostOffsetPoints: offset,
+                reduceMotion: hooks.reduceMotion()
+              ) else { return }
         moveWasUserInitiated = false
         performNudge(toward: coordinate, nudge: nudge)
     }

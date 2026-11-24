@@ -11,8 +11,9 @@
 //  which supersede the amendment's:
 //    Needle    44 pt head (white fill, 2 pt black outline), 20 pt stem tapering 4 -> 1 pt (white,
 //              1.5 pt black outline). 64 pt total; the TIP is exactly `tipPoint` (40% of height).
-//    Ground    12x5 black ellipse centred on the tip (16x7 while lifted). The honest location
-//    mark     while the needle is lifted; it never moves.
+//    Ground    10 pt black dot, 2 pt white ring, plus a 24 pt crosshair, centred on the tip (14 pt
+//    mark     dot / 36 pt crosshair while lifted; snap-fix ruling 5, 2026-11-23). The honest
+//              sampled location while the needle is lifted; it never moves.
 //    Lift      needle translates up 8 pt while a finger is down, drops on settle
 //              (UIView.animate 0.12 s, spring damping 0.8). Under Reduce Motion no translation;
 //              the ground mark still grows as the "you are moving" cue.
@@ -47,8 +48,18 @@ final class PlacementReticleView: UIView {
     static let liftSpringDamping: CGFloat = 0.8
     static let revealDuration: TimeInterval = 0.15
 
-    static let groundMarkSize = CGSize(width: 12, height: 5)
-    static let groundMarkLiftedSize = CGSize(width: 16, height: 7)
+    /// Snap-fix ruling 5 (2026-11-23): the app samples the TIP, but users aim with the 44 pt head
+    /// 64 pt above it. The ground mark was a 12x5 flat black ellipse, easy to miss under a
+    /// fingertip. It is now a round dot with a white ring (readable on any basemap) plus a
+    /// crosshair, so "this exact point is what gets sampled" is obvious while dragging.
+    /// Same centre (the tip); `tipFraction` / the 130 pt tip rule are untouched.
+    static let groundMarkSize = CGSize(width: 10, height: 10)
+    static let groundMarkLiftedSize = CGSize(width: 14, height: 14)
+    static let groundMarkRingWidth: CGFloat = 2
+    static let crosshairArmLength: CGFloat = 12
+    static let crosshairLiftedArmLength: CGFloat = 18
+    static let crosshairCasingWidth: CGFloat = 4
+    static let crosshairCoreWidth: CGFloat = 2
 
     static let ghostFillDiameter: CGFloat = 16
     static let ghostRingWidth: CGFloat = 2.5
@@ -64,6 +75,8 @@ final class PlacementReticleView: UIView {
     private let stemLayer = CAShapeLayer()
     private let headLayer = CAShapeLayer()
     private let groundMarkLayer = CAShapeLayer()
+    private let crosshairCasingLayer = CAShapeLayer()
+    private let crosshairCoreLayer = CAShapeLayer()
     private let ghostLayer = CAShapeLayer()
     private let tetherCasingLayer = CAShapeLayer()
     private let tetherCoreLayer = CAShapeLayer()
@@ -124,7 +137,20 @@ final class PlacementReticleView: UIView {
         ghostLayer.isHidden = true
         self.layer.addSublayer(ghostLayer)
 
+        // Crosshair (black casing under white core) below the dot; dot = black fill, white ring.
+        for layer in [crosshairCasingLayer, crosshairCoreLayer] {
+            layer.fillColor = nil
+            layer.lineCap = .round
+            self.layer.addSublayer(layer)
+        }
+        crosshairCasingLayer.strokeColor = UIColor.black.cgColor
+        crosshairCasingLayer.lineWidth = PlacementReticleView.crosshairCasingWidth
+        crosshairCoreLayer.strokeColor = UIColor.white.cgColor
+        crosshairCoreLayer.lineWidth = PlacementReticleView.crosshairCoreWidth
+
         groundMarkLayer.fillColor = UIColor.black.cgColor
+        groundMarkLayer.strokeColor = UIColor.white.cgColor
+        groundMarkLayer.lineWidth = PlacementReticleView.groundMarkRingWidth
         self.layer.addSublayer(groundMarkLayer)
 
         needleView.isUserInteractionEnabled = false
@@ -193,8 +219,20 @@ final class PlacementReticleView: UIView {
             stem.closeSubpath()
             stemLayer.path = stem
 
-            groundMarkLayer.path = groundMarkPath(lifted: isLifted)
+            applyGroundMark(lifted: isLifted)
         }
+    }
+
+    private func applyGroundMark(lifted: Bool) {
+        groundMarkLayer.path = groundMarkPath(lifted: lifted)
+        let arm = lifted ? PlacementReticleView.crosshairLiftedArmLength : PlacementReticleView.crosshairArmLength
+        let cross = CGMutablePath()
+        cross.move(to: CGPoint(x: tip.x - arm, y: tip.y))
+        cross.addLine(to: CGPoint(x: tip.x + arm, y: tip.y))
+        cross.move(to: CGPoint(x: tip.x, y: tip.y - arm))
+        cross.addLine(to: CGPoint(x: tip.x, y: tip.y + arm))
+        crosshairCasingLayer.path = cross
+        crosshairCoreLayer.path = cross
     }
 
     private func groundMarkPath(lifted: Bool) -> CGPath {
@@ -248,7 +286,7 @@ final class PlacementReticleView: UIView {
         guard lifted != isLifted else { return }
         isLifted = lifted
         withoutImplicitAnimations {
-            groundMarkLayer.path = groundMarkPath(lifted: lifted)
+            applyGroundMark(lifted: lifted)
         }
         let transform = lifted
             ? CGAffineTransform(translationX: 0, y: -PlacementReticleView.liftOffset)

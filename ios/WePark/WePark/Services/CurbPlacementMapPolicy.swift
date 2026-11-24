@@ -378,6 +378,44 @@ nonisolated enum CurbPlacementMapPolicy {
         return PlacementNudge(animated: true, duration: clamped)
     }
 
+    // MARK: Who asked for the nudge (snap-fix ruling 1, 2026-11-23)
+
+    /// Why the camera is about to be moved to put the snapped curb under the tip.
+    nonisolated enum SettleNudgeTrigger {
+        /// The user dragged / flicked the map and let go. They aimed; the camera must NOT move.
+        case userDrag
+        /// The app moved the pin on the user's behalf (nearest-curb chip, VoiceOver adjust).
+        /// The user did not aim at a spot, so the camera brings the curb under the tip.
+        case programmatic
+    }
+
+    /// Orchestrator ruling 2026-11-23 (docs/qa/curbpin-snap-diagnosis-2026-11-23.md cause 1):
+    /// no settle nudge after a user drag - releasing a drag snapped the map to a curb the user
+    /// may not have meant ("auto locks back on once I let go"). "Park here" saves
+    /// `snappedCoordinate`, so the tether + ghost stay visible after release.
+    static func shouldNudgeOnSettle(trigger: SettleNudgeTrigger) -> Bool {
+        switch trigger {
+        case .userDrag: return false
+        case .programmatic: return true
+        }
+    }
+
+    // MARK: Late index swap (snap-fix ruling 6, 2026-11-23)
+
+    /// What to do when tiles finish loading and a rebuilt index replaces the one the current
+    /// snap was resolved against.
+    nonisolated enum LateIndexSwapAction {
+        /// The snapped segment still exists in the new index: leave ghost / card untouched.
+        case keepCurrentSnap
+        /// No current snap, or its segment vanished: resolve again at the pin.
+        case reResolve
+    }
+
+    static func lateIndexSwapAction(currentSegmentID: String?, newIndexContainsCurrent: Bool) -> LateIndexSwapAction {
+        guard currentSegmentID != nil, newIndexContainsCurrent else { return .reResolve }
+        return .keepCurrentSnap
+    }
+
     // MARK: Exit camera (spec A.3 "Exit", A14; A3.6 ambient look)
 
     /// The camera the mode exits to.

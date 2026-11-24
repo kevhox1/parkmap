@@ -223,6 +223,62 @@ final class CandidateSegmentSearchPredicateTests: XCTestCase {
         XCTAssertNil(result, "A segment with the SAME side must never match as its own opposite")
     }
 
+    // MARK: Geometric opposite side (snap-fix ruling 3, 2026-11-23) - E Houston-shaped fixture
+
+    /// North side "1ST AVENUE | 2ND AVENUE" at lat 40.7222; the south side of the same physical
+    /// block carries DIFFERENT cross-street labels (DOT data) at lat 40.72205 (~17 m south).
+    private func houstonNorth() -> Segment {
+        candidateFixtureSegment(
+            id: "hn", street: "EAST HOUSTON STREET", from: "1 AVENUE", to: "2 AVENUE", side: "N",
+            line: [[40.7222, -73.9890], [40.7222, -73.9870]]
+        )
+    }
+
+    private func houstonSouth(id: String = "hs", from: String = "ALLEN STREET", to: String = "ELDRIDGE STREET",
+                              lat: Double = 40.72205, lng0: Double = -73.9891, lng1: Double = -73.9869) -> Segment {
+        candidateFixtureSegment(
+            id: id, street: "EAST HOUSTON STREET", from: from, to: to, side: "S",
+            line: [[lat, lng0], [lat, lng1]]
+        )
+    }
+
+    func testOppositeSideCandidate_houstonDifferentCrossStreets_matchesByGeometry() {
+        let north = houstonNorth()
+        let south = houstonSouth()
+        XCTAssertEqual(CandidateSegmentSearch.oppositeSideCandidate(of: north, in: [north, south])?.id, "hs")
+    }
+
+    func testOppositeSideCandidate_identicalPairStillPreferredOverGeometry() {
+        let north = houstonNorth()
+        let geometric = houstonSouth(id: "geo")
+        let exact = houstonSouth(id: "exact", from: "1 AVENUE", to: "2 AVENUE", lat: 40.72200)
+        XCTAssertEqual(CandidateSegmentSearch.oppositeSideCandidate(of: north, in: [north, geometric, exact])?.id, "exact")
+    }
+
+    func testOppositeSideCandidate_geometry_rejectsNonOverlappingNeighbourBlock() {
+        let north = houstonNorth()
+        // Same street, south side, but the NEXT block east: no overlap along the axis.
+        let eastBlock = houstonSouth(id: "east", lng0: -73.9860, lng1: -73.9840)
+        XCTAssertNil(CandidateSegmentSearch.oppositeSideCandidate(of: north, in: [north, eastBlock]))
+    }
+
+    func testOppositeSideCandidate_geometry_rejectsDifferentStreetAndTooFar() {
+        let north = houstonNorth()
+        let otherStreet = candidateFixtureSegment(
+            id: "other", street: "STANTON STREET", from: "A", to: "B", side: "S",
+            line: [[40.72205, -73.9890], [40.72205, -73.9870]]
+        )
+        let tooFar = houstonSouth(id: "far", lat: 40.7210) // ~130 m south
+        XCTAssertNil(CandidateSegmentSearch.oppositeSideCandidate(of: north, in: [north, otherStreet, tooFar]))
+    }
+
+    func testOppositeSideCandidate_geometry_picksLargestOverlap() {
+        let north = houstonNorth()
+        let partial = houstonSouth(id: "partial", lng0: -73.9881, lng1: -73.9860) // ~55% overlap
+        let full = houstonSouth(id: "full")
+        XCTAssertEqual(CandidateSegmentSearch.oppositeSideCandidate(of: north, in: [north, partial, full])?.id, "full")
+    }
+
     func testNeighborSegment_noMatch_returnsNil() {
         let a = candidateFixtureSegment(id: "1", street: "MOTT STREET", from: "SPRING STREET", to: "BROOME STREET", side: "E")
 
