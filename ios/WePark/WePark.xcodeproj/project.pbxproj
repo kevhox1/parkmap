@@ -117,6 +117,11 @@
 			path = WeParkLiveActivities;
 			sourceTree = "<group>";
 		};
+		C2C000000000000000000001 /* SharedFullApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SharedFullApp;
+			sourceTree = "<group>";
+		};
 		38CA21C02FB12B780080B4F5 /* WePark */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = WePark;
@@ -192,6 +197,7 @@
 				C0C000000000000000000015 /* Clip */,
 				C0C000000000000000000017 /* ClipLiveActivities */,
 				C0C000000000000000000018 /* WeParkLiveActivities */,
+				C2C000000000000000000001 /* SharedFullApp */,
 				38CA21C02FB12B780080B4F5 /* WePark */,
 				A0001000000000000000AA02 /* WeParkTests */,
 				38CA21BF2FB12B780080B4F5 /* Products */,
@@ -232,6 +238,7 @@
 			fileSystemSynchronizedGroups = (
 				38CA21C02FB12B780080B4F5 /* WePark */,
 				C0C000000000000000000016 /* Shared */,
+				C2C000000000000000000001 /* SharedFullApp */,
 			);
 			name = WePark;
 			packageProductDependencies = (
@@ -325,6 +332,7 @@
 			fileSystemSynchronizedGroups = (
 				C0C000000000000000000018 /* WeParkLiveActivities */,
 				C0C000000000000000000016 /* Shared */,
+				C2C000000000000000000001 /* SharedFullApp */,
 			);
 			name = WeParkLiveActivities;
 			packageProductDependencies = (

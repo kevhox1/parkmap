@@ -1297,6 +1297,9 @@ final class ClipCopyLintTests: XCTestCase {
             ClipCopy.blockHappeningNow, ClipCopy.blockNoRule, ClipCopy.blockCheckSigns, ClipCopy.blockDenied,
             ClipCopy.reminderHiddenBody, ClipCopy.passEnded, ClipCopy.finishedTitle, ClipCopy.finishedBody,
             ClipCopy.activitiesOffTitle, ClipCopy.activitiesOffBody, ClipCopy.activityEnded,
+            DriverCopy.saveFailedFootnote, DriverCopy.reminderPermissionNote, DriverCopy.startDrivingNote,
+            DriverCopy.autoPingRowTitle, DriverCopy.autoPingRowSub, DriverCopy.yourSpotPass,
+            CarAutoPingGuideContent.title, CarAutoPingGuideContent.intro, MoreMenuRow.yourSpotPass.subtitle,
             ClipCopy.headline(name: "Bodega Cat"), ClipCopy.sentLine(name: "Bodega Cat"),
             ClipCopy.thanksSub(name: "Bodega Cat"), ClipCopy.reminderBody(name: "Bodega Cat"),
             ClipCopy.lastCallBody(name: "Bodega Cat"), ClipCopy.armedSub(name: "Bodega Cat", reminderTime: "4:15 PM")

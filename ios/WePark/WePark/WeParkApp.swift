@@ -103,7 +103,18 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // neither clobbers the other (setNotificationCategories replaces the whole set). With
         // both flags off nothing is registered, exactly as before.
         if AppConstants.addressAnchoredParkingEnabled || AppConstants.spotHandoffEnabled {
-            Task { await NotificationCategoryRegistry.registerLaunchCategories() }
+            Task {
+                await NotificationCategoryRegistry.registerLaunchCategories(
+                    includeDriverReminders: AppConstants.spotHandoffEnabled
+                )
+            }
+        }
+        // Spot Pass C2 (flag-gated): the lock-screen Live Activity buttons and the Shortcuts action run
+        // `LeavingNowIntent` etc. in THIS process, possibly a background launch with no UI, so the
+        // performer is registered here, before anything can call it. Flag-off: never registered, every
+        // intent answers "No active Spot Pass".
+        if AppConstants.spotHandoffEnabled {
+            SpotPassDriverRuntime.shared.registerIntentPerformer()
         }
         return true
     }
@@ -135,9 +146,32 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         didReceive response: UNNotificationResponse,
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
+        let userInfo = response.notification.request.content.userInfo
+
+        // Spot Pass C2 (flag-gated): the reminder's three actions run in the BACKGROUND (no app UI), so
+        // the completion handler is held until the send/extend/cancel finishes; the body tap opens the
+        // pulling-out screen. Handled BEFORE the `defer` below, which would otherwise complete at once.
+        if AppConstants.spotHandoffEnabled,
+           DriverReminderCategory.isReminderAction(
+               categoryIdentifier: response.notification.request.content.categoryIdentifier,
+               actionIdentifier: response.actionIdentifier
+           ) {
+            let actionIdentifier = response.actionIdentifier
+            Task { @MainActor in
+                await SpotPassDriverRuntime.shared.controller.handleNotification(
+                    actionIdentifier: actionIdentifier, userInfo: userInfo
+                )
+                completionHandler()
+            }
+            return
+        }
         defer { completionHandler() }
 
-        let userInfo = response.notification.request.content.userInfo
+        if AppConstants.spotHandoffEnabled,
+           response.actionIdentifier == UNNotificationDefaultActionIdentifier,
+           response.notification.request.content.categoryIdentifier == DriverReminderCategory.categoryID {
+            DispatchQueue.main.async { SpotPassDriverRuntime.shared.presentPullingOut() }
+        }
         // Spot Pass (flag-gated, inert off): tapping a seeker alert opens the pass.
         if AppConstants.spotHandoffEnabled {
             DispatchQueue.main.async {
@@ -378,6 +412,12 @@ struct WeParkApp: App {
                     SpotPassLinkRouter.handle(url)
                 }
                 .task {
+                    // Spot Pass C2 (flag-gated, spec 6.2): adopt the App Clip's anonymous session BEFORE
+                    // `ensureSession()` can mint a fresh one, so the karma earned in the clip carries over.
+                    // Flag-off: skipped entirely.
+                    if AppConstants.spotHandoffEnabled {
+                        _ = await SpotPassClipAdoption.shared.run(target: authService)
+                    }
                     // Non-blocking: the map loads while auth completes in the background.
                     // ensureSession() fails silently if the network is unavailable (AC-A4).
                     // The app stays in read-only mode until auth is available.

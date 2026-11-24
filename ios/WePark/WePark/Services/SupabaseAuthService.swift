@@ -350,6 +350,24 @@ final class SupabaseAuthService {
         }
     }
 
+    // MARK: - Spot Pass C2: App Clip session adoption (spec 6.2)
+
+    /// True when the SDK already holds a persisted session (read locally, no network). Spot Pass C2
+    /// asks this BEFORE `ensureSession()` can mint a fresh anonymous one.
+    var hasStoredSession: Bool { authClient.currentSession != nil }
+
+    /// Adopts a session minted elsewhere (the App Clip's anonymous identity) so karma and
+    /// `helped_count` that live server-side on that uid carry over. Best effort: false on any failure.
+    func adoptSession(accessToken: String, refreshToken: String) async -> Bool {
+        do {
+            let session = try await authClient.setSession(accessToken: accessToken, refreshToken: refreshToken)
+            applySession(session)
+            return true
+        } catch {
+            return false
+        }
+    }
+
     private func applySession(_ session: Session) {
         currentUserId = session.user.id
         accessToken = session.accessToken

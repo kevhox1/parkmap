@@ -409,6 +409,16 @@ enum AppConstants {
     /// existing install would later be treated as fresh the day these flags eventually flip).
     static let hasLaunchedWeParkBeforeKey = "wepark_has_launched_before"
 
+    /// Spot Pass C2 (spec 6.3): `"clip" | "organic" | "existing"`, written ONCE at the sentinel check,
+    /// only with `spotHandoffEnabled` on. Inert flag-off (nothing reads or writes it).
+    static let onboardingOriginKey = "wepark_onboarding_origin"
+
+    /// Spot Pass C2: the clip-origin tailored Welcome ("Tier 1'") has been completed or skipped.
+    static let hasSeenClipWelcomeKey = "wepark_has_seen_clip_welcome"
+
+    /// Spot Pass C2 (spec 6.2): how adopting the App Clip's anonymous session went on first launch.
+    static let clipAdoptionOutcomeKey = "wepark_clip_adoption_outcome"
+
     // MARK: - Ambient-colors fix (2026-10-21 smoke): shared street-level span magnitude
 
     /// The street-level recenter radius, in meters, `ContentView.recenterMap(on:)` has used

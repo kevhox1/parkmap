@@ -28,6 +28,8 @@ import SwiftUI
 enum MoreMenuRow: Equatable {
     case report
     case spotPass
+    /// The way back to an ARMED driver pass after its cover was closed (flag on + a pass armed only).
+    case yourSpotPass
     case howWeParkWorks
     case mapKey
     case parking101
@@ -40,6 +42,7 @@ enum MoreMenuRow: Equatable {
         switch self {
         case .report: return "Report"
         case .spotPass: return SpotPassCopy.rowTitle
+        case .yourSpotPass: return DriverCopy.yourSpotPass
         case .howWeParkWorks: return "How WePark works"
         case .mapKey: return "What the colors mean"
         case .parking101: return "Parking 101"
@@ -54,6 +57,7 @@ enum MoreMenuRow: Equatable {
         switch self {
         case .report: return "Tell neighbors what you see"
         case .spotPass: return SpotPassCopy.rowSubtitle
+        case .yourSpotPass: return "Back to the pass you set up"
         case .howWeParkWorks: return "Replay the quick tour"
         case .mapKey: return "Green, red, and the rest"
         case .parking101: return "The full guide to NYC parking rules"
@@ -68,6 +72,7 @@ enum MoreMenuRow: Equatable {
         switch self {
         case .report: return "flag.fill"
         case .spotPass: return "ticket.fill"
+        case .yourSpotPass: return "checkmark.seal.fill"
         case .howWeParkWorks: return "sparkles"
         case .mapKey: return "questionmark.circle.fill"
         case .parking101: return "book.closed.fill"
@@ -107,11 +112,13 @@ nonisolated func moreMenuVisibleRows(
     onboardingReplayAvailable: Bool,
     hasParkedCar: Bool,
     fullPaletteMode: Bool,
-    spotPassEnabled: Bool = false
+    spotPassEnabled: Bool = false,
+    driverPassArmed: Bool = false
 ) -> [MoreMenuRow] {
     var rows: [MoreMenuRow] = []
     if communityEnabled { rows.append(.report) }
     if spotPassEnabled { rows.append(.spotPass) }
+    if spotPassEnabled && driverPassArmed { rows.append(.yourSpotPass) }
     if onboardingReplayAvailable { rows.append(.howWeParkWorks) }
     rows.append(.mapKey)
     rows.append(.parking101)
