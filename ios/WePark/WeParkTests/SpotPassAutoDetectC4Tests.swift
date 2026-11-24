@@ -974,4 +974,50 @@ final class AutoDetectNoCoordinatesTests: XCTestCase {
         XCTAssertFalse((AutoDetectFix.self as Any) is Encodable.Type)
         XCTAssertFalse((AutoDetectAnchor.self as Any) is Encodable.Type)
     }
+
+    // MARK: Follow-ups (anchor source, copy, carried-over opt-in note)
+
+    func testAnchor_prefersTheInMemoryCar_overTheKeyValueStore() {
+        let store = MockUbiquitousStore()
+        store.seed(SyncedCarEnvelope(kind: .cleared, updatedAt: Date(), car: nil), forKey: "wepark_synced_car_state")
+        let live = AutoDetectAnchor(latitude: 40.7, longitude: -73.9)
+        XCTAssertEqual(ParkedCarAnchorReader.resolve(live: live, store: store), live)
+    }
+
+    func testAnchor_fallsBackToTheStore_whenNoInMemoryCar() {
+        let store = MockUbiquitousStore()
+        let car = ParkedCar(
+            id: UUID(), latitude: 40.6, longitude: -73.8, detectedSegmentID: nil, detectedSide: nil,
+            street: nil, fromStreet: nil, toStreet: nil, parkedAt: Date()
+        )
+        store.seed(SyncedCarEnvelope(kind: .parked, updatedAt: Date(), car: car), forKey: "wepark_synced_car_state")
+        XCTAssertEqual(
+            ParkedCarAnchorReader.resolve(live: nil, store: store), AutoDetectAnchor(latitude: 40.6, longitude: -73.8))
+    }
+
+    func testAnchor_isNil_whenNeitherSourceHasACar() {
+        XCTAssertNil(ParkedCarAnchorReader.resolve(live: nil, store: MockUbiquitousStore()))
+    }
+
+    func testAnchor_worksWithNoKeyValueStore_viaTheLiveMirror() {
+        ParkedCarAnchorReader.setLiveCar(latitude: 40.5, longitude: -73.7)
+        XCTAssertEqual(
+            ParkedCarAnchorReader.resolve(live: ParkedCarAnchorReader.liveAnchor, store: MockUbiquitousStore()),
+            AutoDetectAnchor(latitude: 40.5, longitude: -73.7))
+        ParkedCarAnchorReader.setLiveCar(latitude: nil, longitude: nil)
+        XCTAssertNil(ParkedCarAnchorReader.liveAnchor)
+    }
+
+    func testArmedRows_haveDistinctTitles_andNoPing() {
+        let titles = [DriverCopy.autoDetectOfferTitle, DriverCopy.autoDetectOnTitle, DriverCopy.autoDetectNeedsCarTitle,
+                      DriverCopy.autoPingRowTitle]
+        XCTAssertNotEqual(DriverCopy.autoDetectOfferTitle, DriverCopy.autoPingRowTitle)
+        XCTAssertFalse(DriverCopy.autoPingRowTitle.lowercased().hasPrefix("auto"), "car-connect row must not start with Auto")
+        XCTAssertEqual(DriverCopy.autoPingRowTitle, "Heads\u{2011}up when your phone connects to your car")
+        XCTAssertEqual(DriverCopy.autoDetectNeedsCarSub, "Save your car's spot to use auto heads\u{2011}up.")
+        for line in titles + [DriverCopy.autoDetectCarriedNote, DriverCopy.autoDetectOfferSub, DriverCopy.autoPingRowSub] {
+            XCTAssertFalse(line.lowercased().contains("ping"), line)
+        }
+        XCTAssertTrue(DriverCopy.autoDetectCarriedNote.contains("on for this pass"))
+    }
 }

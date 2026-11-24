@@ -326,7 +326,6 @@ struct DriverCelebrationView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var stamped = false
     @State private var confettiStart = Date()
-    @State private var showAutoPingGuide = false
 
     private var thanked: Bool { controller.pass?.thanksReceived == true }
     private var name: String { controller.displayName ?? "A neighbor" }
@@ -348,10 +347,6 @@ struct DriverCelebrationView: View {
                             Text(ClipCopy.karmaPendingCaption).font(.footnote).foregroundStyle(SpotPassTheme.lavender)
                         }
                     }
-                    Button { showAutoPingGuide = true } label: {
-                        Text(DriverCopy.autoPingRowTitle)
-                    }
-                    .buttonStyle(SpotPassButtonStyle(kind: .secondary))
                     SpotPassTextButton(title: DriverCopy.done, minHeight: 56) {
                         controller.dismissCelebration()
                         onDone()
@@ -367,7 +362,6 @@ struct DriverCelebrationView: View {
                 DriverConfettiView(start: confettiStart).allowsHitTesting(false).accessibilityHidden(true)
             }
         }
-        .sheet(isPresented: $showAutoPingGuide) { CarAutoPingGuideView() }
         .task {
             confettiStart = Date()
             if !reduceMotion { withAnimation(.spring(duration: 0.35)) { stamped = true } } else { stamped = true }
