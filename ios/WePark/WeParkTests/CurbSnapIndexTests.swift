@@ -182,8 +182,9 @@ final class CurbSnapConfigTests: XCTestCase {
         XCTAssertEqual(config.hysteresisMinMeters, 1.5)
         XCTAssertEqual(config.hysteresisMaxMeters, 4.0)
         XCTAssertEqual(config, CurbSnapConfig.standard)
-        // release = 1.25x acquire (spec §A.3 step 3)
-        XCTAssertEqual(config.releaseRadius, config.acquireRadius * 1.25, accuracy: 1e-9)
+        // release ~= 1.25x acquire (spec §A.3 step 3); 19 m is 15 x 1.25 = 18.75 rounded up
+        // (2026-11-23 ruling), so the ratio is held to within a metre rather than exactly.
+        XCTAssertEqual(config.releaseRadius, config.acquireRadius * 1.25, accuracy: 0.5)
     }
 
     func testConfig_hysteresisMeters_scalesAndClamps() {
@@ -655,14 +656,14 @@ final class CurbSnapGridRobustnessTests: XCTestCase {
     }
 
     func testIndex_cellBoundarySweep_alwaysFindsCurb() {
-        // Curb along y=0; pin 20 m south of it, swept across every 32 m cell boundary in x.
+        // Curb along y=0; pin 12 m south of it (inside the 15 m acquire radius), swept across every 32 m cell boundary in x.
         let seg = CurbSnapTestFixtures.eastWestCurb(id: "B1", side: "N", y: 0, x0: -200, x1: 200)
         let index = CurbSnapIndex(segments: [seg])
         var x = -100.0
         while x <= 100.0 {
-            let outcome = index.resolve(csiPoint(x, -20), incumbent: nil, metersPerPoint: 0.28, config: .standard)
+            let outcome = index.resolve(csiPoint(x, -12), incumbent: nil, metersPerPoint: 0.28, config: .standard)
             let result = csiSnapped(outcome)
-            XCTAssertEqual(result?.distanceMeters ?? -1, 20.0, accuracy: 0.1, "x=\(x)")
+            XCTAssertEqual(result?.distanceMeters ?? -1, 12.0, accuracy: 0.1, "x=\(x)")
             x += 0.5
         }
         // And the vertical boundary: curb along x=0 (north-south), pin swept in y.
@@ -670,8 +671,8 @@ final class CurbSnapGridRobustnessTests: XCTestCase {
         let nsIndex = CurbSnapIndex(segments: [ns])
         var y = -100.0
         while y <= 100.0 {
-            let outcome = nsIndex.resolve(csiPoint(-20, y), incumbent: nil, metersPerPoint: 0.28, config: .standard)
-            XCTAssertEqual(csiSnapped(outcome)?.distanceMeters ?? -1, 20.0, accuracy: 0.1, "y=\(y)")
+            let outcome = nsIndex.resolve(csiPoint(-12, y), incumbent: nil, metersPerPoint: 0.28, config: .standard)
+            XCTAssertEqual(csiSnapped(outcome)?.distanceMeters ?? -1, 12.0, accuracy: 0.1, "y=\(y)")
             y += 0.5
         }
     }
