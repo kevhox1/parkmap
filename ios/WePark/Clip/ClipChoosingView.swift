@@ -15,11 +15,17 @@ struct ClipChoosingView: View {
 
     @Environment(\.clipIsShortScreen) private var isShort
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.clipScreenHeight) private var screenHeight
     @State private var showPicker = false
     @State private var showReport = false
     @State private var pickedDate = Date()
 
     private var isArming: Bool { controller.phase == .arming }
+
+    /// What stays pinned (capped at ~30% of the screen); the rest scrolls with the content.
+    private var pinning: ClipCTAPinning.Plan {
+        ClipCTAPinning.plan(screenHeight: screenHeight, dynamicTypeSize: typeSize, hasInlineError: controller.armFailure != nil)
+    }
 
     var body: some View {
         ScrollView {
@@ -41,6 +47,13 @@ struct ClipChoosingView: View {
                     .font(.footnote)
                     .foregroundStyle(SpotPassTheme.lavender)
                     .multilineTextAlignment(.center)
+                if pinning == .primaryOnly {
+                    // Overflow from the pinned area (large text sizes): still one scroll away, never covered.
+                    if typeSize.isAccessibilitySize == false {
+                        Text(ClipCopy.underCTA).font(.footnote).foregroundStyle(SpotPassTheme.lavender)
+                    }
+                    notLeavingSoonButton
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
@@ -133,8 +146,14 @@ struct ClipChoosingView: View {
         }
     }
 
+    private var notLeavingSoonButton: some View {
+        SpotPassTextButton(title: ClipCopy.notLeavingSoon) { controller.notLeavingSoon() }
+            .disabled(isArming)
+    }
+
     private var pinnedCTA: some View {
-        VStack(spacing: 6) {
+        let plan = pinning
+        return VStack(spacing: 6) {
             if let failure = controller.armFailure {
                 Text(failure == .busy ? ClipCopy.busyBody : ClipCopy.offlineBody)
                     .font(.footnote).foregroundStyle(.white).multilineTextAlignment(.center)
@@ -152,16 +171,24 @@ struct ClipChoosingView: View {
             .disabled(isArming)
             .accessibilityLabel(ClipCopy.cta(choice: controller.choice, name: controller.preview?.name))
             .accessibilityHint(ClipCopy.consent)
-            if !typeSize.isAccessibilitySize {
+            if plan == .full {
                 Text(ClipCopy.underCTA).font(.footnote).foregroundStyle(SpotPassTheme.lavender)
+                notLeavingSoonButton
             }
-            SpotPassTextButton(title: ClipCopy.notLeavingSoon) { controller.notLeavingSoon() }
-                .disabled(isArming)
         }
+        // Bounded: the pinned stack never grows past the cap, whatever the user's text size.
+        .dynamicTypeSize(...ClipCTAPinning.pinnedTypeSizeCap)
         .padding(.horizontal, 20)
         .padding(.top, 10)
         .padding(.bottom, 6)
-        .background(.ultraThinMaterial.opacity(0.0))
+        // Opaque scrim so scrolled text can never show through or collide with the CTAs.
+        .background(SpotPassTheme.ink.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) {
+            LinearGradient(colors: [SpotPassTheme.ink.opacity(0), SpotPassTheme.ink], startPoint: .top, endPoint: .bottom)
+                .frame(height: 14)
+                .offset(y: -14)
+                .allowsHitTesting(false)
+        }
     }
 
     private var pickerSheet: some View {

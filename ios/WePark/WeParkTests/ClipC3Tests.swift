@@ -8,6 +8,7 @@
 //  6 flow controller, 7 carry-over, 8 block insight, 9 fakes and launch options, 10 copy lint.
 //
 
+import SwiftUI
 import XCTest
 import UserNotifications
 @testable import WePark
@@ -128,7 +129,7 @@ private let c3URL = URL(string: "https://getwepark.com/p#t=\(c3Token)") ?? URL(f
 @MainActor
 private final class Harness {
     let api = ScriptedHandoffAPI()
-    let secrets = InMemoryHandoffSecretStore()
+    let secrets: any HandoffSecretStoring
     let passes = InMemoryHandoffPassStore()
     let session = StubSession()
     let reminders = RecordingReminders()
@@ -139,7 +140,8 @@ private final class Harness {
     var clock = Date(timeIntervalSince1970: 1_800_000_000)
     private(set) var controller: ClipFlowController!
 
-    init() {
+    init(secrets: (any HandoffSecretStoring)? = nil) {
+        self.secrets = secrets ?? InMemoryHandoffSecretStore()
         let suite = "c3-tests-\(UUID().uuidString)"
         defaults = UserDefaults(suiteName: suite) ?? .standard
         defaults.removePersistentDomain(forName: suite)
@@ -1241,6 +1243,25 @@ final class ClipFakeAndLaunchTests: XCTestCase {
         XCTAssertEqual(grant.leaveAt, now.addingTimeInterval(20))
     }
 
+    func testSecretStore_isInMemoryOnlyWithFakeFlag() {
+        let fake = ClipLaunchOptions(arguments: ["-spotPassUseFakeAPI", "YES"], environment: [:])
+        XCTAssertTrue(fake.makeSecretStore() is DebugInMemoryHandoffSecretStore)
+        for args in [[String](), ["-spotPassUseFakeAPI", "NO"], ["-spotPassFakeScenario", "offline"]] {
+            let real = ClipLaunchOptions(arguments: args, environment: [:])
+            XCTAssertTrue(real.makeSecretStore() is KeychainHandoffSecretStore, "\(args)")
+        }
+    }
+
+    func testDebugSecretStore_savesLoadsAndScopesToPassID() {
+        let store = DebugInMemoryHandoffSecretStore()
+        let id = UUID()
+        XCTAssertTrue(store.save(FakeHandoffDriverAPI.fakeSecret, passID: id))
+        XCTAssertEqual(store.secret(for: id)?.rawValue, FakeHandoffDriverAPI.fakeSecret.rawValue)
+        XCTAssertNil(store.secret(for: UUID()))
+        store.clear()
+        XCTAssertNil(store.secret(for: id))
+    }
+
     func testFakeFlow_endToEnd_throughTheController() async {
         let h = Harness()
         let controller = ClipFlowController(dependencies: ClipDependencies(
@@ -1268,7 +1289,7 @@ final class ClipCopyLintTests: XCTestCase {
             ClipCopy.timeToGo, ClipCopy.pullingOutSafety, ClipCopy.passedHeadline, ClipCopy.passedSub,
             ClipCopy.karmaPendingCaption, ClipCopy.installHeadline, ClipCopy.installBody, ClipCopy.installSecondary,
             ClipCopy.unavailableTitle, ClipCopy.unavailableBody, ClipCopy.offlineTitle, ClipCopy.offlineBody,
-            ClipCopy.disabledTitle, ClipCopy.disabledBody, ClipCopy.openAppTitle, ClipCopy.openAppBody,
+            ClipCopy.disabledTitle, ClipCopy.disabledBody, ClipCopy.openAppTitle, ClipCopy.openAppBody, ClipCopy.saveFailedTitle, ClipCopy.saveFailedBody, ClipCopy.oneNeighborNote,
             ClipCopy.blockTeaserTitle, ClipCopy.blockTeaserSub, ClipCopy.blockFootnote, ClipCopy.blockForwardLink,
             ClipCopy.blockHappeningNow, ClipCopy.blockNoRule, ClipCopy.blockCheckSigns, ClipCopy.blockDenied,
             ClipCopy.reminderHiddenBody, ClipCopy.passEnded, ClipCopy.activityEnded,
@@ -1309,5 +1330,196 @@ final class ClipCopyLintTests: XCTestCase {
     func testKarmaCopyPromisesNothing() {
         XCTAssertEqual(ClipCopy.karmaPendingCaption, "lands when they say thanks")
         XCTAssertFalse(ClipCopy.passedHeadline.lowercased().contains("earned"))
+    }
+}
+
+
+// MARK: - 11. Follow-ups (PR #168 QA): secret save, pinning, suspensions, second scan, leave_at flip
+
+/// A secret store whose save always fails (the unsigned-build -34018 case).
+@MainActor
+private final class FailingSecretStore: HandoffSecretStoring {
+    func save(_ secret: ClaimerSecret, passID: UUID) -> Bool { false }
+    func secret(for passID: UUID) -> ClaimerSecret? { nil }
+    func clear() {}
+}
+
+@MainActor
+final class ClipSecretFailureTests: XCTestCase {
+
+    func testFailedSecretSave_failsArming_likeNoID() async {
+        let h = Harness(secrets: FailingSecretStore())
+        await h.armed()
+        XCTAssertEqual(h.controller.phase, .saveFailed)
+        XCTAssertNil(h.controller.pass)
+        XCTAssertNil(h.passes.pass)                       // stores nothing
+        XCTAssertTrue(h.reminders.scheduled.isEmpty)
+        XCTAssertEqual(h.activity.ended, [.ended])        // Live Activity ended
+        XCTAssertTrue(h.api.calls.contains("cancel"))     // server claim released, best effort
+        XCTAssertFalse(h.api.calls.contains("depart"))
+        let content = ClipMessageContent.content(for: .saveFailed)
+        XCTAssertEqual(content.title, ClipCopy.saveFailedTitle)
+        XCTAssertNotEqual(content.body, ClipMessageContent.content(for: .openApp).body)
+        XCTAssertFalse(content.body.lowercased().contains("reminder"))
+    }
+
+    func testPullOut_whenSecretIsGone_showsCouldNotSend_andDoesNotCallServer() async {
+        let h = Harness()
+        await h.armed()
+        h.secrets.clear()
+        await h.controller.pullOut()
+        XCTAssertTrue(h.controller.sendFailed)
+        XCTAssertEqual(h.controller.phase, .pullingOut)   // the screen that renders "Couldn't send. Try again."
+        XCTAssertFalse(h.api.calls.contains("depart"))
+        XCTAssertEqual(ClipCopy.sendFailed, "Couldn't send. Try again.")
+        XCTAssertEqual(h.controller.pass?.status, .armed)
+    }
+
+    func testCancel_whenSecretIsGone_toastsInsteadOfSilence() async {
+        let h = Harness()
+        await h.armed()
+        h.secrets.clear()
+        await h.controller.confirmCancel()
+        XCTAssertEqual(h.controller.toast, ClipCopy.cancelFailed)
+        XCTAssertEqual(h.controller.phase, .armed)
+    }
+}
+
+final class ClipPinningRuleTests: XCTestCase {
+
+    private let phone17: CGFloat = 874
+    private let se: CGFloat = 667
+
+    func testDefaultSizes_pinEverything() {
+        XCTAssertEqual(ClipCTAPinning.plan(screenHeight: phone17, dynamicTypeSize: .large, hasInlineError: false), .full)
+        XCTAssertEqual(ClipCTAPinning.plan(screenHeight: se, dynamicTypeSize: .large, hasInlineError: false), .full)
+    }
+
+    func testAccessibilitySizes_pinOnlyThePrimaryCTA() {
+        for size in [DynamicTypeSize.accessibility1, .accessibility3, .accessibility5] {
+            XCTAssertEqual(ClipCTAPinning.plan(screenHeight: phone17, dynamicTypeSize: size, hasInlineError: false), .primaryOnly)
+            XCTAssertEqual(ClipCTAPinning.plan(screenHeight: se, dynamicTypeSize: size, hasInlineError: true), .primaryOnly)
+        }
+    }
+
+    func testSEAtXXXLarge_overflowsToPrimaryOnly() {
+        XCTAssertEqual(ClipCTAPinning.plan(screenHeight: se, dynamicTypeSize: .xxxLarge, hasInlineError: false), .primaryOnly)
+    }
+
+    func testPinnedAreaNeverExceedsThirtyPercent_forAnyPlannedLayout() {
+        let sizes: [DynamicTypeSize] = [.small, .large, .xLarge, .xxLarge, .xxxLarge, .accessibility1, .accessibility3, .accessibility5]
+        for height in [CGFloat(667), 750, 874] {
+            for size in sizes {
+                for error in [false, true] {
+                    let plan = ClipCTAPinning.plan(screenHeight: height, dynamicTypeSize: size, hasInlineError: error)
+                    let used = ClipCTAPinning.estimatedPinnedHeight(plan, screenHeight: height, dynamicTypeSize: size, hasInlineError: error)
+                    XCTAssertLessThanOrEqual(used, height * ClipCTAPinning.maxPinnedFraction + 0.5, "\(height) \(size) err=\(error)")
+                }
+            }
+        }
+    }
+
+    func testArmedFlip_atLeaveAt() {
+        let leave = Date(timeIntervalSince1970: 1_800_000_600)
+        XCTAssertFalse(ClipArmedPresentation.isTimeToGo(leaveAt: leave, now: leave.addingTimeInterval(-1)))
+        XCTAssertTrue(ClipArmedPresentation.isTimeToGo(leaveAt: leave, now: leave))
+        XCTAssertTrue(ClipArmedPresentation.isTimeToGo(leaveAt: leave, now: leave.addingTimeInterval(300)))
+    }
+}
+
+@MainActor
+final class ClipOtherPassScanTests: XCTestCase {
+
+    func testDifferentTokenWhileArmed_showsNote_neverCancelsOrReplaces() async {
+        let h = Harness()
+        await h.armed()
+        XCTAssertFalse(h.controller.showsOtherPassNote)
+        h.controller.handle(url: URL(string: "https://getwepark.com/p#t=ZZZZZZZZZZZZZZZZZZZZZZ") ?? c3URL)
+        await h.settle()
+        XCTAssertTrue(h.controller.showsOtherPassNote)
+        XCTAssertEqual(h.controller.phase, .armed)
+        XCTAssertEqual(h.controller.pass?.id, h.api.passID)
+        XCTAssertFalse(h.api.calls.contains("cancel"))
+        XCTAssertEqual(h.api.calls.filter { $0 == "peek" }.count, 1)
+    }
+
+    func testSamePassUrlRedelivered_afterRelaunch_showsNoNote() async {
+        let h = Harness()
+        await h.armed()
+        let relaunched = h.makeController()           // restores from the pass store; no token in memory
+        relaunched.handle(url: c3URL)
+        XCTAssertEqual(relaunched.phase, .armed)
+        XCTAssertFalse(relaunched.showsOtherPassNote)
+    }
+
+    func testFingerprint_isStableAndNotTheToken() {
+        let a = HandoffActivePass.fingerprint(forToken: c3Token)
+        XCTAssertEqual(a, HandoffActivePass.fingerprint(forToken: c3Token))
+        XCTAssertNotEqual(a, HandoffActivePass.fingerprint(forToken: c3Token + "x"))
+        XCTAssertFalse(a.contains(c3Token))
+        XCTAssertEqual(a.count, 16)
+    }
+}
+
+@MainActor
+final class ClipSuspensionTests: XCTestCase {
+
+    private func et(_ string: String) -> Date {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        f.timeZone = TimeZone(identifier: "America/New_York")
+        return f.date(from: string) ?? Date()
+    }
+
+    // Thursday Nov 26, 2026 is Thanksgiving (ASP suspended). Mon/Thu cleaning, 9:00-10:30.
+    private let monThu = ClipTileRule(category: "ASP_MON_THU", days: [1, 4], timeRanges: [.init(start: 540, end: 630)], anytime: false)
+    private let thanksgiving = ClipSuspensions(dates: ["2026-11-26"])
+
+    func testWithoutSuspensions_nextIsThanksgiving_theBug() {
+        let window = StreetCleaningEvaluator.nextWindow(rules: [monThu], now: et("2026-11-24T12:00:00-05:00"))
+        XCTAssertEqual(window?.start, et("2026-11-26T09:00:00-05:00"))
+    }
+
+    func testNext_skipsSuspendedThanksgiving_toMonday() {
+        let window = StreetCleaningEvaluator.nextWindow(
+            rules: [monThu], now: et("2026-11-24T12:00:00-05:00"), suspensions: thanksgiving)
+        XCTAssertEqual(window?.start, et("2026-11-30T09:00:00-05:00"))
+        XCTAssertEqual(ClipBlockFormat.nextLine(window ?? CleaningWindow(start: Date(), end: Date())), "Next: Mon, Nov 30")
+    }
+
+    func testNeverCleaningNow_onASuspendedDay() {
+        let now = et("2026-11-26T09:30:00-05:00")     // inside the window, but Thanksgiving
+        let plain = StreetCleaningEvaluator.nextWindow(rules: [monThu], now: now)
+        XCTAssertEqual(plain?.isInEffect(at: now), true)
+        let window = StreetCleaningEvaluator.nextWindow(rules: [monThu], now: now, suspensions: thanksgiving)
+        XCTAssertEqual(window?.isInEffect(at: now), false)
+        XCTAssertEqual(window?.start, et("2026-11-30T09:00:00-05:00"))
+    }
+
+    func testOrdinaryDay_isUnaffected() {
+        let now = et("2026-12-01T12:00:00-05:00")
+        XCTAssertEqual(
+            StreetCleaningEvaluator.nextWindow(rules: [monThu], now: now),
+            StreetCleaningEvaluator.nextWindow(rules: [monThu], now: now, suspensions: thanksgiving))
+    }
+
+    func testSuspensionIsKeyedOnTheEasternDay() {
+        XCTAssertTrue(thanksgiving.isSuspended(et("2026-11-26T00:30:00-05:00")))
+        XCTAssertTrue(thanksgiving.isSuspended(et("2026-11-26T23:30:00-05:00")))
+        XCTAssertFalse(thanksgiving.isSuspended(et("2026-11-27T00:30:00-05:00")))
+        XCTAssertFalse(thanksgiving.isSuspended(et("2026-11-25T23:30:00-05:00")))
+    }
+
+    func testDecodesTheAppsCalendarShape() {
+        let json = #"{"year":2026,"dates":[{"date":"2026-11-26","reason":"Thanksgiving Day"}]}"#
+        XCTAssertEqual(ClipSuspensions(jsonData: Data(json.utf8)), thanksgiving)
+        XCTAssertEqual(ClipSuspensions(jsonData: Data("nope".utf8)), .empty)
+    }
+
+    func testSharedBundledCalendar_isTheSameFileTheAppReads() {
+        let bundled = ClipSuspensions.bundled()
+        XCTAssertTrue(bundled.isSuspended(et("2026-11-26T12:00:00-05:00")))
+        XCTAssertEqual(bundled.dates.count, 42)
+        XCTAssertTrue(ASPSuspensionService().isSuspended(et("2026-11-26T12:00:00-05:00")))
     }
 }

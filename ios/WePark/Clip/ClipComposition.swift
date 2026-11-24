@@ -4,7 +4,7 @@
 //
 //  Builds the clip's object graph: live services, or (DEBUG only, `-spotPassUseFakeAPI YES`) the
 //  fake API plus fake location / tile / session / push token. The real ActivityKit controller,
-//  reminder scheduler and keychain stay live in fake mode so QA exercises the real surfaces.
+//  reminder scheduler stay live in fake mode (secret held in memory) so QA exercises the real surfaces.
 //
 
 import Foundation
@@ -36,7 +36,7 @@ struct ClipComposition {
         if options.useFakeAPI {
             let dependencies = ClipDependencies(
                 api: FakeHandoffDriverAPI(scenario: options.scenario, leaveSecondsOverride: options.fakeLeaveSeconds),
-                secrets: KeychainHandoffSecretStore(),
+                secrets: options.makeSecretStore(),
                 passStore: UserDefaultsHandoffPassStore(defaults: defaults),
                 session: FakeClipSession(),
                 reminders: DebugAuthorizingReminderScheduler(),

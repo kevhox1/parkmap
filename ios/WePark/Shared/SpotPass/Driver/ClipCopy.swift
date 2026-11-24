@@ -60,6 +60,7 @@ nonisolated enum ClipCopy {
     static let activitiesOff = "Lock-screen countdown is off. We'll remind you with a notification instead."
     static let remindersOff = "Reminders are off. Your lock-screen countdown still works."
     static let bothOff = "Keep this screen handy. Tap \"I'm pulling out\" when you go."
+    static let oneNeighborNote = "You can only help one neighbor at a time. Finish or cancel this pass first."
     static let notLeavingAfterAll = "Not leaving after all"
     static let cancelMyPass = "Cancel my pass"
     static let keepIt = "Keep it"
@@ -111,7 +112,9 @@ nonisolated enum ClipCopy {
     static let disabledTitle = "Spot Pass isn't live yet."
     static let disabledBody = "Thanks for scanning, neighbor. Check back soon."
     static let openAppTitle = "Open the WePark app to finish."
-    static let openAppBody = "We couldn't set up your reminder here. Get WePark and scan again."
+    static let openAppBody = "We couldn't finish setting this up here. Get WePark and scan again."
+    static let saveFailedTitle = "We couldn't save this on your phone."
+    static let saveFailedBody = "Nothing was set up. Get WePark and scan again."
     static let landingTitle = "Pass the spot"
     static let landingBody = "Looking for a spot? Open WePark and tap Spot Pass."
 

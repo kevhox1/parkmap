@@ -14,7 +14,17 @@ private struct ClipShortScreenKey: EnvironmentKey {
     static let defaultValue = false
 }
 
+private struct ClipScreenHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 874
+}
+
 extension EnvironmentValues {
+    /// The clip's full height in points (drives the pinned-CTA cap, `ClipCTAPinning`).
+    var clipScreenHeight: CGFloat {
+        get { self[ClipScreenHeightKey.self] }
+        set { self[ClipScreenHeightKey.self] = newValue }
+    }
+
     /// True under 700 pt tall (iPhone SE): smaller glyph, chips and CTA.
     var clipIsShortScreen: Bool {
         get { self[ClipShortScreenKey.self] }
