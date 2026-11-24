@@ -39,6 +39,9 @@ nonisolated struct HandoffActivePass: Codable, Equatable, Sendable {
     /// One-way fingerprint of the invocation token this pass was claimed with (NOT the token), so a
     /// re-delivered URL for THIS pass is told apart from a scan of a DIFFERENT one. nil on older saves.
     var tokenFingerprint: String?
+    /// How many times a FINISHED (departed) pass has been restored onto the screen after a relaunch.
+    /// A finished pass is shown at most once more, then cleared, so it can never trap the driver. nil on older saves.
+    var restoreCount: Int?
 
     /// First 8 bytes of SHA-256, hex. Not reversible to the token.
     static func fingerprint(forToken token: String) -> String {
@@ -49,6 +52,9 @@ nonisolated struct HandoffActivePass: Codable, Equatable, Sendable {
 
     /// The server allows 3 extensions (spec section 3).
     static let maxExtensions = 3
+
+    /// A finished pass is restored (celebration / thanks) only until its expiry plus this grace.
+    static let finishedRestoreGrace: TimeInterval = 30 * 60
 }
 
 @MainActor

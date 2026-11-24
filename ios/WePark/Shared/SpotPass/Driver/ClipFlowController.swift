@@ -37,6 +37,8 @@ nonisolated enum ClipPhase: Equatable, Sendable {
     /// The pass secret could not be stored (e.g. keychain unavailable): nothing was armed.
     case saveFailed
     case dismissed
+    /// The driver tapped Done after a SUCCESSFUL hand-off: calm resting screen, nothing stored.
+    case finished
     case cancelled
     case ended
 }
@@ -130,6 +132,7 @@ final class ClipFlowController {
 
     private func restore() {
         guard let saved = deps.passStore.load() else { return }
+        activitiesEnabled = deps.activity.areActivitiesEnabled
         switch saved.status {
         case .armed:
             if deps.now() >= saved.expiresAt {
@@ -140,7 +143,18 @@ final class ClipFlowController {
                 phase = .armed
             }
         case .departed:
-            pass = saved
+            // A finished pass is a terminal state: it may come back onto the screen ONCE after a relaunch
+            // (e.g. a thanks notification), and never past its expiry plus a grace. Otherwise it is cleared
+            // so the next scan starts fresh.
+            let expired = deps.now() >= saved.expiresAt.addingTimeInterval(HandoffActivePass.finishedRestoreGrace)
+            if expired || (saved.restoreCount ?? 0) >= 1 {
+                cleanupLocal(passID: saved.id)
+                return
+            }
+            var restored = saved
+            restored.restoreCount = (saved.restoreCount ?? 0) + 1
+            deps.passStore.save(restored)
+            pass = restored
             phase = .celebration
         }
     }
@@ -151,13 +165,22 @@ final class ClipFlowController {
         guard let link = SpotPassLink(url: url) else { return }
         if let token = link.token {
             guard handledTokenURLs.insert(url).inserted else { return }
-            // An active pass wins (its own token is already claimed, so a re-scan would only say
-            // "used"), and a different pass is never auto-cancelled for: note it, change nothing.
             if let active = pass {
-                let isOtherPass = active.status == .armed
-                    && active.tokenFingerprint.map { $0 != HandoffActivePass.fingerprint(forToken: token) } == true
-                if isOtherPass { showsOtherPassNote = true }
-                return
+                if active.status == .armed, deps.now() < active.expiresAt {
+                    // An armed pass wins (its own token is already claimed, so a re-scan would only say
+                    // "used"), and a different pass is never auto-cancelled for: note it, change nothing.
+                    let isOtherPass = active.tokenFingerprint.map { $0 != HandoffActivePass.fingerprint(forToken: token) } == true
+                    if isOtherPass { showsOtherPassNote = true }
+                    return
+                }
+                if active.status == .departed {
+                    if phase == .sent { return }
+                    // The same pass re-delivered while its celebration is up: nothing to do.
+                    if phase == .celebration,
+                       active.tokenFingerprint == HandoffActivePass.fingerprint(forToken: token) { return }
+                }
+                // Terminal (finished, or armed but past its expiry): a NEW scan starts fresh.
+                clearTerminalPass(active)
             }
             begin(token: token)
         } else if let action = link.action {
@@ -506,7 +529,12 @@ final class ClipFlowController {
         }
         guard (try? await deps.api.report(target: target, reason: reason)) == true else { return }
         toast = ClipCopy.reportThanks
-        if pass?.status == .armed { await endPass(phase: .ended) } else { phase = .unavailable }
+        if pass?.status == .armed {
+            await endPass(phase: .ended)
+        } else {
+            if let finished = pass { clearTerminalPass(finished) }
+            phase = .unavailable
+        }
     }
 
     // MARK: - Install card
@@ -519,8 +547,25 @@ final class ClipFlowController {
 
     func dismissInstallCard() { showInstallCard = false }
 
+    /// Done on the celebration / thanks screen: the pass is finished, so clear it (and its secret and
+    /// reminders). The next scan starts fresh; relaunching never revives this pass.
     func dismissCelebration() {
-        phase = .dismissed
+        if let current = pass { cleanupLocal(passID: current.id) } else { deps.passStore.clear() }
+        pass = nil
+        showsOtherPassNote = false
+        showInstallCard = false
+        phase = .finished
+    }
+
+    /// Drops a pass that can no longer be acted on, ahead of a fresh scan.
+    private func clearTerminalPass(_ terminal: HandoffActivePass) {
+        let wasArmed = terminal.status == .armed
+        cleanupLocal(passID: terminal.id)
+        pass = nil
+        showsOtherPassNote = false
+        showInstallCard = false
+        showCancelConfirm = false
+        if wasArmed && activityStarted { Task { await endActivityIfStarted(.ended) } }
     }
 
     // MARK: - Teardown

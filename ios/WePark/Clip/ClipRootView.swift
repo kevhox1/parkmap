@@ -27,11 +27,11 @@ struct ClipRootView: View {
         .preferredColorScheme(.dark)
         .tint(SpotPassTheme.indigo)
         .overlay(alignment: .bottom) { toastView }
-        .confirmationDialog(
-            ClipCopy.notLeavingAfterAll, isPresented: $controller.showCancelConfirm, titleVisibility: .visible
-        ) {
-            Button(ClipCopy.cancelMyPass) { Task { await controller.confirmCancel() } }
-            Button(ClipCopy.keepIt, role: .cancel) {}
+        .sheet(isPresented: $controller.showCancelConfirm) {
+            ClipCancelConfirmSheet(
+                onCancelPass: { Task { await controller.confirmCancel() } },
+                onKeep: { controller.showCancelConfirm = false }
+            )
         }
         .appStoreOverlay(isPresented: $installOverlay) {
             SKOverlay.AppClipConfiguration(position: .bottom)
@@ -81,5 +81,33 @@ struct ClipRootView: View {
                     controller.toast = nil
                 }
         }
+    }
+}
+
+// MARK: - Cancel confirmation (design 3.4: Cancel my pass / Keep it, 56 pt buttons)
+
+/// A sheet rather than a system dialog so "Keep it" is a visible, full-size button and both buttons are 56 pt.
+struct ClipCancelConfirmSheet: View {
+    var onCancelPass: () -> Void
+    var onKeep: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Text(ClipCopy.notLeavingAfterAll)
+                .font(.title2.bold()).foregroundStyle(.white)
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
+                .padding(.top, 8)
+            Button(ClipCopy.keepIt, action: onKeep)
+                .buttonStyle(SpotPassButtonStyle(kind: .paper, minHeight: 56))
+            Button(ClipCopy.cancelMyPass, action: onCancelPass)
+                .buttonStyle(SpotPassButtonStyle(kind: .secondary, minHeight: 56))
+            Spacer(minLength: 0)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(SpotPassTheme.ink.ignoresSafeArea())
+        .presentationDetents([.height(250), .large])
+        .preferredColorScheme(.dark)
     }
 }

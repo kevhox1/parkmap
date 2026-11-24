@@ -28,18 +28,22 @@ nonisolated enum ClipCTAPinning {
     /// (the scroll content keeps scaling to the user's real size).
     static let pinnedTypeSizeCap: DynamicTypeSize = .xxxLarge
 
-    static func plan(screenHeight: CGFloat, dynamicTypeSize: DynamicTypeSize, hasInlineError: Bool) -> Plan {
+    static func plan(
+        screenHeight: CGFloat, dynamicTypeSize: DynamicTypeSize, hasInlineError: Bool, hasReassurance: Bool = true
+    ) -> Plan {
         // Accessibility sizes: the primary CTA only. The secondary action scrolls with the content.
         if dynamicTypeSize.isAccessibilitySize { return .primaryOnly }
         let height = estimatedPinnedHeight(
-            .full, screenHeight: screenHeight, dynamicTypeSize: dynamicTypeSize, hasInlineError: hasInlineError
+            .full, screenHeight: screenHeight, dynamicTypeSize: dynamicTypeSize, hasInlineError: hasInlineError,
+            hasReassurance: hasReassurance
         )
         return height <= screenHeight * maxPinnedFraction ? .full : .primaryOnly
     }
 
     /// Conservative height estimate (points) of the pinned stack for a plan.
     static func estimatedPinnedHeight(
-        _ plan: Plan, screenHeight: CGFloat, dynamicTypeSize: DynamicTypeSize, hasInlineError: Bool
+        _ plan: Plan, screenHeight: CGFloat, dynamicTypeSize: DynamicTypeSize, hasInlineError: Bool,
+        hasReassurance: Bool = true
     ) -> CGFloat {
         let isShort = screenHeight < SpotPassTheme.shortScreenHeight
         let base = isShort ? SpotPassTheme.compactHeroButtonHeight : SpotPassTheme.heroButtonHeight
@@ -57,7 +61,7 @@ nonisolated enum ClipCTAPinning {
         case .primaryOnly:
             return primary + error + padding
         case .full:
-            let reassurance: CGFloat = 18
+            let reassurance: CGFloat = hasReassurance ? 18 : 0
             let secondary: CGFloat = 56
             return primary + error + reassurance + secondary + 3 * 6 + padding
         }

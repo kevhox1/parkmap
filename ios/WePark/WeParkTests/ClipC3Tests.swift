@@ -1253,7 +1253,10 @@ final class ClipFakeAndLaunchTests: XCTestCase {
     }
 
     func testDebugSecretStore_savesLoadsAndScopesToPassID() {
-        let store = DebugInMemoryHandoffSecretStore()
+        let suite = "c3-debug-secret-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite) ?? .standard
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let store = DebugInMemoryHandoffSecretStore(defaults: defaults)
         let id = UUID()
         XCTAssertTrue(store.save(FakeHandoffDriverAPI.fakeSecret, passID: id))
         XCTAssertEqual(store.secret(for: id)?.rawValue, FakeHandoffDriverAPI.fakeSecret.rawValue)
@@ -1292,7 +1295,8 @@ final class ClipCopyLintTests: XCTestCase {
             ClipCopy.disabledTitle, ClipCopy.disabledBody, ClipCopy.openAppTitle, ClipCopy.openAppBody, ClipCopy.saveFailedTitle, ClipCopy.saveFailedBody, ClipCopy.oneNeighborNote,
             ClipCopy.blockTeaserTitle, ClipCopy.blockTeaserSub, ClipCopy.blockFootnote, ClipCopy.blockForwardLink,
             ClipCopy.blockHappeningNow, ClipCopy.blockNoRule, ClipCopy.blockCheckSigns, ClipCopy.blockDenied,
-            ClipCopy.reminderHiddenBody, ClipCopy.passEnded, ClipCopy.activityEnded,
+            ClipCopy.reminderHiddenBody, ClipCopy.passEnded, ClipCopy.finishedTitle, ClipCopy.finishedBody,
+            ClipCopy.activitiesOffTitle, ClipCopy.activitiesOffBody, ClipCopy.activityEnded,
             ClipCopy.headline(name: "Bodega Cat"), ClipCopy.sentLine(name: "Bodega Cat"),
             ClipCopy.thanksSub(name: "Bodega Cat"), ClipCopy.reminderBody(name: "Bodega Cat"),
             ClipCopy.lastCallBody(name: "Bodega Cat"), ClipCopy.armedSub(name: "Bodega Cat", reminderTime: "4:15 PM")
@@ -1521,5 +1525,174 @@ final class ClipSuspensionTests: XCTestCase {
         XCTAssertTrue(bundled.isSuspended(et("2026-11-26T12:00:00-05:00")))
         XCTAssertEqual(bundled.dates.count, 42)
         XCTAssertTrue(ASPSuspensionService().isSuspended(et("2026-11-26T12:00:00-05:00")))
+    }
+}
+
+// MARK: - 12. Finished-pass lifecycle (PR #171 QA finding 1) and the PR #171 QA polish items
+
+private let c3OtherURL = URL(string: "https://getwepark.com/p#t=ZZZZZZZZZZZZZZZZZZZZZZ") ?? URL(fileURLWithPath: "/")
+
+@MainActor
+final class ClipFinishedPassLifecycleTests: XCTestCase {
+
+    /// QA's repro: complete a pass, tap Done, relaunch with a NEW token -> a new flow starts.
+    func testCompleteThenDone_relaunchWithNewToken_startsFreshFlow() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        XCTAssertEqual(h.controller.phase, .celebration)
+        h.controller.dismissCelebration()
+        XCTAssertEqual(h.controller.phase, .finished)
+        XCTAssertNil(h.passes.pass, "Done clears the stored pass")
+        XCTAssertNil(h.secrets.secret(for: h.api.passID), "and the secret")
+
+        let relaunched = h.makeController()
+        XCTAssertEqual(relaunched.phase, .landing, "a finished pass is never revived after Done")
+        relaunched.handle(url: c3OtherURL)
+        XCTAssertEqual(relaunched.phase, .choosing)
+        await h.settle()
+        XCTAssertEqual(relaunched.preview?.alias, "Bodega Cat")
+    }
+
+    func testCompleteThenDone_relaunchWithSameToken_startsFlow_notDeadScreen() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        h.controller.dismissCelebration()
+        let relaunched = h.makeController()
+        relaunched.handle(url: c3URL)
+        XCTAssertEqual(relaunched.phase, .choosing)
+    }
+
+    func testDepartedPass_restoresAtMostOnce() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        XCTAssertEqual(h.makeController().phase, .celebration, "first relaunch (e.g. thanks notification) shows it")
+        XCTAssertEqual(h.makeController().phase, .landing, "a second relaunch finds nothing")
+        XCTAssertNil(h.passes.pass)
+    }
+
+    func testDepartedPass_pastExpiryPlusGrace_isNotRestored() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        h.clock = h.clock.addingTimeInterval(3 * 3600)
+        XCTAssertEqual(h.makeController().phase, .landing)
+        XCTAssertNil(h.passes.pass)
+    }
+
+    func testNewTokenWhileCelebrationShowing_startsFresh() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        h.controller.handle(url: c3OtherURL)
+        XCTAssertEqual(h.controller.phase, .choosing)
+        XCTAssertNil(h.controller.pass)
+        XCTAssertNil(h.passes.pass)
+    }
+
+    func testSamePassRedeliveredWhileCelebrationShowing_keepsCelebration() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        h.controller.handle(url: URL(string: "https://getwepark.com/p?x=1#t=\(c3Token)") ?? c3URL)
+        XCTAssertEqual(h.controller.phase, .celebration)
+    }
+
+    func testRestoredFinishedPass_thenNewScan_startsFresh() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        let relaunched = h.makeController()
+        XCTAssertEqual(relaunched.phase, .celebration)
+        relaunched.handle(url: c3OtherURL)
+        XCTAssertEqual(relaunched.phase, .choosing)
+        XCTAssertNil(h.passes.pass)
+    }
+
+    func testThanksThenDone_clears() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.pullOut()
+        h.controller.receiveThanks()
+        h.controller.dismissCelebration()
+        XCTAssertNil(h.passes.pass)
+        XCTAssertEqual(h.makeController().phase, .landing)
+    }
+
+    func testArmedPass_stillBlocksADifferentScan() async {
+        let h = Harness()
+        await h.armed()
+        h.controller.handle(url: c3OtherURL)
+        XCTAssertTrue(h.controller.showsOtherPassNote)
+        XCTAssertEqual(h.controller.phase, .armed)
+        XCTAssertNotNil(h.passes.pass)
+    }
+
+    func testArmedPassPastExpiry_newScanStartsFresh_withoutWaitingForTick() async {
+        let h = Harness()
+        await h.armed()
+        h.clock = h.clock.addingTimeInterval(7200)
+        h.controller.handle(url: c3OtherURL)
+        XCTAssertEqual(h.controller.phase, .choosing)
+        XCTAssertNil(h.passes.pass)
+        XCTAssertFalse(h.controller.showsOtherPassNote)
+    }
+
+    func testCancelledPass_clearsAndNextScanStartsFresh() async {
+        let h = Harness()
+        await h.armed()
+        await h.controller.confirmCancel()
+        XCTAssertEqual(h.controller.phase, .cancelled)
+        XCTAssertNil(h.passes.pass)
+        h.controller.handle(url: c3OtherURL)
+        XCTAssertEqual(h.controller.phase, .choosing)
+    }
+
+    func testFinishedScreen_isNotTheNotLeavingCopy() {
+        let finished = ClipMessageContent.content(for: .finished)
+        XCTAssertNotEqual(finished.title, ClipCopy.dismissedLine)
+        XCTAssertFalse(finished.title.contains("No worries"))
+        XCTAssertEqual(finished.title, ClipCopy.finishedTitle)
+        XCTAssertEqual(ClipMessageContent.content(for: .dismissed).title, ClipCopy.dismissedLine)
+    }
+
+    // MARK: Armed pinning (finding 2)
+
+    func testArmedPinning_bothActionsPinnedAtSEDefaultAndPhoneXXXL() {
+        for size in [DynamicTypeSize.large, .xxxLarge] {
+            XCTAssertEqual(
+                ClipCTAPinning.plan(screenHeight: 874, dynamicTypeSize: size, hasInlineError: false, hasReassurance: false),
+                .full, "\(size)")
+        }
+        XCTAssertEqual(
+            ClipCTAPinning.plan(screenHeight: 667, dynamicTypeSize: .large, hasInlineError: false, hasReassurance: false), .full)
+    }
+
+    func testArmedPinning_accessibilitySizes_pinPrimaryOnly() {
+        for size in [DynamicTypeSize.accessibility1, .accessibility3, .accessibility5] {
+            XCTAssertEqual(
+                ClipCTAPinning.plan(screenHeight: 874, dynamicTypeSize: size, hasInlineError: false, hasReassurance: false),
+                .primaryOnly)
+            XCTAssertEqual(
+                ClipCTAPinning.plan(screenHeight: 667, dynamicTypeSize: size, hasInlineError: false, hasReassurance: false),
+                .primaryOnly)
+        }
+    }
+
+    // MARK: DEBUG secret persistence (finding 6)
+
+    func testDebugSecretStore_survivesARelaunch_andClearsOnClear() {
+        let suite = "c3-debug-secret-relaunch-\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite) ?? .standard
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let id = UUID()
+        DebugInMemoryHandoffSecretStore(defaults: defaults).save(FakeHandoffDriverAPI.fakeSecret, passID: id)
+        let relaunched = DebugInMemoryHandoffSecretStore(defaults: defaults)
+        XCTAssertEqual(relaunched.secret(for: id)?.rawValue, FakeHandoffDriverAPI.fakeSecret.rawValue)
+        XCTAssertNil(relaunched.secret(for: UUID()))
+        relaunched.clear()
+        XCTAssertNil(DebugInMemoryHandoffSecretStore(defaults: defaults).secret(for: id))
     }
 }
