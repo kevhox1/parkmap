@@ -215,6 +215,41 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-11-24 — ✅ BUILD 26 ON INTERNAL TESTFLIGHT; snap fix, address MVP, Spot Pass scaffold, getwepark.com live
+
+**Shipped.** Each PR was QA'd live on the sim by an agent that didn't build it, and CI was green.
+- **Build 26 uploaded** after Kevin accepted the PLA. App Store Connect auto-added it to the INTERNAL group only (Testing, 90-day expiry). App Store Connect is signed in on Chrome "Browser 2" (Browser 1 is not). Apple warns that from April 2027 uploads need the iOS 27 SDK.
+- **#156 polish.** Cross-street title case, More `.large` detent, Settings Done button, coach mark 1 avoids the user dot, N2 documented, goal tiles never break a word mid-word below AX1.
+- **#157 curb-pin snap-back fix.** Diagnosis is in `docs/qa/curbpin-snap-diagnosis-2026-11-23.md`. Changes:
+  - no settle-nudge after a user drag;
+  - acquire radius 24→15 m and release 30→19 m;
+  - geometric opposite-side match;
+  - YOUR SQUARE hidden during placement;
+  - dot+crosshair tip mark;
+  - late index swap keeps the snap.
+
+  Follow-ups: `farCurbThresholdMeters` (15) now equals the acquire radius, so the "far curb" footnote is dead code. Block-select "Both curbs" still matches by name.
+- **#158 address-anchored parking MVP.** Behind `addressAnchoredParkingEnabled=false`, plus an UNGATED display formatter that applies one entry point (title case + ordinals) to every street string. Spec: `docs/specs/address-anchored-parking.md`. Device-only items still open: offline, the "Near" tier, both-sides parity, address coverage (about half of sim blocks resolved).
+- **#159 + getwepark.com live.** Kevin bought the domain on Vercel. Vercel project `parkmap-getwepark` serves root `web/getwepark` with the apex not redirected. The AASA is served as JSON and Apple's CDN has fetched it. `ignoreCommand` skips builds when `web/` is unchanged.
+- **#160 Spot Pass C0 scaffold.** Adds the `WeParkClip` target (com.kevinhoxha.wepark.Clip), two Live-Activities-only extensions, `Shared/SpotPass/`, App Group `group.com.kevinhoxha.wepark.shared`, and applinks/appclips:getwepark.com. Flags `spotHandoffEnabled` and `spotHandoffAutoDetectEnabled` are false. ⚠️ **The next archive (build 27) needs new App IDs, the App Group and capabilities registered.** Automatic signing via `-allowProvisioningUpdates` changes Kevin's developer account, so confirm with him first. The new targets carry CURRENT_PROJECT_VERSION too, so bump all of them.
+
+**Specs and concept docs now on main.**
+- `docs/specs/qr-spot-handoff.md` (Rev 2). Kevin's direction: the waiter owns the QR and the driver scans it. The App Clip is in the MVP. The lock-screen Live Activity "Leaving now" is the centerpiece. Also: reminder actions, armed-window auto-detect (last, own flag), a car-connect Shortcut, expiry tied to leave time, and the first-impression funnel.
+- `docs/design/spot-pass-design.md`. The design rules out a dash mount and uses "hold to window" with a scan distance of about 0.5 m through glass. Kevin may hand the visuals to Claude Design.
+- `docs/specs/karma-network-concept.md`, ending with Kevin's decisions:
+  - a merchant perk eventually;
+  - opt-out leaderboards;
+  - his home neighborhood as the pilot;
+  - the network starts as Regulars-only "home in ~30", but the scaling path must be specced first;
+  - for-profit vs fiscal sponsor is undecided.
+
+**Disk.** The XCTestDevices purge freed only about 1 GB, because the clones were APFS. Old `~/dd-*` derived data (4.8 GB) was deleted. The macOS 27 upgrade needs 23.5 GB, which we don't have; Tahoe 26.7.3 needs 19 GB. Three `com.apple.os.update-*` snapshots pin about 45 GB. Kevin is deferring the OS update. Messages (26 GB) is the big personal lever.
+
+**Next.**
+- Spot Pass streams: backend A/B (migration `13-spot-handoffs.sql`, written only; Kevin applies it), C1 seeker, C2 full-app driver, C3 clip, D web fallback (`web/getwepark/p`).
+- A device test of the clip invocation via a Local Experience.
+- Kevin's drive test (`docs/drive-test-build26.md`) and the Supabase ceremony QUICK PATH.
+
 ### 2026-11-23 — ✅ PRE-FLIP PIPELINE: PRs #150–#155 merged (all dark, each QA'd live on the sim by a non-builder with AXe). Build 26 still blocked on Apple's PLA.
 
 - **Merged today:**
