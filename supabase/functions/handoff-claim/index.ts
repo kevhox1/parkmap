@@ -4,7 +4,7 @@
  * No logging of tokens, secrets or IPs. See _shared/handoff.ts and _shared/handoff_runtime.ts.
  *
  * POST {token, leave_at, push_token?, activity_token?, topic?}
- *   -> {status:"armed", leave_at, expires_at, claimer_secret} | {status:"unavailable"}
+ *   -> {status:"armed", id, leave_at, expires_at, claimer_secret} | {status:"unavailable"}
  * Atomic one-time arm (row lock in handoff_claim). leave_at is rounded to 5 min server-side, capped at 240 min
  * (above that: HTTP 400 {"error":"invalid_leave_at"}, decided before the token is looked at).
  * `Authorization: Bearer <user access token>` (the clip's/app's anonymous session) is OPTIONAL: when present the
@@ -44,6 +44,7 @@ serveEndpoint({
     if (r.rpc.status === "armed") {
       return json({
         status: "armed",
+        id: r.rpc.id,
         leave_at: r.rpc.leave_at,
         expires_at: r.rpc.expires_at,
         claimer_secret: r.rpc.claimer_secret,

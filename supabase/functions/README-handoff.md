@@ -114,7 +114,7 @@ End-to-end with two throwaway anonymous users (a TestFlight/debug build is the e
 1. Seeker signs in anonymously, calls `create_handoff(false)` -> `{id, token, alias, glyph, expires_at}`.
 2. `curl -X POST $B/handoff-peek -d '{"token":"<token>"}'` -> `open` + alias. Second user's access token:
    `curl -X POST $B/handoff-claim -H "Authorization: Bearer <user2 access token>" -d '{"token":"<token>","leave_at":"<now+10min ISO>"}'`
-   -> `armed` + `claimer_secret`. Seeker device gets the `armed` alert; the same token now peeks as `unavailable`.
+   -> `armed` + `id` + `claimer_secret` (id and secret are both required by depart/extend/cancel). Seeker device gets the `armed` alert; the same token now peeks as `unavailable`.
 3. `handoff-depart {id, claimer_secret, source:"manual"}` -> `{ok:true}`, seeker gets the `departed` alert within ~10 s.
 4. Seeker `confirm_handoff_outcome(id, 'got_spot')` -> `{ok:true, outcome:"got_spot", seeker_points:3}`; check
    `select reputation, helped_count from profiles where id in (...)` (driver +5 / helped +1). Repeat the call: no change.

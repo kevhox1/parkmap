@@ -3,7 +3,7 @@
 #
 # Runs against a THROWAWAY local Postgres 16 (NOT Supabase, NOT production — Kevin applies migrations by hand).
 # Fresh database, real migrations 01-06 verbatim on a Supabase-shaped stub (supabase/scratch/), then 10 (account
-# deletion), then 13 applied TWICE, then driven as the real `anon` / `authenticated` / `service_role` roles with a
+# deletion), then 13 applied TWICE, then 14 (claim returns id) applied TWICE, then driven as the real `anon` / `authenticated` / `service_role` roles with a
 # JWT-sub GUC like PostgREST. Service RPCs (the ones the Edge Functions call) are driven as `service_role`.
 #
 # WHAT IT CANNOT PROVE (stub): pg_cron / pg_net / Vault are stubs (no real HTTP — pushes are asserted via the pg_net
@@ -33,6 +33,8 @@ echo "== Test 0: apply 10, then 13 twice (idempotent)"
 check "apply 10-account-deletion.sql" "$(apply_file 10-account-deletion.sql)" "ok"
 check "apply 13 (first)"  "$(apply13)" "ok"
 check "apply 13 (second, idempotent)" "$(apply13)" "ok"
+check "apply 14-handoff-claim-returns-id (first)" "$(apply_file 14-handoff-claim-returns-id.sql)" "ok"
+check "apply 14 (second, idempotent)" "$(apply_file 14-handoff-claim-returns-id.sql)" "ok"
 check "cron job registered once" "$(sql "$DB" "select count(*) from cron.job where jobname='handoff-sweep'")" "1"
 check "HANDOFF_ENABLED seeded false, one row after 2 applies" "$(sql "$DB" "select count(*)||':'||min(value) from public.handoff_config where key='HANDOFF_ENABLED'")" "1:false"
 
@@ -145,7 +147,8 @@ out=$(claim "$TOK" "$DRIVER" null 10)
 check "claim => armed" "$(jq_ "'$out'" status)" "armed"
 check "claimer_secret returned, 22 chars" "$(jq_ "'$out'" claimer_secret | grep -Ec '^[A-Za-z0-9_-]{22}$')" "1"
 SEC=$(jq_ "'$out'" claimer_secret)
-check "response keys {claimer_secret, expires_at, leave_at, status}" "$(printf '%s' "$out" | sed 's/[{}" ]//g; s/:[^,]*//g' | tr ',' '\n' | sort | tr '\n' ',')" "claimer_secret,expires_at,leave_at,status,"
+check "claim returns the pass id (14)" "$(jq_ "'$out'" id)" "$ID"
+check "response keys {claimer_secret, expires_at, id, leave_at, status}" "$(printf '%s' "$out" | sed 's/[{}" ]//g; s/:[^,]*//g' | tr ',' '\n' | sort | tr '\n' ',')" "claimer_secret,expires_at,id,leave_at,status,"
 check "leave_at rounded to 5 min" "$(col "$ID" "(extract(epoch from leave_at)::bigint % 300)")" "0"
 check "expires_at = leave_at + 15 min grace" "$(col "$ID" "(expires_at - leave_at = interval '15 minutes')::text")" "true"
 check "only the secret HASH is stored" "$(col "$ID" "(claimer_secret_hash = sha256(convert_to('$SEC','UTF8')))::text")" "true"
@@ -175,14 +178,15 @@ check "tokens + topic stored while armed" "$(col "$ID" "claimer_push_token||'|'|
 echo "== Test 7: depart — secret gating, indistinguishable failures, terminal nulling"
 reset_rates
 P=$(mkpass "$OTHER"); ID=${P% *}; TOK=${P#* }
-C=$(claim "$TOK" "$DRIVER" tok-d2 10); SEC=$(jq_ "'$C'" claimer_secret)
+C=$(claim "$TOK" "$DRIVER" tok-d2 10); SEC=$(jq_ "'$C'" claimer_secret); CID=$(jq_ "'$C'" id)
+check "claim-returned id == pass id (14)" "$CID" "$ID"
 FAIL='{"ok": false}'
 check "valid token alone cannot depart (no secret)" "$(svc "select public.handoff_depart('$ID', '$TOK', 'manual')")" "$FAIL"
 check "wrong secret => ok:false" "$(svc "select public.handoff_depart('$ID', 'AAAAAAAAAAAAAAAAAAAAAA', 'manual')")" "$FAIL"
 check "unknown id => same ok:false" "$(svc "select public.handoff_depart(gen_random_uuid(), '$SEC', 'manual')")" "$FAIL"
 check "bad source => invalid_source" "$(svc "select public.handoff_depart('$ID', '$SEC', 'teleport')")" '{"invalid_source": true}'
 check "still armed after failed attempts" "$(st "$ID")" "armed"
-check "correct secret departs" "$(svc "select public.handoff_depart('$ID', '$SEC', 'live_activity')")" '{"ok": true}'
+check "depart with the claim-returned (id, secret) succeeds end-to-end (14)" "$(svc "select public.handoff_depart('$CID', '$SEC', 'live_activity')")" '{"ok": true}'
 check "status departed, source recorded" "$(col "$ID" "status||'/'||depart_source")" "departed/live_activity"
 check "secret hash nulled at terminal" "$(col "$ID" "(claimer_secret_hash is null)::text")" "true"
 check "tokens on short fuse (<=30 min) for the thanks push" "$(col "$ID" "(claimer_push_token is not null and claimer_tokens_until <= now()+interval '30 minutes')::text")" "true"

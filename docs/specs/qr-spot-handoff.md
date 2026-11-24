@@ -260,7 +260,7 @@ No coordinates, addresses, plate, or username on the row. RLS: seeker selects ow
 API contract (so streams build against fakes):
 - `create_handoff(show_name bool) -> {id, token, alias, glyph, expires_at}`
 - `POST handoff-peek {token} -> {status:"open", alias, glyph, display_name|null} | {status:"unavailable"}`. Read-only, identical response for bad/expired/used.
-- `POST handoff-claim {token, leave_at, push_token?, activity_token?, topic?} -> {status:"armed", leave_at, expires_at, claimer_secret} | {status:"unavailable"}`
+- `POST handoff-claim {token, leave_at, push_token?, activity_token?, topic?} -> {status:"armed", id, leave_at, expires_at, claimer_secret} | {status:"unavailable"}`
 - `POST handoff-depart {id, claimer_secret, source} -> {ok:bool}`; `handoff-extend {id, claimer_secret} -> {ok, leave_at, expires_at}`; `handoff-cancel {id, claimer_secret} -> {ok}`
 - `cancel_handoff(id)` (seeker), `confirm_handoff_outcome(id, outcome)` (seeker; `got_spot` triggers the `thanks` push and karma).
 - Errors indistinguishable for bad/expired/used token or secret.
