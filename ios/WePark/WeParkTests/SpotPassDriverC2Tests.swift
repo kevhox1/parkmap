@@ -403,13 +403,15 @@ final class DriverFlowControllerTests: XCTestCase {
         XCTAssertNil(h.passes.pass, "a settled pass is finished for good")
     }
 
-    func testDoneBeforeThanks_keepsDepartedPassSoALateThanksCanLand() async {
+    func testDoneBeforeThanks_clearsTheFinishedPass_secretAndReminders() async {
         let h = DriverHarness()
         await h.armed()
         await h.controller.pullOut()
         h.controller.dismissCelebration()
-        XCTAssertEqual(h.passes.pass?.status, .departed)
-        XCTAssertTrue(h.controller.receiveThanks())
+        XCTAssertNil(h.passes.pass, "Done finishes the pass for good (QA #1)")
+        XCTAssertNil(h.controller.pass)
+        XCTAssertNil(h.secrets.secret(for: driverPassID))
+        XCTAssertFalse(h.controller.receiveThanks(), "nothing left to settle locally")
     }
 
     func testExpiry_endsArmedPass() async {
@@ -450,8 +452,9 @@ final class DriverFlowControllerTests: XCTestCase {
         let d = DriverHarness()
         await d.armed()
         await d.controller.pullOut()
-        d.clock = d.clock.addingTimeInterval(DriverPassLifetime.departedLinger + 1)
-        XCTAssertNil(d.makeController().pass)
+        d.clock = d.passes.pass.map { $0.expiresAt.addingTimeInterval(HandoffActivePass.finishedRestoreGrace + 1) } ?? d.clock
+        XCTAssertNil(d.makeController().pass, "never restored past expiry plus the grace")
+        XCTAssertNil(d.passes.pass)
     }
 
     func testRestore_recentDeparted_showsCelebration() async {
@@ -460,6 +463,78 @@ final class DriverFlowControllerTests: XCTestCase {
         await h.controller.pullOut()
         h.clock = h.clock.addingTimeInterval(60)
         XCTAssertEqual(h.makeController().phase, .celebration)
+    }
+
+    func testRestore_finishedPass_comesBackAtMostOnce() async {
+        let h = DriverHarness()
+        await h.armed()
+        await h.controller.pullOut()
+        h.clock = h.clock.addingTimeInterval(60)
+        XCTAssertEqual(h.makeController().phase, .celebration)
+        let second = h.makeController()
+        XCTAssertNil(second.pass, "the second relaunch must not revive it")
+        XCTAssertEqual(second.phase, .landing)
+        XCTAssertNil(h.passes.pass)
+    }
+
+    /// QA #1 repro: arm, depart, relaunch with a NEW token while the pass is un-thanked.
+    func testNewToken_afterUnthankedDeparture_startsFresh_notTheOldCelebration() async {
+        let h = DriverHarness()
+        await h.armed()
+        await h.controller.pullOut()
+        let relaunched = h.makeController()
+        XCTAssertEqual(relaunched.phase, .celebration)
+        let other = SpotPassLink(url: URL(string: "https://getwepark.com/p#t=ZZZZZZZZZZZZZZZZZZZZZZ") ?? URL(fileURLWithPath: "/"))
+        XCTAssertEqual(other.map { relaunched.handle(link: $0) }, true)
+        XCTAssertEqual(relaunched.phase, .choosing)
+        XCTAssertNil(relaunched.pass)
+        XCTAssertNil(h.passes.pass)
+        await h.settle()
+        XCTAssertEqual(h.api.calls.filter { $0 == "peek" }.count, 1)
+    }
+
+    func testNewToken_afterDone_startsFresh() async {
+        let h = DriverHarness()
+        await h.armed()
+        await h.controller.pullOut()
+        h.controller.dismissCelebration()
+        let other = SpotPassLink(url: URL(string: "https://getwepark.com/p#t=ZZZZZZZZZZZZZZZZZZZZZZ") ?? URL(fileURLWithPath: "/"))
+        XCTAssertEqual(other.map { h.controller.handle(link: $0) }, true)
+        XCTAssertEqual(h.controller.phase, .choosing)
+    }
+
+    func testSameLinkRedelivered_whileCelebrationUp_keepsTheCelebration() async {
+        let h = DriverHarness()
+        await h.armed()
+        await h.controller.pullOut()
+        XCTAssertEqual(h.controller.phase, .celebration)
+        if let link = driverLink { XCTAssertTrue(h.controller.handle(link: link)) }
+        XCTAssertEqual(h.controller.phase, .celebration)
+        XCTAssertNotNil(h.controller.pass)
+    }
+
+    func testArmedPass_otherToken_keepsThePass_andShowsTheOneNeighborNote() async {
+        let h = DriverHarness()
+        await h.armed()
+        XCTAssertFalse(h.controller.showsOtherPassNote)
+        if let same = driverLink { h.controller.handle(link: same) }
+        XCTAssertFalse(h.controller.showsOtherPassNote, "the same pass again is not 'another'")
+        let other = SpotPassLink(url: URL(string: "https://getwepark.com/p#t=ZZZZZZZZZZZZZZZZZZZZZZ") ?? URL(fileURLWithPath: "/"))
+        XCTAssertEqual(other.map { h.controller.handle(link: $0) }, true)
+        XCTAssertTrue(h.controller.showsOtherPassNote)
+        XCTAssertEqual(h.controller.phase, .armed)
+        XCTAssertEqual(h.passes.pass?.status, .armed)
+        XCTAssertFalse(h.api.calls.contains("cancel"), "a different pass never cancels the armed one")
+    }
+
+    func testExpiredArmedPass_newToken_startsFresh() async {
+        let h = DriverHarness()
+        await h.armed()
+        h.clock = Date(timeIntervalSince1970: 1_800_001_501)
+        let other = SpotPassLink(url: URL(string: "https://getwepark.com/p#t=ZZZZZZZZZZZZZZZZZZZZZZ") ?? URL(fileURLWithPath: "/"))
+        XCTAssertEqual(other.map { h.controller.handle(link: $0) }, true)
+        XCTAssertEqual(h.controller.phase, .choosing)
+        XCTAssertNil(h.passes.pass)
     }
 
     func testReport_whileArmed_usesTheSecret_andEndsThePass() async {
@@ -1346,5 +1421,44 @@ final class SpotPassDriverFlagOffTests: XCTestCase {
     func testNoAlwaysAuthorization_orBackgroundLocationAnywhereInThisStream() {
         let modes = Bundle.main.object(forInfoDictionaryKey: "UIBackgroundModes") as? [String] ?? []
         XCTAssertFalse(modes.contains("location"), "C4 (auto-detect) is not part of C2")
+    }
+}
+
+// MARK: - 11. QA follow-ups (PR #170): "Your Spot Pass" entry, copy, pinning
+
+final class DriverQAFollowUpTests: XCTestCase {
+
+    private func rows(spotPass: Bool, armed: Bool) -> [MoreMenuRow] {
+        moreMenuVisibleRows(
+            communityEnabled: true, onboardingReplayAvailable: false, hasParkedCar: false, fullPaletteMode: false,
+            spotPassEnabled: spotPass, driverPassArmed: armed
+        )
+    }
+
+    func testYourSpotPassRow_showsOnlyWhileFlagOnAndArmed() {
+        XCTAssertTrue(rows(spotPass: true, armed: true).contains(.yourSpotPass))
+        XCTAssertFalse(rows(spotPass: true, armed: false).contains(.yourSpotPass))
+        XCTAssertFalse(rows(spotPass: false, armed: true).contains(.yourSpotPass), "flag off: never")
+        XCTAssertEqual(rows(spotPass: false, armed: false), rows(spotPass: false, armed: true), "flag-off rows are unchanged")
+    }
+
+    func testYourSpotPassRow_sitsRightBelowSpotPass() {
+        let list = rows(spotPass: true, armed: true)
+        guard let index = list.firstIndex(of: .spotPass) else { return XCTFail("spot pass row missing") }
+        XCTAssertEqual(list[index + 1], .yourSpotPass)
+    }
+
+    func testAutoHeadsUpCopy_neverSaysPing_andKeepsTheHyphenUnbreakable() {
+        let all = [DriverCopy.autoPingRowTitle, DriverCopy.autoPingRowSub, CarAutoPingGuideContent.title,
+                   CarAutoPingGuideContent.intro, DriverCopy.yourSpotPass]
+        for line in all { XCTAssertFalse(line.lowercased().contains("ping"), line) }
+        XCTAssertTrue(DriverCopy.autoPingRowTitle.contains("heads\u{2011}up"), "non-breaking hyphen: no AX5 split")
+    }
+
+    func testPinning_atAccessibilitySizes_pinsOnlyThePrimaryCTA() {
+        XCTAssertEqual(
+            ClipCTAPinning.plan(screenHeight: 874, dynamicTypeSize: .accessibility5, hasInlineError: false), .primaryOnly)
+        XCTAssertEqual(
+            ClipCTAPinning.plan(screenHeight: 667, dynamicTypeSize: .xxxLarge, hasInlineError: false), .primaryOnly)
     }
 }

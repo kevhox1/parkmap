@@ -19,8 +19,13 @@ nonisolated enum DriverCopy {
     static let reminderPermissionNote = "WePark will ask to remind you at your leave time."
     static let closeLabel = "Close"
     static let done = "Done"
-    static let autoPingRowTitle = "Set up car auto-ping"
-    static let autoPingRowSub = "Tell your neighbor automatically when your phone connects to your car."
+    /// "heads-up", never "ping" (voice rules). The hyphen is a non-breaking one (U+2011) so large Dynamic
+    /// Type never splits the word across lines.
+    static let autoPingRowTitle = "Auto heads\u{2011}up when you start your car"
+    static let autoPingRowSub = "Tell your neighbor the moment your phone connects to your car."
+    /// Entry back to an armed pass once the cover is closed (More sheet row, map chip).
+    static let yourSpotPass = "Your Spot Pass"
+    static let yourSpotPassHint = "Opens the pass you have set up."
     /// Footnote when the claimer secret could not be saved (the clip's "Get WePark" line does not fit
     /// a user who is already in the app). Nothing was armed.
     static let saveFailedFootnote = "We couldn't save this on your phone, so nothing was set up. Try scanning the pass again."
@@ -75,6 +80,7 @@ struct DriverFlowView: View {
                     .transition(.opacity)
             }
             .environment(\.driverIsShortScreen, proxy.size.height < SpotPassTheme.shortScreenHeight)
+            .environment(\.driverScreenHeight, proxy.size.height)
         }
         .preferredColorScheme(.dark)
         .tint(SpotPassTheme.indigo)
@@ -124,7 +130,8 @@ struct DriverFlowView: View {
                 .padding(.horizontal, 16)
                 .frame(minHeight: 44)
                 .background(.thinMaterial, in: Capsule())
-                .padding(.top, 8)
+                // Below the pinned header row (44 pt + status bar) so it never covers Report / Close.
+                .padding(.top, 64)
                 .transition(.opacity)
                 .accessibilityAddTraits(.isStaticText)
         }
@@ -174,6 +181,7 @@ struct DriverChoosingView: View {
     var onClose: () -> Void
 
     @Environment(\.driverIsShortScreen) private var isShort
+    @Environment(\.driverScreenHeight) private var screenHeight
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showPicker = false
     @State private var showReport = false
@@ -182,10 +190,14 @@ struct DriverChoosingView: View {
 
     private var isArming: Bool { controller.phase == .arming }
 
+    /// What stays pinned (capped at ~30% of the screen, the clip's rule); the rest scrolls with the content.
+    private var pinning: ClipCTAPinning.Plan {
+        ClipCTAPinning.plan(screenHeight: screenHeight, dynamicTypeSize: typeSize, hasInlineError: controller.armFailure != nil)
+    }
+
     var body: some View {
         ScrollView {
             VStack(spacing: isShort ? 14 : 20) {
-                topRow
                 DriverGlyphDisc(
                     glyph: controller.glyph, alias: controller.alias,
                     size: typeSize.isAccessibilitySize ? 72 : (isShort ? 64 : 96), floats: true
@@ -202,12 +214,27 @@ struct DriverChoosingView: View {
                     .font(.footnote)
                     .foregroundStyle(SpotPassTheme.lavender)
                     .multilineTextAlignment(.center)
+                if pinning == .primaryOnly {
+                    // Overflow from the pinned area (large text sizes): one scroll away, never covered.
+                    if !typeSize.isAccessibilitySize {
+                        Text(willAskForNotifications ? DriverCopy.reminderPermissionNote : ClipCopy.underCTA)
+                            .font(.footnote).foregroundStyle(SpotPassTheme.lavender)
+                            .multilineTextAlignment(.center)
+                    }
+                    notLeavingSoonButton
+                }
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
             .padding(.bottom, 16)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            // Pinned (not in the scroll) with an opaque backing: the header never slides under the status bar.
+            topRow
+                .padding(.horizontal, 20)
+                .driverPinnedBarBackground(edge: .top)
+        }
         .safeAreaInset(edge: .bottom) { pinnedCTA }
         .sheet(isPresented: $showPicker) { pickerSheet }
         .confirmationDialog(ClipCopy.reportTitle, isPresented: $showReport, titleVisibility: .visible) {
@@ -311,8 +338,14 @@ struct DriverChoosingView: View {
         }
     }
 
+    private var notLeavingSoonButton: some View {
+        SpotPassTextButton(title: ClipCopy.notLeavingSoon) { controller.notLeavingSoon() }
+            .disabled(isArming)
+    }
+
     private var pinnedCTA: some View {
-        VStack(spacing: 6) {
+        let plan = pinning
+        return VStack(spacing: 6) {
             if let failure = controller.armFailure {
                 Text(Self.armFailureMessage(failure))
                     .font(.footnote).foregroundStyle(.white).multilineTextAlignment(.center)
@@ -330,17 +363,20 @@ struct DriverChoosingView: View {
             .disabled(isArming)
             .accessibilityLabel(ClipCopy.cta(choice: controller.choice, name: controller.preview?.name))
             .accessibilityHint(ClipCopy.consent)
-            if !typeSize.isAccessibilitySize {
+            if plan == .full {
                 Text(willAskForNotifications ? DriverCopy.reminderPermissionNote : ClipCopy.underCTA)
                     .font(.footnote).foregroundStyle(SpotPassTheme.lavender)
                     .multilineTextAlignment(.center)
+                notLeavingSoonButton
             }
-            SpotPassTextButton(title: ClipCopy.notLeavingSoon) { controller.notLeavingSoon() }
-                .disabled(isArming)
         }
+        // Bounded: the pinned stack never grows past the cap, whatever the user's text size.
+        .dynamicTypeSize(...ClipCTAPinning.pinnedTypeSizeCap)
         .padding(.horizontal, 20)
         .padding(.top, 10)
         .padding(.bottom, 6)
+        // Opaque scrim so scrolled text can never show through or collide with the CTAs.
+        .driverPinnedBarBackground(edge: .bottom)
     }
 
     private var pickerSheet: some View {

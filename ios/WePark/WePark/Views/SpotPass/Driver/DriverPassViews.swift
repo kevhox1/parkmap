@@ -47,6 +47,14 @@ struct DriverArmedView: View {
                     .accessibilityHint("Your pass stays on.")
                 }
                 .frame(minHeight: 44)
+                if controller.showsOtherPassNote {
+                    Text(ClipCopy.oneNeighborNote)
+                        .font(.footnote).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
                 DriverGlyphDisc(
                     glyph: controller.glyph, alias: controller.alias,
                     size: typeSize.isAccessibilitySize ? 72 : (isShort ? 64 : 96), showsSeal: true

@@ -102,7 +102,7 @@ final class SpotPassDriverRuntime {
     private func makeLiveController() -> DriverFlowController {
         let dependencies = DriverDependencies(
             api: makeAPI(),
-            secrets: DriverKeychainSecretStore(),
+            secrets: makeSecretStore(),
             passStore: UserDefaultsHandoffPassStore(defaults: .standard),
             session: AuthServiceDriverSession(tokenProvider: { [weak self] in await self?.accessTokenProvider?() }),
             reminders: DriverReminderScheduler(),
@@ -111,6 +111,16 @@ final class SpotPassDriverRuntime {
             feedback: SystemHandoffFeedback()
         )
         return DriverFlowController(dependencies: dependencies)
+    }
+
+    /// The real keychain store; in DEBUG fake-API mode an in-memory one, so an UNSIGNED simulator build
+    /// (where the keychain write fails) can still arm. Compiled out of Release.
+    private func makeSecretStore() -> any HandoffSecretStoring {
+        #if DEBUG
+        let options = ClipLaunchOptions(arguments: ProcessInfo.processInfo.arguments, environment: ProcessInfo.processInfo.environment)
+        if options.useFakeAPI { return DebugInMemoryHandoffSecretStore() }
+        #endif
+        return DriverKeychainSecretStore()
     }
 
     private func makeAPI() -> any HandoffDriverAPI {
@@ -166,6 +176,20 @@ final class SpotPassDriverRuntime {
         // The generic landing with nothing active: a friendly line, never a dead end (spec 5.3).
         showToast(ClipCopy.landingBody)
         return false
+    }
+
+    /// An armed, unexpired driver pass exists (drives the "Your Spot Pass" More row). Never builds the
+    /// controller just to find out: a stored record is read directly.
+    var hasArmedPass: Bool {
+        if hasController { return controller.hasArmedPass }
+        guard let saved = UserDefaultsHandoffPassStore(defaults: .standard).load() else { return false }
+        return saved.status == .armed && Date() < saved.expiresAt
+    }
+
+    /// "Your Spot Pass": reopens the armed pass's cover (the cover was closed, the pass stays on).
+    func presentArmedPass() {
+        guard hasArmedPass else { return }
+        coverPresented = true
     }
 
     /// The reminder notification body was tapped: straight to the pulling-out screen (spec 7.3).

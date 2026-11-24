@@ -24,6 +24,39 @@ extension EnvironmentValues {
     }
 }
 
+private struct DriverScreenHeightKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 800
+}
+
+extension EnvironmentValues {
+    /// The cover's full height in points (drives the pinned-CTA cap, `ClipCTAPinning`).
+    var driverScreenHeight: CGFloat {
+        get { self[DriverScreenHeightKey.self] }
+        set { self[DriverScreenHeightKey.self] = newValue }
+    }
+}
+
+// MARK: - Pinned bars
+
+extension View {
+    /// An opaque backing for a bar pinned at the top or bottom, so scrolled text can never show through
+    /// or collide with it; a short fade softens the seam.
+    func driverPinnedBarBackground(edge: VerticalEdge) -> some View {
+        background(SpotPassTheme.ink.ignoresSafeArea(edges: edge == .top ? .top : .bottom))
+            .overlay(alignment: edge == .top ? .bottom : .top) {
+                LinearGradient(
+                    colors: edge == .top
+                        ? [SpotPassTheme.ink, SpotPassTheme.ink.opacity(0)]
+                        : [SpotPassTheme.ink.opacity(0), SpotPassTheme.ink],
+                    startPoint: .top, endPoint: .bottom
+                )
+                .frame(height: 14)
+                .offset(y: edge == .top ? 14 : -14)
+                .allowsHitTesting(false)
+            }
+    }
+}
+
 // MARK: - Backdrop
 
 struct DriverBackdrop: View {

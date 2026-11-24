@@ -95,11 +95,8 @@ struct DriverDependencies {
     var sentDwell: TimeInterval = 1.2
 }
 
-/// A delivered departed pass lingers this long waiting for the seeker's thanks (the backend keeps
-/// the activity-end push window at 30 minutes, spec 9 item 13).
-nonisolated enum DriverPassLifetime {
-    static let departedLinger: TimeInterval = 30 * 60
-}
+// A finished (departed) pass may come back onto the screen once after a relaunch, and never past its
+// expiry plus `HandoffActivePass.finishedRestoreGrace` (the same rule as the App Clip, PR #172).
 
 /// Notification delivery -> what the driver flow should do.
 nonisolated enum DriverNotificationRoute: Equatable, Sendable {
@@ -133,6 +130,8 @@ final class DriverFlowController {
     private(set) var sendFailed = false
     var showCancelConfirm = false
     var toast: String?
+    /// A link for a DIFFERENT pass arrived while one is armed: the armed pass stays, the screen says so.
+    private(set) var showsOtherPassNote = false
 
     // MARK: Private
     @ObservationIgnored private let deps: DriverDependencies
@@ -172,14 +171,20 @@ final class DriverFlowController {
                 activityStarted = deps.activity.adoptExisting()
             }
         case .departed:
-            let age = deps.now().timeIntervalSince(saved.departedAt ?? saved.armedAt)
-            if saved.thanksReceived || age > DriverPassLifetime.departedLinger {
+            // A finished pass is terminal: it may come back onto the screen ONCE after a relaunch (e.g. a
+            // thanks notification), and never past its expiry plus a grace. Otherwise it is cleared so the
+            // next scan starts fresh.
+            let expired = deps.now() >= saved.expiresAt.addingTimeInterval(HandoffActivePass.finishedRestoreGrace)
+            if saved.thanksReceived || expired || (saved.restoreCount ?? 0) >= 1 {
                 cleanupLocal(passID: saved.id)
-            } else {
-                pass = saved
-                phase = .celebration
-                activityStarted = deps.activity.adoptExisting()
+                return
             }
+            var restored = saved
+            restored.restoreCount = (saved.restoreCount ?? 0) + 1
+            deps.passStore.save(restored)
+            pass = restored
+            phase = .celebration
+            activityStarted = deps.activity.adoptExisting()
         }
     }
 
@@ -201,8 +206,23 @@ final class DriverFlowController {
     @discardableResult
     func handle(link: SpotPassLink) -> Bool {
         if let token = link.token {
-            // An active pass wins: its own token is already claimed, so a re-scan would only say "used".
-            if pass != nil { return true }
+            if let active = pass {
+                if active.status == .armed, deps.now() < active.expiresAt {
+                    // An armed pass wins (its own token is already claimed, so a re-scan would only say
+                    // "used"), and a different pass is never auto-cancelled for: note it, change nothing.
+                    let isOtherPass = active.tokenFingerprint.map { $0 != HandoffActivePass.fingerprint(forToken: token) } == true
+                    if isOtherPass { showsOtherPassNote = true }
+                    return true
+                }
+                if active.status == .departed {
+                    if phase == .sent { return true }
+                    // The same pass re-delivered while its celebration is up: nothing to do.
+                    if phase == .celebration,
+                       active.tokenFingerprint == HandoffActivePass.fingerprint(forToken: token) { return true }
+                }
+                // Terminal (finished, or armed but past its expiry): a NEW scan starts fresh.
+                clearTerminalPass(active)
+            }
             // The same link delivered twice while its flow is in progress (cold-launch buffer + live
             // activity delivery) must not restart the peek. A TERMINAL phase may begin again.
             if self.token == token, phase == .choosing || phase == .arming { return true }
@@ -346,7 +366,7 @@ final class DriverFlowController {
             id: passID, alias: preview?.alias ?? name, glyph: preview?.glyph ?? SpotPassGlyph.fallbackSymbol,
             displayName: preview?.displayName, armedAt: startedAt, leaveAt: grant.leaveAt,
             expiresAt: grant.expiresAt, extensions: 0, status: .armed, departedAt: nil,
-            thanksReceived: false, userId: nil
+            thanksReceived: false, userId: nil, tokenFingerprint: token.map(HandoffActivePass.fingerprint(forToken:))
         )
         pass = armed
         deps.passStore.save(armed)
@@ -617,14 +637,29 @@ final class DriverFlowController {
 
     // MARK: - Celebration
 
-    /// "Done". A settled (thanked) pass is finished for good; an unsettled one stays on disk so a
-    /// late thank-you can still land (it is purged after `DriverPassLifetime.departedLinger`).
+    /// "Done": the pass is finished, so clear it (and its secret and reminders). The next scan starts
+    /// fresh and relaunching never revives it. (A late thanks after Done can no longer settle locally; the
+    /// server still credits the karma.)
     func dismissCelebration() {
-        if let current = pass, current.status == .departed, current.thanksReceived {
+        if let current = pass {
+            guard current.status != .armed else { phase = .dismissed; return }
             cleanupLocal(passID: current.id)
-            pass = nil
+        } else {
+            deps.passStore.clear()
         }
+        pass = nil
+        showsOtherPassNote = false
         phase = .dismissed
+    }
+
+    /// Drops a pass that can no longer be acted on, ahead of a fresh scan.
+    private func clearTerminalPass(_ terminal: HandoffActivePass) {
+        let wasArmed = terminal.status == .armed
+        cleanupLocal(passID: terminal.id)
+        pass = nil
+        showsOtherPassNote = false
+        showCancelConfirm = false
+        if wasArmed && activityStarted { Task { await endActivityIfStarted(.ended) } }
     }
 
     // MARK: - Teardown
@@ -633,6 +668,7 @@ final class DriverFlowController {
         guard let current = pass else { phase = newPhase; return }
         cleanupLocal(passID: current.id)
         pass = nil
+        showsOtherPassNote = false
         let activityPhase: SpotPassActivityAttributes.Phase = newPhase == .cancelled ? .cancelled : .ended
         await endActivityIfStarted(activityPhase)
         showCancelConfirm = false

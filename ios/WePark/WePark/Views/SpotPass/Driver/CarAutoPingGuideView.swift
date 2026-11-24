@@ -2,7 +2,7 @@
 //  CarAutoPingGuideView.swift
 //  Views/SpotPass/Driver
 //
-//  Spot Pass C2 (spec 7.5, design item 8): "Set up car auto-ping". WePark exposes the "I'm leaving"
+//  Spot Pass C2 (spec 7.5, design item 8): the auto heads-up. WePark exposes the "I'm leaving"
 //  App Intent; the user builds the Shortcuts automation ("when my phone connects to my car")
 //  themselves because Apple does not allow an app to create or share a personal automation.
 //  The app can only GUIDE. No location permission is involved.
@@ -14,8 +14,8 @@
 import SwiftUI
 
 nonisolated enum CarAutoPingGuideContent {
-    static let title = "Set up car auto-ping"
-    static let intro = "Skip the tap. Your phone can tell your neighbor the moment it connects to your car."
+    static let title = "Auto heads\u{2011}up from your car"
+    static let intro = "Skip the tap. Your phone can give your neighbor a heads-up the moment it connects to your car."
     static let steps: [String] = [
         "Open Shortcuts and tap Automation.",
         "Tap New Automation, then choose CarPlay or Bluetooth, pick your car, and choose Is Connected.",

@@ -2110,7 +2110,8 @@ struct ContentView: View {
                 onboardingReplayAvailable: AppConstants.onboardingExperienceEnabled(),
                 hasParkedCar: parkPinService.parkedCar != nil,
                 fullPaletteMode: fullPaletteMode,
-                spotPassEnabled: AppConstants.spotHandoffEnabled
+                spotPassEnabled: AppConstants.spotHandoffEnabled,
+                driverPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass
             ),
             fullPaletteMode: fullPaletteMode,
             onSelect: { row in handleMoreMenuSelection(row) },
@@ -2141,6 +2142,10 @@ struct ContentView: View {
             // the same tap (independent presentation layers, same shape as the onboarding replay).
             activeSheet = dismissTargetOutsideBrowseNav
             presentSpotPass()
+        case .yourSpotPass:
+            // Back to an armed driver pass: dismiss More, raise the driver cover (its own layer).
+            activeSheet = dismissTargetOutsideBrowseNav
+            SpotPassDriverRuntime.shared.presentArmedPass()
         case .howWeParkWorks:
             // First-run onboarding §3.1/§3.2: dismiss More to the rest state AND present the
             // story deck as a REPLAY in the same tap — the deck's own `.fullScreenCover` and
