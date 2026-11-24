@@ -342,6 +342,18 @@ enum AppConstants {
     /// overlay, camera, display link - is ever created. Guard tests: `CurbPlacementSessionPolicyTests`.
     static let curbPinPlacementEnabled = false
 
+    /// Master flag for address-anchored parking (docs/specs/address-anchored-parking.md): the
+    /// placement card's "In front of 123 E 1st St" line, the same line on the parked-car sheet,
+    /// and the verified-only address in reminder notification bodies. The address comes from an
+    /// on-device MapKit reverse geocode and never leaves the phone (iCloud KVS + local
+    /// notifications only).
+    ///
+    /// DARK-SHIPS `false`. Flag off: no geocode is ever requested, the card reserves no extra
+    /// row (layout byte-identical), `ParkedCar.address` stays nil, nothing else changes.
+    /// NOT gated by this flag: the display-only `StreetNameFormatter` ordinals ("E 1st St"),
+    /// which only improve strings.
+    static let addressAnchoredParkingEnabled = false
+
     /// UserDefaults key: set to true once the placement mode's first-use hint pill ("Drag the map
     /// to place the pin") has been shown on this install. `BackgroundNoteGate` convention (see
     /// `CurbPlacementHintGate`); naming mirrors the other `wepark_<feature>_shown` keys.

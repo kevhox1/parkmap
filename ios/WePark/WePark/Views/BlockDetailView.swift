@@ -559,15 +559,15 @@ struct BlockDetailView: View {
 
     /// "<StreetName> — <SideLabel>"
     private var blockHeaderTitle: String {
-        let street = StreetNameNormalizer.canonical(segment.street)
+        let street = StreetNameFormatter.displayCanonical(segment.street)
         let side = sideLabel(segment.side)
         return "\(street) \u{2014} \(side)"
     }
 
     /// "between <from> and <to>"
     private var blockHeaderSubtitle: String {
-        let from = StreetNameNormalizer.canonical(segment.fromStreet)
-        let to   = StreetNameNormalizer.canonical(segment.to)
+        let from = StreetNameFormatter.displayCanonical(segment.fromStreet)
+        let to   = StreetNameFormatter.displayCanonical(segment.to)
         return "between \(from) and \(to)"
     }
 

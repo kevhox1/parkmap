@@ -515,6 +515,9 @@ struct ContentView: View {
 
     /// W5: Single-pin persistence service. Loaded once at app launch.
     @State private var parkPinService = ParkPinService()
+    /// Address-anchored parking triggers + the placement card's address (flag
+    /// `addressAnchoredParkingEnabled`; inert when off).
+    @State private var addressCoordinator = ParkingAddressCoordinator()
 
     /// W5.1: User location service for the recenter button.
     @State private var locationService = LocationService()
@@ -5534,6 +5537,7 @@ struct ContentView: View {
         // the map layer disagree about whether a session is live, reconcile through
         // `endPlacement`. No-op when both agree (always, flag-off).
         healStuckCurbPlacement()
+        ensureParkedCarAddress()
         bannerState = aspService.suspensionState(at: .nowET)
         // Re-sync mute state in case it changed while backgrounded (edge case).
         notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
@@ -5866,7 +5870,8 @@ struct ContentView: View {
             tier: tier,
             fullHeight: fullHeight,
             bottomInset: Double(window.safeAreaInsets.bottom),
-            wantsLink: wantsLink
+            wantsLink: wantsLink,
+            wantsAddress: AppConstants.addressAnchoredParkingEnabled
         )
         #if DEBUG
         if !selection.fits {
@@ -5954,6 +5959,7 @@ struct ContentView: View {
         if adjusted != ambientLookUserAdjusted { ambientLookUserAdjusted = adjusted }
 
         curbPlacement = nil
+        addressCoordinator.clearPlacement()
 
         // A deferred recenter (see `handleLocationUpdate`) has no fix scheduled to complete it:
         // ask for one single-shot fix so it is re-queued rather than waiting for an unrelated one.
@@ -6103,6 +6109,16 @@ struct ContentView: View {
         session.outcome = outcome
         session.oppositeSideLoaded = opposite
         curbPlacement = session
+        // Address-anchored parking: debounced re-resolve for the new snap, or invalidate when no
+        // curb owns the pin. Inert flag-off. Never touches the map / camera.
+        if AppConstants.addressAnchoredParkingEnabled {
+            switch outcome {
+            case .snapped(let result):
+                addressCoordinator.placementSnapChanged(ParkingAddressRequest(snap: result))
+            case .noCurbInRange:
+                addressCoordinator.placementSnapChanged(nil)
+            }
+        }
         if needsNearestProbe {
             // `handleRegionChanged` (which refreshes `region`) is hopped to the main queue by the
             // map layer right after the settle that produced this outcome; hop behind it so the
@@ -6154,6 +6170,8 @@ struct ContentView: View {
             outcome: session.outcome,
             fallbackPin: coordinatorActions.placementPinCoordinate() ?? session.seed
         )
+        // Read the card's resolved address BEFORE the session ends (it is cleared with it).
+        let resolvedAddress = AppConstants.addressAnchoredParkingEnabled ? addressCoordinator.placementAddress : nil
         endCurbPlacement(restore: false)
         activeSheet = driveModeDefaultRestStateSheet()
         let intent = PinDropIntent(
@@ -6163,7 +6181,7 @@ struct ContentView: View {
             detectedSegmentDistance: target.distanceMeters,
             alternativeCandidates: []
         )
-        confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true))
+        confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true), address: resolvedAddress)
     }
 
     /// "Next" (pill) and the quiet "Report something here" link (long-press): leave the mode,
@@ -6252,6 +6270,10 @@ struct ContentView: View {
                 oppositeSideLoaded: session.oppositeSideLoaded,
                 nearestCurb: session.nearestCurb,
                 usesMetricSystem: usesMetric
+            )
+            .withAddress(
+                addressCoordinator.placementAddress,
+                reservesRow: AppConstants.addressAnchoredParkingEnabled
             )
             CurbPlacementOverlay(
                 model: model,
@@ -6995,7 +7017,7 @@ struct ContentView: View {
     // MARK: - W5: Confirm pin drop (from ParkConfirmView)
 
     /// W7: Updated to accept PinConfirmResult (wraps intent + notifyOnRestriction).
-    private func confirmPinDrop(result: PinConfirmResult) {
+    private func confirmPinDrop(result: PinConfirmResult, address: ParkingAddress? = nil) {
         let intent = result.intent
 
         // W6: Capture the current car ID BEFORE save() overwrites parkedCar.
@@ -7014,9 +7036,33 @@ struct ContentView: View {
             fromStreet: intent.detectedSegment?.fromStreet,
             toStreet: intent.detectedSegment?.to,
             parkedAt: .nowET,
-            notifyOnRestriction: result.notifyOnRestriction
+            notifyOnRestriction: result.notifyOnRestriction,
+            address: address
         )
         parkPinService.save(car)
+        // Address-anchored parking: a car saved without an address (offline / not resolved yet)
+        // gets one in the background. Never blocks the save; inert flag-off.
+        ensureParkedCarAddress()
+    }
+
+    /// Fills in the current car's address (if it has none) and, once it lands, re-schedules the
+    /// car's reminders so a VERIFIED address can appear in the body. Silent on every failure.
+    /// Called after a park, and on foreground (retry after an offline failure / car synced from an
+    /// older build). Flag-off: returns immediately.
+    private func ensureParkedCarAddress() {
+        guard AppConstants.addressAnchoredParkingEnabled,
+              let car = parkPinService.parkedCar, car.address == nil else { return }
+        let segment = tileLoader.segments.first { $0.id == car.detectedSegmentID }
+        addressCoordinator.ensureAddress(for: car, segment: segment) { address, carID in
+            guard let updated = parkPinService.updateAddress(address, forCarID: carID) else { return }
+            guard address.confidence == .verified, updated.notifyOnRestriction, !notificationsMuted else { return }
+            NotificationScheduler.shared.cancelAllThenSchedule(
+                for: updated,
+                oldCarID: updated.id,
+                loadedSegments: tileLoader.segments,
+                engine: engine
+            )
+        }
     }
 
     // MARK: - W5: Open ParkedCarDetailView

@@ -50,12 +50,12 @@ final class SpotPlacementNearLabelTests: XCTestCase {
 
     func testNearLabel_fractionZero_nearFromStreet() {
         let result = SpotPlacementCopy.nearLabel(fraction: 0.0, fromStreet: "SPRING STREET", toStreet: "BROOME STREET")
-        XCTAssertEqual(result, "near SPRING ST")
+        XCTAssertEqual(result, "near Spring St")
     }
 
     func testNearLabel_fractionJustBelow0_4_nearFromStreet() {
         let result = SpotPlacementCopy.nearLabel(fraction: 0.39, fromStreet: "SPRING STREET", toStreet: "BROOME STREET")
-        XCTAssertEqual(result, "near SPRING ST")
+        XCTAssertEqual(result, "near Spring St")
     }
 
     /// Boundary: exactly 0.4 must NOT count as "near from" — the JS source uses a strict
@@ -78,12 +78,12 @@ final class SpotPlacementNearLabelTests: XCTestCase {
 
     func testNearLabel_fractionJustAbove0_6_nearToStreet() {
         let result = SpotPlacementCopy.nearLabel(fraction: 0.61, fromStreet: "SPRING STREET", toStreet: "BROOME STREET")
-        XCTAssertEqual(result, "near BROOME ST")
+        XCTAssertEqual(result, "near Broome St")
     }
 
     func testNearLabel_fractionOne_nearToStreet() {
         let result = SpotPlacementCopy.nearLabel(fraction: 1.0, fromStreet: "SPRING STREET", toStreet: "BROOME STREET")
-        XCTAssertEqual(result, "near BROOME ST")
+        XCTAssertEqual(result, "near Broome St")
     }
 }
 
@@ -94,19 +94,19 @@ final class SpotPlacementConfirmCopyTests: XCTestCase {
     func testConfirmTitle_matchesStreetSideFormat() {
         let seg = placementFixtureSegment(side: "E")
         let result = SpotPlacementCopy.confirmTitle(segment: seg)
-        XCTAssertEqual(result, "MOTT ST (east side)",
+        XCTAssertEqual(result, "Mott St (east side)",
             "Format: {canonical street} ({lowercased side name}) — design/prototype.html:1012's placeTitle")
     }
 
     func testConfirmSubtitle_midBlock_includesBtwnCrossStreets() {
         let seg = placementFixtureSegment()
         let result = SpotPlacementCopy.confirmSubtitle(segment: seg, positionFraction: 0.5)
-        XCTAssertEqual(result, "mid-block · btwn SPRING ST & BROOME ST")
+        XCTAssertEqual(result, "mid-block · btwn Spring St & Broome St")
     }
 
     func testConfirmSubtitle_nearFromStreet_usesNearLabel() {
         let seg = placementFixtureSegment()
         let result = SpotPlacementCopy.confirmSubtitle(segment: seg, positionFraction: 0.1)
-        XCTAssertEqual(result, "near SPRING ST · btwn SPRING ST & BROOME ST")
+        XCTAssertEqual(result, "near Spring St · btwn Spring St & Broome St")
     }
 }

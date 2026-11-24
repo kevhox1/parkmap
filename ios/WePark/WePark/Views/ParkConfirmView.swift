@@ -181,7 +181,7 @@ struct ParkConfirmView: View {
                     intent.alternativeCandidates = newAlts
                 } label: {
                     HStack {
-                        Text("\(StreetNameNormalizer.canonical(candidate.segment.street)) (\(Int(candidate.distanceMeters.rounded()))m)")
+                        Text("\(StreetNameFormatter.displayCanonical(candidate.segment.street)) (\(Int(candidate.distanceMeters.rounded()))m)")
                             .font(.subheadline)
                             .foregroundStyle(Color.accentColor)
                         Spacer()
@@ -228,11 +228,11 @@ struct ParkConfirmView: View {
     // MARK: - Helpers
 
     private func blockHeaderTitle(_ seg: Segment) -> String {
-        "\(StreetNameNormalizer.canonical(seg.street)) \u{2014} \(sideLabel(seg.side))"
+        "\(StreetNameFormatter.displayCanonical(seg.street)) \u{2014} \(sideLabel(seg.side))"
     }
 
     private func blockHeaderSubtitle(_ seg: Segment) -> String {
-        "between \(StreetNameNormalizer.canonical(seg.fromStreet)) and \(StreetNameNormalizer.canonical(seg.to))"
+        "between \(StreetNameFormatter.displayCanonical(seg.fromStreet)) and \(StreetNameFormatter.displayCanonical(seg.to))"
     }
 
     private func sideLabel(_ code: String) -> String {
@@ -247,7 +247,7 @@ struct ParkConfirmView: View {
 
     private var confirmAccessibilityStreet: String {
         guard let seg = intent.detectedSegment else { return "this location" }
-        return StreetNameNormalizer.canonical(seg.street)
+        return StreetNameFormatter.displayCanonical(seg.street)
     }
 }
 

@@ -97,6 +97,11 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
     ) -> Bool {
         // AC-W6.18: delegate must be set before the app finishes launching.
         UNUserNotificationCenter.current().delegate = self
+        // Address-anchored parking: the category whose hidden-previews placeholder keeps the
+        // verified address off the lock screen when previews are off. Inert flag-off.
+        if AppConstants.addressAnchoredParkingEnabled {
+            NotificationScheduler.registerAddressCategory()
+        }
         return true
     }
 

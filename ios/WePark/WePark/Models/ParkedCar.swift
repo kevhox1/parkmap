@@ -68,6 +68,12 @@ struct ParkedCar: Codable, Identifiable {
     /// after pin drop without losing the setting across app relaunches.
     let notifyOnRestriction: Bool
 
+    /// Address-anchored parking (docs/specs/address-anchored-parking.md section 4): the human
+    /// anchor ("In front of 123 E 1st St"). Optional and omitted from the JSON when nil, so
+    /// older builds ignore it and pre-feature blobs decode with `address == nil`. Never sent to
+    /// any server; lives on-device and in the user's own iCloud key-value store only.
+    let address: ParkingAddress?
+
     // MARK: - CodingKeys
 
     private enum CodingKeys: String, CodingKey {
@@ -81,6 +87,7 @@ struct ParkedCar: Codable, Identifiable {
         case toStreet
         case parkedAt
         case notifyOnRestriction
+        case address
     }
 
     // MARK: - Custom decode (for pre-W7 migration)
@@ -98,6 +105,8 @@ struct ParkedCar: Codable, Identifiable {
         parkedAt           = try container.decode(Date.self,    forKey: .parkedAt)
         // Safe decoding default — existing pins before W7 will get notifyOnRestriction = true.
         notifyOnRestriction = try container.decodeIfPresent(Bool.self, forKey: .notifyOnRestriction) ?? true
+        // Missing key (pre-feature blob or older-build write) => nil.
+        address = try container.decodeIfPresent(ParkingAddress.self, forKey: .address)
     }
 
     // MARK: - Memberwise init (used by callers that construct ParkedCar directly)
@@ -112,7 +121,8 @@ struct ParkedCar: Codable, Identifiable {
         fromStreet: String?,
         toStreet: String?,
         parkedAt: Date,
-        notifyOnRestriction: Bool = true
+        notifyOnRestriction: Bool = true,
+        address: ParkingAddress? = nil
     ) {
         self.id                 = id
         self.latitude           = latitude
@@ -124,5 +134,23 @@ struct ParkedCar: Codable, Identifiable {
         self.toStreet           = toStreet
         self.parkedAt           = parkedAt
         self.notifyOnRestriction = notifyOnRestriction
+        self.address            = address
+    }
+
+    /// A copy with a different `address` (same `id`: "address filled in later" is not a new car).
+    func withAddress(_ address: ParkingAddress?) -> ParkedCar {
+        ParkedCar(
+            id: id,
+            latitude: latitude,
+            longitude: longitude,
+            detectedSegmentID: detectedSegmentID,
+            detectedSide: detectedSide,
+            street: street,
+            fromStreet: fromStreet,
+            toStreet: toStreet,
+            parkedAt: parkedAt,
+            notifyOnRestriction: notifyOnRestriction,
+            address: address
+        )
     }
 }

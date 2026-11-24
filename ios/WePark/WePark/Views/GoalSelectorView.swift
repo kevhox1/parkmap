@@ -567,9 +567,7 @@ private struct GoalTile: View {
                 Image(systemName: goal.dockIcon)
                     .font(.title)
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(goal.dockPrimary)
-                        .font(.headline.bold())
-                        .multilineTextAlignment(.leading)
+                    horizontalTitle
                     if showsSubLabel {
                         Text(goal.dockSubLabel)
                             .font(.footnote)
@@ -617,6 +615,28 @@ private struct GoalTile: View {
 
 
 extension GoalTile {
+    /// The title of the full-width horizontal layout (the AX1+ goal card). A single-word name
+    /// ("Overnight") must never break INSIDE the word ("Overnigh / t" at AX3, QA
+    /// docs/qa/pr156-preflip-polish.md #1): it gets exactly one line and shrinks (to 0.6x) when the
+    /// icon and the Change chevron leave it too little width. A multi-word name keeps its natural
+    /// wrapping unchanged (it can only break at a space). The line count never grows, so the
+    /// dock height budget (docs/design/goal-first-ambient-design.md AX dock addenda) is unchanged
+    /// or smaller.
+    @ViewBuilder
+    fileprivate var horizontalTitle: some View {
+        if goalTitleLines(goal.dockPrimary).count == 1 {
+            Text(goal.dockPrimary)
+                .font(.headline.bold())
+                .multilineTextAlignment(.leading)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        } else {
+            Text(goal.dockPrimary)
+                .font(.headline.bold())
+                .multilineTextAlignment(.leading)
+        }
+    }
+
     /// The three-across tile title. Below `.xxLarge` it is the original `lineLimit(2)` Text,
     /// byte-for-byte (the dock's measured height at `.large` is pinned by a test). From `.xxLarge`
     /// up a goal name must never break INSIDE a word ("Overnig / ht" on an SE at XXXL): the name
