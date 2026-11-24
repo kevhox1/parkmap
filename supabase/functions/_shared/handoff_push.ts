@@ -49,6 +49,9 @@ export function approxMinutes(leaveAt: string | null, nowMs: number): number | n
   return mins > 5 ? mins : null;
 }
 
+/** iOS registers this notification category (NotificationCategoryRegistry.swift). Seeker visible alerts only. */
+export const SEEKER_CATEGORY = "wepark_spot_pass_seeker";
+
 export function seekerAlertBody(kind: "armed" | "departed", row: HandoffPushRow, nowMs: number): Record<string, unknown> {
   let body: string;
   if (kind === "armed") {
@@ -62,6 +65,7 @@ export function seekerAlertBody(kind: "armed" | "departed", row: HandoffPushRow,
       alert: { title: "Spot Pass", body },
       sound: "default",
       "thread-id": "spot-pass",
+      category: SEEKER_CATEGORY,
     },
     kind,
     handoff_id: row.id,
