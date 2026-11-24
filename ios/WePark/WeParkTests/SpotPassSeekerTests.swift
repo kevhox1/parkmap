@@ -19,6 +19,7 @@
 import XCTest
 import CoreImage
 import UserNotifications
+import SwiftUI
 @testable import WePark
 
 // MARK: - 1. Countdown
@@ -1347,5 +1348,72 @@ final class SpotPassSupportTests: XCTestCase {
         _ = try await api.createHandoff(showName: false)
         let first = try await api.fetchStatus(id: UUID())
         XCTAssertEqual(first.status, .created)
+    }
+
+    // MARK: - Follow-up: routing by payload keys, not category
+
+    func testParse_routesByKindAndHandoffID_withoutCategory() {
+        let id = UUID()
+        let userInfo: [AnyHashable: Any] = [
+            "aps": ["alert": ["title": "Spot Pass", "body": "Your neighbor is pulling out now."], "thread-id": "spot-pass"],
+            "kind": "departed",
+            "handoff_id": id.uuidString
+        ]
+        let event = SpotPassPushEvent.parse(userInfo: userInfo, opened: true)
+        XCTAssertEqual(event?.kind, .departed)
+        XCTAssertEqual(event?.handoffID, id)
+    }
+
+    func testParse_routesIdenticallyWithOrWithoutCategory() {
+        let id = UUID().uuidString
+        let without: [AnyHashable: Any] = ["aps": ["alert": "x"], "kind": "armed", "handoff_id": id]
+        let withCategory: [AnyHashable: Any] = ["aps": ["alert": "x", "category": "wepark_spot_pass_seeker"], "kind": "armed", "handoff_id": id]
+        let other: [AnyHashable: Any] = ["aps": ["alert": "x", "category": "some_other_category"], "kind": "armed", "handoff_id": id]
+        XCTAssertEqual(SpotPassPushEvent.parse(userInfo: without, opened: false),
+                       SpotPassPushEvent.parse(userInfo: withCategory, opened: false))
+        XCTAssertEqual(SpotPassPushEvent.parse(userInfo: without, opened: false),
+                       SpotPassPushEvent.parse(userInfo: other, opened: false))
+        XCTAssertNotNil(SpotPassPushEvent.parse(userInfo: without, opened: false))
+    }
+
+    func testRouter_categorylessPayload_isHandledWhenEnabled() {
+        let inbox = SpotPassPushInbox()
+        let userInfo: [AnyHashable: Any] = ["aps": ["alert": "x"], "kind": "armed", "handoff_id": UUID().uuidString]
+        XCTAssertTrue(SpotPassPushRouter.handle(userInfo: userInfo, opened: true, enabled: true, inbox: inbox, center: NotificationCenter()))
+        XCTAssertEqual(inbox.pending?.kind, .armed)
+    }
+
+    // MARK: - Follow-up F1: Spot Pass rationale shown once
+
+    func testRationale_shownOnlyWhenUndeterminedAndUnseen() {
+        XCTAssertTrue(SpotPassPreferences.shouldShowRationale(authorizationStatus: .notDetermined, alreadySeen: false))
+        XCTAssertFalse(SpotPassPreferences.shouldShowRationale(authorizationStatus: .notDetermined, alreadySeen: true))
+        XCTAssertFalse(SpotPassPreferences.shouldShowRationale(authorizationStatus: .denied, alreadySeen: false))
+        XCTAssertFalse(SpotPassPreferences.shouldShowRationale(authorizationStatus: .authorized, alreadySeen: false))
+    }
+
+    func testRationaleSeenFlag_persistsAndDefaultsFalse() {
+        let suite = "spotpass.rationale.tests.\(UUID().uuidString)"
+        guard let defaults = UserDefaults(suiteName: suite) else { return XCTFail("no suite") }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let prefs = SpotPassPreferences(defaults: defaults)
+        XCTAssertFalse(prefs.notificationRationaleSeen)
+        prefs.notificationRationaleSeen = true
+        XCTAssertTrue(SpotPassPreferences(defaults: defaults).notificationRationaleSeen)
+    }
+
+    func testRationaleCopy_usesHeadsUpNotPing() {
+        let copy = [SpotPassCopy.rationaleTitle, SpotPassCopy.rationaleBody, SpotPassCopy.rationaleAllow, SpotPassCopy.rationaleNotNow]
+        for line in copy { XCTAssertFalse(line.lowercased().contains("ping"), line) }
+    }
+
+    // MARK: - Follow-up F5: pinned Stop button only when it cannot cover content
+
+    func testStopButtonPinning() {
+        XCTAssertTrue(SpotPassBadgeView.pinsStopButton(short: false, landscape: false, dynamicTypeSize: .large))
+        XCTAssertTrue(SpotPassBadgeView.pinsStopButton(short: true, landscape: false, dynamicTypeSize: .large))
+        XCTAssertFalse(SpotPassBadgeView.pinsStopButton(short: true, landscape: false, dynamicTypeSize: .xxxLarge))
+        XCTAssertFalse(SpotPassBadgeView.pinsStopButton(short: false, landscape: false, dynamicTypeSize: .accessibility5))
+        XCTAssertFalse(SpotPassBadgeView.pinsStopButton(short: false, landscape: true, dynamicTypeSize: .large))
     }
 }

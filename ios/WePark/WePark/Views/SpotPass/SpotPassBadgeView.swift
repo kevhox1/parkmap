@@ -42,22 +42,39 @@ struct SpotPassBadgeView: View {
         GeometryReader { proxy in
             let short = proxy.size.height < SpotPassTheme.shortScreenHeight
             let landscape = verticalSizeClass == .compact
+            let pinned = Self.pinsStopButton(short: short, landscape: landscape, dynamicTypeSize: dynamicTypeSize)
             ScrollView {
-                Group {
-                    if landscape {
-                        landscapeContent
-                    } else {
-                        portraitContent(short: short)
+                VStack(spacing: 16) {
+                    Group {
+                        if landscape {
+                            landscapeContent
+                        } else {
+                            portraitContent(short: short)
+                        }
+                    }
+                    // F5: when there is not room to pin the button, it is the last item of the
+                    // scrolling content, so it can never cover the alias or the countdown.
+                    if !landscape && !pinned {
+                        stopButton(short: short)
+                            .padding(.horizontal, 4)
                     }
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
-                .padding(.bottom, 8)
+                // When pinned, leave room under the content for the bar so nothing rests behind it.
+                .padding(.bottom, pinned ? (short ? 20 : 12) : 24)
             }
             .scrollBounceBehavior(.basedOnSize)
             .safeAreaInset(edge: .top, spacing: 0) { topRow }
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                if !landscape { stopButton(short: short).padding(.horizontal, 16).padding(.vertical, 8) }
+                if pinned {
+                    stopButton(short: short)
+                        .padding(.horizontal, 16)
+                        .padding(.top, short ? 12 : 8)
+                        .padding(.bottom, short ? 12 : 8)
+                        .frame(maxWidth: .infinity)
+                        .background(SpotPassTheme.ink)
+                }
             }
         }
         .spotPassBackdrop()
@@ -74,6 +91,16 @@ struct SpotPassBadgeView: View {
         }
         .onDisappear { controller.end() }
         .task { await refreshNotificationStatus() }
+    }
+
+    /// F5: pin "Stop waiting" to the bottom only when the card and the button both fit. At
+    /// accessibility sizes, and on short screens at large sizes, the card is taller than the
+    /// screen, so the button joins the scrolling content instead of covering it.
+    nonisolated static func pinsStopButton(short: Bool, landscape: Bool, dynamicTypeSize: DynamicTypeSize) -> Bool {
+        if landscape { return false }
+        if dynamicTypeSize.isAccessibilitySize { return false }
+        if short && dynamicTypeSize >= .xxLarge { return false }
+        return true
     }
 
     // MARK: - Pieces
@@ -181,6 +208,10 @@ struct SpotPassBadgeView: View {
             Label("WePark", systemImage: "mappin.circle.fill")
                 .font(.headline)
                 .foregroundStyle(.white)
+                // F5: never break the wordmark mid-word at large text sizes.
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
             Spacer()
             KarmaChip(label: store.karmaBucketLabel, compact: dynamicTypeSize.isAccessibilitySize)
         }

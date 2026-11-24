@@ -608,7 +608,7 @@ Height: 12 + 44 + 18 + 8 + 56 + 12 = **150 pt**. Alert: system sound is the defa
 | **Thanks** | Glyph + settled chip | **Thanks, neighbor!** / **Bodega Cat got your spot.** chip **+5 karma** (solid), ends 10 min later |
 | **Cancelled** | one line, dismisses immediately | **Pass cancelled.** |
 | **Ended / expired** | one line | **This pass has ended. Thanks for being ready, neighbor.** |
-| **Auto-detect armed** | The caption row gains a trailing `location.fill` 12 pt icon + text | **Bodega Cat · auto-ping on** (full app only, flag-gated, section 5.4) |
+| **Auto-detect armed** | The caption row gains a trailing `location.fill` 12 pt icon + text | **Bodega Cat · auto heads-up on** (full app only, flag-gated, section 5.4) |
 
 ### 5.2 Driver, **clip** variant (no interactive intent, F-spec §4)
 
@@ -645,9 +645,9 @@ Dynamic Island keylines: `keylineTint(passIndigo)`. Never green.
 
 Ships last behind `spotHandoffAutoDetectEnabled`. The OS shows the blue status-bar pill; we add three visible, non-alarming signals, never a banner that competes with the Leaving now button:
 
-1. **Live Activity caption** (5.1c): `location.fill` icon + "auto-ping on".
-2. **In-app driver screen row** (full app), a 64 pt material row: **Auto-ping is on** / **We'll tell Bodega Cat when you drive off. This stops after 60 minutes or when you cancel.** / trailing **Turn off** (44 pt min).
-3. **Window ended:** one-line toast **Auto-ping is off.** (no sound, no haptic).
+1. **Live Activity caption** (5.1c): `location.fill` icon + "auto heads-up on".
+2. **In-app driver screen row** (full app), a 64 pt material row: **Auto heads-up is on** / **We'll tell Bodega Cat when you drive off. This stops after 60 minutes or when you cancel.** / trailing **Turn off** (44 pt min).
+3. **Window ended:** one-line toast **Auto heads-up is off.** (no sound, no haptic).
 
 **Enable screen** (one-time, second explicit opt-in, spec §9 item 1), a full-height sheet, white-on-ink, 64 pt primary:
 
@@ -657,9 +657,9 @@ Ships last behind `spotHandoffAutoDetectEnabled`. The OS shows the blue status-b
 | Bullet 1 | **Only while a Spot Pass is active.** Up to 60 minutes, then it stops. |
 | Bullet 2 | **Your location stays on your phone.** WePark only sends "leaving", never where. |
 | Bullet 3 | **You'll see a blue pill at the top** while it's on. Cancel anytime. |
-| Primary | **Turn on auto-ping** |
+| Primary | **Turn on auto heads-up** |
 | Secondary | **Not now** |
-| No saved car | **Save your car's spot first** (disabled primary, helper "Auto-ping needs to know where your car is parked.") |
+| No saved car | **Save your car's spot first** (disabled primary, helper "Auto heads-up needs to know where your car is parked.") |
 
 The auto-detect UI must never imply it replaces the button: the Leaving now button stays at full size at all times.
 
@@ -893,7 +893,7 @@ On **Show me around** or **Skip**: set `hasSeenOnboardingStory = true`, `hasSeen
 
 ### 8.3 Notifications and permissions in this funnel (restating the design rule)
 
-No prompt on the welcome. **Notification rationale** (`NotificationRationaleView`) appears **at the first action that needs it**: creating a Spot Pass as a seeker (section 9.2) or enabling auto-ping (5.4). Rationale copy for Spot Pass: **"Know the moment a neighbor scans. Spot Pass pings you when someone's leaving."** / **Allow notifications** / **Not now** (then the badge keeps working with the in-app state and a banner: **Notifications are off. Keep this screen open to see when a neighbor scans.** with a Settings link).
+No prompt on the welcome. **Notification rationale** (Spot Pass's own `SpotPassNotificationRationaleView`, shown once) appears **at the first action that needs it**: creating a Spot Pass as a seeker (section 9.2) or enabling auto heads-up (5.4). Rationale copy for Spot Pass: **"Get a heads-up. We'll let you know the moment your neighbor is pulling out, even if your screen is locked."** / **Allow notifications** / **Not now** (then the badge keeps working with the in-app state and a banner: **Notifications are off. Keep this screen open to see when a neighbor scans.** with a Settings link).
 
 ---
 
@@ -918,7 +918,7 @@ First run only, a `.medium` sheet:
 |      their car.                              |
 |  (2) They scan it with their camera. No app  |
 |      needed.                                 |
-|  (3) You get a ping the moment they pull out.|
+|  (3) You get a heads-up the moment they pull out.|  "heads-up", never "ping" (§10.1 banned-word rule)
 |                                              |
 |  Hold it up to your window. Please set it up |  .footnote secondary
 |  while parked.                               |
@@ -1026,7 +1026,7 @@ Covered per-surface above. Summary: badge scroll rules (2.7); explainer sheet be
 | **Never mention location, address, or where a car is.** | Copy says "this block", "this side". |
 | **AC-31 vocabulary.** | No "avoid/ticket/fine/dodge/evade". "Move it" is the app's own honest phrase. |
 
-**Words we use:** pass, spot, neighbor, thanks, leaving, pulling out, "on my way". **Words we avoid:** ping (internal jargon; user-facing "tell"/"let them know"), karma *points*, "claim", "token", "scan to win", "free spot" (green/free ambiguity per goal-first §0).
+**Words we use:** pass, spot, neighbor, thanks, leaving, pulling out, "on my way". **Words we avoid:** ping (internal jargon, banned in user-facing copy: say "heads-up"; user-facing "tell"/"let them know"), karma *points*, "claim", "token", "scan to win", "free spot" (green/free ambiguity per goal-first §0).
 
 **Do / Don't pairs**
 

@@ -394,6 +394,18 @@ final class PushRegistrationService {
     /// — tests inject `{ true }` explicitly instead of mutating the immutable global constant.
     private let communityEnabledProvider: () -> Bool
 
+    /// Spot Pass follow-up (F2): the seeker's armed/departed alerts go to the seeker's own
+    /// `device_push_tokens` rows (`send-handoff-push` looks them up by `user_id` + `environment`
+    /// only, no zone), so with `spotHandoffEnabled` on the token is registered and uploaded even
+    /// when community is off, and without a resolved zone (`zone_id` is nullable). With this
+    /// flag off, every code path below behaves exactly as before.
+    private let spotHandoffEnabledProvider: () -> Bool
+
+    /// True when either feature wants the device token on the server.
+    private var registrationWanted: Bool {
+        communityEnabledProvider() || spotHandoffEnabledProvider()
+    }
+
     // MARK: - State
 
     /// The hex-encoded APNs device token, once `didReceiveDeviceToken(_:)` has fired at least
@@ -417,7 +429,7 @@ final class PushRegistrationService {
     private struct UploadKey: Equatable {
         let tokenHex: String
         let environment: String
-        let zoneId: String
+        let zoneId: String?
         let userId: UUID?
     }
     private var lastUploaded: UploadKey?
@@ -459,7 +471,8 @@ final class PushRegistrationService {
         authService: SupabaseAuthService,
         urlSession: URLSession = .shared,
         environmentProvider: @escaping () -> String = { APNSEnvironment.detectCurrent() },
-        communityEnabledProvider: @escaping () -> Bool = { AppConstants.communityEnabled }
+        communityEnabledProvider: @escaping () -> Bool = { AppConstants.communityEnabled },
+        spotHandoffEnabledProvider: @escaping () -> Bool = { AppConstants.spotHandoffEnabled }
     ) {
         self.supabaseURL = supabaseURL
         self.supabaseAnonKey = supabaseAnonKey
@@ -467,6 +480,7 @@ final class PushRegistrationService {
         self.urlSession = urlSession
         self.environmentProvider = environmentProvider
         self.communityEnabledProvider = communityEnabledProvider
+        self.spotHandoffEnabledProvider = spotHandoffEnabledProvider
     }
 
     /// Convenience initializer reading `SUPABASE_URL` / `SUPABASE_ANON_KEY` from `Bundle.main`
@@ -495,7 +509,7 @@ final class PushRegistrationService {
     /// `registerForRemoteNotifications()` itself is idempotent and safe to call repeatedly
     /// per Apple's own documentation — no internal guard needed here beyond the flag check.
     func requestRegistrationIfEnabled() {
-        guard communityEnabledProvider() else { return }
+        guard registrationWanted else { return }
         UNUserNotificationCenter.current().getNotificationSettings { settings in
             guard settings.authorizationStatus == .authorized
                 || settings.authorizationStatus == .provisional
@@ -513,7 +527,7 @@ final class PushRegistrationService {
     /// drain-via-onChange-in-ContentView pattern, W6.1's proven fix for the "subscriber not
     /// attached yet" race — see `WeParkApp.swift`).
     func didReceiveDeviceToken(_ deviceToken: Data) {
-        guard communityEnabledProvider() else { return }
+        guard registrationWanted else { return }
         deviceTokenHex = Self.hexString(from: deviceToken)
         attemptUpsert()
     }
@@ -533,7 +547,7 @@ final class PushRegistrationService {
     /// skipped (spec §2.9: "a token without a zone receives nothing by design — the server
     /// fans out per zone").
     func updateZone(_ zoneId: String?) {
-        guard communityEnabledProvider() else { return }
+        guard registrationWanted else { return }
         currentZoneId = zoneId
         attemptUpsert()
     }
@@ -543,7 +557,7 @@ final class PushRegistrationService {
     /// nothing has changed since the last successful upload (`attemptUpsert`'s own dedupe via
     /// `lastUploaded`).
     func handleAppForeground() {
-        guard communityEnabledProvider() else { return }
+        guard registrationWanted else { return }
         attemptUpsert()
     }
 
@@ -559,21 +573,24 @@ final class PushRegistrationService {
         userId: UUID,
         tokenHex: String,
         environment: String,
-        zoneId: String
+        zoneId: String?
     ) -> [String: Any] {
         [
             "user_id": userId.uuidString,
             "apns_token": tokenHex,
             "environment": environment,
-            "zone_id": zoneId,
+            // A nil zone (Spot Pass only) uploads SQL NULL; the community fan-out is per zone,
+            // so a NULL-zone row receives no community push, by design.
+            "zone_id": zoneId ?? NSNull(),
         ]
     }
 
     private func attemptUpsert() {
-        guard communityEnabledProvider(),
-              let tokenHex = deviceTokenHex,
-              let zoneId = currentZoneId
-        else { return }
+        guard registrationWanted, let tokenHex = deviceTokenHex else { return }
+        // Community needs a zone (spec §2.9). Spot Pass alone does not: an unresolved zone
+        // uploads NULL. With spot handoff off this guard is identical to the pre-F2 one.
+        let zoneId = currentZoneId
+        guard zoneId != nil || spotHandoffEnabledProvider() else { return }
         let environment = environmentProvider()
         let candidate = UploadKey(
             tokenHex: tokenHex,

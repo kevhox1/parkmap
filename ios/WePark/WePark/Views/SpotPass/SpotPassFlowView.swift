@@ -52,13 +52,15 @@ struct SpotPassFlowView: View {
             .sheet(isPresented: $showRationale, onDismiss: {
                 Task { await createPass() }
             }) {
-                NotificationRationaleView(
-                    onDismiss: { showRationale = false },
-                    onPermissionGranted: {}
+                SpotPassNotificationRationaleView(
+                    onFinished: { showRationale = false },
+                    onPermissionGranted: {
+                        // The seeker's armed/departed alerts are remote pushes, so register now.
+                        UIApplication.shared.registerForRemoteNotifications()
+                    }
                 )
-                .presentationDetents([.medium])
+                .presentationDetents([.medium, .large])
                 .interactiveDismissDisabled(true)
-                .presentationBackground(.regularMaterial)
                 .presentationCornerRadius(20)
             }
             .task { await start() }
@@ -162,10 +164,13 @@ struct SpotPassFlowView: View {
         }
     }
 
-    /// Asks for notification permission the first time (existing rationale sheet), then creates.
+    /// Shows the Spot Pass rationale once (F1), then creates. After "Not now" it just creates.
     private func requestCreate() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
-        if settings.authorizationStatus == .notDetermined {
+        if SpotPassPreferences.shouldShowRationale(
+            authorizationStatus: settings.authorizationStatus,
+            alreadySeen: SpotPassPreferences().notificationRationaleSeen
+        ) {
             showRationale = true
         } else {
             await createPass()

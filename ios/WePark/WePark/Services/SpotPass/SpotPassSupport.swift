@@ -13,6 +13,7 @@
 //
 
 import Foundation
+import UserNotifications
 import UIKit
 
 // MARK: - Persistence
@@ -56,9 +57,19 @@ final class UserDefaultsSpotPassPersistence: SpotPassPersistence {
 @MainActor
 struct SpotPassPreferences {
 
+    /// Whether to show the Spot Pass rationale before creating a pass: only while the system
+    /// permission is still undecided AND the user has not already seen the rationale.
+    nonisolated static func shouldShowRationale(
+        authorizationStatus: UNAuthorizationStatus,
+        alreadySeen: Bool
+    ) -> Bool {
+        authorizationStatus == .notDetermined && !alreadySeen
+    }
+
     nonisolated static let showFirstNameKey = "wepark.spotPass.showFirstName"
     nonisolated static let explainerSeenKey = "wepark.spotPass.explainerSeen"
     nonisolated static let nightModeKey = "wepark.spotPass.nightMode"
+    nonisolated static let notificationRationaleSeenKey = "wepark.spotPass.notificationRationaleSeen"
 
     let defaults: UserDefaults
 
@@ -75,6 +86,13 @@ struct SpotPassPreferences {
     var hasSeenExplainer: Bool {
         get { defaults.bool(forKey: Self.explainerSeenKey) }
         nonmutating set { defaults.set(newValue, forKey: Self.explainerSeenKey) }
+    }
+
+    /// The Spot Pass notification rationale has been shown and answered (allow or "Not now").
+    /// Once true it is never shown again; the pass relies on polling if notifications are off.
+    var notificationRationaleSeen: Bool {
+        get { defaults.bool(forKey: Self.notificationRationaleSeenKey) }
+        nonmutating set { defaults.set(newValue, forKey: Self.notificationRationaleSeenKey) }
     }
 
     /// Night brightness (70%) instead of maximum (design §2.6). Persisted.
