@@ -7,8 +7,9 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#0E0F24">
 <meta name="color-scheme" content="dark">
-<!-- Safari smart banner. Deliberately NO app-argument: the pass URL carries the secret token in its fragment. -->
-<meta name="apple-itunes-app" content="app-id=6777589379, app-clip-bundle-id=com.kevinhoxha.wepark.Clip">
+<!-- Safari smart banner: DISABLED during TestFlight (it sends people to the App Store listing). Restore at App Store launch.
+     Deliberately NO app-argument: the pass URL carries the secret token in its fragment.
+<meta name="apple-itunes-app" content="app-id=6777589379, app-clip-bundle-id=com.kevinhoxha.wepark.Clip"> -->
 <title>Spot Pass - WePark</title>
 <style>
   :root { --ink:#0E0F24; --ink2:#1B1E4B; --indigo:#6366F1; --lav:#A5A8FF; --text:#F2F3FF; --mute:#B9BCE0; --line:rgba(165,168,255,.35); }
@@ -121,7 +122,8 @@
   <div id="foot" hidden>
     <div class="card">
       <p><strong>Get the free WePark app</strong> for a lock-screen countdown, a heads-up when a spot opens near you, and neighbor karma. This web page can't do those, and it can't give you credit for helping.</p>
-      <a class="btn outline" href="https://apps.apple.com/app/id6777589379" rel="noopener noreferrer">Get WePark</a>
+      <!-- TestFlight public link (external group) until App Store launch; then https://apps.apple.com/app/id6777589379 -->
+      <a class="btn outline" href="https://testflight.apple.com/join/QhVnaG4C" rel="noopener noreferrer">Get WePark</a>
     </div>
     <button class="link" id="report" type="button">Report this pass</button>
   </div>
