@@ -161,6 +161,8 @@ nonisolated enum ClipCopy {
     // MARK: Live Activity
 
     static func activityCaption(name: String) -> String { "\(name) is waiting" }
+    /// C4 (design 5.4): the lock-screen caption while the armed-window auto-detect is running. Full app only.
+    static let autoDetectCaption = "auto heads-up on"
     static let activityPassed = "You passed a spot."
     static let activityEnded = "This pass has ended. Thanks for being ready, neighbor."
     static let activityLeavingNow = "Leaving now"

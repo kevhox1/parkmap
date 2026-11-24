@@ -797,6 +797,9 @@
 				EXCLUDED_SOURCE_FILE_NAMES = .gitkeep;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_OTHER_PREPROCESSOR_FLAGS = "-traditional";
+				INFOPLIST_PREPROCESS = YES;
+				INFOPLIST_PREPROCESSOR_DEFINITIONS = "SPOT_PASS_AUTODETECT_$(SPOT_PASS_AUTODETECT)";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "WePark uses your camera to photograph posted signs (like a film shoot or construction closure notice) as evidence for a community report. The photo is never shown to other users.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend nearby parking. Your location stays on your device — except the location of community reports you choose to submit.";
@@ -815,6 +818,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SPOT_PASS_AUTODETECT = NO;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
@@ -839,6 +843,9 @@
 				EXCLUDED_SOURCE_FILE_NAMES = .gitkeep;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = Info.plist;
+				INFOPLIST_OTHER_PREPROCESSOR_FLAGS = "-traditional";
+				INFOPLIST_PREPROCESS = YES;
+				INFOPLIST_PREPROCESSOR_DEFINITIONS = "SPOT_PASS_AUTODETECT_$(SPOT_PASS_AUTODETECT)";
 				INFOPLIST_KEY_ITSAppUsesNonExemptEncryption = NO;
 				INFOPLIST_KEY_NSCameraUsageDescription = "WePark uses your camera to photograph posted signs (like a film shoot or construction closure notice) as evidence for a community report. The photo is never shown to other users.";
 				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location to center the map on your block and recommend nearby parking. Your location stays on your device — except the location of community reports you choose to submit.";
@@ -857,6 +864,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				SPOT_PASS_AUTODETECT = NO;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;

@@ -13,6 +13,11 @@
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>
+#ifdef SPOT_PASS_AUTODETECT_YES
+		<!-- Spot Pass C4 armed-window auto-detect. Present ONLY when the SPOT_PASS_AUTODETECT build
+		     setting is YES (default NO in every configuration). See docs/specs/qr-spot-handoff.md 7.4. -->
+		<string>location</string>
+#endif
 	</array>
 	<key>CFBundleURLTypes</key>
 	<array>

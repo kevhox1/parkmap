@@ -53,7 +53,7 @@ struct ClipCelebrationView: View {
         }
         .overlay(alignment: .bottom) {
             if controller.showInstallCard {
-                ClipInstallCard(showsLockScreenLine: controller.activitiesEnabled, onGet: onGetApp, onNotNow: { controller.dismissInstallCard() })
+                ClipInstallCard(showsLockScreenLine: ClipInstallCardRules.showsLockScreenLine(activityStarted: controller.activityStarted), onGet: onGetApp, onNotNow: { controller.dismissInstallCard() })
                     .padding(12)
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
@@ -88,7 +88,7 @@ struct ClipCelebrationView: View {
 
 /// Our own copy; "Get WePark" presents the system SKOverlay (its banner copy cannot be changed, F5).
 struct ClipInstallCard: View {
-    /// False when Live Activities are off: never promise a lock-screen one-tap that cannot happen.
+    /// False unless a Live Activity actually started (see `ClipInstallCardRules`): never promise a lock-screen one-tap that cannot happen.
     var showsLockScreenLine = true
     var onGet: () -> Void
     var onNotNow: () -> Void

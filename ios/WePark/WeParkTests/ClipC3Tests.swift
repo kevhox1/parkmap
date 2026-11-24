@@ -86,6 +86,8 @@ private final class RecordingReminders: HandoffReminderScheduling {
 @MainActor
 private final class RecordingActivity: HandoffActivityControlling {
     var areActivitiesEnabled = true
+    /// Enabled in Settings, but `Activity.request` fails (budget limit): QA pr172 finding 1.
+    var failsToStart = false
     var onRemotePhase: ((SpotPassActivityAttributes.Phase) -> Void)?
     var token: String? = "ab12cd34ef56ab12cd34ef56ab12cd34ef56"
     private(set) var started = 0
@@ -93,7 +95,7 @@ private final class RecordingActivity: HandoffActivityControlling {
     private(set) var ended: [SpotPassActivityAttributes.Phase] = []
 
     func start(name: String, glyph: String, leaveAt: Date, startedAt: Date) async -> (didStart: Bool, token: String?) {
-        guard areActivitiesEnabled else { return (false, nil) }
+        guard areActivitiesEnabled, !failsToStart else { return (false, nil) }
         started += 1
         return (true, token)
     }
@@ -1697,5 +1699,31 @@ final class ClipFinishedPassLifecycleTests: XCTestCase {
         XCTAssertNil(relaunched.secret(for: UUID()))
         relaunched.clear()
         XCTAssertNil(DebugInMemoryHandoffSecretStore(defaults: defaults).secret(for: id))
+    }
+}
+
+// MARK: - Install card lock-screen line (QA pr172 finding 1)
+
+@MainActor
+final class ClipInstallCardRulesTests: XCTestCase {
+
+    func testLockScreenLine_showsOnlyWhenAnActivityStarted() {
+        XCTAssertTrue(ClipInstallCardRules.showsLockScreenLine(activityStarted: true))
+        XCTAssertFalse(ClipInstallCardRules.showsLockScreenLine(activityStarted: false))
+    }
+
+    func testEnabledButStartFailed_hidesTheLine() async {
+        let h = Harness()
+        h.activity.failsToStart = true
+        await h.armed()
+        XCTAssertTrue(h.controller.activitiesEnabled, "the setting is on")
+        XCTAssertFalse(h.controller.activityStarted)
+        XCTAssertFalse(ClipInstallCardRules.showsLockScreenLine(activityStarted: h.controller.activityStarted))
+    }
+
+    func testStarted_showsTheLine() async {
+        let h = Harness()
+        await h.armed()
+        XCTAssertTrue(ClipInstallCardRules.showsLockScreenLine(activityStarted: h.controller.activityStarted))
     }
 }
