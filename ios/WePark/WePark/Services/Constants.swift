@@ -295,6 +295,23 @@ enum AppConstants {
     /// `testSuggestAffordance_hidden_whenDisabled`.
     static let coverageRequestsEnabled = false
 
+    // MARK: - Spot Pass (QR spot handoff, `docs/specs/qr-spot-handoff.md`)
+
+    /// DARK-SHIPS `false` (same playbook as the flags above). Gates the full app's handling of the
+    /// Spot Pass universal link `https://getwepark.com/p[#t=<token>]` (C0: the route stub only
+    /// records the parsed link in `SpotPassLinkInbox`; C1/C2 build the seeker and driver flows
+    /// behind this same flag). With it `false` the link handler does nothing at all.
+    ///
+    /// Flip to `true` only after the backend (migration + edge functions) is live and the QA
+    /// device pass records clean — see the spec's section 14.
+    ///
+    /// Guard test: `SpotPassLinkRouterTests.testSpotHandoffFlags_defaultFalse`.
+    static let spotHandoffEnabled = false
+
+    /// DARK-SHIPS `false`. Armed-window auto-detect (spec section 7.4, stream C4). Declared in C0
+    /// so the flag exists before the stream that uses it; nothing reads it yet.
+    static let spotHandoffAutoDetectEnabled = false
+
     /// Single gating function for the Settings "Delete account" row — callers read through this
     /// rather than the raw flag (same shape as `regularsSettingsRowVisible(enabled:)`).
     nonisolated static func accountDeletionRowVisible(enabled: Bool = accountDeletionEnabled) -> Bool {

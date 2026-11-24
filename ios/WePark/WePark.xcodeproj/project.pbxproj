@@ -7,11 +7,35 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		C0C000000000000000000047 /* WeParkLiveActivities.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C0C00000000000000000000D /* WeParkLiveActivities.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C0C000000000000000000048 /* WeParkClip.app in Embed App Clips */ = {isa = PBXBuildFile; fileRef = C0C00000000000000000000B /* WeParkClip.app */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		C0C000000000000000000049 /* ClipLiveActivities.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = C0C00000000000000000000C /* ClipLiveActivities.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		38C7C18A302D7D7300A27E12 /* Auth in Frameworks */ = {isa = PBXBuildFile; productRef = 38C7C189302D7D7300A27E12 /* Auth */; };
 		38C7C18C302D7D7300A27E12 /* Realtime in Frameworks */ = {isa = PBXBuildFile; productRef = 38C7C18B302D7D7300A27E12 /* Realtime */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		C0C00000000000000000005B /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 38CA21B62FB12B780080B4F5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0C000000000000000000001;
+			remoteInfo = WeParkClip;
+		};
+		C0C00000000000000000005C /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 38CA21B62FB12B780080B4F5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0C000000000000000000003;
+			remoteInfo = WeParkLiveActivities;
+		};
+		C0C00000000000000000005D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 38CA21B62FB12B780080B4F5 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = C0C000000000000000000002;
+			remoteInfo = ClipLiveActivities;
+		};
 		A0001000000000000000AA09 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 38CA21B62FB12B780080B4F5 /* Project object */;
@@ -21,7 +45,50 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		C0C00000000000000000003D /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				C0C000000000000000000047 /* WeParkLiveActivities.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0C00000000000000000003E /* Embed App Clips */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "$(CONTENTS_FOLDER_PATH)/AppClips";
+			dstSubfolderSpec = 16;
+			files = (
+				C0C000000000000000000048 /* WeParkClip.app in Embed App Clips */,
+			);
+			name = "Embed App Clips";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0C00000000000000000003F /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				C0C000000000000000000049 /* ClipLiveActivities.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
+		C0C00000000000000000000B /* WeParkClip.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WeParkClip.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0C00000000000000000000C /* ClipLiveActivities.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = ClipLiveActivities.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0C00000000000000000000D /* WeParkLiveActivities.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WeParkLiveActivities.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		C0C00000000000000000007A /* Clip.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Clip.entitlements; sourceTree = "<group>"; };
+		C0C00000000000000000007B /* Clip-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Clip-Info.plist; sourceTree = "<group>"; };
+		C0C00000000000000000007C /* ClipLiveActivities-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = ClipLiveActivities-Info.plist; sourceTree = "<group>"; };
+		C0C00000000000000000007D /* WeParkLiveActivities-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = WeParkLiveActivities-Info.plist; sourceTree = "<group>"; };
 		38CA21BE2FB12B780080B4F5 /* WePark.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WePark.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0001000000000000000AA01 /* WeParkTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WeParkTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B8C5A1010000000000000001 /* Config.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config.xcconfig; sourceTree = "<group>"; };
@@ -30,6 +97,26 @@
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
+		C0C000000000000000000015 /* Clip */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Clip;
+			sourceTree = "<group>";
+		};
+		C0C000000000000000000016 /* Shared */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		C0C000000000000000000017 /* ClipLiveActivities */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = ClipLiveActivities;
+			sourceTree = "<group>";
+		};
+		C0C000000000000000000018 /* WeParkLiveActivities */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = WeParkLiveActivities;
+			sourceTree = "<group>";
+		};
 		38CA21C02FB12B780080B4F5 /* WePark */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = WePark;
@@ -43,6 +130,27 @@
 /* End PBXFileSystemSynchronizedRootGroup section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		C0C000000000000000000029 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0C00000000000000000002A /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0C00000000000000000002B /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		38CA21BB2FB12B780080B4F5 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -62,12 +170,28 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
+		C0C000000000000000000079 /* Support */ = {
+			isa = PBXGroup;
+			children = (
+				C0C00000000000000000007A /* Clip.entitlements */,
+				C0C00000000000000000007B /* Clip-Info.plist */,
+				C0C00000000000000000007C /* ClipLiveActivities-Info.plist */,
+				C0C00000000000000000007D /* WeParkLiveActivities-Info.plist */,
+			);
+			path = Support;
+			sourceTree = "<group>";
+		};
 		38CA21B52FB12B780080B4F5 = {
 			isa = PBXGroup;
 			children = (
 				B8C5A1010000000000000001 /* Config.xcconfig */,
 				B8C5A1020000000000000002 /* Config.xcconfig.example */,
 				B8C5A1030000000000000003 /* Info.plist */,
+				C0C000000000000000000079 /* Support */,
+				C0C000000000000000000016 /* Shared */,
+				C0C000000000000000000015 /* Clip */,
+				C0C000000000000000000017 /* ClipLiveActivities */,
+				C0C000000000000000000018 /* WeParkLiveActivities */,
 				38CA21C02FB12B780080B4F5 /* WePark */,
 				A0001000000000000000AA02 /* WeParkTests */,
 				38CA21BF2FB12B780080B4F5 /* Products */,
@@ -78,6 +202,9 @@
 			isa = PBXGroup;
 			children = (
 				38CA21BE2FB12B780080B4F5 /* WePark.app */,
+				C0C00000000000000000000B /* WeParkClip.app */,
+				C0C00000000000000000000C /* ClipLiveActivities.appex */,
+				C0C00000000000000000000D /* WeParkLiveActivities.appex */,
 				A0001000000000000000AA01 /* WeParkTests.xctest */,
 			);
 			name = Products;
@@ -93,13 +220,18 @@
 				38CA21BA2FB12B780080B4F5 /* Sources */,
 				38CA21BB2FB12B780080B4F5 /* Frameworks */,
 				38CA21BC2FB12B780080B4F5 /* Resources */,
+				C0C00000000000000000003D /* Embed Foundation Extensions */,
+				C0C00000000000000000003E /* Embed App Clips */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				C0C000000000000000000052 /* PBXTargetDependency */,
+				C0C000000000000000000051 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				38CA21C02FB12B780080B4F5 /* WePark */,
+				C0C000000000000000000016 /* Shared */,
 			);
 			name = WePark;
 			packageProductDependencies = (
@@ -132,6 +264,75 @@
 			productReference = A0001000000000000000AA01 /* WeParkTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
+		C0C000000000000000000001 /* WeParkClip */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0C000000000000000000065 /* Build configuration list for PBXNativeTarget "WeParkClip" */;
+			buildPhases = (
+				C0C00000000000000000001F /* Sources */,
+				C0C000000000000000000029 /* Frameworks */,
+				C0C000000000000000000033 /* Resources */,
+				C0C00000000000000000003F /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				C0C000000000000000000053 /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				C0C000000000000000000015 /* Clip */,
+				C0C000000000000000000016 /* Shared */,
+			);
+			name = WeParkClip;
+			packageProductDependencies = (
+			);
+			productName = WeParkClip;
+			productReference = C0C00000000000000000000B /* WeParkClip.app */;
+			productType = "com.apple.product-type.application.on-demand-install-capable";
+		};
+		C0C000000000000000000002 /* ClipLiveActivities */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0C000000000000000000066 /* Build configuration list for PBXNativeTarget "ClipLiveActivities" */;
+			buildPhases = (
+				C0C000000000000000000020 /* Sources */,
+				C0C00000000000000000002A /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C0C000000000000000000017 /* ClipLiveActivities */,
+				C0C000000000000000000016 /* Shared */,
+			);
+			name = ClipLiveActivities;
+			packageProductDependencies = (
+			);
+			productName = ClipLiveActivities;
+			productReference = C0C00000000000000000000C /* ClipLiveActivities.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		C0C000000000000000000003 /* WeParkLiveActivities */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = C0C000000000000000000067 /* Build configuration list for PBXNativeTarget "WeParkLiveActivities" */;
+			buildPhases = (
+				C0C000000000000000000021 /* Sources */,
+				C0C00000000000000000002B /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				C0C000000000000000000018 /* WeParkLiveActivities */,
+				C0C000000000000000000016 /* Shared */,
+			);
+			name = WeParkLiveActivities;
+			packageProductDependencies = (
+			);
+			productName = WeParkLiveActivities;
+			productReference = C0C00000000000000000000D /* WeParkLiveActivities.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -142,6 +343,15 @@
 				LastSwiftUpdateCheck = 2640;
 				LastUpgradeCheck = 2640;
 				TargetAttributes = {
+					C0C000000000000000000001 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					C0C000000000000000000002 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
+					C0C000000000000000000003 = {
+						CreatedOnToolsVersion = 26.4.1;
+					};
 					38CA21BD2FB12B780080B4F5 = {
 						CreatedOnToolsVersion = 26.4.1;
 					};
@@ -170,11 +380,21 @@
 			targets = (
 				38CA21BD2FB12B780080B4F5 /* WePark */,
 				A0001000000000000000AA04 /* WeParkTests */,
+				C0C000000000000000000001 /* WeParkClip */,
+				C0C000000000000000000002 /* ClipLiveActivities */,
+				C0C000000000000000000003 /* WeParkLiveActivities */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		C0C000000000000000000033 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		38CA21BC2FB12B780080B4F5 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -185,6 +405,27 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+		C0C00000000000000000001F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0C000000000000000000020 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		C0C000000000000000000021 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		38CA21BA2FB12B780080B4F5 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -202,6 +443,21 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		C0C000000000000000000051 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0C000000000000000000001 /* WeParkClip */;
+			targetProxy = C0C00000000000000000005B /* PBXContainerItemProxy */;
+		};
+		C0C000000000000000000052 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0C000000000000000000003 /* WeParkLiveActivities */;
+			targetProxy = C0C00000000000000000005C /* PBXContainerItemProxy */;
+		};
+		C0C000000000000000000053 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = C0C000000000000000000002 /* ClipLiveActivities */;
+			targetProxy = C0C00000000000000000005D /* PBXContainerItemProxy */;
+		};
 		A0001000000000000000AA08 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 38CA21BD2FB12B780080B4F5 /* WePark */;
@@ -210,6 +466,196 @@
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		C0C00000000000000000006F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B8C5A1010000000000000001 /* Config.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Support/Clip.entitlements;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = Support/Clip-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WePark;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location, once, to show the parking rules for the block you are on. It stays on your device.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark.Clip;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26;
+				DEVELOPMENT_TEAM = ZAA4UCS6CH;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		C0C000000000000000000070 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = B8C5A1010000000000000001 /* Config.xcconfig */;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = Support/Clip.entitlements;
+				ENABLE_PREVIEWS = YES;
+				INFOPLIST_FILE = Support/Clip-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = WePark;
+				INFOPLIST_KEY_NSLocationWhenInUseUsageDescription = "WePark uses your location, once, to show the parking rules for the block you are on. It stays on your device.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UIUserInterfaceStyle = Dark;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark.Clip;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26;
+				DEVELOPMENT_TEAM = ZAA4UCS6CH;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		C0C000000000000000000071 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Support/ClipLiveActivities-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "WePark Clip Live Activities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark.Clip.LiveActivities;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26;
+				DEVELOPMENT_TEAM = ZAA4UCS6CH;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		C0C000000000000000000072 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Support/ClipLiveActivities-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "WePark Clip Live Activities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark.Clip.LiveActivities;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26;
+				DEVELOPMENT_TEAM = ZAA4UCS6CH;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		C0C000000000000000000073 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Support/WeParkLiveActivities-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "WePark Live Activities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark.LiveActivities;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26;
+				DEVELOPMENT_TEAM = ZAA4UCS6CH;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Debug;
+		};
+		C0C000000000000000000074 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				INFOPLIST_FILE = Support/WeParkLiveActivities-Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = "WePark Live Activities";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = com.kevinhoxha.wepark.LiveActivities;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 26;
+				DEVELOPMENT_TEAM = ZAA4UCS6CH;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
 		38CA21C72FB12B7B0080B4F5 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -460,6 +906,33 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		C0C000000000000000000065 /* Build configuration list for PBXNativeTarget "WeParkClip" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0C00000000000000000006F /* Debug */,
+				C0C000000000000000000070 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0C000000000000000000066 /* Build configuration list for PBXNativeTarget "ClipLiveActivities" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0C000000000000000000071 /* Debug */,
+				C0C000000000000000000072 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		C0C000000000000000000067 /* Build configuration list for PBXNativeTarget "WeParkLiveActivities" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C0C000000000000000000073 /* Debug */,
+				C0C000000000000000000074 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 		38CA21B92FB12B780080B4F5 /* Build configuration list for PBXProject "WePark" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
