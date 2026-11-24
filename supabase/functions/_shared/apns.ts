@@ -55,8 +55,10 @@ export interface PushOutcome {
  * file only stamps the headers Apple requires for HTTP/2 provider push and performs the send.
  */
 export interface ApnsRequestSpec {
-  /** "background" for a silent/content-available push, "alert" for a visible one. */
-  pushType: "background" | "alert";
+  /** "background" for a silent/content-available push, "alert" for a visible one, "liveactivity" for an
+   * ActivityKit push-to-update/end (apns-topic must then be `<bundle id>.push-type.liveactivity`; added for
+   * Spot Pass — type-only widening, no behavior change for the existing callers). */
+  pushType: "background" | "alert" | "liveactivity";
   /** Apple requires priority "5" for any "background" push-type; "10" is used for user-visible
    * alerts that should be delivered immediately. Never send "10" with pushType "background" — Apple
    * rejects that combination outright (see send-community-push/index.ts's original comment, carried

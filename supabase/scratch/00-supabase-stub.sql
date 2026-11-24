@@ -12,7 +12,8 @@ create schema if not exists auth;
 create table if not exists auth.users (
   id uuid primary key default gen_random_uuid(),
   email text,
-  is_anonymous boolean not null default false
+  is_anonymous boolean not null default false,
+  created_at timestamptz not null default now()
 );
 -- Mimics GoTrue's own FKs onto auth.users so a deleted user's sessions/identities cascade.
 create table if not exists auth.identities (
