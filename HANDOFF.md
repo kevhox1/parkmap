@@ -215,6 +215,13 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-11-24 (afternoon) — ✅ BUILD 28 LIVE ON EXTERNAL TESTFLIGHT (public link) + Kevin's live smoke in progress
+
+- Kevin: future builds may go external. Build 28 is build 27's code with the same flag-on set, exported WITHOUT `testFlightInternalTestingOnly`. Added to "WePark - Test Groups" and auto-approved, so it's Testing right away. Public link `testflight.apple.com/join/QhVnaG4C`.
+- Colleen Kelly (colleenkelly23@icloud.com) is an App Store Connect user (Marketing, WePark only) in the Internal group.
+- `HANDOFF_ENABLED=true` in prod (Kevin ran it for the phone tests). getwepark.com/p "Get WePark" points to the TestFlight link and the smart banner is off (#176). App Clip entitlement fix #175 is merged.
+- **Kevin's live smoke findings** are in `docs/qa/build27-live-smoke-notes.md` (13 items plus screenshots). NO fixes until Kevin says "live smoke complete. You may proceed".
+
 ### 2026-11-24 (late) — ✅ BUILD 27 UPLOADED (internal TestFlight only): first build with the App Clip
 
 - Kevin OK'd build 27 ("OK build 27"). `CURRENT_PROJECT_VERSION=27` on all targets (`61cbd11a`). Archived with `-allowProvisioningUpdates`, which registered the Clip and Live Activities App IDs plus the App Group. Exported with `testFlightInternalTestingOnly=true`. Archive: `~/Library/Developer/Xcode/Archives/2026-11-24/WePark-27-flagon.xcarchive`.
