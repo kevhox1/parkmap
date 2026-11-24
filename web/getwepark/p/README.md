@@ -11,7 +11,7 @@ when the App Clip / full app cannot open (spec `docs/specs/qr-spot-handoff.md` s
    claimer secret is kept in `sessionStorage` only.
 2. `handoff-peek` -> "<Alias> is waiting for your spot" with a glyph (emoji per the 16 `create_handoff` slugs, pin fallback).
    `{status:"unavailable"}` -> one uniform "This Spot Pass isn't active" screen. HTTP 503 -> "Spot Pass isn't live yet".
-3. Chips Now / ~10 min / ~30 min / ~1 hour (max 1 h, well under the 4 h cap) -> `handoff-claim` (no push token).
+3. Chips Now / ~10 min / ~30 min / ~1 hour / **Pick a time** -> `handoff-claim` (no push token). "Pick a time" opens a grid of clock times (next 5-min mark, then every 15 min, up to `floor5(now+239min)`, mirroring iOS `LeaveChoice.latest`); the choice is rounded to 5 min and sent as ISO UTC.
    "Now" claims and shows the "Time to go?" screen (never departs by itself). All chips show the armed screen: **I'm leaving now** (`handoff-depart`,
    `source:"manual"`), **5 more min** (`handoff-extend`), **Not leaving** (`handoff-cancel`).
 4. After depart: "You just made someone's day" (no karma promised; web has no identity) plus the Get WePark card.
