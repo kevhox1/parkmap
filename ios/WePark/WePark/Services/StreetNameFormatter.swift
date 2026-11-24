@@ -27,7 +27,35 @@ nonisolated enum StreetNameFormatter {
         "ln", "way", "ct", "sq", "pkwy", "ter", "terrace"
     ]
 
-    /// Returns `name` with ordinal suffixes restored on street-number tokens. Idempotent.
+    /// Acronyms that stay upper-case in a street name ("FDR Dr", not "Fdr Dr").
+    private static let streetAcronyms: Set<String> = ["FDR", "BQE", "LIE", "JFK", "MLK"]
+
+    /// Title case only: lower-case, capitalise each word, but a token that starts with a digit
+    /// stays lower-case ("31st"; `String.capitalized` yields "1St"), a lone N/S/E/W stays capital
+    /// ("W 34th St"), and known acronyms stay upper-case. Keeps abbreviations ("St", "Ave").
+    /// Prefer `display(_:)`, which also restores ordinals, so a surface never gets half of it.
+    static func titleCased(_ name: String) -> String {
+        let words = name.split(whereSeparator: { $0.isWhitespace })
+        var out: [String] = []
+        for word in words {
+            let lower = String(word).lowercased()
+            guard let first = lower.first else { continue }
+            if first.isNumber {
+                out.append(lower)
+            } else if lower.count == 1, "nsew".contains(first) {
+                out.append(lower.uppercased())
+            } else if streetAcronyms.contains(lower.uppercased()) {
+                out.append(lower.uppercased())
+            } else {
+                out.append(String(first).uppercased() + lower.dropFirst())
+            }
+        }
+        return out.joined(separator: " ")
+    }
+
+    /// THE display entry point for any user-facing street string: title case + acronyms +
+    /// ordinals in one call ("E 2 ST" / "E 2ND ST" -> "E 2nd St"). Idempotent.
+    /// Ordinal rules:
     ///
     /// - A 1-3 digit token (value >= 1, no leading zero) followed by a street-type word gets
     ///   its ordinal suffix.
@@ -35,7 +63,7 @@ nonisolated enum StreetNameFormatter {
     /// - Everything else is untouched: "Pier 40", "Route 9", "Avenue A", tokens longer than
     ///   three digits, directionals, abbreviations.
     static func display(_ name: String) -> String {
-        let tokens = name.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        let tokens = titleCased(name).split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard !tokens.isEmpty else { return name }
         var out: [String] = []
         out.reserveCapacity(tokens.count)
@@ -55,7 +83,7 @@ nonisolated enum StreetNameFormatter {
     }
 
     /// Convenience for views that show a raw tile street: canonical form first (so "FIRST AVENUE"
-    /// and "1 AVE" agree), then ordinals restored. Display only; never a matching key.
+    /// and "1 AVE" agree), then `display` (title case + ordinals). Display only; never a matching key.
     static func displayCanonical(_ raw: String) -> String {
         display(StreetNameNormalizer.canonical(raw))
     }

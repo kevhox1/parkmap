@@ -44,7 +44,7 @@ nonisolated enum ParkingAddressCopy {
     /// separately (formatter contract: never feed a house number through it).
     static func numberAndStreet(_ address: ParkingAddress) -> String {
         let canonical = StreetNameNormalizer.canonical(address.streetDisplay)
-        let street = StreetNameFormatter.display(CurbPlacementCardModel.titleCased(canonical))
+        let street = StreetNameFormatter.display(canonical)
         return "\(address.houseNumber) \(street)"
     }
 
@@ -61,7 +61,7 @@ nonisolated enum ParkingAddressCopy {
     static func spoken(_ address: ParkingAddress) -> String {
         let canonical = StreetNameNormalizer.canonical(address.streetDisplay)
         let street = CurbPlacementCardModel.expandedStreetName(
-            StreetNameFormatter.display(CurbPlacementCardModel.titleCased(canonical))
+            StreetNameFormatter.display(canonical)
         )
         let place = "\(address.houseNumber) \(street)"
         switch address.confidence {

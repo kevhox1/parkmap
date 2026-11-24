@@ -52,7 +52,7 @@ final class StreetNameFormatterTests: XCTestCase {
 
     func testAlreadyOrdinal_keptWithLowercasedSuffix() {
         assertDisplay("E 42ND St", "E 42nd St")
-        assertDisplay("1ST AVE", "1st AVE")
+        assertDisplay("1ST AVE", "1st Ave")
     }
 
     func testNotOrdinalized() {
@@ -73,15 +73,25 @@ final class StreetNameFormatterTests: XCTestCase {
     }
 
     func testStreetTypeWordsAreCaseInsensitive() {
-        assertDisplay("E 1 ST", "E 1st ST")
+        assertDisplay("E 1 ST", "E 1st St")
         assertDisplay("E 1 Street", "E 1st Street")
         assertDisplay("5 Avenue", "5th Avenue")
+    }
+
+    func testRawUppercaseTileStrings_getTitleCaseAndOrdinals() {
+        assertDisplay("E 2 ST", "E 2nd St")
+        assertDisplay("E 2ND ST", "E 2nd St")
+        assertDisplay("1 AVE", "1st Ave")
+        assertDisplay("FDR DR", "FDR Dr")
+        assertDisplay("W 11 ST", "W 11th St")
+        assertDisplay("AVE A", "Ave A")
+        assertDisplay("E HOUSTON ST", "E Houston St")
     }
 
     func testIdempotent() {
         let inputs = [
             "E 1 St", "W 42 St", "1 Ave", "E 11 St", "W 22 St", "E 113 St", "E 42ND St",
-            "Avenue A", "Pier 40", "Broadway", "FDR Dr", "", "E 1st St"
+            "Avenue A", "Pier 40", "Broadway", "FDR Dr", "", "E 1st St", "E 2ND ST", "W 11 ST", "FDR DR", "1 AVE"
         ]
         for input in inputs {
             let once = StreetNameFormatter.display(input)
@@ -100,8 +110,8 @@ final class StreetNameFormatterTests: XCTestCase {
     }
 
     func testDisplayCanonical_matchesTileAndCenterlineSpellings() {
-        XCTAssertEqual(StreetNameFormatter.displayCanonical("1ST AVENUE"), "1st AVE")
-        XCTAssertEqual(StreetNameFormatter.displayCanonical("EAST 1ST STREET"), "E 1st ST")
+        XCTAssertEqual(StreetNameFormatter.displayCanonical("1ST AVENUE"), "1st Ave")
+        XCTAssertEqual(StreetNameFormatter.displayCanonical("EAST 1ST STREET"), "E 1st St")
     }
 
     // MARK: - canonical (matching key) is unchanged

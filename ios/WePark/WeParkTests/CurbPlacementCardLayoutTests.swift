@@ -442,4 +442,75 @@ final class CurbPlacementSessionLayoutDefaultsTests: XCTestCase {
         let higher = CurbPlacementMapPolicy.entryCenter(seed: seed, visibleHeightMeters: 200, tipFraction: 0.30)
         XCTAssertLessThan(higher.latitude, standard.latitude, "a higher tip puts the centre further south of the seed")
     }
+
+    // MARK: - Address row priority (QA #2 on PR #158): the cross street outranks the address
+
+    func testAddressPriority_flagOffCandidatesAreUntouched() {
+        XCTAssertEqual(CurbPlacementCardLayout.candidateList(wantsAddress: false), CurbPlacementCardLayout.candidates)
+        XCTAssertTrue(CurbPlacementCardLayout.candidates.allSatisfy { $0.showsAddress })
+    }
+
+    func testAddressPriority_addressIsDroppedBeforeLinkAndSubtitle() {
+        let list = CurbPlacementCardLayout.addressCandidates
+        XCTAssertEqual(list.count, CurbPlacementCardLayout.candidates.count + CurbPlacementCardLayout.candidates.filter { $0.link != .none }.count)
+        // Everything after the link candidates that carry the address is address-less.
+        let firstDropped = list.firstIndex { !$0.showsAddress }
+        XCTAssertNotNil(firstDropped)
+        if let firstDropped {
+            XCTAssertTrue(list[firstDropped...].allSatisfy { !$0.showsAddress })
+            XCTAssertTrue(list[..<firstDropped].allSatisfy { $0.showsAddress && $0.showsSubtitle && $0.link != .none })
+        }
+        // The address-less tail is exactly the flag-off order.
+        let tail = list.filter { !$0.showsAddress }.map {
+            CurbPlacementCardConfig(tipFraction: $0.tipFraction, link: $0.link, showsSubtitle: $0.showsSubtitle)
+        }
+        XCTAssertEqual(tail, CurbPlacementCardLayout.candidates)
+    }
+
+    func testAddressPriority_crossStreetAndLinkSurviveWheneverFlagOffShowsThem() {
+        for phone in cpclPhones {
+            for tier in cpclTiers {
+                for wantsLink in [true, false] {
+                    let off = CurbPlacementCardLayout.select(
+                        tier: tier, fullHeight: phone.height, bottomInset: phone.inset, wantsLink: wantsLink)
+                    let on = CurbPlacementCardLayout.select(
+                        tier: tier, fullHeight: phone.height, bottomInset: phone.inset,
+                        wantsLink: wantsLink, wantsAddress: true)
+                    let context = "h\(phone.height) tier \(tier) link \(wantsLink)"
+                    if off.config.showsSubtitle {
+                        XCTAssertTrue(on.config.showsSubtitle, "cross street dropped for the address: \(context)")
+                    }
+                    if off.showsLink {
+                        XCTAssertTrue(on.showsLink, "link dropped for the address: \(context)")
+                    }
+                    if off.fits {
+                        XCTAssertTrue(on.fits, context)
+                    }
+                }
+            }
+        }
+    }
+
+    func testAddressPriority_whereBothCannotFit_addressRowGoesAndSubtitleStays() {
+        // SE at AX1: flag-off keeps the cross street; flag-on must too, with no address row.
+        let on = CurbPlacementCardLayout.select(
+            tier: .accessibility, fullHeight: 667, bottomInset: 0, wantsLink: false, wantsAddress: true)
+        let off = CurbPlacementCardLayout.select(
+            tier: .accessibility, fullHeight: 667, bottomInset: 0, wantsLink: false)
+        XCTAssertEqual(on.config.showsSubtitle, off.config.showsSubtitle)
+        if off.config.showsSubtitle {
+            XCTAssertFalse(on.config.showsAddress)
+            XCTAssertEqual(on.content, off.content)
+        }
+    }
+
+    func testAddressPriority_cardHeightIsConstantForAGivenConfig() {
+        // The row is reserved whether or not an address has resolved: height depends only on the
+        // config, never on the address text.
+        for config in CurbPlacementCardLayout.addressCandidates {
+            let a = CurbPlacementCardLayout.contentHeight(tier: .standard, config: config, wantsLink: true, wantsAddress: true)
+            let b = CurbPlacementCardLayout.contentHeight(tier: .standard, config: config, wantsLink: true, wantsAddress: true)
+            XCTAssertEqual(a, b)
+        }
+    }
 }

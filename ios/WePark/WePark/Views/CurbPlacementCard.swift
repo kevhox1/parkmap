@@ -361,37 +361,16 @@ nonisolated struct CurbPlacementCardModel: Equatable {
 
     // MARK: Pure helpers
 
-    /// Acronyms that stay upper-case in a street name ("FDR Dr", not "Fdr Dr").
-    private nonisolated static let streetAcronyms: Set<String> = ["FDR", "BQE", "LIE", "JFK", "MLK"]
-
-    /// Visible street title case (#37 item 8): lower-case, capitalise each word, but a token that
-    /// starts with a digit stays lower-case ("31st", "1st Ave" - `String.capitalized` yields
-    /// "1St Ave"), a lone N/S/E/W stays capital ("W 34th St"), and known acronyms stay upper-case.
-    /// Keeps the canonical abbreviations ("St", "Ave", "Pl") for width; VoiceOver uses
-    /// `expandedStreetName` instead.
+    /// Visible street title case (#37 item 8), now owned by `StreetNameFormatter.titleCased`.
+    /// Title case only (no ordinals); surfaces should call `displayStreetName` / the formatter.
     nonisolated static func titleCased(_ canonical: String) -> String {
-        let words = canonical.split(separator: " ", omittingEmptySubsequences: true)
-        var out: [String] = []
-        for word in words {
-            let lower = String(word).lowercased()
-            guard let first = lower.first else { continue }
-            if first.isNumber {
-                out.append(lower)
-            } else if lower.count == 1, "nsew".contains(first) {
-                out.append(lower.uppercased())
-            } else if streetAcronyms.contains(lower.uppercased()) {
-                out.append(lower.uppercased())
-            } else {
-                out.append(String(first).uppercased() + lower.dropFirst())
-            }
-        }
-        return out.joined(separator: " ")
+        StreetNameFormatter.titleCased(canonical)
     }
 
     /// Visible street string: title case, then the display-only ordinal restore ("E 1 St" ->
     /// "E 1st St"). Never used for matching; `titleCased` itself is unchanged.
     nonisolated static func displayStreetName(_ canonical: String) -> String {
-        StreetNameFormatter.display(titleCased(canonical))
+        StreetNameFormatter.display(canonical)
     }
 
     /// VoiceOver street string: ordinals restored, then abbreviations expanded
@@ -545,6 +524,11 @@ nonisolated struct CurbPlacementCardConfig: Equatable {
     let tipFraction: Double
     let link: Link
     let showsSubtitle: Bool
+    /// Address-anchored parking (flag on only): whether the reserved address row is kept. Only
+    /// meaningful with `wantsAddress` and `showsSubtitle`; defaults to true so every existing
+    /// `CurbPlacementCardConfig(tipFraction:link:showsSubtitle:)` call is unchanged. Declared
+    /// last (memberwise-init order).
+    var showsAddress: Bool = true
 }
 
 /// The selector's result for one phone / tier / link wish.
@@ -600,6 +584,27 @@ nonisolated enum CurbPlacementCardLayout {
         CurbPlacementCardConfig(tipFraction: 0.30, link: .none, showsSubtitle: false)
     ]
 
+    /// Flag-on candidate order. The cross street outranks the address line (the address also
+    /// appears on the parked-car sheet after Park here), and the address is dropped BEFORE the
+    /// link: first the `candidates` that carry a link, WITH the address row; then the same link
+    /// candidates WITHOUT it; then the remaining link-less candidates (address already gone).
+    /// Once the address is dropped the sequence is exactly the flag-off `candidates`, so the
+    /// result matches what flag-off would show at that size.
+    static let addressCandidates: [CurbPlacementCardConfig] = {
+        let withLink = candidates.filter { $0.link != .none }
+        let rest = candidates.filter { $0.link == .none }
+        func dropAddress(_ config: CurbPlacementCardConfig) -> CurbPlacementCardConfig {
+            CurbPlacementCardConfig(tipFraction: config.tipFraction, link: config.link,
+                                    showsSubtitle: config.showsSubtitle, showsAddress: false)
+        }
+        return withLink + withLink.map(dropAddress) + rest.map(dropAddress)
+    }()
+
+    /// The candidate list for a flag state. Flag off is the untouched `candidates`.
+    nonisolated static func candidateList(wantsAddress: Bool) -> [CurbPlacementCardConfig] {
+        wantsAddress ? addressCandidates : candidates
+    }
+
     /// The link row (gap above it + its height) for a config, zero when it is not shown.
     nonisolated static func linkBlock(
         tier: CurbPlacementSizeTier,
@@ -629,7 +634,7 @@ nonisolated enum CurbPlacementCardLayout {
         // Address-anchored parking (flag on only): one more one-line row under the cross street,
         // dropped together with the subtitle on the tightest candidates. Default false keeps
         // the flag-off budget byte-identical.
-        if wantsAddress && config.showsSubtitle { height += chipToSubtitle + m.subtitle }
+        if wantsAddress && config.showsSubtitle && config.showsAddress { height += chipToSubtitle + m.subtitle }
         height += primaryGap + m.primary
         height += link.shown ? (link.gap + link.height + bottomPaddingWithLink) : bottomPaddingNoLink
         return height
@@ -674,14 +679,15 @@ nonisolated enum CurbPlacementCardLayout {
         wantsAddress: Bool = false
     ) -> CurbPlacementCardLayoutResult {
         var last: CurbPlacementCardLayoutResult?
-        for candidate in candidates {
+        let list = candidateList(wantsAddress: wantsAddress)
+        for candidate in list {
             let result = evaluate(candidate, tier: tier, fullHeight: fullHeight, bottomInset: bottomInset,
                                   wantsLink: wantsLink, wantsAddress: wantsAddress)
             if result.fits { return result }
             last = result
         }
         return last ?? evaluate(
-            candidates[candidates.count - 1], tier: tier,
+            list[list.count - 1], tier: tier,
             fullHeight: fullHeight, bottomInset: bottomInset, wantsLink: wantsLink, wantsAddress: wantsAddress
         )
     }
@@ -697,7 +703,7 @@ nonisolated enum CurbPlacementCardLayout {
         wantsLink: Bool,
         wantsAddress: Bool = false
     ) -> CurbPlacementCardLayoutResult {
-        let atTip = candidates.filter { abs($0.tipFraction - tipFraction) < 0.0005 }
+        let atTip = candidateList(wantsAddress: wantsAddress).filter { abs($0.tipFraction - tipFraction) < 0.0005 }
         guard !atTip.isEmpty else {
             return select(tier: tier, fullHeight: fullHeight, bottomInset: bottomInset,
                           wantsLink: wantsLink, wantsAddress: wantsAddress)
@@ -937,7 +943,8 @@ struct CurbPlacementOverlay: View {
         // only (`cardBackground` ignores the bottom safe area), so `bottomInset` is not padding.
         return VStack(alignment: .leading, spacing: 0) {
             textRows(metrics: metrics, showsSubtitle: layout.config.showsSubtitle,
-                     showsAddress: model.reservesAddressRow && layout.config.showsSubtitle)
+                     showsAddress: model.reservesAddressRow && layout.config.showsSubtitle
+                                && layout.config.showsAddress)
             primaryButton(height: CGFloat(metrics.primary), tier: layout.tier)
                 .padding(.top, CGFloat(CurbPlacementCardLayout.primaryGap))
             if link.shown, let title = model.secondaryTitle {
