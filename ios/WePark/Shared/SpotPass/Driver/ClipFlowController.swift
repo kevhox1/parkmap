@@ -423,7 +423,8 @@ final class ClipFlowController {
         deps.feedback.success()
         deps.feedback.announce(ClipCopy.thanksHeadline)
         phase = .celebration
-        Task { await deps.activity.end(phase: .thanks, now: deps.now()) }
+        let endedAt = deps.now()
+        Task { await deps.activity.end(phase: .thanks, now: endedAt) }
     }
 
     private func handleRemotePhase(_ remote: SpotPassActivityAttributes.Phase) {

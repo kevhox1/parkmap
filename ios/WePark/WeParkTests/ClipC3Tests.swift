@@ -151,7 +151,7 @@ private final class Harness {
             api: api, secrets: secrets, passStore: passes, session: session, reminders: reminders,
             activity: activity, pushToken: push, feedback: feedback,
             carryOver: ClipHandoffContextStore(defaults: defaults),
-            now: { [unowned self] in self.clock }, sentDwell: 0
+            now: { [weak self] in self?.clock ?? Date() }, sentDwell: 0
         ))
     }
 
