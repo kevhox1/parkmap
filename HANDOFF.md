@@ -215,6 +215,45 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-11-24 (night) — ✅ SPOT PASS iOS COMPLETE except C4 (all dark): seeker, App Clip, full-app driver, web fallback
+
+**Merged.** Each PR was QA'd live in the sim by a non-builder; CI was green. Fake-mode flags (DEBUG only) are `-spotPassUseFakeAPI YES` and `-spotPassClipURL`.
+- **#162 + #165 — seeker.** Badge QR, states, karma, own rationale, push-token registration when the spot flag is on.
+- **#168, #169, #171, #172 — App Clip.**
+  - The full driver flow, 5.3 MB.
+  - Holiday suspensions handled: `asp-2026.json` and `ASPSuspension.swift` moved to `Shared/`.
+  - A DEBUG in-memory secret store, so unsigned sims can walk the whole flow.
+  - The finished-pass lifecycle fix (the clip had been stuck on "Thanks, neighbor!").
+- **#170 — full-app driver.**
+  - Live Activity with App Intents (one-tap "Leaving now" works on the sim lock screen).
+  - Reminder actions, a Start Driving hook, clip carry-over, and a tailored "Welcome, neighbor".
+  - A "Your Spot Pass" row in More.
+  - The intents are `isDiscoverable=false` and the `AppShortcutsProvider` is behind `#if SPOT_PASS_SHORTCUTS`.
+- **#166 — web fallback.** LIVE at getwepark.com/p, with CSP on `/p` and `/p/`.
+
+**FLIP CHECKLIST** (Spot Pass is not live; `HANDOFF_ENABLED=false` server-side, `spotHandoffEnabled=false` in iOS):
+- **Device passes:**
+  - Live Activity one-tap from a passcode-locked phone.
+  - Reminder actions without launching the app.
+  - A real universal-link cold launch.
+  - Clip invocation via Local Experience, then a TestFlight experience.
+  - `#t=` fragment survival.
+  - Clip → app keychain adoption.
+  - Real APNs: armed, departed, thanks, and silent `handoff_ended`.
+  - Through-glass QR scan distances.
+  - The clip Settings link when Live Activities are off.
+- **Server checks** (README-handoff §2): the forged-XFF and two-network rate-limit checks, and `net._http_response` showing 200 after the first claim.
+- **App Store Connect:** register the App IDs and App Group (build 27 archive with `-allowProvisioningUpdates` needs Kevin's OK). Set up the default and advanced App Clip experiences for `https://getwepark.com/p`.
+- **Re-enable together:** define `SPOT_PASS_SHORTCUTS`, set `LeavingNowIntent.isDiscoverable`, and the heads-up guide.
+- **Then flip:** the iOS flag plus `update handoff_config set value='true'`.
+- **Known residuals:**
+  - The map Start Driving toast still uses the shared toast host.
+  - A late thanks after Done doesn't settle the chip locally (the server credits it).
+  - The clip block card ignores days beyond the 2026 calendar.
+  - The DriveCameraTiltTests malloc host crash in CI was seen once and has not recurred.
+
+**In flight:** C4 armed-window auto-detect (`feat/spot-pass-c4-autodetect`). `UIBackgroundModes location` is behind a build setting that defaults OFF, so dark builds carry no App Review exposure.
+
 ### 2026-11-24 (evening) — ✅ PROD: Regulars 07/09/08 + Spot Pass 14 applied; push functions secured; getwepark.com/p live
 
 - **Push-function security hole closed.** `send-community-push` (live) accepted the PUBLIC anon key. PR #163 now requires a gateway-verified JWT with `role=service_role`, or an exact env-key match. The first design was exact-compare only, and a pre-deploy prod probe caught that it would have broken live community push: the Vault `service_role_key` is a valid service_role JWT but is NOT byte-equal to the runtime `SUPABASE_SERVICE_ROLE_KEY`. All three push functions are deployed (verify_jwt=true) and probed: the anon key gets 401, and the Vault-bearer pg_net call is non-401 with no push sent. **They must never be deployed with `--no-verify-jwt`.**
