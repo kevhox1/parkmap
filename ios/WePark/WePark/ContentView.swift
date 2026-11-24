@@ -5491,7 +5491,12 @@ struct ContentView: View {
                 case .course:
                     effectiveDriveHeading = locationService.driveHeading
                 case .streetSnap:
-                    if let segment = service.matchedSegment {
+                    if locationService.driveHeadingHeld, let held = locationService.driveHeading {
+                        // Finding 10: idle at a light. GPS jitter can flip the matched segment
+                        // between two streets at an intersection, which would spin the snapped
+                        // bearing. Hold the last good heading until the car moves again.
+                        effectiveDriveHeading = held
+                    } else if let segment = service.matchedSegment {
                         effectiveDriveHeading = DriveHeadingSnap.snappedHeading(
                             segment: segment,
                             lastGoodHeading: locationService.driveHeading

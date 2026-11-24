@@ -205,6 +205,14 @@ final class LocationService: NSObject {
     /// alongside `headingEMA` in `endDriveMode()`.
     private var flipGuard = DriveHeadingFlipGuard()
 
+    /// Idle heading hold (`DriveHeadingGuard.swift`, finding 10). Fresh per drive session.
+    private var holdState = DriveHeadingHold()
+
+    /// True while the car is idle and the heading is deliberately held on the last good
+    /// value. `ContentView` reads this to keep the street-snap source from re-snapping to a
+    /// neighboring segment on GPS jitter while parked at an intersection.
+    private(set) var driveHeadingHeld: Bool = false
+
     // MARK: - Private
 
     private let manager: CLLocationManager
@@ -299,6 +307,8 @@ final class LocationService: NSObject {
         headingEMA = nil
         prevDriveCoordinate = nil
         flipGuard = DriveHeadingFlipGuard()  // wrong-way hardening change 2: fresh per session.
+        holdState = DriveHeadingHold()
+        driveHeadingHeld = false
 
         // Restore single-shot posture with a fresh fix request.
         if isAuthorized {
@@ -353,6 +363,16 @@ final class LocationService: NSObject {
 
         // Save current position for next tick's bearing computation.
         prevDriveCoordinate = current
+
+        // Idle hold (finding 10): a stop engages a hold that only sustained speed or real
+        // displacement releases, so GPS speed/course noise at a standstill cannot spin the puck.
+        let held = holdState.shouldHold(
+            speed: speed,
+            coordinate: current,
+            stoppedBelowSpeed: DRIVING_HEADING_MIN_SPEED_MPS
+        )
+        if driveHeadingHeld != holdState.isHeld { driveHeadingHeld = holdState.isHeld }
+        guard !held else { return driveHeading }
 
         // Speed gate: under threshold, keep last good heading (OQ-6: freeze, not snap to north).
         let movingFastEnough = speed >= DRIVING_HEADING_MIN_SPEED_MPS
