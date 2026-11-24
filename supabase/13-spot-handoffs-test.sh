@@ -439,6 +439,41 @@ reset_rates; p=$(mkpass "$OTHER"); rt=${p#* }
 check "suspended claimer => unavailable" "$(claim "$rt" "$RD" null 10)" "$UNAVAIL"
 sql "$DB" "delete from public.handoff_suspensions" >/dev/null
 
+echo "   -- R1: 3 FRESH (<24h) accounts each claim a pass of the victim and report => recorded, NOT suspended"
+sql "$DB" "delete from public.spot_handoffs; delete from public.handoff_reports; delete from public.handoff_suspensions" >/dev/null
+V=$(new_user true)
+for i in 1 2 3; do
+  F=$(new_user_fresh true); reset_rates
+  p=$(mkpass "$V"); rid=${p% *}; rt=${p#* }
+  c=$(claim "$rt" "$F" null 10); rs=$(jq_ "'$c'" claimer_secret)
+  svc "select public.handoff_report(null, '$rid', '$rs', 'harassment', 'ip-f')" >/dev/null
+done
+check "R1: 3 fresh reporters => 3 report rows recorded" "$(sql "$DB" "select count(*) from public.handoff_reports where subject_user_id='$V'")" "3"
+check "R1: 3 fresh distinct reporters => victim NOT suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$V'")" "0"
+echo "   -- R1: fresh reporters do not even add the anonymous voice; 1 anonymous + 1 aged + 2 fresh => still not suspended"
+reset_rates; p=$(mkpass "$V"); rt=${p#* }
+svc "select public.handoff_report('$rt', null, null, 'spam', 'ip-anon')" >/dev/null
+A1=$(new_user true); reset_rates; p=$(mkpass "$V"); rid=${p% *}; rt=${p#* }
+c=$(claim "$rt" "$A1" null 10); rs=$(jq_ "'$c'" claimer_secret)
+svc "select public.handoff_report(null, '$rid', '$rs', 'unsafe', 'ip-a')" >/dev/null
+check "R1: anon + 1 aged + 3 fresh => 2 counted voices, NOT suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$V'")" "0"
+echo "   -- R1 positive: a 2nd + 3rd AGED distinct reporter DO suspend"
+for i in 1 2; do
+  A=$(new_user true); reset_rates; p=$(mkpass "$V"); rid=${p% *}; rt=${p#* }
+  c=$(claim "$rt" "$A" null 10); rs=$(jq_ "'$c'" claimer_secret)
+  svc "select public.handoff_report(null, '$rid', '$rs', 'unsafe', 'ip-a')" >/dev/null
+done
+check "R1: 3 aged distinct reporters => suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$V'")" "1"
+sql "$DB" "delete from public.spot_handoffs; delete from public.handoff_reports; delete from public.handoff_suspensions" >/dev/null
+echo "   -- R1 positive (clean): exactly 3 aged distinct reporters, nothing else"
+for i in 1 2 3; do
+  A=$(new_user true); reset_rates; p=$(mkpass "$V"); rid=${p% *}; rt=${p#* }
+  c=$(claim "$rt" "$A" null 10); rs=$(jq_ "'$c'" claimer_secret)
+  svc "select public.handoff_report(null, '$rid', '$rs', 'unsafe', 'ip-a')" >/dev/null
+done
+check "R1: 3 aged distinct reporters (clean) => suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$V'")" "1"
+sql "$DB" "delete from public.spot_handoffs; delete from public.handoff_reports; delete from public.handoff_suspensions" >/dev/null
+
 echo "== Test 13: rate limits"
 reset_rates
 p=$(mkpass "$SEEKER"); rt=${p#* }

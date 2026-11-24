@@ -555,6 +555,8 @@ end $$;
 --     claimer carried a JWT). One reporter reporting the same victim on many passes counts ONCE.
 --   * ALL unidentified reports (token-path / JWT-less claimer reports, which cannot be deduped without storing IPs)
 --     together count as AT MOST ONE reporter, however many there are or whatever IPs they rotate through.
+--   * an identified reporter whose account was < 24 h old at report time is recorded but counts as NO voice (R1: free
+--     anonymous sign-ins must not be able to mint distinct reporters on demand).
 -- So N reports from one source can never suspend; it takes >= 2 distinct identified users (+ optionally one anonymous
 -- voice). Suspensions expire (handoff_suspensions.expires_at), are kept for review, and a re-suspension needs 3 NEW
 -- distinct reporters after the previous one. Review: select * from public.handoff_suspensions order by suspended_at desc;
@@ -574,8 +576,14 @@ begin
     select greatest(now() - interval '30 days',
                     coalesce((select suspended_at from public.handoff_suspensions where user_id = v_subject), '-infinity'))
       into v_since;
-    select count(distinct reporter_user_id) + least(1, count(*) filter (where reporter_user_id is null)) into n
-      from public.handoff_reports where subject_user_id = v_subject and created_at > v_since;
+    -- R1: an identified reporter counts only if their account was >= 24 h old WHEN THEY REPORTED (same rule as
+    -- handoff_karma_pair_ok). Younger accounts' reports stay recorded for review but count as NO voice (safer than
+    -- folding them into the anonymous voice, which would let fresh accounts still supply that third voice).
+    select count(distinct hr.reporter_user_id) filter (
+             where exists (select 1 from auth.users u where u.id = hr.reporter_user_id
+                              and u.created_at <= hr.created_at - interval '24 hours'))
+           + least(1, count(*) filter (where hr.reporter_user_id is null)) into n
+      from public.handoff_reports hr where hr.subject_user_id = v_subject and hr.created_at > v_since;
     if n >= 3 then
       insert into public.handoff_suspensions (user_id, reason, suspended_at, expires_at)
       values (v_subject, 'reports', now(), now() + interval '7 days')
@@ -903,8 +911,9 @@ begin
 end $$;
 
 -- ------------------------------------------------------------------------------------------
--- Cron — LAST on purpose (same sequencing lesson as 03): if pg_cron were unavailable, the paste above is the part
--- that matters; re-run only this block after enabling the extension. Fixed job name => idempotent.
+-- Cron — LAST on purpose (same sequencing lesson as 03). The SQL Editor runs this whole file as ONE transaction: if
+-- pg_cron is unavailable this statement fails and EVERYTHING above rolls back (nothing half-applied). Enable pg_cron
+-- (Dashboard > Database > Extensions), then re-run the WHOLE file; it is idempotent and the fixed job name upserts.
 -- ------------------------------------------------------------------------------------------
 create extension if not exists pg_cron;
 select cron.schedule('handoff-sweep', '* * * * *', $$ select internal.handoff_sweep() $$);

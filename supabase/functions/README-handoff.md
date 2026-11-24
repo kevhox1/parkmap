@@ -61,7 +61,8 @@ Replace `<PROJECT_REF>` with `jiispshyqerscdoferaw` and `<SERVICE_ROLE_KEY>` / `
    Emergency stop with no SQL: `supabase secrets set HANDOFF_ENABLED=false` makes every function answer 503 `{"error":"disabled"}`
    (unset it, or set `true`, to defer to the database flag again).
 7. Suspension policy: >= 3 DISTINCT reporters (all unidentified reports together count as one; one reporter across many passes
-   counts once) suspend a user for **7 days**; expired rows are kept for review:
+   counts once; an identified reporter counts only if their account was >= 24 h old when they reported, younger accounts'
+   reports are recorded but count as no voice) suspend a user for **7 days**; expired rows are kept for review:
    `select user_id, suspended_at, expires_at, reason from public.handoff_suspensions order by suspended_at desc;`
    Lift early by hand: `delete from public.handoff_suspensions where user_id = '<uuid>';`
 
