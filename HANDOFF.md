@@ -252,7 +252,7 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
   - The clip block card ignores days beyond the 2026 calendar.
   - The DriveCameraTiltTests malloc host crash in CI was seen once and has not recurred.
 
-**In flight:** C4 armed-window auto-detect (`feat/spot-pass-c4-autodetect`). `UIBackgroundModes location` is behind a build setting that defaults OFF, so dark builds carry no App Review exposure.
+**C4 auto-detect: MERGED** (#173, plus follow-ups #174). It is QA'd live in the sim: walking does not trigger, driving triggers once, Turn off works, and the opt-in persists with a visible per-pass note. The flip steps are in `docs/specs/qr-spot-handoff-c4-flip.md`. Known nit: on a reopened pass the carried-over note can be suppressed once (the `offeredHere` latch). **Previously in flight:** C4 armed-window auto-detect (`feat/spot-pass-c4-autodetect`). `UIBackgroundModes location` is behind a build setting that defaults OFF, so dark builds carry no App Review exposure.
 
 ### 2026-11-24 (evening) — ✅ PROD: Regulars 07/09/08 + Spot Pass 14 applied; push functions secured; getwepark.com/p live
 
