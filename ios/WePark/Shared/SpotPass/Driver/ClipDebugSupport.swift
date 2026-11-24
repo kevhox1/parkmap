@@ -14,8 +14,8 @@
 //    -spotPassFakeLeaveSeconds <n>      fake claim returns leave_at = now + n s (test reminders without waiting)
 //    -spotPassFakeThanksAfter <n>       n seconds after a successful depart, simulate the seeker's thanks
 //
-//  The real ActivityKit controller, the real reminder scheduler and the real keychain stay in use
-//  in fake mode, so QA exercises the actual lock screen and notification surfaces.
+//  The real ActivityKit controller, and the real reminder scheduler stay in use in fake
+//  mode (the claimer secret is held in memory, since the unsigned simulator keychain write fails).
 //
 
 #if DEBUG
@@ -111,6 +111,26 @@ final class FakeHandoffDriverAPI: HandoffDriverAPI {
     func report(target: HandoffReportTarget, reason: HandoffReportReason) async throws -> Bool {
         calls.append("report:\(reason.rawValue)")
         return true
+    }
+}
+
+// MARK: - Secret store for fake mode
+
+/// In-memory claimer-secret store so the whole fake flow is reachable in an UNSIGNED simulator build,
+/// where the real keychain write fails (-34018). Used only when `-spotPassUseFakeAPI YES` is passed
+/// (see `ClipLaunchOptions.makeSecretStore()`); the fake secret is a constant, never a real one.
+@MainActor
+final class DebugInMemoryHandoffSecretStore: HandoffSecretStoring {
+    private var stored: (UUID, ClaimerSecret)?
+    @discardableResult func save(_ secret: ClaimerSecret, passID: UUID) -> Bool { stored = (passID, secret); return true }
+    func secret(for passID: UUID) -> ClaimerSecret? { stored?.0 == passID ? stored?.1 : nil }
+    func clear() { stored = nil }
+}
+
+extension ClipLaunchOptions {
+    /// The in-memory store ONLY in fake-API mode; the real keychain store otherwise.
+    @MainActor func makeSecretStore() -> any HandoffSecretStoring {
+        useFakeAPI ? DebugInMemoryHandoffSecretStore() : KeychainHandoffSecretStore()
     }
 }
 

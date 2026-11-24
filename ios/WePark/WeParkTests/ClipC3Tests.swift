@@ -1243,6 +1243,25 @@ final class ClipFakeAndLaunchTests: XCTestCase {
         XCTAssertEqual(grant.leaveAt, now.addingTimeInterval(20))
     }
 
+    func testSecretStore_isInMemoryOnlyWithFakeFlag() {
+        let fake = ClipLaunchOptions(arguments: ["-spotPassUseFakeAPI", "YES"], environment: [:])
+        XCTAssertTrue(fake.makeSecretStore() is DebugInMemoryHandoffSecretStore)
+        for args in [[String](), ["-spotPassUseFakeAPI", "NO"], ["-spotPassFakeScenario", "offline"]] {
+            let real = ClipLaunchOptions(arguments: args, environment: [:])
+            XCTAssertTrue(real.makeSecretStore() is KeychainHandoffSecretStore, "\(args)")
+        }
+    }
+
+    func testDebugSecretStore_savesLoadsAndScopesToPassID() {
+        let store = DebugInMemoryHandoffSecretStore()
+        let id = UUID()
+        XCTAssertTrue(store.save(FakeHandoffDriverAPI.fakeSecret, passID: id))
+        XCTAssertEqual(store.secret(for: id)?.rawValue, FakeHandoffDriverAPI.fakeSecret.rawValue)
+        XCTAssertNil(store.secret(for: UUID()))
+        store.clear()
+        XCTAssertNil(store.secret(for: id))
+    }
+
     func testFakeFlow_endToEnd_throughTheController() async {
         let h = Harness()
         let controller = ClipFlowController(dependencies: ClipDependencies(
@@ -1270,7 +1289,7 @@ final class ClipCopyLintTests: XCTestCase {
             ClipCopy.timeToGo, ClipCopy.pullingOutSafety, ClipCopy.passedHeadline, ClipCopy.passedSub,
             ClipCopy.karmaPendingCaption, ClipCopy.installHeadline, ClipCopy.installBody, ClipCopy.installSecondary,
             ClipCopy.unavailableTitle, ClipCopy.unavailableBody, ClipCopy.offlineTitle, ClipCopy.offlineBody,
-            ClipCopy.disabledTitle, ClipCopy.disabledBody, ClipCopy.openAppTitle, ClipCopy.openAppBody, ClipCopy.oneNeighborNote,
+            ClipCopy.disabledTitle, ClipCopy.disabledBody, ClipCopy.openAppTitle, ClipCopy.openAppBody, ClipCopy.saveFailedTitle, ClipCopy.saveFailedBody, ClipCopy.oneNeighborNote,
             ClipCopy.blockTeaserTitle, ClipCopy.blockTeaserSub, ClipCopy.blockFootnote, ClipCopy.blockForwardLink,
             ClipCopy.blockHappeningNow, ClipCopy.blockNoRule, ClipCopy.blockCheckSigns, ClipCopy.blockDenied,
             ClipCopy.reminderHiddenBody, ClipCopy.passEnded, ClipCopy.activityEnded,
@@ -1331,14 +1350,17 @@ final class ClipSecretFailureTests: XCTestCase {
     func testFailedSecretSave_failsArming_likeNoID() async {
         let h = Harness(secrets: FailingSecretStore())
         await h.armed()
-        XCTAssertEqual(h.controller.phase, .openApp)
+        XCTAssertEqual(h.controller.phase, .saveFailed)
         XCTAssertNil(h.controller.pass)
         XCTAssertNil(h.passes.pass)                       // stores nothing
         XCTAssertTrue(h.reminders.scheduled.isEmpty)
         XCTAssertEqual(h.activity.ended, [.ended])        // Live Activity ended
         XCTAssertTrue(h.api.calls.contains("cancel"))     // server claim released, best effort
         XCTAssertFalse(h.api.calls.contains("depart"))
-        XCTAssertEqual(ClipMessageContent.content(for: .openApp).title, "Open the WePark app to finish.")
+        let content = ClipMessageContent.content(for: .saveFailed)
+        XCTAssertEqual(content.title, ClipCopy.saveFailedTitle)
+        XCTAssertNotEqual(content.body, ClipMessageContent.content(for: .openApp).body)
+        XCTAssertFalse(content.body.lowercased().contains("reminder"))
     }
 
     func testPullOut_whenSecretIsGone_showsCouldNotSend_andDoesNotCallServer() async {
