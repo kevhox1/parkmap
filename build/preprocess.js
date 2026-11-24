@@ -72,13 +72,70 @@ const CATEGORIES = {
   UNKNOWN:            { label: 'Unknown',          priority: 11 },
 };
 
-const SKIP_PATTERNS = ['LOCATOR NUMBER', 'LOCATION PANEL', 'MTA BUS', 'STREET NAME', 'ONE WAY', 'SPEED LIMIT', 'DEAD END', 'CONSTRUCTION'];
+// Pure-information signs that carry no regulation. NOTE (sign reclassification):
+// 'MTA BUS' and 'CONSTRUCTION' are NO LONGER blanket skips -- they used to drop
+// bus-layover regulations and temporary construction regulations, which are
+// real restrictions for a private car. Route/destination PANELS are still dropped
+// via isSkippedSign() below.
+const SKIP_PATTERNS = ['LOCATOR NUMBER', 'LOCATION PANEL', 'STREET NAME', 'ONE WAY', 'SPEED LIMIT', 'DEAD END'];
+
+// Temporary (hard hat) construction regulation marker.
+const TEMP_CONSTRUCTION_RE = /HARD ?HAT|TEMPORARY CONSTRUCTION|NO PARKING ANYTIME\s*CONSTRUCTION/;
+const REGULATION_WORDS_RE = /NO STOPPING|NO STANDING|NO PARKING/;
+
+// True when the sign must not become a rule at all (info panels, riders with no
+// regulation text of their own).
+function isSkippedSign(desc) {
+  if (!desc) return false; // empty descriptions are handled by classifySign (null)
+  const d = desc.toUpperCase();
+  for (const p of SKIP_PATTERNS) { if (d.includes(p)) return true; }
+  // MTA / non-MTA bus ROUTE / DESTINATION panels are pure info; layover and
+  // bus-stop regulations are not.
+  if (d.includes('MTA BUS') && /PANEL/.test(d) && !d.includes('LAYOVER') && !REGULATION_WORDS_RE.test(d)) return true;
+  // Hard-hat construction RIDER with no regulation of its own: it only modifies a
+  // neighbouring sign record, nothing to enforce by itself.
+  if (TEMP_CONSTRUCTION_RE.test(d) && !REGULATION_WORDS_RE.test(d)) return true;
+  return false;
+}
+
+// Temporary construction regulation (hard hat). Emitted as the regulation it
+// states, flagged so clients can label it "temporary".
+function isTemporarySign(desc) {
+  if (!desc) return false;
+  const d = desc.toUpperCase();
+  return TEMP_CONSTRUCTION_RE.test(d) && REGULATION_WORDS_RE.test(d);
+}
+
+// Curbs where a private car may not park because they are reserved for a
+// plate / vehicle type / use. Order-independent; evaluated AFTER the NO_*
+// families and BEFORE the generic meter match.
+const RESERVED_CURB_RES = [
+  /AUTHORIZED VEHICLES? ONLY/,                 // STAR sign: consul/diplomat, USPS, courts, agencies...
+  /DIPLOMAT|CONSUL/,                           // incl. "CONSUL / DIPLOMAT CODING RIDER"
+  /PRESS.*\bNYP\b|\bNYP\b.*PLATES/,
+  /POSTAL SERVICE/,
+  /AMBULETTE/,
+  /FOR[ -]HIRE VEHICLES?|\bFHV\b/,
+  /TAXI.{0,40}STAND|RELIEF STAND|TAXI STAND/,
+  /ELECTRIC VEHICLES?.{0,40}CHARGING|\bEV CHARGING/,
+  /HORSE[ -]DRAWN CAB/,
+  /FARMERS?\s*MARKET|FLEA MARKET/,
+  /\bNLZ\b|LOADING ONLY/,                      // neighborhood loading zone etc.
+  /PERMITS? ONLY|WITH PERMIT|\bRIOC\b|R I O C|\bF L E O\b|\bFLEO\b/,
+  /PRISON VANS|LAW DEPT VEHICLES|SUPREME COURT JUSTICES|CHINATOWN BUSES ONLY/,
+  /WAITING LINE/,
+  /MOTORCYCLE PARKING ONLY/,
+  /\bBUS STAND\b/,
+  /STAR \(SYMBOL\)/,                          // STAR = authorized-vehicles curb
+  /\bBUSES ONLY\b|NYU PERMIT|\bMTA BUSES\b|ARCHDIOCESE|MEDICAL FACILITY/,
+  /(?<!NO )BUS LAYOVER/,                       // MTA / non-MTA layover (car may not stand)
+];
 
 // ==== Sign Classification ====
 function classifySign(desc) {
   if (!desc) return null;
   const d = desc.toUpperCase();
-  for (const p of SKIP_PATTERNS) { if (d.includes(p)) return null; }
+  if (isSkippedSign(desc)) return null;
 
   const hasBroom = d.includes('BROOM');
   const hasMidnight = d.includes('MIDNIGHT');
@@ -110,12 +167,20 @@ function classifySign(desc) {
 
   if (d.includes('NO STOPPING') || d.includes('NO STANDING')) return 'NO_STANDING';
   if (d.includes('NO PARKING')) return 'NO_PARKING';
-  if (d.includes('TRUCK LOADING')) return 'TRUCK_LOADING';
+  if (d.includes('TRUCK LOADING') || d.includes('TRUCKS LOADING')) return 'TRUCK_LOADING';
   if (d.includes('AMBULANCE') || d.includes('FIRE DEPT') || d.includes('DOCTOR LICENSE') || d.includes('AVO')) return 'SPECIAL';
+  // Commercial-vehicles-only curbs (metered "HMP"/"MMP" or not): a passenger car may
+  // not park there during the stated window, so NOT a meter for a private car.
+  if (/COMMERCIAL VEHICLES? ONLY/.test(d)) return 'NO_PARKING';
+  for (const re of RESERVED_CURB_RES) { if (re.test(d)) return 'SPECIAL'; }
   if ((d.includes('HMP') || d.includes('MUNI METER') || d.includes('METER')) && !d.includes('METERS ARE NOT IN EFFECT')) return 'METERED';
 
   return 'UNKNOWN';
 }
+
+// Categories that are hard restrictions in the iOS rules engine (day/time window,
+// "anytime" when no window is stated).
+const WINDOWED_RESTRICTION_CATEGORIES = new Set(['NO_STANDING', 'NO_PARKING', 'TRUCK_LOADING', 'SPECIAL']);
 
 // ==== Schedule Parsing ====
 function parseTimeStr(s) {
@@ -132,7 +197,7 @@ function parseTimeStr(s) {
   return h * 60 + min;
 }
 
-function parseSchedule(desc) {
+function parseSchedule(desc, category) {
   if (!desc) return { days: [], timeRanges: [], anytime: false, arrow: null };
   const d = desc.toUpperCase();
   const result = { days: [], timeRanges: [], anytime: false, arrow: null };
@@ -173,6 +238,21 @@ function parseSchedule(desc) {
     });
   }
 
+  // "ALL DAYS" / DAILY / EVERY DAY: the sign applies all seven days (previously fell
+  // through to the Mon-Sat default, leaving Sunday falsely free).
+  const allDaysToken = /ALL DAYS|\bDAILY\b|EVERY DAY/.test(d);
+  if (result.days.length === 0 && allDaysToken) result.days = [0,1,2,3,4,5,6];
+
+  // Sign reclassification: a hard-restriction sign (NO_STANDING / NO_PARKING /
+  // TRUCK_LOADING / SPECIAL) that names NO day and NO exception applies EVERY day.
+  // Previously these (bus stops, hotel loading zones, fire zones, AVO police/fire,
+  // doctor, taxi, diplomat...) fell through to the Mon-Sat default, so Sunday showed
+  // green on a bus stop. With no stated time window it is "anytime".
+  const impliedAllDays = category && WINDOWED_RESTRICTION_CATEGORIES.has(category) &&
+    result.days.length === 0 &&
+    !/\b(MON|TUE|WED|THU|FRI|SAT|SUN)[A-Z]*\b|SCHOOL DAYS|EXCEPT/.test(d);
+  if (impliedAllDays) result.days = [0,1,2,3,4,5,6];
+
   if (result.days.length === 0) result.days = [1,2,3,4,5,6];
 
   // Parse times
@@ -183,6 +263,8 @@ function parseSchedule(desc) {
     const end = parseTimeStr(tm[2]);
     if (start !== null && end !== null) result.timeRanges.push({ start, end });
   }
+
+  if (impliedAllDays && result.timeRanges.length === 0) result.anytime = true;
 
   return result;
 }
@@ -1628,8 +1710,8 @@ function createSubSegments(block, bearingVector) {
     .map(s => {
       const cat = classifySign(s.sign_description);
       if (!cat) return null;
-      const schedule = parseSchedule(s.sign_description);
-      return { sign: s, category: cat, schedule, distance: +(s.distance_from_intersection || 0), arrow: schedule.arrow };
+      const schedule = parseSchedule(s.sign_description, cat);
+      return { sign: s, category: cat, schedule, temporary: isTemporarySign(s.sign_description), distance: +(s.distance_from_intersection || 0), arrow: schedule.arrow };
     })
     .filter(Boolean);
 
@@ -1932,10 +2014,7 @@ function groupSignsIntoBlocks(deduped) {
   const blocks = {};
   let skippedInfo = 0;
   deduped.forEach(sign => {
-    const desc = (sign.sign_description || '').toUpperCase();
-    for (const p of SKIP_PATTERNS) {
-      if (desc.includes(p)) { skippedInfo++; return; }
-    }
+    if (isSkippedSign(sign.sign_description)) { skippedInfo++; return; }
 
     // Normalize NYC's weird street names (e.g., "EAST    4 STREET" → "EAST 4TH STREET")
     const normStreet = normalizeNYCName(sign.on_street);
@@ -2385,7 +2464,9 @@ async function main() {
           days: r.schedule.days,
           timeRanges: r.schedule.timeRanges,
           anytime: r.schedule.anytime,
-          arrow: r.schedule.arrow
+          arrow: r.schedule.arrow,
+          // Optional, additive: hard-hat temporary construction regulation.
+          ...(r.temporary && { temporary: true })
         }));
 
         const segId = `${block.street}_${block.from}_${block.to}_${block.side}_${idx}`.replace(/\s+/g, '_');
@@ -3054,6 +3135,8 @@ if (require.main !== module) {
     // test fixture.
     classifySign,
     parseSchedule,
+    isSkippedSign,
+    isTemporarySign,
     normalizeNYCName,
     createSubSegments,
     getBlockBearingVector,
