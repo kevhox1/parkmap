@@ -2,10 +2,15 @@
 //  SpotPassActivityAttributes.swift
 //  Shared/SpotPass
 //
-//  PLACEHOLDER ActivityAttributes shared by the app, the clip and both Live Activity extensions
-//  (the type must be identical in every process that starts, updates or renders the activity).
-//  C2 (app) and C3 (clip) own the real shape; keep payloads under ActivityKit's 4 KB limit and
-//  never put a location, address, plate or username in it (spec §9).
+//  ActivityAttributes shared by the app, the clip and both Live Activity extensions (the type must
+//  be identical in every process that starts, updates or renders the activity). C3 defines the
+//  real shape (clip driver countdown); C2 (full app) reuses it.
+//
+//  Constraints: under ActivityKit's 4 KB, never a location, address, plate or username (spec 9).
+//
+//  Push contract: the backend ends the activity with a content-state of ONLY `{"phase":"thanks"}`
+//  or `{"phase":"ended"}` (supabase/functions/_shared/handoff_push.ts), so every other
+//  `ContentState` field is optional and an unknown phase decodes to `.ended`.
 //
 
 import ActivityKit
@@ -13,11 +18,45 @@ import Foundation
 
 nonisolated struct SpotPassActivityAttributes: ActivityAttributes {
 
-    nonisolated struct ContentState: Codable, Hashable {
-        /// Planned departure time; nil until a pass is armed.
-        var leaveAt: Date?
+    nonisolated enum Phase: String, Codable, Hashable, Sendable {
+        case counting       // "Leaving in 9:42"
+        case timeToGo       // leave_at reached: "Time to go?"
+        case sent           // "Sent. <name> knows you're pulling out."
+        case passed         // celebration, karma pending
+        case thanks         // seeker said thanks
+        case cancelled
+        case ended
+
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.singleValueContainer().decode(String.self)
+            self = Phase(rawValue: raw) ?? .ended
+        }
     }
 
-    /// The friendly alias the pass carries ("Bodega Cat").
+    nonisolated struct ContentState: Codable, Hashable {
+        var phase: Phase
+        /// Planned departure time; drives the system timer. nil in push-to-end updates.
+        var leaveAt: Date?
+        /// When the countdown started (progress bar origin).
+        var startedAt: Date?
+
+        init(phase: Phase = .counting, leaveAt: Date? = nil, startedAt: Date? = nil) {
+            self.phase = phase
+            self.leaveAt = leaveAt
+            self.startedAt = startedAt
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            phase = try container.decodeIfPresent(Phase.self, forKey: .phase) ?? .ended
+            leaveAt = try container.decodeIfPresent(Date.self, forKey: .leaveAt)
+            startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+        }
+    }
+
+    /// What the driver sees as the pass owner's name: the opt-in first name, else the alias.
     var alias: String
+    var glyph: String = SpotPassGlyph.fallbackSymbol
+    /// True for the App Clip's activity: buttons are deep links, not App Intents.
+    var isClip: Bool = false
 }

@@ -17,6 +17,10 @@ nonisolated struct SpotPassLink: Equatable, Hashable, Sendable {
     /// The 22-character base64url pass token (128 bits), or nil for the generic landing.
     let token: String?
 
+    /// Clip-internal deep action carried by Live Activity links (`?a=pull|now|more|cancel`), or
+    /// nil. Ignored by the full app's seeker path.
+    let action: ClipDeepAction?
+
     /// Token length: 128 bits in unpadded base64url.
     static let tokenLength = 22
 
@@ -40,6 +44,9 @@ nonisolated struct SpotPassLink: Equatable, Hashable, Sendable {
         if candidate == nil {
             candidate = components.queryItems?.first(where: { $0.name == "t" })?.value
         }
+
+        action = components.queryItems?.first(where: { $0.name == "a" })?.value
+            .flatMap(ClipDeepAction.init(urlCode:))
 
         if let candidate, Self.isValidToken(candidate) {
             token = candidate
