@@ -140,15 +140,26 @@ struct DriverArmedView: View {
 
     private var autoPingRow: some View {
         Button { showAutoPingGuide = true } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "car.fill").foregroundStyle(SpotPassTheme.lavender).frame(width: 28)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(DriverCopy.autoPingRowTitle).font(.headline).foregroundStyle(.white)
-                    Text(DriverCopy.autoPingRowSub).font(.footnote).foregroundStyle(SpotPassTheme.lavender)
-                        .multilineTextAlignment(.leading)
+            Group {
+                if typeSize.isAccessibilitySize {
+                    // AX sizes: icon and chevron share a top line and the text gets the FULL row width, so the
+                    // title wraps only at word boundaries (the narrow beside-the-icon column split "heads-up").
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            autoPingIcon
+                            Spacer(minLength: 0)
+                            autoPingChevron
+                        }
+                        autoPingText
+                    }
+                } else {
+                    HStack(alignment: .center, spacing: 16) {
+                        autoPingIcon
+                        autoPingText
+                        Spacer(minLength: 0)
+                        autoPingChevron
+                    }
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.6))
             }
             .padding(16)
             .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
@@ -158,6 +169,33 @@ struct DriverArmedView: View {
         .buttonStyle(.plain)
         .accessibilityElement(children: .combine)
         .accessibilityAddTraits(.isButton)
+    }
+
+    private var autoPingIcon: some View {
+        // `minWidth`, not a fixed width: the glyph grows with Dynamic Type and must never touch the text.
+        Image(systemName: "car.fill")
+            .foregroundStyle(SpotPassTheme.lavender)
+            .frame(minWidth: 32, alignment: .center)
+            .accessibilityHidden(true)
+    }
+
+    private var autoPingChevron: some View {
+        Image(systemName: "chevron.right").foregroundStyle(.white.opacity(0.6)).accessibilityHidden(true)
+    }
+
+    private var autoPingText: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(DriverCopy.autoPingRowTitle)
+                .font(.headline).foregroundStyle(.white)
+                .multilineTextAlignment(.leading)
+                // Shrinks a long word a little before it would ever need to break; wraps at spaces otherwise.
+                .minimumScaleFactor(0.8)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(DriverCopy.autoPingRowSub)
+                .font(.footnote).foregroundStyle(SpotPassTheme.lavender)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 

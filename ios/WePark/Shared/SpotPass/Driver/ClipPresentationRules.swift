@@ -73,3 +73,12 @@ nonisolated enum ClipArmedPresentation {
     /// The armed screen shows "You're on" until the chosen leave time, then "Time to go?".
     static func isTimeToGo(leaveAt: Date, now: Date) -> Bool { now >= leaveAt }
 }
+
+// MARK: - Install card
+
+/// The install card may sell "leave from your lock screen" only when a Live Activity ACTUALLY started
+/// for this pass. `areActivitiesEnabled` alone is not enough: the request can fail while the setting
+/// is on (budget limit, simulator), and the card must not promise what the driver never saw.
+nonisolated enum ClipInstallCardRules {
+    static func showsLockScreenLine(activityStarted: Bool) -> Bool { activityStarted }
+}
