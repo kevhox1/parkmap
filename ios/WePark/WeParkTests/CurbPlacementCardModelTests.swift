@@ -127,14 +127,14 @@ final class CurbPlacementCardSnappedTests: XCTestCase {
         let model = cpcmMake(
             cpcmSnapped(cpcmBareSegment(from: "W 42ND STREET", to: "FDR DRIVE")), intent: .plant
         )
-        XCTAssertEqual(model.subtitle, "between W 42nd St & FDR Dr")
+        XCTAssertEqual(model.subtitle, "between W 42 St & FDR Dr")
     }
 
     func testSubtitle_crossStreets_firstOrdinalAndAvenue() {
         let model = cpcmMake(
             cpcmSnapped(cpcmBareSegment(from: "1ST AVENUE", to: "2ND AVENUE")), intent: .plant
         )
-        XCTAssertEqual(model.subtitle, "between 1st Ave & 2nd Ave")
+        XCTAssertEqual(model.subtitle, "between 1 Ave & 2 Ave")
     }
 
     func testStatusText_isByteEqualToEngineSafetyLabel_forRestrictedSegment() {

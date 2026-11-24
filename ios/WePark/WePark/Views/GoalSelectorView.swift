@@ -516,6 +516,7 @@ private struct GoalTile: View {
     var minHeight: CGFloat = 128
     /// Addendum 4: the card's own label ("..., Selected. Double tap to change goal.").
     var accessibilityLabelOverride: String? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     let onTap: () -> Void
 
     var body: some View {
@@ -616,39 +617,25 @@ private struct GoalTile: View {
 
 
 extension GoalTile {
-    /// The three-across tile title. A goal name must never break INSIDE a word ("Overnig / ht"
-    /// on an SE at XXXL): try the whole name on one line, else break only at a word boundary
-    /// (`goalTitleLines`) with each line shrinking (down to 0.6x) rather than wrapping mid-word.
+    /// The three-across tile title. Below `.xxLarge` it is the original `lineLimit(2)` Text,
+    /// byte-for-byte (the dock's measured height at `.large` is pinned by a test). From `.xxLarge`
+    /// up a goal name must never break INSIDE a word ("Overnig / ht" on an SE at XXXL): the name
+    /// is pre-broken at a word boundary (`goalTitleLines`) and the line limit equals the line
+    /// count, so an over-wide line shrinks (down to 0.6x) instead of wrapping mid-word.
     @ViewBuilder
     fileprivate var tileTitle: some View {
-        let name = goal.dockPrimary
-        // Reserve exactly two unscaled headline lines (what the old `lineLimit(2)` title could
-        // occupy) so the dock's measured height below AX1 does not change.
-        ZStack {
-            Text("A\nA")
+        if dynamicTypeSize < .xxLarge {
+            Text(goal.dockPrimary)
                 .font(.headline.bold())
+                .multilineTextAlignment(.center)
                 .lineLimit(2)
-                .hidden()
-                .accessibilityHidden(true)
-            titleFit(name)
-        }
-    }
-
-    private func titleFit(_ name: String) -> some View {
-        ViewThatFits(in: .horizontal) {
-            Text(name)
+        } else {
+            let lines = goalTitleLines(goal.dockPrimary)
+            Text(lines.joined(separator: "\n"))
                 .font(.headline.bold())
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-            VStack(spacing: 0) {
-                ForEach(Array(goalTitleLines(name).enumerated()), id: \.offset) { _, line in
-                    Text(line)
-                        .font(.headline.bold())
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                }
-            }
-            .multilineTextAlignment(.center)
+                .multilineTextAlignment(.center)
+                .lineLimit(lines.count)
+                .minimumScaleFactor(0.6)
         }
     }
 }
