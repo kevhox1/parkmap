@@ -15,6 +15,7 @@ import {
   isToken,
   isUuid,
   parseClaimBody,
+  readJsonBody,
   safeEqual,
 } from "./handoff.ts";
 import {
@@ -102,7 +103,11 @@ Deno.test("ip hashing: stable, salted, never contains the IP", async () => {
 });
 
 Deno.test("client ip + bearer parsing", () => {
-  assertEquals(clientIp(new Headers({ "x-forwarded-for": "1.2.3.4, 10.0.0.1" })), "1.2.3.4");
+  // forged leading XFF hop is ignored: last hop (appended by the trusted proxy) wins
+  assertEquals(clientIp(new Headers({ "x-forwarded-for": "6.6.6.6, 203.0.113.9" })), "203.0.113.9");
+  assertEquals(clientIp(new Headers({ "x-forwarded-for": "203.0.113.9" })), "203.0.113.9");
+  // cf-connecting-ip beats any x-forwarded-for
+  assertEquals(clientIp(new Headers({ "cf-connecting-ip": "5.6.7.8", "x-forwarded-for": "6.6.6.6" })), "5.6.7.8");
   assertEquals(clientIp(new Headers({ "cf-connecting-ip": "5.6.7.8" })), "5.6.7.8");
   assertEquals(clientIp(new Headers()), "unknown");
   assertEquals(bearer(new Headers({ authorization: "Bearer abc.def" })), "abc.def");
@@ -183,4 +188,19 @@ Deno.test("driver payloads: thanks alert (clip adds target-content-id), silent e
   assertEquals(liveActivityTopic("com.kevinhoxha.wepark.Clip"), "com.kevinhoxha.wepark.Clip.push-type.liveactivity");
   assert(isClipTopic("com.kevinhoxha.wepark.Clip", "com.kevinhoxha.wepark"));
   assertFalse(isClipTopic("com.kevinhoxha.wepark", "com.kevinhoxha.wepark"));
+});
+
+Deno.test("readJsonBody rejects oversized bodies while streaming (no content-length)", async () => {
+  const big = new ReadableStream<Uint8Array>({
+    start(c) {
+      const chunk = new TextEncoder().encode("x".repeat(1024));
+      for (let i = 0; i < 8; i++) c.enqueue(chunk);
+      c.close();
+    },
+  });
+  const req = new Request("http://x/", { method: "POST", body: big, // @ts-ignore deno duplex
+    duplex: "half" });
+  assertEquals(await readJsonBody(req), null);
+  const ok = new Request("http://x/", { method: "POST", body: JSON.stringify({ a: 1 }) });
+  assertEquals(await readJsonBody(ok), { a: 1 });
 });

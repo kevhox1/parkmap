@@ -29,7 +29,7 @@
  * LOGGING: kind, counts and APNs status classes only. Never a token, alias, name, id of a person, or location.
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { APNS_HOSTS, ApnsEnv, DeviceTokenRow, getApnsJwt, sendInChunks, sendOnePush } from "../_shared/apns.ts";
 import { allowedTopics, bearer, envKillSwitch, json, isUuid, safeEqual } from "../_shared/handoff.ts";
 import {

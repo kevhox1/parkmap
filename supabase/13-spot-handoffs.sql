@@ -10,7 +10,7 @@
 --   Tables (all RLS-enabled):
 --     public.spot_handoffs         the pass. Seeker may SELECT own rows, a fixed column list only (no hashes/tokens).
 --     public.handoff_reports       abuse reports (deny-all to clients).
---     public.handoff_suspensions   users blocked after 3 reports (deny-all).
+--     public.handoff_suspensions   users blocked by the report policy (deny-all); suspensions EXPIRE (7 days).
 --     public.handoff_pair_log      24 h pair-cooldown ledger for karma (deny-all).
 --     public.handoff_rate_events   rate-limit counters (deny-all; keys are user ids or SALTED IP hashes, never raw IPs).
 --     public.handoff_config        server-side feature flag HANDOFF_ENABLED (deny-all).
@@ -157,6 +157,9 @@ create table if not exists public.handoff_reports (
   subject_user_id uuid references auth.users(id) on delete cascade,   -- the REPORTED party (nullable: unknown claimer)
   created_at      timestamptz not null default now()
 );
+-- Reporter identity (QA #2): NULL = unidentified (web-fallback/token-path or JWT-less claimer). Distinct-reporter counting
+-- uses this column; see internal.handoff_record_report for the full policy.
+alter table public.handoff_reports add column if not exists reporter_user_id uuid references auth.users(id) on delete cascade;
 create unique index if not exists handoff_reports_one_per_side
   on public.handoff_reports(handoff_id, reporter) where handoff_id is not null;
 create index if not exists handoff_reports_subject_idx on public.handoff_reports(subject_user_id, created_at);
@@ -168,10 +171,13 @@ create table if not exists public.handoff_suspensions (
   suspended_at timestamptz not null default now(),
   reason       text not null default 'reports'
 );
+-- Suspensions expire (QA #2). NULL = indefinite (manual suspension). Expired rows are kept (reviewable), purged after 90 days.
+alter table public.handoff_suspensions add column if not exists expires_at timestamptz;
 alter table public.handoff_suspensions enable row level security;
 revoke all on public.handoff_suspensions from anon, authenticated;
 comment on table public.handoff_suspensions is
-  'Lift a suspension by hand: delete from public.handoff_suspensions where user_id = ''<uuid>'';';
+  'Report-driven suspensions last 7 days (expires_at). Review: select * from public.handoff_suspensions order by suspended_at desc; '
+  'lift early by hand: delete from public.handoff_suspensions where user_id = ''<uuid>'';';
 
 create table if not exists public.handoff_pair_log (
   handoff_id uuid primary key,                         -- no FK: must outlive the 24 h row purge for the cooldown
@@ -242,7 +248,8 @@ end $$;
 
 create or replace function internal.handoff_user_suspended(p_uid uuid)
 returns boolean language sql stable security definer set search_path = '' as $$
-  select p_uid is not null and exists (select 1 from public.handoff_suspensions where user_id = p_uid)
+  select p_uid is not null and exists (select 1 from public.handoff_suspensions
+                                        where user_id = p_uid and (expires_at is null or expires_at > now()))
 $$;
 
 -- Fire-and-forget push dispatch (same Vault + pg_net pattern as 08). pg_net sends AFTER the surrounding transaction
@@ -329,13 +336,28 @@ returns boolean language sql stable security definer set search_path = '' as $$
                     and handoff_id <> p_handoff and created_at > now() - interval '24 hours')
 $$;
 
+-- Karma anti-gaming guard (QA #4). Karma needs a claimer the CLIENT cannot make disappear from the check by omitting
+-- something: (1) a verified, different user id (JWT-resolved server side; no JWT => no karma), (2) an account at least
+-- 24 h old (auth.users.created_at: a Sybil pair must be farmed a day ahead, and the 3/day cap + 24 h pair cooldown still
+-- bound it), (3) the two accounts do not share a registered push token (same phone, registered by either side
+-- through device_push_tokens, independent of what the claim request carried). Honest limit: two anonymous accounts on one
+-- phone that never register a push token and are > 24 h old are indistinguishable from neighbors; the spec's watch-list
+-- query covers that residual risk. Consequence: a brand-new clip user's first pass earns them no karma.
+create or replace function internal.handoff_karma_pair_ok(p_seeker uuid, p_claimer uuid)
+returns boolean language sql stable security definer set search_path = '' as $$
+  select p_claimer is not null and p_seeker is not null and p_claimer <> p_seeker
+     and exists (select 1 from auth.users u where u.id = p_claimer and u.created_at <= now() - interval '24 hours')
+     and not exists (select 1 from public.device_push_tokens a join public.device_push_tokens b on b.apns_token = a.apns_token
+                      where a.user_id = p_seeker and b.user_id = p_claimer)
+$$;
+
 -- Driver reward. p_mode 'confirmed' (+5, +3 if the fallback +2 was already paid) or 'fallback' (+2, no seeker).
 -- Returns points awarded to the driver.
 create or replace function internal.handoff_reward_driver(r public.spot_handoffs, p_mode text)
 returns int language plpgsql security definer set search_path = '' as $$
 declare v_fb boolean; v_pts int := 0;
 begin
-  if r.claimer_anon_id is null or r.claimer_anon_id = r.seeker_id then return 0; end if;
+  if not internal.handoff_karma_pair_ok(r.seeker_id, r.claimer_anon_id) then return 0; end if;
   if internal.handoff_user_suspended(r.claimer_anon_id) then return 0; end if;
   if internal.handoff_pair_cooling(r.id, r.seeker_id, r.claimer_anon_id) then return 0; end if;
   if not internal.handoff_under_cap(r.id, r.claimer_anon_id) then return 0; end if;
@@ -454,8 +476,8 @@ begin
   update public.spot_handoffs set outcome = confirm_handoff_outcome.outcome, outcome_at = now() where public.spot_handoffs.id = r.id;
   r.outcome := confirm_handoff_outcome.outcome;
 
-  -- Karma only when a DIFFERENT, identified user claimed it (spec 10); caps + pair cooldown apply to both sides.
-  v_pair_ok := r.claimer_anon_id is not null and r.claimer_anon_id <> r.seeker_id
+  -- Karma only when a DIFFERENT, identified, aged, not-same-device user claimed it (spec 10, QA #4); caps + pair cooldown apply to both sides.
+  v_pair_ok := internal.handoff_karma_pair_ok(r.seeker_id, r.claimer_anon_id)
                and not internal.handoff_user_suspended(r.claimer_anon_id)
                and not internal.handoff_pair_cooling(r.id, r.seeker_id, r.claimer_anon_id);
   if v_pair_ok then
@@ -504,7 +526,7 @@ begin
   end if;
   select * into r from public.spot_handoffs h where h.id = report_handoff.id and h.seeker_id = v_uid;
   if not found then return jsonb_build_object('ok', false); end if;
-  perform internal.handoff_record_report(r.id, 'seeker', reason, r.claimer_anon_id);
+  perform internal.handoff_record_report(r.id, 'seeker', reason, r.claimer_anon_id, v_uid);
   return jsonb_build_object('ok', true);
 end $$;
 
@@ -525,25 +547,39 @@ begin
 end $$;
 
 -- ------------------------------------------------------------------------------------------
--- Reports (shared by seeker RPC and claimer service RPC). 3 reports against one user within 30 days -> suspended.
--- A report ends the pass immediately (status 'suspended').
+-- Reports (shared by seeker RPC and claimer service RPC). A report ends the pass immediately (status 'suspended').
+--
+-- SUSPENSION POLICY (QA #2). A user is suspended for 7 days when, since their last suspension (or in the last 30 days),
+-- reports against them come from >= 3 DISTINCT REPORTERS, where
+--   * an identified reporter = a distinct auth user id (seeker-side reports; claimer-side reports on an armed pass whose
+--     claimer carried a JWT). One reporter reporting the same victim on many passes counts ONCE.
+--   * ALL unidentified reports (token-path / JWT-less claimer reports, which cannot be deduped without storing IPs)
+--     together count as AT MOST ONE reporter, however many there are or whatever IPs they rotate through.
+-- So N reports from one source can never suspend; it takes >= 2 distinct identified users (+ optionally one anonymous
+-- voice). Suspensions expire (handoff_suspensions.expires_at), are kept for review, and a re-suspension needs 3 NEW
+-- distinct reporters after the previous one. Review: select * from public.handoff_suspensions order by suspended_at desc;
 -- ------------------------------------------------------------------------------------------
-create or replace function internal.handoff_record_report(p_id uuid, p_reporter text, p_reason text, p_subject uuid)
+drop function if exists internal.handoff_record_report(uuid, text, text, uuid);
+create or replace function internal.handoff_record_report(p_id uuid, p_reporter text, p_reason text, p_subject uuid, p_reporter_user uuid)
 returns void language plpgsql security definer set search_path = '' as $$
-declare v_subject uuid := p_subject; r public.spot_handoffs; n int;
+declare v_subject uuid := p_subject; r public.spot_handoffs; n int; v_since timestamptz;
 begin
   select * into r from public.spot_handoffs where id = p_id;
   if p_reporter = 'claimer' then v_subject := r.seeker_id; end if;
-  insert into public.handoff_reports (handoff_id, reporter, reason, subject_user_id)
-  values (p_id, p_reporter, p_reason, v_subject)
+  insert into public.handoff_reports (handoff_id, reporter, reason, subject_user_id, reporter_user_id)
+  values (p_id, p_reporter, p_reason, v_subject, case when p_reporter_user is distinct from v_subject then p_reporter_user end)
   on conflict do nothing;
   perform internal.handoff_end(p_id, 'suspended', case when p_reporter = 'seeker' then 'handoff_ended' end, interval '2 minutes');
   if v_subject is not null then
-    select count(*) into n from public.handoff_reports
-     where subject_user_id = v_subject and created_at > now() - interval '30 days';
+    select greatest(now() - interval '30 days',
+                    coalesce((select suspended_at from public.handoff_suspensions where user_id = v_subject), '-infinity'))
+      into v_since;
+    select count(distinct reporter_user_id) + least(1, count(*) filter (where reporter_user_id is null)) into n
+      from public.handoff_reports where subject_user_id = v_subject and created_at > v_since;
     if n >= 3 then
-      insert into public.handoff_suspensions (user_id, reason) values (v_subject, 'reports')
-      on conflict (user_id) do nothing;
+      insert into public.handoff_suspensions (user_id, reason, suspended_at, expires_at)
+      values (v_subject, 'reports', now(), now() + interval '7 days')
+      on conflict (user_id) do update set suspended_at = now(), expires_at = now() + interval '7 days', reason = 'reports';
       -- end any other live pass of the suspended seeker
       perform internal.handoff_end(h.id, 'suspended', 'handoff_ended', interval '2 minutes')
          from public.spot_handoffs h where h.seeker_id = v_subject and h.status in ('created', 'armed');
@@ -636,14 +672,21 @@ returns jsonb language plpgsql security definer set search_path = '' as $$
 declare r public.spot_handoffs;
 begin
   if not internal.handoff_enabled() then return '{"disabled":true}'::jsonb; end if;
-  if not internal.handoff_rate_hit('depart', p_id::text, 20, interval '1 hour') then
-    return '{"rate_limited":true}'::jsonb;
-  end if;
   if p_source is null or p_source not in ('manual','live_activity','notification','auto','start_driving','shortcut') then
     return '{"invalid_source":true}'::jsonb;
   end if;
-  r := internal.handoff_gate(p_id, p_secret);
-  if r.id is null then return '{"ok":false}'::jsonb; end if;
+  r := internal.handoff_gate(p_id, p_secret);   -- secret FIRST (constant time); limiter second (QA #1)
+  if r.id is null then
+    -- Wrong secrets burn only a FAILURE bucket: it can answer further failures with rate_limited but can never block the
+    -- real secret holder (whose calls take the success path below). The seeker knows the pass id, not the secret.
+    if not internal.handoff_rate_hit('depart_fail', p_id::text, 20, interval '1 hour') then
+      return '{"rate_limited":true}'::jsonb;
+    end if;
+    return '{"ok":false}'::jsonb;
+  end if;
+  if not internal.handoff_rate_hit('depart', p_id::text, 60, interval '1 hour') then   -- only secret holders get here
+    return '{"rate_limited":true}'::jsonb;
+  end if;
   update public.spot_handoffs set
       status = 'departed', departed_at = now(), depart_source = p_source,
       claimer_secret_hash = null,
@@ -658,11 +701,18 @@ returns jsonb language plpgsql security definer set search_path = '' as $$
 declare r public.spot_handoffs; v_new timestamptz; v_cap timestamptz;
 begin
   if not internal.handoff_enabled() then return '{"disabled":true}'::jsonb; end if;
-  if not internal.handoff_rate_hit('extend', p_id::text, 20, interval '1 hour') then
+  r := internal.handoff_gate(p_id, p_secret);   -- secret FIRST (constant time); limiter second (QA #1)
+  if r.id is null then
+    -- Wrong secrets burn only a FAILURE bucket: it can answer further failures with rate_limited but can never block the
+    -- real secret holder (whose calls take the success path below). The seeker knows the pass id, not the secret.
+    if not internal.handoff_rate_hit('extend_fail', p_id::text, 20, interval '1 hour') then
+      return '{"rate_limited":true}'::jsonb;
+    end if;
+    return '{"ok":false}'::jsonb;
+  end if;
+  if not internal.handoff_rate_hit('extend', p_id::text, 60, interval '1 hour') then   -- only secret holders get here
     return '{"rate_limited":true}'::jsonb;
   end if;
-  r := internal.handoff_gate(p_id, p_secret);
-  if r.id is null then return '{"ok":false}'::jsonb; end if;
   v_cap := internal.floor5(r.armed_at + interval '240 minutes');             -- never past the horizon measured from claim
   v_new := greatest(r.leave_at, internal.floor5(now())) + interval '5 minutes';
   if r.extensions >= 3 or v_new > v_cap then return '{"ok":false}'::jsonb; end if;
@@ -677,11 +727,18 @@ returns jsonb language plpgsql security definer set search_path = '' as $$
 declare r public.spot_handoffs;
 begin
   if not internal.handoff_enabled() then return '{"disabled":true}'::jsonb; end if;
-  if not internal.handoff_rate_hit('cancel', p_id::text, 20, interval '1 hour') then
+  r := internal.handoff_gate(p_id, p_secret);   -- secret FIRST (constant time); limiter second (QA #1)
+  if r.id is null then
+    -- Wrong secrets burn only a FAILURE bucket: it can answer further failures with rate_limited but can never block the
+    -- real secret holder (whose calls take the success path below). The seeker knows the pass id, not the secret.
+    if not internal.handoff_rate_hit('cancel_fail', p_id::text, 20, interval '1 hour') then
+      return '{"rate_limited":true}'::jsonb;
+    end if;
+    return '{"ok":false}'::jsonb;
+  end if;
+  if not internal.handoff_rate_hit('cancel', p_id::text, 60, interval '1 hour') then   -- only secret holders get here
     return '{"rate_limited":true}'::jsonb;
   end if;
-  r := internal.handoff_gate(p_id, p_secret);
-  if r.id is null then return '{"ok":false}'::jsonb; end if;
   update public.spot_handoffs set
       claimer_secret_hash = null, claimer_push_token = null, claimer_activity_token = null,
       claimer_topic = null, claimer_tokens_until = null, claimer_cancelled_at = now()
@@ -708,7 +765,7 @@ begin
     r := internal.handoff_gate(p_id, p_secret);
     if r.id is null then return '{"ok":false}'::jsonb; end if;
   end if;
-  perform internal.handoff_record_report(r.id, 'claimer', p_reason, null);
+  perform internal.handoff_record_report(r.id, 'claimer', p_reason, null, r.claimer_anon_id);
   return '{"ok":true}'::jsonb;
 end $$;
 
@@ -748,7 +805,8 @@ begin
   -- 4. purge (24 h) + housekeeping
   delete from public.spot_handoffs where created_at < now() - interval '24 hours';
   delete from public.handoff_rate_events where at < now() - interval '2 hours';
-  delete from public.handoff_pair_log where created_at < now() - interval '48 hours';
+  delete from public.handoff_pair_log where created_at < now() - interval '25 hours';   -- cooldown needs 24 h
+  delete from public.handoff_suspensions where expires_at is not null and expires_at < now() - interval '90 days';
   delete from public.handoff_reports where created_at < now() - interval '30 days';
 end $$;
 
@@ -784,7 +842,7 @@ begin
 
   -- Spot Pass (13): passes the user created or claimed (reports about those passes go with them via FK set-null,
   -- and reports ABOUT the user cascade on subject_user_id), suspension, pair log, rate counters.
-  delete from public.handoff_reports      where subject_user_id = v_uid
+  delete from public.handoff_reports      where subject_user_id = v_uid or reporter_user_id = v_uid
      or handoff_id in (select id from public.spot_handoffs where seeker_id = v_uid or claimer_anon_id = v_uid);
   delete from public.spot_handoffs        where seeker_id = v_uid or claimer_anon_id = v_uid;
   delete from public.handoff_suspensions  where user_id = v_uid;

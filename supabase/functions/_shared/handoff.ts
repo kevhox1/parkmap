@@ -132,14 +132,25 @@ export function allowedOrigins(env: string | null | undefined): string[] {
   return list;
 }
 
-/** First hop of x-forwarded-for, else cf-connecting-ip, else "unknown". Never logged. */
+/**
+ * Client IP for rate-limit keys. NEVER the first X-Forwarded-For hop: that one is whatever the client sent.
+ * Source for the order below (cited, not guaranteed by Supabase docs; hence the post-deploy forged-XFF test in
+ * README-handoff.md): Supabase Edge Functions sit behind Cloudflare. Cloudflare OVERWRITES `cf-connecting-ip` with the
+ * real peer, and APPENDS the real peer to any client-supplied X-Forwarded-For (community report: "the real IP is
+ * concatenated with the spoofed one as a proxy", https://github.com/orgs/supabase/discussions/34647 — Supabase has
+ * not published a guarantee). So: 1) cf-connecting-ip, 2) the LAST x-forwarded-for hop (appended by the trusted
+ * proxy, not the client), 3) "unknown" (one shared bucket: fails closed for the unattributable, per-token limits
+ * still apply). Per-token limits stay primary; a shared CGNAT IP only shares the 30/h peek budget. Never logged.
+ */
 export function clientIp(headers: Headers): string {
+  const cf = headers.get("cf-connecting-ip")?.trim();
+  if (cf) return cf;
   const xff = headers.get("x-forwarded-for");
   if (xff) {
-    const first = xff.split(",")[0].trim();
-    if (first) return first;
+    const hops = xff.split(",").map((h) => h.trim()).filter(Boolean);
+    if (hops.length) return hops[hops.length - 1];
   }
-  return headers.get("cf-connecting-ip")?.trim() || "unknown";
+  return "unknown";
 }
 
 /** HMAC-SHA256(salt, ip) -> first 32 hex chars. Only this value is stored (rate-limit key). */
@@ -155,14 +166,33 @@ export async function ipHash(ip: string, salt: string): Promise<string> {
   return Array.from(sig.slice(0, 16)).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-/** Reads and parses a size-capped JSON body. Returns null on any problem. */
+/** Reads and parses a size-capped JSON body. Returns null on any problem. The cap is enforced WHILE STREAMING so a
+ * chunked body without Content-Length cannot be buffered whole. */
 export async function readJsonBody(req: Request): Promise<unknown | null> {
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (declared > MAX_BODY_BYTES) return null;
   try {
-    const text = await req.text();
-    if (text.length > MAX_BODY_BYTES) return null;
-    return JSON.parse(text);
+    if (!req.body) return null;
+    const reader = req.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return null;
+      }
+      chunks.push(value);
+    }
+    const buf = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      buf.set(c, off);
+      off += c.byteLength;
+    }
+    return JSON.parse(new TextDecoder().decode(buf));
   } catch {
     return null;
   }

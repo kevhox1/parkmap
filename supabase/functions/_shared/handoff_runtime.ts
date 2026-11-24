@@ -10,7 +10,7 @@
  * identity. A bearer that is just the public anon key resolves to no user and is ignored.
  */
 
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import {
   allowedOrigins,
   bearer,

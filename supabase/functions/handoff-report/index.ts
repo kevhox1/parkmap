@@ -5,8 +5,8 @@
  *
  * POST {token, reason}                      (pass not yet claimed)     -> {ok:boolean}
  * POST {id, claimer_secret, reason}         (pass armed by the caller) -> {ok:boolean}
- * reason in harassment|spam|unsafe|other. A report ends the pass immediately; 3 reports against one user in 30
- * days suspend that user from creating (or claiming) passes. 10/hour/IP.
+ * reason in harassment|spam|unsafe|other. A report ends the pass immediately; reports from >= 3 DISTINCT reporters (all
+ * unidentified reports together count as at most one) suspend that user for 7 days from creating/claiming passes. 10/hour/IP.
  */
 import { isReportReason, isSecret, isToken, isUuid, json, NOT_OK } from "../_shared/handoff.ts";
 import { callRpc, serveEndpoint } from "../_shared/handoff_runtime.ts";

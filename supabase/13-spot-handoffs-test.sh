@@ -58,6 +58,9 @@ check "all handoff functions are SECURITY DEFINER with search_path=''" \
   "$(sql "$DB" "select count(*) from pg_proc p join pg_namespace n on n.oid=p.pronamespace where ((n.nspname='public' and (p.proname like '%handoff%')) or (n.nspname='internal' and p.proname like 'handoff%')) and p.proname <> 'delete_my_account' and (not p.prosecdef or array_to_string(p.proconfig, ',') not like 'search_path=\"\"%')")" "0"
 
 # ---- fixtures / helpers ------------------------------------------------------------------------------
+# Users are created 3 days old by default (karma requires a claimer account >= 24 h old, QA #4); new_user_fresh makes a new one.
+new_user()       { sql "$DB" "insert into auth.users (email, is_anonymous, created_at) values ('u'||gen_random_uuid()||'@example.test', ${1:-false}, now() - interval '3 days') returning id;"; }
+new_user_fresh() { sql "$DB" "insert into auth.users (email, is_anonymous) values ('u'||gen_random_uuid()||'@example.test', ${1:-false}) returning id;"; }
 SEEKER=$(new_user true); DRIVER=$(new_user true); OTHER=$(new_user true)
 svc() { sql_as "$DB" service_role "" "$1"; }
 as()  { sql_as "$DB" authenticated "$1" "$2"; }
@@ -346,9 +349,28 @@ check "manual departure + no confirm => no fallback karma" "$(rep "$K4")" ""
 echo "   -- get_my_handoff_karma counters"
 check "spots_passed/spots_caught for K2/K1" "$(as "$K2" "select (public.get_my_handoff_karma())->>'spots_passed';")/$(as "$K1" "select (public.get_my_handoff_karma())->>'spots_caught';")" "1/1"
 
-echo "== Test 12: reports — 3 reports suspend; suspended users are blocked"
+echo "   -- QA #4: omitting the push token no longer bypasses the guard; fresh accounts / shared-device accounts earn nothing"
+sql "$DB" "delete from public.reputation_award_log; delete from public.handoff_pair_log; delete from public.spot_handoffs; delete from public.profiles; delete from public.device_push_tokens" >/dev/null
+F1=$(new_user true); F2=$(new_user_fresh true)
+full_pass "$F1" "$F2"; out=$(confirm "$F1" "$ID" got_spot)
+check "claimer account < 24 h old => no karma for either side" "$(jq_ "'$out'" seeker_points)|$(sql "$DB" "select count(*) from public.reputation_award_log")" "0|0"
+sql "$DB" "update auth.users set created_at = now() - interval '25 hours' where id='$F2'" >/dev/null
+sql "$DB" "insert into public.device_push_tokens (user_id, apns_token, environment) values ('$F1','shared-phone-tok','sandbox'), ('$F2','shared-phone-tok','sandbox')" >/dev/null
+full_pass "$F1" "$F2"; out=$(confirm "$F1" "$ID" got_spot)
+check "claim sent NO push token but both accounts registered the same device => no karma" "$(jq_ "'$out'" seeker_points)|$(sql "$DB" "select count(*) from public.reputation_award_log")" "0|0"
+sql "$DB" "delete from public.device_push_tokens where user_id='$F2'" >/dev/null
+full_pass "$F1" "$F2"; out=$(confirm "$F1" "$ID" got_spot)
+check "aged, distinct-device claimer => karma flows (seeker 3)" "$(jq_ "'$out'" seeker_points)" "3"
+F3=$(new_user_fresh true); full_pass "$F1" "$F3" auto
+sql "$DB" "update public.spot_handoffs set departed_at = now() - interval '31 minutes' where id='$ID'" >/dev/null
+sql "$DB" "select internal.handoff_sweep()" >/dev/null
+check "fallback karma is guarded identically (fresh claimer, auto depart, 31 min)" "$(rep "$F3")" ""
+sql "$DB" "delete from public.reputation_award_log; delete from public.handoff_pair_log; delete from public.spot_handoffs; delete from public.profiles" >/dev/null
+
+echo "== Test 12: reports — distinct reporters, anonymous cap, expiry"
 sql "$DB" "delete from public.spot_handoffs; delete from public.handoff_reports; delete from public.handoff_suspensions; delete from public.profiles" >/dev/null
 R1=$(new_user true); RD=$(new_user true)
+echo "   -- QA probe P4: ONE claimer reporting the same seeker over 3 passes counts once"
 for i in 1 2 3; do
   reset_rates
   p=$(mkpass "$R1"); rid=${p% *}; rt=${p#* }
@@ -357,23 +379,62 @@ for i in 1 2 3; do
   check "claimer report #$i accepted" "$(jq_ "'$out'" ok)" "true"
   check "report #$i ends the pass (suspended)" "$(st "$rid")" "suspended"
 done
-check "3 reports against the seeker => suspension row" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$R1'")" "1"
+check "3 reports from ONE reporter => NOT suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$R1'")" "0"
+check "...3 report rows recorded, 1 distinct reporter" "$(sql "$DB" "select count(*)||'/'||count(distinct reporter_user_id) from public.handoff_reports where subject_user_id='$R1'")" "3/1"
+reset_rates
+check "seeker can still create a pass" "$(jq_ "'$(as "$R1" "select public.create_handoff(false);")'" alias | grep -c .)" "1"
+echo "   -- QA probe P5: anonymous (token-path) reports from rotating IPs count as at most ONE reporter"
+reset_rates
+for i in 1 2 3 4 5 6; do
+  p=$(mkpass "$R1"); rid=${p% *}; rt=${p#* }
+  svc "select public.handoff_report('$rt', null, null, 'spam', 'ip-rot-$i')" >/dev/null
+done
+check "6 anonymous reports + 1 identified claimer => 2 voices, NOT suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$R1'")" "0"
+echo "   -- RD (identified) + RD2 (identified) + the anonymous voice = 3 distinct voices => suspended"
+RD2=$(new_user true)
+reset_rates
+p=$(mkpass "$R1"); rid=${p% *}; rt=${p#* }
+c=$(claim "$rt" "$RD2" null 10); rs=$(jq_ "'$c'" claimer_secret)
+svc "select public.handoff_report(null, '$rid', '$rs', 'unsafe', 'ip-r')" >/dev/null
+check "3 distinct voices => suspension row" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$R1'")" "1"
+check "suspension expires in ~7 days" "$(sql "$DB" "select (expires_at between now() + interval '6 days 23 hours' and now() + interval '7 days 1 hour')::text from public.handoff_suspensions where user_id='$R1'")" "true"
 reset_rates
 out=$(as "$R1" "select public.create_handoff(false);")
 check_err "suspended seeker cannot create passes" "$out" 42501
-check "report by a reporter on the same pass twice is deduped" "$(sql "$DB" "select count(*) from public.handoff_reports where subject_user_id='$R1'")" "3"
-check "invalid reason refused" "$(svc "select public.handoff_report('x', null, null, 'rude', 'ip')")" '{"invalid_reason": true}'
+echo "   -- expiry: suspension lapses; a single fresh report does not re-suspend"
+sql "$DB" "update public.handoff_suspensions set expires_at = now() - interval '1 minute' where user_id='$R1'" >/dev/null
+reset_rates
+check "after expiry the seeker can create again" "$(jq_ "'$(as "$R1" "select public.create_handoff(false);")'" alias | grep -c .)" "1"
+reset_rates
+p=$(mkpass "$R1"); rid=${p% *}; rt=${p#* }
+c=$(claim "$rt" "$RD2" null 10); rs=$(jq_ "'$c'" claimer_secret)
+svc "select public.handoff_report(null, '$rid', '$rs', 'unsafe', 'ip-r')" >/dev/null
+check "one fresh report after expiry => still not suspended (needs 3 NEW voices)" "$(as "$R1" "select (public.create_handoff(false))->>'alias' is not null;")" "t"
+check "expired suspension row kept for review" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$R1' and expires_at < now()")" "1"
+sql "$DB" "delete from public.handoff_suspensions" >/dev/null
 echo "   -- pre-claim report by token; seeker-side report"
 p=$(mkpass "$OTHER"); rid=${p% *}; rt=${p#* }
 check "claimer can report a still-'created' pass by token" "$(jq_ "'$(svc "select public.handoff_report('$rt', null, null, 'spam', 'ip-r2')")'" ok)" "true"
 check "...which ends it" "$(st "$rid")" "suspended"
+check "invalid reason refused" "$(svc "select public.handoff_report('x', null, null, 'rude', 'ip')")" '{"invalid_reason": true}'
 reset_rates
 p=$(mkpass "$OTHER"); rid=${p% *}; rt=${p#* }; claim "$rt" "$RD" null 10 >/dev/null
 check "seeker report (own pass) ok" "$(jq_ "'$(as "$OTHER" "select public.report_handoff('$rid','unsafe');")'" ok)" "true"
 check "someone else's pass => ok:false" "$(jq_ "'$(as "$R1" "select public.report_handoff('$rid','unsafe');")'" ok)" "false"
-check "report recorded against the CLAIMER" "$(sql "$DB" "select count(*) from public.handoff_reports where subject_user_id='$RD'")" "1"
+check "report recorded against the CLAIMER, with reporter identity" "$(sql "$DB" "select count(*) from public.handoff_reports where subject_user_id='$RD' and reporter_user_id='$OTHER'")" "1"
+echo "   -- one seeker reporting the same claimer across 3 passes counts once; 3 distinct seekers suspend"
+sql "$DB" "delete from public.handoff_reports where subject_user_id='$RD'; delete from public.handoff_suspensions; delete from public.spot_handoffs" >/dev/null
+for i in 1 2 3; do
+  reset_rates; p=$(mkpass "$OTHER"); rid=${p% *}; rt=${p#* }; claim "$rt" "$RD" null 10 >/dev/null
+  as "$OTHER" "select public.report_handoff('$rid','harassment');" >/dev/null
+done
+check "same seeker x3 passes => claimer NOT suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$RD'")" "0"
+for sk in "$SEEKER" "$R1"; do
+  reset_rates; p=$(mkpass "$sk"); rid=${p% *}; rt=${p#* }; claim "$rt" "$RD" null 10 >/dev/null
+  as "$sk" "select public.report_handoff('$rid','harassment');" >/dev/null
+done
+check "3 distinct seekers => claimer suspended" "$(sql "$DB" "select count(*) from public.handoff_suspensions where user_id='$RD'")" "1"
 echo "   -- suspended claimer cannot claim"
-sql "$DB" "insert into public.handoff_suspensions(user_id) values ('$RD') on conflict do nothing" >/dev/null
 reset_rates; p=$(mkpass "$OTHER"); rt=${p#* }
 check "suspended claimer => unavailable" "$(claim "$rt" "$RD" null 10)" "$UNAVAIL"
 sql "$DB" "delete from public.handoff_suspensions" >/dev/null
@@ -386,8 +447,26 @@ check "30 peeks/hour/IP allowed, 31st limited" "$(svc "select public.handoff_pee
 check "a different IP is unaffected" "$(jq_ "'$(svc "select public.handoff_peek('$rt','ip-other')")'" status)" "open"
 c=$(claim "$rt" "$DRIVER" null 10); rid=$(col "(select id from public.spot_handoffs where seeker_id='$SEEKER' and status='armed')" "id" 2>/dev/null)
 rid=$(sql "$DB" "select id from public.spot_handoffs where seeker_id='$SEEKER' and status='armed' limit 1")
-for i in $(seq 1 20); do svc "select public.handoff_depart('$rid','AAAAAAAAAAAAAAAAAAAAAA','manual')" >/dev/null; done
-check "depart limited after 20/hour/id" "$(svc "select public.handoff_depart('$rid','AAAAAAAAAAAAAAAAAAAAAA','manual')")" '{"rate_limited": true}'
+echo "   -- QA probe P3: 21+ wrong secrets on a known pass id must NOT lock out the real secret holder"
+WRONG=AAAAAAAAAAAAAAAAAAAAAA
+for fn in depart extend cancel; do
+  reset_rates
+  p=$(mkpass "$SEEKER"); rid=${p% *}; rt=${p#* }
+  SECX=$(jq_ "'$(claim "$rt" "$DRIVER" null 10)'" claimer_secret)
+  for i in $(seq 1 25); do
+    case $fn in depart) svc "select public.handoff_depart('$rid','$WRONG','manual')" >/dev/null;;
+                extend) svc "select public.handoff_extend('$rid','$WRONG')" >/dev/null;;
+                cancel) svc "select public.handoff_cancel_claim('$rid','$WRONG')" >/dev/null;; esac
+  done
+  case $fn in depart) w=$(svc "select public.handoff_depart('$rid','$WRONG','manual')");;
+              extend) w=$(svc "select public.handoff_extend('$rid','$WRONG')");;
+              cancel) w=$(svc "select public.handoff_cancel_claim('$rid','$WRONG')");; esac
+  check "$fn: further WRONG-secret attempts are rate limited (failure bucket)" "$w" '{"rate_limited": true}'
+  case $fn in depart) g=$(svc "select public.handoff_depart('$rid','$SECX','manual')");;
+              extend) g=$(svc "select public.handoff_extend('$rid','$SECX')");;
+              cancel) g=$(svc "select public.handoff_cancel_claim('$rid','$SECX')");; esac
+  check "$fn: real secret still succeeds after 26 wrong attempts" "$(jq_ "'$g'" ok)" "true"
+done
 reset_rates
 for i in $(seq 1 10); do as "$OTHER" "select public.create_handoff(false);" >/dev/null; done
 out=$(as "$OTHER" "select public.create_handoff(false);")
