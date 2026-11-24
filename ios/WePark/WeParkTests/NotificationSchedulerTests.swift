@@ -461,9 +461,9 @@ final class NotificationSchedulerTests: XCTestCase {
 
         let title = mockCenter.addedRequests[0].content.title
         // Spec §3.4: "Move your car — <street> (<side>)"
-        // StreetNameNormalizer.canonical() returns uppercase: "MOTT ST".
+        // Display title-cases the canonical street: "Mott St" (QA #1 on PR #158).
         XCTAssertTrue(title.contains("Move your car"), "T-W6.9: title must contain 'Move your car'")
-        XCTAssertTrue(title.contains("MOTT ST"), "T-W6.9: title must contain canonical 'MOTT ST' (uppercase from normalizer)")
+        XCTAssertTrue(title.contains("Mott St"), "T-W6.9: title must contain display-cased 'Mott St'")
         XCTAssertTrue(title.contains("(N)"), "T-W6.9: title must contain side in parens")
     }
 
