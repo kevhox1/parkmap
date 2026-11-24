@@ -46,7 +46,9 @@ Replace `<PROJECT_REF>` with `jiispshyqerscdoferaw` and `<SERVICE_ROLE_KEY>` / `
    supabase functions deploy handoff-extend  --no-verify-jwt
    supabase functions deploy handoff-cancel  --no-verify-jwt
    supabase functions deploy handoff-report  --no-verify-jwt
-   # service-role only: keep default JWT verification AND it checks the bearer == service role key itself
+   # service-role only. MUST be deployed WITH the default JWT verification (NEVER --no-verify-jwt): _shared/service_auth.ts
+   # accepts a bearer whose JWT payload says role=service_role and trusts the gateway's signature check. The same rule
+   # applies to send-community-push and send-regular-push.
    supabase functions deploy send-handoff-push
    ```
    `apns.ts` changed only by a **type** union; the already-deployed `send-community-push` / `send-regular-push` do not need
@@ -78,7 +80,8 @@ select has_function_privilege('anon','public.create_handoff(boolean)','execute')
        has_function_privilege('service_role','public.handoff_claim(text,timestamptz,text,text,text,uuid,text)','execute') svc_claim;
 select relname, relrowsecurity from pg_class where relname in
   ('spot_handoffs','handoff_reports','handoff_suspensions','handoff_pair_log','handoff_rate_events','handoff_config');
--- A2. Vault secret exists, and (by hand, dashboard > Project Settings > API) equals SUPABASE_SERVICE_ROLE_KEY:
+-- A2. Vault secret exists (it only has to be a valid service-role JWT for this project; it does NOT need to be byte-equal
+--     to the runtime SUPABASE_SERVICE_ROLE_KEY, and nobody should copy or paste secrets to check that):
 select name from vault.decrypted_secrets where name = 'service_role_key';
 -- A3. ~2 minutes after applying: the sweep cron is actually running and succeeding
 select status, return_message, start_time from cron.job_run_details
@@ -117,9 +120,11 @@ End-to-end with two throwaway anonymous users (a TestFlight/debug build is the e
    `select reputation, helped_count from profiles where id in (...)` (driver +5 / helped +1). Repeat the call: no change.
    pg_net dispatch smoke (the push dispatch is fail-open, so a Vault/key mismatch fails SILENTLY; this is the only place you see it):
    `select id, status_code, left(content, 80) from net._http_response order by id desc limit 3;` should show 200 from
-   `send-handoff-push` after the claim; 401 = the Vault `service_role_key` is not the project's current service-role key
-   (rotated keys or new-style `sb_secret_*` keys will 401: `send-handoff-push` compares its bearer to `SUPABASE_SERVICE_ROLE_KEY`
-   and must also be deployed WITH JWT verification, as above).
+   `send-handoff-push` after the claim. `send-handoff-push` accepts any bearer that is a JWT with `role=service_role` (the gateway
+   verified its signature) or that exactly equals `SUPABASE_SERVICE_ROLE_KEY`, so a Vault key that differs from the runtime key is
+   fine. A 401 now means the Vault value is not a service-role JWT (e.g. the anon key) or the function was not deployed with JWT
+   verification, as above. Probe from the SQL Editor (pg_net, Vault bearer, body `{}`): expect NOT 401, i.e. 200
+   `{"skipped":true,...}` (flag/APNs not configured) or 400 `{"error":"invalid_request"}`.
 5. Cross-user RLS: signed in as user B (a different anonymous user), `select count(*) from public.spot_handoffs where status is not null;`
    must return 0 for user A's pass. And a seeker reading with `select *` must fail (name the columns).
    Privacy spot check: `select * from public.spot_handoffs` as the seeker via PostgREST must fail (column grants);
