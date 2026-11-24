@@ -53,7 +53,7 @@ struct ClipCelebrationView: View {
         }
         .overlay(alignment: .bottom) {
             if controller.showInstallCard {
-                ClipInstallCard(onGet: onGetApp, onNotNow: { controller.dismissInstallCard() })
+                ClipInstallCard(showsLockScreenLine: controller.activitiesEnabled, onGet: onGetApp, onNotNow: { controller.dismissInstallCard() })
                     .padding(12)
                     .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
             }
@@ -88,6 +88,8 @@ struct ClipCelebrationView: View {
 
 /// Our own copy; "Get WePark" presents the system SKOverlay (its banner copy cannot be changed, F5).
 struct ClipInstallCard: View {
+    /// False when Live Activities are off: never promise a lock-screen one-tap that cannot happen.
+    var showsLockScreenLine = true
     var onGet: () -> Void
     var onNotNow: () -> Void
 
@@ -95,7 +97,9 @@ struct ClipInstallCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Text(ClipCopy.installHeadline).font(.title2.bold()).foregroundStyle(.white)
             Text(ClipCopy.installBody).font(.body).foregroundStyle(.white)
-            Text(ClipCopy.installSecondary).font(.subheadline).foregroundStyle(SpotPassTheme.lavender)
+            if showsLockScreenLine {
+                Text(ClipCopy.installSecondary).font(.subheadline).foregroundStyle(SpotPassTheme.lavender)
+            }
             Button(ClipCopy.installButton, action: onGet)
                 .buttonStyle(ClipHeroButtonStyle(minHeight: SpotPassTheme.heroButtonHeight))
                 .accessibilityHint("Opens the App Store")

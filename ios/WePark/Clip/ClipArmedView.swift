@@ -7,6 +7,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct ClipArmedView: View {
     @Bindable var controller: ClipFlowController
@@ -15,9 +16,20 @@ struct ClipArmedView: View {
     @Environment(\.clipIsShortScreen) private var isShort
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.clipScreenHeight) private var screenHeight
+    @Environment(\.openURL) private var openURL
     @State private var stamped = false
 
     private var bothOff: Bool { controller.reminderAvailability == .off && !controller.activityStarted }
+
+    /// What stays pinned (same rule as the choosing screen, PR #169): the primary action always; "Not
+    /// leaving after all" too unless the text is so large it would crowd the screen, in which case it
+    /// moves to just under the lock-screen card (one short scroll, ahead of the optional block card).
+    private var pinning: ClipCTAPinning.Plan {
+        ClipCTAPinning.plan(
+            screenHeight: screenHeight, dynamicTypeSize: typeSize, hasInlineError: false, hasReassurance: false
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -42,25 +54,49 @@ struct ClipArmedView: View {
                 }
                 headlineBlock
                 lockScreenCard
-                if bothOff || timeToGo {
-                    Button(ClipCopy.pullingOut) { controller.showPullingOut() }
-                        .buttonStyle(ClipHeroButtonStyle())
-                } else {
-                    Button(ClipCopy.pullingOut) { controller.showPullingOut() }
-                        .buttonStyle(SpotPassButtonStyle(kind: .secondary))
-                        .accessibilityHint("Tells \(controller.displayName ?? "your neighbor") you are leaving. Only tap right before you go.")
-                }
+                if pinning == .primaryOnly { cancelButton }
                 if ClipFeatureFlags.showBlockEnabled { ClipBlockCard(block: block) }
-                SpotPassTextButton(
-                    title: ClipCopy.notLeavingAfterAll,
-                    minHeight: 56,
-                    accessibilityHint: "Cancels your pass. \(controller.displayName ?? "Your neighbor") will not be told."
-                ) { controller.requestCancel() }
             }
             .padding(.horizontal, 20)
             .padding(.bottom, 24)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .safeAreaInset(edge: .bottom) { pinnedActions }
+    }
+
+    private var cancelButton: some View {
+        SpotPassTextButton(
+            title: ClipCopy.notLeavingAfterAll,
+            minHeight: 56,
+            accessibilityHint: "Cancels your pass. \(controller.displayName ?? "Your neighbor") will not be told."
+        ) { controller.requestCancel() }
+    }
+
+    private var pinnedActions: some View {
+        VStack(spacing: 6) {
+            if bothOff || timeToGo {
+                Button(ClipCopy.pullingOut) { controller.showPullingOut() }
+                    .buttonStyle(ClipHeroButtonStyle())
+                    .accessibilityHint("Tells \(controller.displayName ?? "your neighbor") you are leaving. Only tap right before you go.")
+            } else {
+                Button(ClipCopy.pullingOut) { controller.showPullingOut() }
+                    .buttonStyle(SpotPassButtonStyle(kind: .secondary))
+                    .accessibilityHint("Tells \(controller.displayName ?? "your neighbor") you are leaving. Only tap right before you go.")
+            }
+            if pinning == .full { cancelButton }
+        }
+        // Bounded: the pinned stack never grows past the cap, whatever the user's text size.
+        .dynamicTypeSize(...ClipCTAPinning.pinnedTypeSizeCap)
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .background(SpotPassTheme.ink.ignoresSafeArea(edges: .bottom))
+        .overlay(alignment: .top) {
+            LinearGradient(colors: [SpotPassTheme.ink.opacity(0), SpotPassTheme.ink], startPoint: .top, endPoint: .bottom)
+                .frame(height: 14)
+                .offset(y: -14)
+                .allowsHitTesting(false)
+        }
     }
 
     /// Re-evaluated every second while foregrounded; at `leave_at` the screen flips to "Time to go?".
@@ -94,7 +130,8 @@ struct ClipArmedView: View {
             if bothOff {
                 Text(ClipCopy.bothOff).font(.body).foregroundStyle(.white)
             } else {
-                Text(ClipCopy.lockScreenTitle).font(.headline).foregroundStyle(.white)
+                Text(controller.activityStarted ? ClipCopy.lockScreenTitle : ClipCopy.activitiesOffTitle)
+                    .font(.headline).foregroundStyle(.white)
                 if let pass = controller.pass, controller.activityStarted {
                     HStack(spacing: 12) {
                         Text(timerInterval: controller.now...max(pass.leaveAt, controller.now.addingTimeInterval(1)), countsDown: true)
@@ -109,7 +146,11 @@ struct ClipArmedView: View {
                     Text(ClipCopy.lockScreenBody).font(.subheadline).foregroundStyle(SpotPassTheme.lavender)
                     Text(ClipCopy.tapWhenOut).font(.footnote).foregroundStyle(SpotPassTheme.lavender)
                 } else {
-                    Text(ClipCopy.activitiesOff).font(.subheadline).foregroundStyle(SpotPassTheme.lavender)
+                    Text(ClipCopy.activitiesOffBody).font(.subheadline).foregroundStyle(SpotPassTheme.lavender)
+                    if !controller.activitiesEnabled, let settings = URL(string: UIApplication.openSettingsURLString) {
+                        SpotPassTextButton(title: ClipCopy.settingsLink, minHeight: 44) { openURL(settings) }
+                            .accessibilityHint("Opens Settings so you can turn on Live Activities.")
+                    }
                 }
                 if controller.reminderAvailability == .off {
                     Text(ClipCopy.remindersOff).font(.footnote).foregroundStyle(SpotPassTheme.lavender)
