@@ -100,6 +100,8 @@ final class ClipFlowController {
     var showCancelConfirm = false
     var toast: String?
     private(set) var showInstallCard = false
+    /// A different pass was scanned while this one is armed: say so, never replace or cancel it.
+    private(set) var showsOtherPassNote = false
 
     // MARK: Private
     @ObservationIgnored private let deps: ClipDependencies
@@ -147,8 +149,14 @@ final class ClipFlowController {
         guard let link = SpotPassLink(url: url) else { return }
         if let token = link.token {
             guard handledTokenURLs.insert(url).inserted else { return }
-            // An active pass wins: its own token is already claimed, so a re-scan would only say "used".
-            guard pass == nil else { return }
+            // An active pass wins (its own token is already claimed, so a re-scan would only say
+            // "used"), and a different pass is never auto-cancelled for: note it, change nothing.
+            if let active = pass {
+                let isOtherPass = active.status == .armed
+                    && active.tokenFingerprint.map { $0 != HandoffActivePass.fingerprint(forToken: token) } == true
+                if isOtherPass { showsOtherPassNote = true }
+                return
+            }
             begin(token: token)
         } else if let action = link.action {
             perform(action)
@@ -268,12 +276,22 @@ final class ClipFlowController {
     }
 
     private func finishArming(grant: HandoffArmedGrant, passID: UUID, name: String, userId: String?, startedAt: Date) async {
-        deps.secrets.save(grant.secret, passID: passID)
+        guard deps.secrets.save(grant.secret, passID: passID) else {
+            // Without the secret the clip could never depart/extend/cancel: do not look armed. Best-effort
+            // release of the server-side claim (we still hold the secret in memory) so the neighbor is
+            // not left waiting on a pass nobody can complete, then the same calm fallback as `noID`.
+            _ = try? await deps.api.cancel(id: passID, secret: grant.secret)
+            await endActivityIfStarted(.ended)
+            deps.secrets.clear()
+            phase = .openApp
+            return
+        }
         let armed = HandoffActivePass(
             id: passID, alias: preview?.alias ?? name, glyph: preview?.glyph ?? SpotPassGlyph.fallbackSymbol,
             displayName: preview?.displayName, armedAt: startedAt, leaveAt: grant.leaveAt,
             expiresAt: grant.expiresAt, extensions: 0, status: .armed, departedAt: nil,
-            thanksReceived: false, userId: userId
+            thanksReceived: false, userId: userId,
+            tokenFingerprint: token.map(HandoffActivePass.fingerprint(forToken:))
         )
         pass = armed
         deps.passStore.save(armed)
@@ -311,9 +329,13 @@ final class ClipFlowController {
     }
 
     func pullOut(source: HandoffDepartSource = .manual) async {
-        guard var current = pass, current.status == .armed, phase == .armed || phase == .pullingOut,
-              let secret = deps.secrets.secret(for: current.id)
-        else { return }
+        guard var current = pass, current.status == .armed, phase == .armed || phase == .pullingOut else { return }
+        guard let secret = deps.secrets.secret(for: current.id) else {
+            // Can't act (secret unavailable): say so on the screen that shows it, never a dead button.
+            sendFailed = true
+            phase = .pullingOut
+            return
+        }
         sendFailed = false
         phase = .sending
         let sent: Bool
@@ -394,9 +416,11 @@ final class ClipFlowController {
 
     func confirmCancel() async {
         showCancelConfirm = false
-        guard let current = pass, current.status == .armed,
-              let secret = deps.secrets.secret(for: current.id)
-        else { return }
+        guard let current = pass, current.status == .armed else { return }
+        guard let secret = deps.secrets.secret(for: current.id) else {
+            toast = ClipCopy.cancelFailed
+            return
+        }
         do {
             _ = try await deps.api.cancel(id: current.id, secret: secret)   // ok:false = already gone: same outcome
         } catch {
@@ -503,11 +527,14 @@ final class ClipFlowController {
         guard let current = pass else { phase = newPhase; return }
         cleanupLocal(passID: current.id)
         pass = nil
+        showsOtherPassNote = false
         let activityPhase: SpotPassActivityAttributes.Phase = newPhase == .cancelled ? .cancelled : .ended
         await endActivityIfStarted(activityPhase)
         showCancelConfirm = false
         phase = newPhase
     }
+
+    func dismissOtherPassNote() { showsOtherPassNote = false }
 
     private func cleanupLocal(passID: UUID) {
         deps.reminders.cancelAll(passID: passID)

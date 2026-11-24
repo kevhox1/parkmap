@@ -32,15 +32,17 @@ struct ClipArmedView: View {
                     guard !reduceMotion else { return }
                     withAnimation(.spring(duration: 0.4)) { stamped = true }
                 }
-                Text(ClipCopy.armedHeadline)
-                    .font(.clipHeadline).foregroundStyle(.white)
-                    .multilineTextAlignment(.center)
-                    .accessibilityAddTraits(.isHeader)
-                Text(subline)
-                    .font(.title3).foregroundStyle(SpotPassTheme.lavender)
-                    .multilineTextAlignment(.center)
+                if controller.showsOtherPassNote {
+                    Text(ClipCopy.oneNeighborNote)
+                        .font(.footnote).foregroundStyle(.white)
+                        .multilineTextAlignment(.center)
+                        .padding(12)
+                        .frame(maxWidth: .infinity)
+                        .background(.white.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                }
+                headlineBlock
                 lockScreenCard
-                if bothOff {
+                if bothOff || timeToGo {
                     Button(ClipCopy.pullingOut) { controller.showPullingOut() }
                         .buttonStyle(ClipHeroButtonStyle())
                 } else {
@@ -59,6 +61,26 @@ struct ClipArmedView: View {
             .padding(.bottom, 24)
         }
         .scrollBounceBehavior(.basedOnSize)
+    }
+
+    /// Re-evaluated every second while foregrounded; at `leave_at` the screen flips to "Time to go?".
+    @State private var timeToGo = false
+
+    private var headlineBlock: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let past = controller.pass.map { ClipArmedPresentation.isTimeToGo(leaveAt: $0.leaveAt, now: context.date) } ?? false
+            VStack(spacing: isShort ? 14 : 20) {
+                Text(past ? ClipCopy.timeToGo : ClipCopy.armedHeadline)
+                    .font(.clipHeadline).foregroundStyle(.white)
+                    .multilineTextAlignment(.center)
+                    .accessibilityAddTraits(.isHeader)
+                Text(past ? ClipCopy.pullingOutSafety : subline)
+                    .font(.title3).foregroundStyle(SpotPassTheme.lavender)
+                    .multilineTextAlignment(.center)
+            }
+            .frame(maxWidth: .infinity)
+            .onChange(of: past, initial: true) { _, newValue in timeToGo = newValue }
+        }
     }
 
     private var subline: String {
