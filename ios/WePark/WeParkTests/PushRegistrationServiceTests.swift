@@ -457,7 +457,10 @@ final class PushRegistrationServiceWireTests: XCTestCase {
     /// `PushTokenMockURLProtocol`-backed `URLSession` for its own `device_push_tokens` traffic.
     /// `environmentProvider` is injected as a fixed `"sandbox"` so these tests never depend on
     /// `APNSEnvironment.detectCurrent()`'s real bundle read.
-    private func makeAuthenticatedService() async -> PushRegistrationService {
+    private func makeAuthenticatedService(
+        communityEnabled: Bool = true,
+        spotHandoffEnabled: Bool = false
+    ) async -> PushRegistrationService {
         let authSession = URLSession(configuration: {
             let config = URLSessionConfiguration.ephemeral
             config.protocolClasses = [PushAuthMockURLProtocol.self]
@@ -487,7 +490,8 @@ final class PushRegistrationServiceWireTests: XCTestCase {
             // `{ true }` explicitly rather than reading the live constant. See
             // `communityEnabledProvider`'s own doc comment in `PushRegistrationService.swift`
             // for why this seam exists.
-            communityEnabledProvider: { true }
+            communityEnabledProvider: { communityEnabled },
+            spotHandoffEnabledProvider: { spotHandoffEnabled }
         )
     }
 
@@ -579,5 +583,96 @@ final class PushRegistrationServiceWireTests: XCTestCase {
 
         XCTAssertEqual(requestCount, 1,
             "a redundant handleAppForeground() call issued before the first attemptUpsert's Task has run must not fire a second network request for the identical candidate")
+    }
+
+    // MARK: - Spot Pass seeker registration gating (follow-up F2)
+
+    /// Reads a request body whether URLSession handed it over as data or as a stream.
+    private func bodyData(_ request: URLRequest) -> Data? {
+        if let body = request.httpBody { return body }
+        guard let stream = request.httpBodyStream else { return nil }
+        stream.open()
+        defer { stream.close() }
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 1024)
+        while stream.hasBytesAvailable {
+            let count = stream.read(&buffer, maxLength: buffer.count)
+            if count <= 0 { break }
+            data.append(buffer, count: count)
+        }
+        return data
+    }
+
+    /// Flag-off: both flags false means no registration, no upload, even with token and zone.
+    func testBothFlagsOff_neverUploads() async throws {
+        let service = await makeAuthenticatedService(communityEnabled: false, spotHandoffEnabled: false)
+        var requestCount = 0
+        PushTokenMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        service.didReceiveDeviceToken(Data([0x21, 0x22]))
+        service.updateZone("soho")
+        service.handleAppForeground()
+        await service.inFlightUpload?.value
+        XCTAssertEqual(requestCount, 0)
+        XCTAssertNil(service.deviceTokenHex, "with both flags off the token is not even captured")
+    }
+
+    /// Community only (spot off): a token without a zone is still never uploaded (pre-F2 behavior).
+    func testCommunityOnly_noZone_doesNotUpload() async throws {
+        let service = await makeAuthenticatedService(communityEnabled: true, spotHandoffEnabled: false)
+        var requestCount = 0
+        PushTokenMockURLProtocol.requestHandler = { request in
+            requestCount += 1
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        service.didReceiveDeviceToken(Data([0x23, 0x24]))
+        service.handleAppForeground()
+        await service.inFlightUpload?.value
+        XCTAssertEqual(requestCount, 0)
+    }
+
+    /// Spot Pass only: the token uploads even though community is off and no zone resolved,
+    /// with the row shape `send-handoff-push` reads (user_id, apns_token, environment).
+    func testSpotHandoffOnly_noZone_uploadsTokenWithNullZone() async throws {
+        let service = await makeAuthenticatedService(communityEnabled: false, spotHandoffEnabled: true)
+        var capturedBody: [String: Any]?
+        var requestCount = 0
+        PushTokenMockURLProtocol.requestHandler = { [self] request in
+            requestCount += 1
+            capturedBody = bodyData(request).flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        service.didReceiveDeviceToken(Data([0x25, 0x26]))
+        await service.inFlightUpload?.value
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(capturedBody?["user_id"] as? String, kPushUser.uuidString)
+        XCTAssertEqual(capturedBody?["apns_token"] as? String, "2526")
+        XCTAssertEqual(capturedBody?["environment"] as? String, "sandbox")
+        XCTAssertTrue(capturedBody?["zone_id"] is NSNull, "no zone resolved uploads SQL null")
+    }
+
+    /// Both on and a zone resolved: the zone still rides along, so community fan-out keeps working.
+    func testBothFlagsOn_withZone_uploadsZone() async throws {
+        let service = await makeAuthenticatedService(communityEnabled: true, spotHandoffEnabled: true)
+        var zones: [String] = []
+        PushTokenMockURLProtocol.requestHandler = { [self] request in
+            if let obj = bodyData(request).flatMap({ try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }),
+               let zone = obj["zone_id"] as? String { zones.append(zone) }
+            return (HTTPURLResponse(url: request.url!, statusCode: 204, httpVersion: nil, headerFields: nil)!, Data())
+        }
+        service.didReceiveDeviceToken(Data([0x27, 0x28]))
+        await service.inFlightUpload?.value
+        service.updateZone("soho")
+        await service.inFlightUpload?.value
+        XCTAssertEqual(zones, ["soho"])
+    }
+
+    func testTokenUpsertPayload_nilZone_isNull() {
+        let payload = PushRegistrationService.tokenUpsertPayload(
+            userId: kPushUser, tokenHex: "ab", environment: "sandbox", zoneId: nil
+        )
+        XCTAssertTrue(payload["zone_id"] is NSNull)
     }
 }

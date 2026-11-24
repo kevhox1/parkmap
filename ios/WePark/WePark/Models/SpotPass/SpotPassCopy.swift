@@ -43,6 +43,13 @@ nonisolated enum SpotPassCopy {
     static let showFirstNameDisabled = "Add a first name in Settings to turn this on."
     static let createButton = "Create my Spot Pass"
 
+    // MARK: Notification rationale (design §8.3; "heads-up", never "ping")
+
+    static let rationaleTitle = "Get a heads-up."
+    static let rationaleBody = "We'll let you know the moment your neighbor is pulling out, even if your screen is locked."
+    static let rationaleAllow = "Allow notifications"
+    static let rationaleNotNow = "Not now"
+
     // MARK: Create states (design §9.5)
 
     static let creating = "Making your Spot Pass..."
