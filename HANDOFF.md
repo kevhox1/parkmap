@@ -215,6 +215,24 @@ the DigitalOcean VPS at 167.172.237.2, `/root/repos/parkmap`; Darwin = Kevin's M
 
 ## Changelog
 
+### 2026-11-24 (later) — ✅ SUPABASE: migrations 10/11/12 + Spot Pass 13 APPLIED to prod; 7 handoff edge functions DEPLOYED (flag OFF)
+
+The orchestrator ran these through Chrome (SQL Editor) and the CLI. Kevin clicked Run on each migration, because auto mode blocks the orchestrator from clicking Run on prod. The CLI is logged in on the Mac; Kevin ran `supabase login` in Terminal.app, since the `!` prefix is non-TTY.
+- **Migrations 10, 11, 12.** The Q0 pre-check matched exactly. The Q1 verify matched after fixing a `polcmd::text` cast in the doc.
+- **Migration 13 (PR #161).** QA said APPLY-READY twice; the R1 reporter-age fix was reviewed by the orchestrator. The pre-check passed 6/6 and the post-apply checks all passed:
+  - flag false;
+  - one `handoff-sweep` cron job (jobid 3), already running successfully;
+  - grants f/t and f/t;
+  - RLS 6/6;
+  - no handoff tables in realtime;
+  - `delete_my_account` grants f/t/f.
+- **Functions deployed** (`--use-api`): `handoff-peek/claim/depart/extend/cancel/report` with `verify_jwt=false`, and `send-handoff-push` with `verify_jwt=true`. A smoke test with the flag off returned 503 `disabled` for well-formed calls and 401 for an unauthenticated push.
+- **Before flipping `HANDOFF_ENABLED`:** run README-handoff §2:
+  - F2, the forged-XFF test, plus the reverse "two networks don't share a bucket" check;
+  - the `net._http_response` 200 check after the first real claim;
+  - an end-to-end run with accounts older than 24 h.
+- ⚠️ **Noticed:** `send-regular-push` (Regulars, PR #112) is NOT deployed in prod. Only `ingest-film-permits` and `send-community-push` existed before. Check whether migrations 07-09 are applied before relying on Regulars pushes.
+
 ### 2026-11-24 — ✅ BUILD 26 ON INTERNAL TESTFLIGHT; snap fix, address MVP, Spot Pass scaffold, getwepark.com live
 
 **Shipped.** Each PR was QA'd live on the sim by an agent that didn't build it, and CI was green.
