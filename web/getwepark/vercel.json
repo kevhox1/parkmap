@@ -16,7 +16,7 @@
       ]
     },
     {
-      "source": "/p",
+      "source": "/p{/}?",
       "headers": [
         {
           "key": "Content-Security-Policy",
