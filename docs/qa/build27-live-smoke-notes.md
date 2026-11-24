@@ -27,3 +27,11 @@ Rule: Kevin reviews first. Nothing below gets fixed until he says "live smoke co
 - **09 E 1st St:** chips RED ("Free until Friday 9 AM" / "Free until Monday 9 AM") while the street lines are green. Same bug as 07/08. The parked-car icon IS visible here (top, E 1st St).
 - **10 browse after moving the car (finding 13):** no car icon visible, but a horizontal DASHED BLUE LINE crosses the screen at the user dot. Check whether that's a stale car-pin/route artifact and why the car annotation dropped after re-placement.
 - **Also odd:** the Overnight chip reads "Good through Thu" on a Tuesday afternoon. Check the goal-summary copy logic (overnight should read like "Good until tomorrow 8 AM", or explain the Thu).
+
+## Status after the first fix wave (2026-11-24 night)
+- MERGED: #177 Bowery/E Houston hairpin geometry (finding 9). #178 overlay classification cache (findings 1/5; on-device pinch still unverified). #179 drive-card chip = any-legal-spot rule + text from the passing set + dated labels + AX wrap + defensive car pin (findings 11/12/13; car icon never reproduced). #180 sign reclassification (commercial-only/plate-only/layover/construction = red; no-day signs every day). #181 web Pick a time (finding 4, web).
+- NEW from #179 re-QA (pre-existing, HIGH): drive-card LEFT/RIGHT follow CARDINAL sides (N/W = left, S/E = right), not the driver's heading, so westbound "LEFT" is the curb on the driver's right. Likely explains finding 8's "one side blank" confusion. Fix next.
+- NEW: at AX3–AX5 the drive card takes ~55% of the screen; End overlaps Park here; Report truncates.
+- NEW: `AVSpeechSynthesisVoice(language:)` in `DrivingVoice.init` is a synchronous main-thread call at app init (hung 2+ min on a fresh sim).
+- Product call: a 6 m free sliver can make a side green. "Free until Sat 11/28 12:00 AM" reads oddly (should be "Fri night midnight" or "until Sat").
+- Copy to confirm with Kevin: "Not free through your window".
