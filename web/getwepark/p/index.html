@@ -41,7 +41,7 @@
   .status { min-height:1.4em; margin:6px 0; color:var(--lav); }
   .big { font:800 2.2rem ui-rounded,-apple-system,system-ui,sans-serif; color:var(--text); margin:6px 0 2px; }
   .reasons { display:grid; gap:8px; margin:12px 0; }
-  .banner { position:fixed; left:0; right:0; bottom:0; background:var(--indigo); color:#fff; text-align:center; padding:6px; font-size:.8rem; }
+  .banner { margin:16px 0 0; border-radius:10px; background:var(--indigo); color:#fff; text-align:center; padding:6px; font-size:.8rem; }
   .confetti { position:relative; height:0; }
   .confetti i { position:absolute; top:0; left:50%; width:8px; height:12px; border-radius:2px; opacity:0; animation:fall 1.6s ease-out 1 forwards; }
   @keyframes fall { 0% { opacity:1; transform:translate(0,0) rotate(0); } 100% { opacity:0; transform:translate(var(--x),240px) rotate(540deg); } }
@@ -141,15 +141,17 @@
 
   // State lives in memory. sessionStorage (tab-scoped, cleared on tab close, never transmitted) only lets a reload
   // or an iOS tab discard keep the pass, since the token is scrubbed from the URL. Token is dropped once claimed.
-  var S = { token:null, id:null, secret:null, leaveAt:null, alias:null, glyph:null, name:null, sent:false };
+  var S = { token:null, id:null, secret:null, leaveAt:null, alias:null, glyph:null, name:null, sent:false, now:false };
+  // Report credentials, kept in memory only until the page is left (never sessionStorage), because wipe() clears S after claim/depart.
+  var R = { id:null, secret:null };
   function save() { try { sessionStorage.setItem(KEY, JSON.stringify(S)); } catch (e) {} }
   function load() {
     try {
       var v = JSON.parse(sessionStorage.getItem(KEY) || 'null');
-      if (v && typeof v === 'object') { for (var k in S) if (k in v) S[k] = v[k]; }
+      if (v && typeof v === 'object') { for (var k in S) if (k in v) S[k] = v[k]; if (S.id && S.secret) { R.id = S.id; R.secret = S.secret; } }
     } catch (e) {}
   }
-  function wipe() { S.token = S.id = S.secret = S.leaveAt = null; try { sessionStorage.removeItem(KEY); } catch (e) {} }
+  function wipe() { S.token = S.id = S.secret = S.leaveAt = null; S.now = false; try { sessionStorage.removeItem(KEY); } catch (e) {} }
 
   // Read token from the fragment, then scrub the visible URL.
   var qs = new URLSearchParams(location.search);
@@ -185,6 +187,8 @@
   function show(id, foot) {
     SECTIONS.forEach(function (s) { $(s).hidden = s !== id; });
     $('foot').hidden = !foot;
+    ['st-open', 'st-armed', 'st-report'].forEach(function (i) { $(i).textContent = ''; });
+    $('report').hidden = !(S.token || (S.id && S.secret) || (R.id && R.secret));
     window.scrollTo(0, 0);
     var h = $(id).querySelector('h1'); if (h) { h.setAttribute('tabindex', '-1'); h.focus({ preventScroll:true }); }
   }
@@ -194,15 +198,15 @@
     $('retry').hidden = !retryFn; $('retry').onclick = retryFn || null;
     show('s-msg', false);
   }
-  function unavailable() { wipe(); msg('⏳', "This Spot Pass isn't active", 'It may have been used or timed out. Thanks for stopping to look, neighbor.'); }
-  function disabled() { msg('\u{1F6A7}', "Spot Pass isn't live yet", "We're still getting it ready. Check back soon, and thanks for stopping by."); }
+  function unavailable() { wipe(); msg('\u2026', "This Spot Pass isn't active", 'It may have been used or timed out. Thanks for stopping to look, neighbor.'); }
+  function disabled() { msg('\u2026', "Spot Pass isn't live yet", "We're still getting it ready. Check back soon, and thanks for stopping by."); }
   function glyphChar() { return GLYPHS[S.glyph] || '\u{1F4CD}'; }
   function who() { return S.name || S.alias || 'Your neighbor'; }
   function setGlyphs() { ['glyph', 'glyph2', 'glyph3'].forEach(function (i) { $(i).textContent = glyphChar(); }); }
   function busy(on) { ['go', 'leave', 'extend', 'cancel', 'notnow'].forEach(function (i) { $(i).disabled = on; }); }
   function handleCommon(r) {
     if (r.status === 503) { disabled(); return true; }
-    if (r.status === 429) { msg('⏳', 'Too many tries', 'Please wait a few minutes and try again.'); return true; }
+    if (r.status === 429) { msg('\u2026', 'Too many tries', 'Please wait a few minutes and try again.'); return true; }
     return false;
   }
   var RETRY = "That didn't go through. Check your connection and try again.";
@@ -223,8 +227,12 @@
   function renderArmed(note) {
     setGlyphs(); updateWhen();
     clearInterval(tick); tick = setInterval(updateWhen, 20000);
-    $('st-armed').textContent = note || '';
     show('s-armed', true);
+    $('st-armed').textContent = note || '';
+    var nw = !!S.now;
+    $('h-armed').textContent = nw ? 'Time to go?' : "You're on. Keep this page open.";
+    $('when').hidden = nw; $('when-sr').hidden = nw; $('extend').hidden = nw;
+    $('leave').textContent = "I'm leaving now";
   }
   function renderSent() {
     clearInterval(tick); wipe(); S.sent = true; save(); setGlyphs();
@@ -268,8 +276,10 @@
       if (handleCommon(r)) return;
       if (r.status !== 200) { $('st-open').textContent = RETRY; return; }
       if (r.body.status !== 'armed') { unavailable(); return; }
-      S.secret = r.body.claimer_secret; S.id = r.body.id || null; S.leaveAt = r.body.leave_at; S.token = null; save();
-      if (chosen === 0) depart(); else renderArmed();
+      S.secret = r.body.claimer_secret; S.id = r.body.id || null; S.leaveAt = r.body.leave_at; S.token = null; S.now = chosen === 0; save();
+      R.id = S.id; R.secret = S.secret;
+      // "Now" arms and opens the Time to go screen. Nothing is sent to the seeker until the explicit tap.
+      renderArmed();
     }, function () { busy(false); $('st-open').textContent = RETRY; });
   };
   $('notnow').onclick = function () { wipe(); msg('\u{1F44B}', 'No worries', 'Thanks for looking, neighbor.'); };
@@ -283,28 +293,33 @@
       busy(false);
       if (handleCommon(r)) return;
       if (r.status === 200 && r.body.ok === true) { renderSent(); return; }
-      if (r.status === 200 && retried) { wipe(); msg('⏳', 'This pass has ended', "If you already tapped the button, they know you're pulling out."); return; }
+      if (r.status === 200 && retried) { wipe(); msg('\u2026', 'This pass has ended', "If you already tapped the button, they know you're pulling out."); return; }
       retried = true; renderArmed("That didn't go through. Tap again. If it keeps failing, the pass may have ended.");
     }, function () { busy(false); retried = true; renderArmed(RETRY); });
   }
   $('leave').onclick = depart;
 
   $('extend').onclick = function () {
+    if (!S.id) { $('st-armed').textContent = "We couldn't add time from the web. Please open the WePark app."; return; }
     busy(true); $('st-armed').textContent = '';
     post('handoff-extend', { id:S.id, claimer_secret:S.secret }).then(function (r) {
       busy(false);
       if (handleCommon(r)) return;
       if (r.status === 200 && r.body.ok === true) { S.leaveAt = r.body.leave_at; save(); updateWhen(); $('st-armed').textContent = 'Added 5 minutes.'; }
-      else $('st-armed').textContent = "Can't add more time. There's a limit on extensions.";
+      else if (r.status === 200) $('st-armed').textContent = "Can't add more time. The pass may have ended or reached its limit.";
+      else $('st-armed').textContent = RETRY;
     }, function () { busy(false); $('st-armed').textContent = RETRY; });
   };
 
   $('cancel').onclick = function () {
+    if (!S.id) { $('st-armed').textContent = "We couldn't cancel this from the web. Please open the WePark app."; return; }
     busy(true);
     post('handoff-cancel', { id:S.id, claimer_secret:S.secret }).then(function (r) {
       busy(false);
       if (handleCommon(r)) return;
-      wipe(); msg('\u{1F44B}', 'No problem', 'Thanks for letting us know, neighbor.');
+      if (r.status === 200 && r.body.ok === true) { wipe(); R.id = R.secret = null; msg('\u{1F44B}', 'No problem', 'Thanks for letting us know, neighbor.'); }
+      else if (r.status === 200) { $('st-armed').textContent = 'This pass may have already ended. Please open the WePark app to check.'; }
+      else $('st-armed').textContent = RETRY;
     }, function () { busy(false); $('st-armed').textContent = RETRY; });
   };
 
@@ -317,15 +332,18 @@
   $('s-report').addEventListener('click', function (e) {
     var b = e.target.closest('[data-reason]'); if (!b) return;
     var reason = b.getAttribute('data-reason'); if (!REASONS[reason]) return;
-    var body = (S.id && S.secret) ? { id:S.id, claimer_secret:S.secret, reason:reason } : { token:S.token, reason:reason };
+    var rid = S.id || R.id, rsec = S.secret || R.secret;
+    var body = (rid && rsec) ? { id:rid, claimer_secret:rsec, reason:reason } : (S.token ? { token:S.token, reason:reason } : null);
+    if (!body) { $('st-report').textContent = "We couldn't send this from here. Please open the WePark app to report."; return; }
     post('handoff-report', body).then(function (r) {
       if (handleCommon(r)) return;
-      wipe(); msg('✓', 'Thanks for telling us', "This pass has ended. We don't know who you are, and that's how it stays.");
+      if (r.status !== 200 || r.body.ok !== true) { $('st-report').textContent = r.status === 200 ? "We couldn't record that. The pass may have already ended." : RETRY; return; }
+      wipe(); R.id = R.secret = null; msg('✓', 'Thanks for telling us', "This pass has ended. We don't know who you are, and that's how it stays.");
     }, function () { $('st-report').textContent = RETRY; });
   });
 
   if (FAKE) $('fakebar').hidden = false;
-  if (FAKE && FAKE_STATE === 'armed') { S.alias = 'Bodega Cat'; S.glyph = 'bodega_cat'; S.id = '0'; S.secret = 'x'; S.leaveAt = new Date(Date.now() + 600000).toISOString(); fakeLeave = S.leaveAt; renderArmed(); }
+  if (FAKE && FAKE_STATE === 'armed') { S.alias = 'Bodega Cat'; S.glyph = 'bodega_cat'; S.id = '00000000-0000-4000-8000-000000000000'; S.secret = 'FAKEFAKEFAKEFAKEFAKEFA'; R.id = S.id; R.secret = S.secret; S.leaveAt = new Date(Date.now() + 600000).toISOString(); fakeLeave = S.leaveAt; renderArmed(); }
   else if (FAKE && FAKE_STATE === 'sent') { S.alias = 'Bodega Cat'; S.glyph = 'bodega_cat'; renderSent(); }
   else if (FAKE) { S.token = 'FAKEFAKEFAKEFAKEFAKEFA'; peek(); }
   else if (S.secret && S.leaveAt) renderArmed();

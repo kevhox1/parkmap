@@ -12,7 +12,7 @@ when the App Clip / full app cannot open (spec `docs/specs/qr-spot-handoff.md` s
 2. `handoff-peek` -> "<Alias> is waiting for your spot" with a glyph (emoji per the 16 `create_handoff` slugs, pin fallback).
    `{status:"unavailable"}` -> one uniform "This Spot Pass isn't active" screen. HTTP 503 -> "Spot Pass isn't live yet".
 3. Chips Now / ~10 min / ~30 min / ~1 hour (max 1 h, well under the 4 h cap) -> `handoff-claim` (no push token).
-   "Now" claims and departs in one action. Others show the armed screen: **I'm leaving now** (`handoff-depart`,
+   "Now" claims and shows the "Time to go?" screen (never departs by itself). All chips show the armed screen: **I'm leaving now** (`handoff-depart`,
    `source:"manual"`), **5 more min** (`handoff-extend`), **Not leaving** (`handoff-cancel`).
 4. After depart: "You just made someone's day" (no karma promised; web has no identity) plus the Get WePark card.
 5. **Report this pass** (`handoff-report`: harassment / spam / unsafe / other), with `{id, claimer_secret}` once armed,
@@ -50,5 +50,8 @@ requests to `jiispshyqerscdoferaw.supabase.co/functions/v1/handoff-*`; no cookie
 - CORS: the functions default to allowing `https://getwepark.com` (verified live: OPTIONS and POST echo that origin). The
   `www.` host is NOT allowed unless `HANDOFF_ALLOWED_ORIGINS` is extended.
 - No `apikey` header is needed (functions deploy with `--no-verify-jwt`; verified with a live request).
-- Known contract gap: `handoff-depart/extend/cancel` require the pass `id`, but `handoff-claim` and `handoff-peek` do not return it.
-  The page uses `id` from the claim response when present; until backend adds it, "I'm leaving now" shows a graceful error.
+- Contract: `handoff-depart/extend/cancel` need the pass `id`. `handoff-claim` returns it since PR #167. The page still
+  degrades gracefully ("open the WePark app") if `id` is ever missing.
+- "Now" arms the pass and shows the "Time to go?" screen. Nothing is sent to the seeker until the explicit "I'm leaving now" tap.
+- Report credentials (`id` + `claimer_secret`) stay in memory (not sessionStorage) until the tab is left, so Report works from the
+  celebration screen. After a reload on that screen they are gone and the Report link is hidden.
