@@ -1391,6 +1391,15 @@ struct ContentView: View {
                     SpotPassFlowView(store: store, onClose: { showSpotPassCover = false })
                 }
             }
+            // Spot Pass driver flow (C2): universal-link inbox drain, the driver cover and the clip-origin
+            // Welcome, all in ONE modifier (`SpotPassDriverLayer`). Returns `content` untouched while
+            // `AppConstants.spotHandoffEnabled` is false.
+            .spotPassDriverLayer(
+                authService: authService,
+                pushTokenHex: { pushRegistrationService.deviceTokenHex },
+                seekerCoverPresented: $showSpotPassCover,
+                onWelcomeFinished: { scheduleOnboardingCoach(isReplay: false) }
+            )
             // Spot Pass: auto-end an open/armed pass when the seeker parks (spec §3). Inert while
             // `spotPassStore` is nil (always, flag-off).
             .onChange(of: parkPinService.parkedCar?.id) { oldID, newID in
@@ -2196,6 +2205,10 @@ struct ContentView: View {
         guard let store = spotPassStoreIfEnabled() else { return }
         SpotPassPushInbox.shared.pending = nil
         Task { await store.handlePush(event) }
+        // C2: `thanks` / `handoff_ended` concern the DRIVER flow (the buffered cold-launch path too).
+        if event.kind == .thanks || event.kind == .handoffEnded {
+            Task { await SpotPassDriverRuntime.shared.handle(push: event) }
+        }
         if event.opened, event.kind == .armed || event.kind == .departed {
             showSpotPassCover = true
         }
@@ -3765,6 +3778,9 @@ struct ContentView: View {
                         // belt-and-braces `.onChange(of: driveModeActive)` in `body` covers the
                         // sustained-motion auto-engage path, which has no tap to hook here).
                         onboardingCoachMark = nil
+                        // Spot Pass C2 (spec 7.4): with an armed pass, Start Driving tells the neighbor
+                        // (source `start_driving`). No-op flag-off or with no armed pass.
+                        SpotPassDriverRuntime.shared.startDriving()
                         enterCruiseMode()
                     },
                     onTileRowFrameChange: { onboardingTileRowFrame = $0 },
@@ -5453,7 +5469,7 @@ struct ContentView: View {
         // Without this, every existing install would later be treated as a brand-new install
         // the day these flags eventually flip (there would be no way, at flip time, to tell
         // "has used this app for months" apart from "installed five minutes ago").
-        FirstLaunchSentinel().markLaunchedAndPreSeedIfUpgrading()
+        let isFreshInstall = FirstLaunchSentinel().markLaunchedAndPreSeedIfUpgrading()
 
         // Spot Pass: a seeker alert tapped on a cold launch was buffered by the AppDelegate.
         // Inert flag-off (nothing is ever buffered).
@@ -5499,12 +5515,26 @@ struct ContentView: View {
         // by `FirstLaunchSentinel` above (so `showOnboardingStoryCover` resolves `false` for
         // them here) — in that branch, go straight to scheduling the coach layer instead, with
         // no cards in front of it (§4.2).
-        showOnboardingStoryCover = onboardingStoryShouldShow(
+        // Spot Pass C2 (spec 6.3, flag-gated): a clip-origin fresh install gets the one-screen "Welcome,
+        // neighbor" INSTEAD of the 3-card deck; Tier 2 and the Tier 3 coach follow unchanged. The
+        // `await` is skipped entirely flag-off, so organic and upgrade installs are byte-identical.
+        let showSpotPassWelcome: Bool
+        if AppConstants.spotHandoffEnabled {
+            showSpotPassWelcome = await SpotPassWelcomeCoordinator.prepare(
+                isFreshInstall: isFreshInstall,
+                adoption: { await SpotPassClipAdoption.shared.run(target: authService) }
+            )
+        } else {
+            showSpotPassWelcome = false
+        }
+        showOnboardingStoryCover = !showSpotPassWelcome && onboardingStoryShouldShow(
             onboardingStoryEnabled: AppConstants.onboardingStoryEnabled,
             driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
             gateShouldShow: OnboardingStoryGate().shouldShow()
         )
-        if showOnboardingStoryCover {
+        if showSpotPassWelcome {
+            SpotPassDriverRuntime.shared.welcomeRequested = true
+        } else if showOnboardingStoryCover {
             // QA #7A: a force-quit mid-deck must not let the sentinel classify this fresh
             // install as upgrading on the next launch - see `markDeckBegun()`.
             OnboardingStoryGate().markDeckBegun()

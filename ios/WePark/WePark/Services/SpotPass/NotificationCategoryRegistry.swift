@@ -77,10 +77,17 @@ enum NotificationCategoryRegistry {
 
     /// The categories the launch path wants, from the feature flags. Empty when both are off.
     @MainActor
-    static func launchCategories(addressEnabled: Bool, spotPassEnabled: Bool) -> [UNNotificationCategory] {
+    static func launchCategories(
+        addressEnabled: Bool,
+        spotPassEnabled: Bool,
+        includeDriverReminders: Bool = false
+    ) -> [UNNotificationCategory] {
         var categories: [UNNotificationCategory] = []
         if addressEnabled { categories.append(NotificationScheduler.addressCategory()) }
         if spotPassEnabled { categories.append(spotPassSeekerCategory()) }
+        // C2: the driver's `SPOT_PASS_LEAVING` reminder category (background actions). Registered at
+        // launch too (not only when a pass arms) so an action tapped after a relaunch still resolves.
+        if includeDriverReminders { categories.append(DriverReminderCategory.category()) }
         return categories
     }
 
@@ -89,10 +96,14 @@ enum NotificationCategoryRegistry {
     static func registerLaunchCategories(
         addressEnabled: Bool = AppConstants.addressAnchoredParkingEnabled,
         spotPassEnabled: Bool = AppConstants.spotHandoffEnabled,
+        includeDriverReminders: Bool = false,
         center: (any NotificationCategoryCenter)? = nil
     ) async {
         await register(
-            launchCategories(addressEnabled: addressEnabled, spotPassEnabled: spotPassEnabled),
+            launchCategories(
+                addressEnabled: addressEnabled, spotPassEnabled: spotPassEnabled,
+                includeDriverReminders: includeDriverReminders
+            ),
             center: center
         )
     }

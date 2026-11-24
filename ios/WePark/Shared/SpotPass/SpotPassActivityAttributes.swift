@@ -39,11 +39,16 @@ nonisolated struct SpotPassActivityAttributes: ActivityAttributes {
         var leaveAt: Date?
         /// When the countdown started (progress bar origin).
         var startedAt: Date?
+        /// The armed pass's id (a random UUID, lowercase). Full app only (C2): the App Intent buttons
+        /// carry it so a stale button can never act on a newer pass. nil for the clip and in
+        /// push-to-end updates.
+        var passID: String?
 
-        init(phase: Phase = .counting, leaveAt: Date? = nil, startedAt: Date? = nil) {
+        init(phase: Phase = .counting, leaveAt: Date? = nil, startedAt: Date? = nil, passID: String? = nil) {
             self.phase = phase
             self.leaveAt = leaveAt
             self.startedAt = startedAt
+            self.passID = passID
         }
 
         init(from decoder: Decoder) throws {
@@ -51,6 +56,7 @@ nonisolated struct SpotPassActivityAttributes: ActivityAttributes {
             phase = try container.decodeIfPresent(Phase.self, forKey: .phase) ?? .ended
             leaveAt = try container.decodeIfPresent(Date.self, forKey: .leaveAt)
             startedAt = try container.decodeIfPresent(Date.self, forKey: .startedAt)
+            passID = try container.decodeIfPresent(String.self, forKey: .passID)
         }
     }
 
