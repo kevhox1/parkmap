@@ -1,0 +1,16 @@
+{
+  "applinks": {
+    "details": [
+      {
+        "appIDs": ["ZAA4UCS6CH.com.kevinhoxha.wepark"],
+        "components": [
+          { "/": "/p", "comment": "Spot Pass landing (no token)" },
+          { "/": "/p/*", "comment": "Spot Pass (token travels in the URL fragment)" }
+        ]
+      }
+    ]
+  },
+  "appclips": {
+    "apps": ["ZAA4UCS6CH.com.kevinhoxha.wepark.Clip"]
+  }
+}
