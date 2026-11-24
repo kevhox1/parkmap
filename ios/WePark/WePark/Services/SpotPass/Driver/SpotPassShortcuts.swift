@@ -11,6 +11,12 @@
 //  (`SpotPassIntentRuntime.performer` is nil), so it answers "No active Spot Pass" and touches nothing.
 //
 
+// COMPILED OUT: Spot Pass ships dark, so the provider is excluded and the action is not listed in
+// Shortcuts/Siri. Enable at the Spot Pass flag flip: define SPOT_PASS_SHORTCUTS (one line in
+// SWIFT_ACTIVE_COMPILATION_CONDITIONS, or delete the #if), AND remove `isDiscoverable = false` from
+// `LeavingNowIntent`, AND turn on the in-app car auto-ping guide. All three together.
+
+#if SPOT_PASS_SHORTCUTS
 import AppIntents
 
 nonisolated struct WeParkShortcuts: AppShortcutsProvider {
@@ -26,3 +32,4 @@ nonisolated struct WeParkShortcuts: AppShortcutsProvider {
         )
     }
 }
+#endif

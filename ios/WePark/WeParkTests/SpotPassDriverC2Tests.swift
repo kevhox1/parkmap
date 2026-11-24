@@ -581,6 +581,7 @@ final class DriverBackgroundActionTests: XCTestCase {
     func testIntentDiscoverability() {
         XCTAssertFalse(NotLeavingIntent.isDiscoverable)
         XCTAssertFalse(FiveMoreMinutesIntent.isDiscoverable)
+        XCTAssertFalse(LeavingNowIntent.isDiscoverable, "ships dark: not in Shortcuts until the flag flip")
         XCTAssertFalse(LeavingNowIntent.openAppWhenRun, "no app launch UI (spec 7.2)")
     }
 

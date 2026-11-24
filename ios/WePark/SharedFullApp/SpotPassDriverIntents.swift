@@ -13,9 +13,10 @@
 //  which only the app registers (`AppDelegate`, flag-gated). Nothing registered (flag off, or the
 //  extension process) means every intent answers "No active Spot Pass" and touches nothing.
 //
-//  ISOLATION: the project defaults to MainActor isolation. The intent structs are `nonisolated`
-//  so their static metadata satisfies AppIntents' nonisolated requirements; only `perform()`
-//  (which touches the main-actor performer) is `@MainActor`.
+//  ISOLATION: the project defaults to MainActor isolation. The intent structs stay MainActor (a type-level
+//  `nonisolated` makes the @Parameter macro emit "nonisolated cannot be applied to mutable stored
+//  properties", an error in Swift 6 mode); their static metadata and inits are `nonisolated` to satisfy
+//  AppIntents requirements, and `perform()` (which touches the main-actor performer) is `@MainActor`.
 //
 //  PRIVACY: an intent carries a pass id (a random UUID) at most. No location, no secret (the
 //  claimer secret stays in the app's keychain).
@@ -69,22 +70,26 @@ enum SpotPassIntentRuntime {
 
 /// "Leaving now". The Live Activity / lock-screen button AND the Shortcuts action ("when my phone
 /// connects to my car", spec 7.5): the pass id is present from the Live Activity, absent from Shortcuts.
-nonisolated struct LeavingNowIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "I'm leaving"
-    static let description = IntentDescription(
+struct LeavingNowIntent: LiveActivityIntent {
+    nonisolated static let title: LocalizedStringResource = "I'm leaving"
+    nonisolated static let description = IntentDescription(
         "Tells the neighbor waiting for your Spot Pass spot that you are pulling out. Does nothing if you have no active Spot Pass."
     )
     /// A one-bit event with no personal data: allowed from a locked phone (spec 7.2; device test
     /// whether the OS still asks to unlock, unlock-then-send is the accepted degraded path).
-    static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
-    static let openAppWhenRun = false
+    /// Ships DARK: not offered as a Shortcuts action until the Spot Pass flag flips (re-enable
+    /// together with `SpotPassShortcuts.swift` and the car auto-ping guide). Live Activity buttons
+    /// and notification actions still work: they instantiate the intent directly.
+    nonisolated static let isDiscoverable = false
+    nonisolated static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+    nonisolated static let openAppWhenRun = false
 
     @Parameter(title: "Pass")
     var passID: String?
 
-    init() {}
+    nonisolated init() {}
 
-    init(passID: String?) {
+    nonisolated init(passID: String?) {
         self.passID = passID
     }
 
@@ -96,19 +101,19 @@ nonisolated struct LeavingNowIntent: LiveActivityIntent {
 }
 
 /// "5 more min" on the Time-to-go state. Live Activity only (not offered in Shortcuts).
-nonisolated struct FiveMoreMinutesIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Five more minutes"
-    static let description = IntentDescription("Gives your Spot Pass five more minutes.")
-    static let isDiscoverable = false
-    static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
-    static let openAppWhenRun = false
+struct FiveMoreMinutesIntent: LiveActivityIntent {
+    nonisolated static let title: LocalizedStringResource = "Five more minutes"
+    nonisolated static let description = IntentDescription("Gives your Spot Pass five more minutes.")
+    nonisolated static let isDiscoverable = false
+    nonisolated static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+    nonisolated static let openAppWhenRun = false
 
     @Parameter(title: "Pass")
     var passID: String?
 
-    init() {}
+    nonisolated init() {}
 
-    init(passID: String?) {
+    nonisolated init(passID: String?) {
         self.passID = passID
     }
 
@@ -120,19 +125,19 @@ nonisolated struct FiveMoreMinutesIntent: LiveActivityIntent {
 }
 
 /// "Not leaving". Silent to the neighbor (spec 3, 9 item 3). Live Activity only.
-nonisolated struct NotLeavingIntent: LiveActivityIntent {
-    static let title: LocalizedStringResource = "Not leaving"
-    static let description = IntentDescription("Cancels your Spot Pass. The neighbor is not told.")
-    static let isDiscoverable = false
-    static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
-    static let openAppWhenRun = false
+struct NotLeavingIntent: LiveActivityIntent {
+    nonisolated static let title: LocalizedStringResource = "Not leaving"
+    nonisolated static let description = IntentDescription("Cancels your Spot Pass. The neighbor is not told.")
+    nonisolated static let isDiscoverable = false
+    nonisolated static let authenticationPolicy: IntentAuthenticationPolicy = .alwaysAllowed
+    nonisolated static let openAppWhenRun = false
 
     @Parameter(title: "Pass")
     var passID: String?
 
-    init() {}
+    nonisolated init() {}
 
-    init(passID: String?) {
+    nonisolated init(passID: String?) {
         self.passID = passID
     }
 
