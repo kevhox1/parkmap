@@ -21,6 +21,9 @@ nonisolated enum DriverCopy {
     static let done = "Done"
     static let autoPingRowTitle = "Set up car auto-ping"
     static let autoPingRowSub = "Tell your neighbor automatically when your phone connects to your car."
+    /// Footnote when the claimer secret could not be saved (the clip's "Get WePark" line does not fit
+    /// a user who is already in the app). Nothing was armed.
+    static let saveFailedFootnote = "We couldn't save this on your phone, so nothing was set up. Try scanning the pass again."
     static let startDrivingNote = "Tapping Start Driving also tells them you're leaving."
 }
 
@@ -304,7 +307,7 @@ struct DriverChoosingView: View {
         switch failure {
         case .busy: return ClipCopy.busyBody
         case .offline: return ClipCopy.offlineBody
-        case .saveFailed: return "\(ClipCopy.saveFailedTitle) \(ClipCopy.saveFailedBody)"
+        case .saveFailed: return DriverCopy.saveFailedFootnote
         }
     }
 
