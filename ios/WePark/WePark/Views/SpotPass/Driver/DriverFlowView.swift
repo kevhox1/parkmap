@@ -21,8 +21,8 @@ nonisolated enum DriverCopy {
     static let done = "Done"
     /// "heads-up", never "ping" (voice rules). The hyphen is a non-breaking one (U+2011) so large Dynamic
     /// Type never splits the word across lines.
-    static let autoPingRowTitle = "Auto heads\u{2011}up when you start your car"
-    static let autoPingRowSub = "Tell your neighbor the moment your phone connects to your car."
+    static let autoPingRowTitle = "Heads\u{2011}up when your phone connects to your car"
+    static let autoPingRowSub = "Set it up once in Shortcuts. It tells your neighbor the moment you connect."
     /// Entry back to an armed pass once the cover is closed (More sheet row, map chip).
     static let yourSpotPass = "Your Spot Pass"
     static let yourSpotPassHint = "Opens the pass you have set up."
@@ -39,12 +39,15 @@ nonisolated enum DriverCopy {
     }
     static let autoDetectTurnOff = "Turn off"
     static let autoDetectTurnOffHint = "Stops auto heads-up. You can still tap Leaving now."
-    static let autoDetectOfferTitle = "Let WePark tell them when you drive off"
-    static let autoDetectOfferSub = "Uses your location on this phone only while this pass is active."
+    static let autoDetectOfferTitle = "Auto heads\u{2011}up"
+    static let autoDetectOfferSub = "Send an auto heads\u{2011}up when you drive off. Uses your location on this phone only while this pass is active."
     static let autoDetectWaitingTitle = "Auto heads-up is ready"
     static let autoDetectWaitingSub = "It starts when you open WePark within 30 minutes of your leave time."
-    static let autoDetectNeedsCarTitle = "Auto heads-up needs your car"
-    static let autoDetectNeedsCarSub = "Save your car's spot on the map first, then come back."
+    static let autoDetectNeedsCarTitle = "Auto heads\u{2011}up"
+    static let autoDetectNeedsCarSub = "Save your car's spot to use auto heads\u{2011}up."
+    /// Shown on the armed row when auto heads-up was already on as this pass armed (opt-in persists
+    /// until Turn off). The Turn off pill sits beside it.
+    static let autoDetectCarriedNote = "Auto heads\u{2011}up is on for this pass. Tap Turn off to stop it."
     static let autoDetectDeniedTitle = "Auto heads-up needs location"
     static let autoDetectDeniedSub = "Turn on location for WePark in Settings."
 

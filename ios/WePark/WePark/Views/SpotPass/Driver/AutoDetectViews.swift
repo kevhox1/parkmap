@@ -39,21 +39,50 @@ private struct AutoDetectRowBody: View {
     var onTurnOff: () -> Void
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    /// True once this row has shown an opt-in offer. A row that first appears already on/ready means
+    /// the opt-in carried over from an earlier pass, which the note makes unmistakable.
+    @State private var offeredHere = false
+
+    private var carriedOver: Bool {
+        !offeredHere && (autoDetect.offer == .on || autoDetect.offer == .waiting)
+    }
 
     var body: some View {
+        content
+            .onChange(of: autoDetect.offer, initial: true) { _, offer in
+                switch offer {
+                case .canEnable, .needsSavedCar, .locationDenied: offeredHere = true
+                case .hidden, .waiting, .on: break
+                }
+            }
+    }
+
+    @ViewBuilder private var content: some View {
         switch autoDetect.offer {
         case .hidden:
             EmptyView()
         case .on:
-            stateRow(title: DriverCopy.autoDetectOnTitle, sub: DriverCopy.autoDetectOnSub(name: name), symbol: "location.fill", showsTurnOff: true)
+            withCarriedNote(stateRow(title: DriverCopy.autoDetectOnTitle, sub: DriverCopy.autoDetectOnSub(name: name), symbol: "location.fill", showsTurnOff: true))
         case .waiting:
-            stateRow(title: DriverCopy.autoDetectWaitingTitle, sub: DriverCopy.autoDetectWaitingSub, symbol: "location", showsTurnOff: true)
+            withCarriedNote(stateRow(title: DriverCopy.autoDetectWaitingTitle, sub: DriverCopy.autoDetectWaitingSub, symbol: "location", showsTurnOff: true))
         case .canEnable:
             offerRow(title: DriverCopy.autoDetectOfferTitle, sub: DriverCopy.autoDetectOfferSub)
         case .needsSavedCar:
             offerRow(title: DriverCopy.autoDetectNeedsCarTitle, sub: DriverCopy.autoDetectNeedsCarSub)
         case .locationDenied:
             offerRow(title: DriverCopy.autoDetectDeniedTitle, sub: DriverCopy.autoDetectDeniedSub)
+        }
+    }
+
+    private func withCarriedNote(_ row: some View) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            row
+            if carriedOver {
+                Text(DriverCopy.autoDetectCarriedNote)
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.white)
+                    .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 4)
+            }
         }
     }
 

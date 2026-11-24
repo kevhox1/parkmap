@@ -121,6 +121,26 @@ final class AutoDetectCLProvider: AutoDetectLocationProviding {
 /// (no live `ParkPinService`, which `SpotPassDriverRuntime` cannot reach). The caller keeps it in
 /// memory for one window and drops it.
 enum ParkedCarAnchorReader {
+    /// The app's in-memory parked car (`ParkPinService.parkedCar`), mirrored here by `ContentView` so the
+    /// feature works when iCloud key-value storage is unavailable. Coordinates only, never persisted here.
+    private(set) static var liveAnchor: AutoDetectAnchor?
+
+    /// Called whenever the in-memory parked car changes (nil when cleared or not loaded).
+    static func setLiveCar(latitude: Double?, longitude: Double?) {
+        if let latitude, let longitude {
+            liveAnchor = AutoDetectAnchor(latitude: latitude, longitude: longitude)
+        } else {
+            liveAnchor = nil
+        }
+    }
+
+    /// In-memory car first, the synced key-value store only as a fallback (pure, for tests).
+    nonisolated static func resolve(
+        live: AutoDetectAnchor?, store: UbiquitousKeyValueStoring
+    ) -> AutoDetectAnchor? {
+        live ?? currentAnchor(store: store)
+    }
+
     /// Must match `ParkPinService.syncedStateKey`.
     private nonisolated static let syncedStateKey = "wepark_synced_car_state"
 
@@ -151,7 +171,9 @@ extension AutoDetectController {
         let controller = AutoDetectController(
             flagEnabled: enabled,
             optIn: UserDefaultsAutoDetectOptIn(),
-            anchorProvider: { ParkedCarAnchorReader.currentAnchor() },
+            anchorProvider: {
+                ParkedCarAnchorReader.resolve(live: ParkedCarAnchorReader.liveAnchor, store: NSUbiquitousKeyValueStore.default)
+            },
             location: AutoDetectCLProvider(),
             makeSession: { AutoDetectBackgroundActivity() },
             isForeground: { UIApplication.shared.applicationState == .active }

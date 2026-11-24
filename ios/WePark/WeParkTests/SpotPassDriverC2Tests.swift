@@ -1452,7 +1452,7 @@ final class DriverQAFollowUpTests: XCTestCase {
         let all = [DriverCopy.autoPingRowTitle, DriverCopy.autoPingRowSub, CarAutoPingGuideContent.title,
                    CarAutoPingGuideContent.intro, DriverCopy.yourSpotPass]
         for line in all { XCTAssertFalse(line.lowercased().contains("ping"), line) }
-        XCTAssertTrue(DriverCopy.autoPingRowTitle.contains("heads\u{2011}up"), "non-breaking hyphen: no AX5 split")
+        XCTAssertTrue(DriverCopy.autoPingRowTitle.lowercased().contains("heads\u{2011}up"), "non-breaking hyphen: no AX5 split")
     }
 
     func testPinning_atAccessibilitySizes_pinsOnlyThePrimaryCTA() {

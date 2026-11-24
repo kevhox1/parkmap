@@ -1406,6 +1406,12 @@ struct ContentView: View {
                 guard newID != nil, newID != oldID else { return }
                 endSpotPassBecauseParked()
             }
+            // Spot Pass C4: mirror the in-memory car as the auto-detect anchor. Inert flag-off.
+            .onChange(of: parkPinService.parkedCar?.id, initial: true) { _, _ in
+                guard AppConstants.spotHandoffAutoDetectEnabled else { return }
+                ParkedCarAnchorReader.setLiveCar(
+                    latitude: parkPinService.parkedCar?.latitude, longitude: parkPinService.parkedCar?.longitude)
+            }
             // Spot Pass: seeker push alerts (armed / departed) refresh the pass; a tap opens it.
             .onReceive(NotificationCenter.default.publisher(for: .spotPassPushReceived)) { note in
                 guard let event = note.object as? SpotPassPushEvent else { return }
