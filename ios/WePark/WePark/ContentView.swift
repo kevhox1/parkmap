@@ -2657,6 +2657,11 @@ struct ContentView: View {
 
     // MARK: - Overlay rebuild
 
+    /// perf/map-lag: per-segment classification memo for `rebuildOverlays` (reference boxes so
+    /// mutating them never invalidates the view body).
+    @State private var currentStateCache = OverlayClassificationCache<CurrentState>()
+    @State private var parkUntilFreeCache = OverlayClassificationCache<Bool>()
+
     /// Partitions loaded segments by current state → 5 MKMultiPolyline coordinate groups
     /// + selected-block highlight coordinates, then bumps the generation to trigger
     /// a MapViewRepresentable update.
@@ -2757,15 +2762,26 @@ struct ContentView: View {
 
             var freeCoords:    [[CLLocationCoordinate2D]] = []
             var notFreeCoords: [[CLLocationCoordinate2D]] = []
+            // perf/map-lag: reuse the previous rebuild's answer for every segment whose
+            // inputs (now, target, metered flag) are identical - see OverlayClassificationCache.
+            let parkUntilKey = OverlayClassificationKey(
+                now: now,
+                mode: .parkUntil(
+                    target: target,
+                    ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
+                )
+            )
 
             for segment in tileLoader.segments {
                 let coords = segment.coordinates
                 guard coords.count >= 2 else { continue }
                 if segment.id == selectedSegmentID { continue }
-                if engine.isFree(
-                    segment: segment, from: now, until: target,
-                    ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
-                ) {
+                if parkUntilFreeCache.value(for: segment.id, key: parkUntilKey, compute: {
+                    engine.isFree(
+                        segment: segment, from: now, until: target,
+                        ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
+                    )
+                }) {
                     freeCoords.append(coords)
                 } else {
                     notFreeCoords.append(coords)
@@ -2801,6 +2817,8 @@ struct ContentView: View {
             return
         }
 
+        // perf/map-lag: see `OverlayClassificationCache`.
+        let currentStateKey = OverlayClassificationKey(now: now, mode: .currentState)
         var freeComfortably:        [[CLLocationCoordinate2D]] = []
         var freeButRestrictionSoon: [[CLLocationCoordinate2D]] = []
         var meteredActive:          [[CLLocationCoordinate2D]] = []
@@ -2813,7 +2831,9 @@ struct ContentView: View {
             // Skip the selected segment from group overlays — it will be rendered
             // by the selectedBlock overlay at lineWidth:6 instead.
             if segment.id == selectedSegmentID { continue }
-            let state = engine.currentState(for: segment, at: now)
+            let state = currentStateCache.value(for: segment.id, key: currentStateKey, compute: {
+                engine.currentState(for: segment, at: now)
+            })
             switch state {
             case .freeComfortably:        freeComfortably.append(coords)
             case .freeButRestrictionSoon: freeButRestrictionSoon.append(coords)

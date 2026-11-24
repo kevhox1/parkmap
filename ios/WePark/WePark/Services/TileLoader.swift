@@ -105,6 +105,11 @@ final class TileLoader {
     private(set) var segments: [Segment] = []
 
     // MARK: Private state
+    /// Bumped whenever `cache` contents change (insert/evict). With `lastRebuiltKeys` it lets
+    /// `rebuildSegments` skip re-publishing an identical `segments` array (perf/map-lag).
+    @ObservationIgnored private var cacheVersion = 0
+    @ObservationIgnored private var lastRebuiltKeys: [String]?
+    @ObservationIgnored private var lastRebuiltCacheVersion = -1
     private var tileIndex: TileIndex?
     /// Quick lookup: "row_col" → true, for tiles that actually exist.
     private var tileSet: Set<String> = []
@@ -399,6 +404,7 @@ final class TileLoader {
             lruOrder.removeAll { $0 == key }
         }
         cache[key] = segments
+        cacheVersion += 1
         lruOrder.append(key)
         evictIfNeeded()
     }
@@ -415,14 +421,37 @@ final class TileLoader {
     private func evictIfNeeded() {
         while cache.count > maxCachedTiles, let oldest = lruOrder.first {
             cache.removeValue(forKey: oldest)
+            cacheVersion += 1
             lruOrder.removeFirst()
         }
     }
 
     // MARK: - Segment rebuild
 
+    /// Pure decision: the flattened `segments` array would be identical to the last one.
+    nonisolated static func canSkipRebuild(
+        lastKeys: [String]?, lastVersion: Int, keys: [String], cacheVersion: Int
+    ) -> Bool {
+        guard let lastKeys else { return false }
+        return lastVersion == cacheVersion && lastKeys == keys
+    }
+
     /// Flattens all cached segments for the given tile keys into `self.segments`.
+    ///
+    /// perf/map-lag: `segments` is `@Observable`, so assigning it - even an array equal to the
+    /// current one - invalidates every view body that reads it. Every settled camera move (about
+    /// once per second in Drive Mode) lands here with all tiles already cached, producing a
+    /// byte-identical array. Skip the assignment when neither the key list nor the cache
+    /// contents changed since the last flatten.
     private func rebuildSegments(forKeys keys: [String]) {
+        if Self.canSkipRebuild(
+            lastKeys: lastRebuiltKeys, lastVersion: lastRebuiltCacheVersion,
+            keys: keys, cacheVersion: cacheVersion
+        ) {
+            return
+        }
+        lastRebuiltKeys = keys
+        lastRebuiltCacheVersion = cacheVersion
         var flat: [Segment] = []
         flat.reserveCapacity(keys.count * 40) // rough average ~40 segs/tile
         for key in keys {
