@@ -61,7 +61,7 @@ union all
 select 'coverage_requests column grants (expect 4)', count(*)::text from information_schema.column_privileges
  where table_schema = 'public' and table_name = 'coverage_requests' and grantee in ('anon', 'authenticated')
 union all
-select 'storage policies (expect delete d, insert a, select r)', coalesce(string_agg(polname || ':' || polcmd, ', ' order by polname), 'none')
+select 'storage policies (expect delete d, insert a, select r)', coalesce(string_agg(polname || ':' || polcmd::text, ', ' order by polname), 'none')
   from pg_policy where polrelid = 'storage.objects'::regclass and polname like 'pin_evidence_storage_%';
 ```
 
