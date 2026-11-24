@@ -8,9 +8,10 @@
 //  the request path.
 //
 //  Scope: street cleaning (alternate side parking) only, which is what design 3.5 shows. It never
-//  says "free", "legal" or "safe". Known gap vs the full app: ASP holiday suspensions are not
-//  consulted (that data is a separate network feed), hence the "Always check the posted signs"
-//  footer; see the PR notes.
+//  says "free", "legal" or "safe". ASP holiday suspensions come from the SAME `asp-2026.json` the
+//  full app reads (it lives in Shared/, so both bundles carry the one file): a suspended day is
+//  skipped, so it is never "Next" and never "cleaning now". The "Always check the posted signs"
+//  footer stays (the calendar covers 2026 only).
 //
 
 import Foundation
@@ -102,6 +103,38 @@ nonisolated enum ClipTileGrid {
     }
 }
 
+// MARK: - ASP suspension calendar
+
+/// The set of ET calendar days (`yyyy-MM-dd`) when alternate side parking is suspended.
+nonisolated struct ClipSuspensions: Equatable, Sendable {
+    let dates: Set<String>
+
+    static let empty = ClipSuspensions(dates: [])
+
+    init(dates: Set<String>) { self.dates = dates }
+
+    /// Decodes the app's `asp-2026.json` bytes. Malformed data degrades to "no suspensions".
+    init(jsonData: Data) {
+        let calendar = try? JSONDecoder().decode(ASPSuspensionCalendar.self, from: jsonData)
+        self.dates = Set(calendar?.dates.map(\.date) ?? [])
+    }
+
+    /// The calendar bundled with this target (`asp-2026.json`, shared with the full app).
+    static func bundled(_ bundle: Bundle = .main) -> ClipSuspensions {
+        guard let url = bundle.url(forResource: "asp-2026", withExtension: "json"),
+              let data = try? Data(contentsOf: url)
+        else { return .empty }
+        return ClipSuspensions(jsonData: data)
+    }
+
+    /// `day` is any instant; the Eastern calendar day it falls on is what counts.
+    func isSuspended(_ day: Date) -> Bool {
+        let parts = StreetCleaningEvaluator.calendar.dateComponents([.year, .month, .day], from: day)
+        guard let year = parts.year, let month = parts.month, let dayOfMonth = parts.day else { return false }
+        return dates.contains(String(format: "%04d-%02d-%02d", year, month, dayOfMonth))
+    }
+}
+
 // MARK: - Street cleaning evaluation
 
 nonisolated struct CleaningWindow: Equatable, Sendable {
@@ -132,7 +165,7 @@ nonisolated enum StreetCleaningEvaluator {
     }
 
     /// The window in progress, or the next one, within 14 days. nil if the rules have no cleaning.
-    static func nextWindow(rules: [ClipTileRule], now: Date) -> CleaningWindow? {
+    static func nextWindow(rules: [ClipTileRule], now: Date, suspensions: ClipSuspensions = .empty) -> CleaningWindow? {
         var best: CleaningWindow?
         let today = calendar.startOfDay(for: now)
         for rule in rules {
@@ -142,6 +175,7 @@ nonisolated enum StreetCleaningEvaluator {
                 : rule.timeRanges
             for offset in 0...14 {
                 guard let day = calendar.date(byAdding: .day, value: offset, to: today) else { continue }
+                guard !suspensions.isSuspended(day) else { continue }   // ASP holiday: no cleaning that day
                 let weekday = calendar.component(.weekday, from: day) - 1
                 guard categoryDays.contains(weekday), rule.days.isEmpty || rule.days.contains(weekday) else { continue }
                 for range in ranges {
@@ -179,7 +213,9 @@ nonisolated enum ClipBlockLookup {
         try? JSONDecoder().decode([ClipTileSegment].self, from: data)
     }
 
-    static func lookup(latitude: Double, longitude: Double, segments: [ClipTileSegment], now: Date) -> ClipBlockResult? {
+    static func lookup(
+        latitude: Double, longitude: Double, segments: [ClipTileSegment], now: Date, suspensions: ClipSuspensions = .empty
+    ) -> ClipBlockResult? {
         var nearest: (segment: ClipTileSegment, meters: Double)?
         for segment in segments {
             guard let meters = distanceMeters(latitude: latitude, longitude: longitude, line: segment.line) else { continue }
@@ -189,7 +225,7 @@ nonisolated enum ClipBlockLookup {
 
         var sides: [ClipBlockSide] = [
             ClipBlockSide(side: nearest.segment.side,
-                          window: StreetCleaningEvaluator.nextWindow(rules: nearest.segment.rules, now: now))
+                          window: StreetCleaningEvaluator.nextWindow(rules: nearest.segment.rules, now: now, suspensions: suspensions))
         ]
         // The other curb of the same block: nearest sub-segment on a different side.
         var other: (segment: ClipTileSegment, meters: Double)?
@@ -199,7 +235,7 @@ nonisolated enum ClipBlockLookup {
         }
         if let other {
             sides.append(ClipBlockSide(side: other.segment.side,
-                                       window: StreetCleaningEvaluator.nextWindow(rules: other.segment.rules, now: now)))
+                                       window: StreetCleaningEvaluator.nextWindow(rules: other.segment.rules, now: now, suspensions: suspensions)))
         }
         return ClipBlockResult(sides: sides)
     }
@@ -330,10 +366,15 @@ final class ClipBlockController {
     @ObservationIgnored private let location: any ClipLocationProviding
     @ObservationIgnored private let tiles: any ClipTileFetching
     @ObservationIgnored private let now: () -> Date
+    @ObservationIgnored private let suspensions: ClipSuspensions
 
-    init(location: any ClipLocationProviding, tiles: any ClipTileFetching, now: @escaping () -> Date = { Date() }) {
+    init(
+        location: any ClipLocationProviding, tiles: any ClipTileFetching,
+        suspensions: ClipSuspensions = .bundled(), now: @escaping () -> Date = { Date() }
+    ) {
         self.location = location
         self.tiles = tiles
+        self.suspensions = suspensions
         self.now = now
     }
 
@@ -366,7 +407,7 @@ final class ClipBlockController {
                 return
             }
             if let result = ClipBlockLookup.lookup(latitude: coordinate.latitude, longitude: coordinate.longitude,
-                                                   segments: segments, now: now()) {
+                                                   segments: segments, now: now(), suspensions: suspensions) {
                 state = .result(result, sideIndex: 0)
             } else {
                 state = .noRule

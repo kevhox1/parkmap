@@ -21,7 +21,8 @@ struct ClipRootView: View {
                 ClipBackdrop()
                 content
             }
-            .environment(\.clipIsShortScreen, geometry.size.height < 700)
+            .environment(\.clipIsShortScreen, geometry.size.height < SpotPassTheme.shortScreenHeight)
+            .environment(\.clipScreenHeight, geometry.size.height)
         }
         .preferredColorScheme(.dark)
         .tint(SpotPassTheme.indigo)

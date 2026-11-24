@@ -10,6 +10,7 @@
 //    - the clip's anonymous Supabase session (refresh token): keychain, same label.
 //
 
+import CryptoKit
 import Foundation
 import Security
 
@@ -35,6 +36,14 @@ nonisolated struct HandoffActivePass: Codable, Equatable, Sendable {
     var thanksReceived: Bool
     /// The clip's anonymous user id (not a secret): used for the carry-over context.
     var userId: String?
+    /// One-way fingerprint of the invocation token this pass was claimed with (NOT the token), so a
+    /// re-delivered URL for THIS pass is told apart from a scan of a DIFFERENT one. nil on older saves.
+    var tokenFingerprint: String?
+
+    /// First 8 bytes of SHA-256, hex. Not reversible to the token.
+    static func fingerprint(forToken token: String) -> String {
+        SHA256.hash(data: Data(token.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
 
     var name: String { displayName ?? alias }
 
@@ -85,7 +94,8 @@ final class InMemoryHandoffPassStore: HandoffPassStoring {
 
 @MainActor
 protocol HandoffSecretStoring: AnyObject {
-    func save(_ secret: ClaimerSecret, passID: UUID)
+    /// Returns false when the secret could NOT be stored: the caller must not arm without it.
+    @discardableResult func save(_ secret: ClaimerSecret, passID: UUID) -> Bool
     func secret(for passID: UUID) -> ClaimerSecret?
     func clear()
 }
@@ -93,7 +103,7 @@ protocol HandoffSecretStoring: AnyObject {
 @MainActor
 final class InMemoryHandoffSecretStore: HandoffSecretStoring {
     private var stored: (UUID, ClaimerSecret)?
-    func save(_ secret: ClaimerSecret, passID: UUID) { stored = (passID, secret) }
+    @discardableResult func save(_ secret: ClaimerSecret, passID: UUID) -> Bool { stored = (passID, secret); return true }
     func secret(for passID: UUID) -> ClaimerSecret? { stored?.0 == passID ? stored?.1 : nil }
     func clear() { stored = nil }
 }
@@ -105,11 +115,11 @@ final class KeychainHandoffSecretStore: HandoffSecretStoring {
 
     nonisolated static let service = "com.kevinhoxha.wepark.clip.claimer-secret"
 
-    func save(_ secret: ClaimerSecret, passID: UUID) {
+    @discardableResult func save(_ secret: ClaimerSecret, passID: UUID) -> Bool {
         clear()
-        guard let data = secret.rawValue.data(using: .utf8) else { return }
+        guard let data = secret.rawValue.data(using: .utf8) else { return false }
         let attributes = Self.addAttributes(passID: passID, data: data)
-        SecItemAdd(attributes as CFDictionary, nil)
+        return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 
     func secret(for passID: UUID) -> ClaimerSecret? {
