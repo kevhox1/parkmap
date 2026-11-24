@@ -891,6 +891,11 @@ function pickClosestCandidatePair(candsA, candsB, opts) {
   return { a: bestA, b: bestB, dist: bestDist };
 }
 
+const DETOUR_RATIO = 2;
+const DETOUR_SLACK_M = 30;
+const DETOUR_MIN_IMPROVEMENT = 0.75;
+const DETOUR_STATS = { rerouted: 0, unresolved: 0 };
+
 function getBlockPolyline(block) {
   const streetOsm = osmName(block.street);
   const fromOsm = osmName(block.from);
@@ -908,10 +913,45 @@ function getBlockPolyline(block) {
   // pickClosestCandidatePair()'s comment) is skipped for them so their resolution
   // stays byte-identical to before that fix, out of this fix's scope.
   const isSelfReferential = block.from === block.street || block.to === block.street || block.from === block.to;
-  const { a: ptFrom, b: ptTo } = pickClosestCandidatePair(candsFrom, candsTo, { skipPlausibilityFloor: isSelfReferential });
+  let { a: ptFrom, b: ptTo } = pickClosestCandidatePair(candsFrom, candsTo, { skipPlausibilityFloor: isSelfReferential });
 
-  const line = extractPolylineBetween(streetOsm, ptFrom, ptTo);
+  let line = extractPolylineBetween(streetOsm, ptFrom, ptTo);
   if (!line || line.length < 2) return null;
+
+  // #35 (Bowery/E Houston hairpin-detour fix): the straight-line-closest candidate
+  // pair can pair a candidate on one carriageway leg of a street's OSM chain with a
+  // candidate on the OTHER leg (Bowery, E Houston, Riverside Dr, Varick... are drawn
+  // as one chain that runs out along one carriageway and back along the other). The
+  // chain slice between the two snap points then runs the whole way around the
+  // hairpin -- e.g. Bowery Bleecker->E Houston came back 526m long for a 118m block,
+  // painting its rules (commercial-only meters) over the wrong blocks. Only when the
+  // extracted line is a gross detour (> DETOUR_RATIO x the pair's straight distance
+  // + DETOUR_SLACK_M) do we re-rank every candidate pair by its extracted chain
+  // length instead and adopt the shortest, if it is materially shorter. Blocks that
+  // are not detours never enter this branch, so their output is byte-identical.
+  if (!isSelfReferential) {
+    const straightM = geoDist(ptFrom[0], ptFrom[1], ptTo[0], ptTo[1]);
+    const lineLenM = (l) => { const c = cumulativeDists(l); return c[c.length - 1]; };
+    const curLenM = lineLenM(line);
+    if (curLenM > DETOUR_RATIO * straightM + DETOUR_SLACK_M) {
+      let best = null;
+      for (const a of candsFrom) {
+        for (const b of candsTo) {
+          if (geoDist(a[0], a[1], b[0], b[1]) < MIN_PLAUSIBLE_PAIR_DIST_M) continue;
+          const l = extractPolylineBetween(streetOsm, a, b);
+          if (!l || l.length < 2) continue;
+          const len = lineLenM(l);
+          if (best === null || len < best.len) best = { a, b, l, len };
+        }
+      }
+      if (best !== null && best.len < curLenM * DETOUR_MIN_IMPROVEMENT) {
+        ptFrom = best.a; ptTo = best.b; line = best.l;
+        DETOUR_STATS.rerouted++;
+      } else {
+        DETOUR_STATS.unresolved++;
+      }
+    }
+  }
 
   const totalLen = cumulativeDists(line);
   const blockLenM = totalLen[totalLen.length - 1];
