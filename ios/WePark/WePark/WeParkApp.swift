@@ -343,6 +343,14 @@ struct WeParkApp: App {
                 // the out-of-coverage "Suggest this area" sheet can reach it WITHOUT threading a
                 // new parameter through ContentView.swift. Read as an Optional there.
                 .environment(authService)
+                // Spot Pass C0 (docs/specs/qr-spot-handoff.md §8): universal link
+                // https://getwepark.com/p[#t=<token>]. Inert while AppConstants.spotHandoffEnabled
+                // is false (the router returns immediately). Deliberately NOT `.onOpenURL` — that
+                // one stays exclusively ContentView's wepark://invite handler.
+                .onContinueUserActivity(NSUserActivityTypeBrowsingWeb) { activity in
+                    guard let url = activity.webpageURL else { return }
+                    SpotPassLinkRouter.handle(url)
+                }
                 .task {
                     // Non-blocking: the map loads while auth completes in the background.
                     // ensureSession() fails silently if the network is unavailable (AC-A4).
