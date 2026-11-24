@@ -31,7 +31,10 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.119.2";
 import { APNS_HOSTS, ApnsEnv, DeviceTokenRow, getApnsJwt, sendInChunks, sendOnePush } from "../_shared/apns.ts";
-import { allowedTopics, bearer, envKillSwitch, json, isUuid, safeEqual } from "../_shared/handoff.ts";
+import { allowedTopics, envKillSwitch, json, isUuid } from "../_shared/handoff.ts";
+import { logAuthStartup, requireServiceRole } from "../_shared/service_auth.ts";
+
+logAuthStartup("send-handoff-push", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
 import {
   driverThanksAlertBody,
   HandoffPushRow,
@@ -54,8 +57,10 @@ Deno.serve(async (req: Request): Promise<Response> => {
   const serviceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
   if (!supabaseUrl || !serviceRoleKey) return json({ error: "server_error" }, 500);
 
-  const presented = bearer(req.headers);
-  if (!presented || !safeEqual(presented, serviceRoleKey)) return json({ error: "unauthorized" }, 401);
+  // SECURITY: service-role-only; trusts the gateway's JWT verification, so this function MUST stay deployed
+  // WITH verify_jwt. Runs before any body work.
+  const denied = requireServiceRole(req, serviceRoleKey, supabaseUrl);
+  if (denied) return denied;
 
   if (envKillSwitch(Deno.env.get("HANDOFF_ENABLED"))) return json({ skipped: true, reason: "disabled" }, 200);
 

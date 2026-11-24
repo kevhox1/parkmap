@@ -67,7 +67,9 @@
  * source change has no production effect until send-community-push is explicitly re-deployed.
  */
 
-import { requireServiceRole } from "../_shared/service_auth.ts";
+import { logAuthStartup, requireServiceRole } from "../_shared/service_auth.ts";
+
+logAuthStartup("send-community-push", Deno.env.get("SUPABASE_SERVICE_ROLE_KEY"));
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
   APNS_HOSTS,
@@ -121,8 +123,9 @@ Deno.serve(async (req: Request): Promise<Response> => {
       { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
-  // SECURITY: service-role-only (verify_jwt alone accepts the public anon key). Runs before the body is touched.
-  const denied = requireServiceRole(req, serviceRoleKey);
+  // SECURITY: service-role-only (verify_jwt alone accepts the public anon key). Trusts the gateway's JWT
+  // verification, so this function MUST stay deployed WITH verify_jwt. Runs before the body is touched.
+  const denied = requireServiceRole(req, serviceRoleKey, supabaseUrl);
   if (denied) return denied;
 
   if (!apnsKeyId || !apnsTeamId || !apnsPrivateKey || !apnsTopic) {
