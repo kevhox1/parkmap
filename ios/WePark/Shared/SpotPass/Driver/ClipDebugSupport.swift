@@ -121,10 +121,30 @@ final class FakeHandoffDriverAPI: HandoffDriverAPI {
 /// (see `ClipLaunchOptions.makeSecretStore()`); the fake secret is a constant, never a real one.
 @MainActor
 final class DebugInMemoryHandoffSecretStore: HandoffSecretStoring {
+    /// DEBUG-only (compiled out of Release): fake mode also mirrors the constant fake secret here so a
+    /// relaunched armed pass can still act. Never a real secret.
+    nonisolated static let defaultsKey = "spotPassDebugFakeSecret"
+    private let defaults: UserDefaults
     private var stored: (UUID, ClaimerSecret)?
-    @discardableResult func save(_ secret: ClaimerSecret, passID: UUID) -> Bool { stored = (passID, secret); return true }
+
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+        if let raw = defaults.string(forKey: Self.defaultsKey) {
+            let parts = raw.split(separator: "|", maxSplits: 1).map(String.init)
+            if parts.count == 2, let id = UUID(uuidString: parts[0]) { stored = (id, ClaimerSecret(parts[1])) }
+        }
+    }
+
+    @discardableResult func save(_ secret: ClaimerSecret, passID: UUID) -> Bool {
+        stored = (passID, secret)
+        defaults.set("\(passID.uuidString)|\(secret.rawValue)", forKey: Self.defaultsKey)
+        return true
+    }
     func secret(for passID: UUID) -> ClaimerSecret? { stored?.0 == passID ? stored?.1 : nil }
-    func clear() { stored = nil }
+    func clear() {
+        stored = nil
+        defaults.removeObject(forKey: Self.defaultsKey)
+    }
 }
 
 extension ClipLaunchOptions {

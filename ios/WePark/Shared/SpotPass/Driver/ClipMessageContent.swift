@@ -31,6 +31,8 @@ nonisolated struct ClipMessageContent: Equatable, Sendable {
             return .init(symbol: "exclamationmark.lock", title: ClipCopy.saveFailedTitle, body: ClipCopy.saveFailedBody, showsWhatsWePark: true)
         case .dismissed:
             return .init(symbol: "hand.wave", title: ClipCopy.dismissedLine, body: "", showsWhatsWePark: true)
+        case .finished:
+            return .init(symbol: "checkmark.circle", title: ClipCopy.finishedTitle, body: ClipCopy.finishedBody, showsWhatsWePark: true)
         case .cancelled:
             return .init(symbol: "xmark.circle", title: ClipCopy.cancelledLine, body: "", showsWhatsWePark: true)
         case .ended:

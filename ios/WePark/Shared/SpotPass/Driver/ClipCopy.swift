@@ -57,7 +57,10 @@ nonisolated enum ClipCopy {
     static let lockScreenTitle = "Look at your lock screen"
     static let lockScreenBody = "Your countdown is there, with a Leaving now button for when you pull out."
     static let tapWhenOut = "Tap it when you pull out."
-    static let activitiesOff = "Lock-screen countdown is off. We'll remind you with a notification instead."
+    static let activitiesOffTitle = "Lock-screen countdown is off"
+    static let activitiesOffBody = "We'll remind you with a notification instead."
+    static let activitiesOff = "\(activitiesOffTitle). \(activitiesOffBody)"
+    static let settingsLink = "Settings"
     static let remindersOff = "Reminders are off. Your lock-screen countdown still works."
     static let bothOff = "Keep this screen handy. Tap \"I'm pulling out\" when you go."
     static let oneNeighborNote = "You can only help one neighbor at a time. Finish or cancel this pass first."
@@ -65,6 +68,8 @@ nonisolated enum ClipCopy {
     static let cancelMyPass = "Cancel my pass"
     static let keepIt = "Keep it"
     static let cancelledLine = "Pass cancelled."
+    static let finishedTitle = "Thanks for passing it on."
+    static let finishedBody = "That helped a neighbor find a spot."
 
     // MARK: Pulling out
 
