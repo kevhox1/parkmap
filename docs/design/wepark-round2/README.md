@@ -33,7 +33,7 @@ Each is one reusable piece. Props are listed in the `data-props` attribute at th
 ## Parts added in round 2
 - **Map toolbar:** search field (flex), More and Locate (48 circles). White, 1.5 line. Sits 12 above the sheet.
 - **End-time lever (A1):** "Change" (2.5 line, 48 tall) beside the headline only while Overnight is chosen. Opens a row of hour chips, 6 to 10 AM, 52 tall. Map and headline update per tap.
-- **Verdict block:** radius 24, padding 16/18. Over-line 15/500, time 36 to 44/700, sub-line 14/500. Park = #3CCF7A fill. Soon = #F2A23A fill. Don't = 3pt dashed #E39A90 outline, over-line in #B8322A. Metered = 3pt dotted #5B7CFA outline. No data = 2pt #A9A7B8 outline.
+- **Verdict block:** radius 24, padding 16/18. Over-line 15/500, time 36 to 44/700, sub-line 14/500. Park = #3CCF7A fill. Soon = 3pt dashed #F2A23A outline (follows the part file and b4-soon.png; not a fill). Don't = 3pt dashed #E39A90 outline, over-line in #B8322A. Metered = 3pt dotted #5B7CFA outline. No data = 2pt #A9A7B8 outline.
 - **Full-screen scaffold:** cream ground; wordmark 20/600 and a 48 close pill at top 58; headline 32/600, body 17/400; rows with gap 10; primary button pinned to the bottom (taxi raised 72 tall for a commitment, ink 64 tall for navigation); optional text secondary 56 tall.
 - **Choice chip:** white, 2pt line, radius 20, 56 to 64 tall, label 17 to 18/600. Chosen = taxi fill, 2.5 line, raise 4.
 - **List card:** white, 1.5 line, radius 20, horizontal padding 18. Rows 56 minimum, label 17/600, hairline #E4E3EC between rows. Trailing chevron, switch, or value 15/400.

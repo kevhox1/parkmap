@@ -231,7 +231,7 @@ final class DesignSystemV01Tests: XCTestCase {
         XCTAssertEqual(CurbLineStyleV2.kind(for: .unknown, detailMode: true), .noData)
         XCTAssertEqual(CurbLineStyleV2.kind(for: .meteredActive, detailMode: false), .dont)
         XCTAssertEqual(CurbLineStyleV2.kind(for: .meteredActive, detailMode: true), .metered)
-        XCTAssertEqual(CurbLineStyleV2.kind(for: .freeButRestrictionSoon, detailMode: false), .park)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: .freeButRestrictionSoon, detailMode: false), .dont)  // Phase 2a: green = whole window
         XCTAssertEqual(CurbLineStyleV2.kind(for: .freeButRestrictionSoon, detailMode: true), .soon)
         XCTAssertEqual(CurbLineStyleV2.kind(for: .restrictedNow, detailMode: false), .dont)
         XCTAssertEqual(CurbLineStyleV2.kind(for: .freeComfortably, detailMode: false), .park)

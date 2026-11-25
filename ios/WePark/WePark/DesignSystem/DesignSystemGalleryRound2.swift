@@ -221,7 +221,8 @@ struct WPGalleryTrip: View {
                 WPTripPlanTag(dates: "Sat 11/28 10 AM to Sun 11/29 6 PM")
                     .padding(WP.Space.s4)
             }
-            .frame(height: 220)
+            // minHeight, not height: the tag grows with Dynamic Type instead of being clipped.
+            .frame(minHeight: 220)
             .clipShape(RoundedRectangle(cornerRadius: WP.Radius.card, style: .continuous))
             .wpTripFrame()
         }

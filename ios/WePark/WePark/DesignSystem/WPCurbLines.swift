@@ -24,7 +24,9 @@
 //
 //  Mapping of the existing 5 classifier states (`OverlayTag` / `CurrentState`):
 //      freeComfortably        -> park    (both modes)
-//      freeButRestrictionSoon -> soon    (detail)  /  park  (default: it is free right now)
+//      freeButRestrictionSoon -> soon    (detail)  /  dont  (default: a restriction starts inside the
+//                                window, and green must mean free for the WHOLE selected window;
+//                                Phase 2a accuracy fix, was `park` "free right now")
 //      meteredActive          -> metered (detail)  /  dont  (default: a running meter is not free)
 //      restrictedNow          -> dont    (both modes)
 //      unknown                -> noData  (detail)  /  dont  (default: unsure is drawn as don't)
@@ -74,7 +76,7 @@ enum CurbLineStyleV2 {
         case .freeComfortably:
             return .park
         case .freeButRestrictionSoon:
-            return detailMode ? .soon : .park
+            return detailMode ? .soon : .dont
         case .meteredActive:
             return detailMode ? .metered : .dont
         case .restrictedNow:
