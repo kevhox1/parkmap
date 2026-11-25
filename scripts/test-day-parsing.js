@@ -45,6 +45,19 @@ const DAYS = [
   ['bus stop, no day -> every day', 'NO STANDING BUS STOP', 'NO_STANDING', ALL],
   ['MON-FRI + SAT clause union', 'MONDAY-FRIDAY 7PM-MIDNIGHT SATURDAY 9AM-MIDNIGHT', 'METERED', [1, 2, 3, 4, 5, 6]],
   ['ASP single weekday abbreviation + TO time', 'NO PARKING (SANITATION BROOM SYMBOL) 11AM TO 12:30PM WED <--->', 'ASP_DAILY', [3]],
+  // Truncated day words (>= 3-letter prefixes). "MONDAY THURSDA" used to drop Thursday.
+  ['truncated THURSDA keeps Thursday', 'NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDA 8AM-9AM', 'ASP_MON_THU', [1, 4]],
+  ['truncated THURSDA alone', 'NO PARKING (SANITATION BROOM SYMBOL) 8AM-9AM THURSDA', 'ASP_DAILY', [4]],
+  ['truncated WEDNESD', 'NO PARKING 8AM-9AM WEDNESD', 'NO_PARKING', [3]],
+  ['truncated SATURD in a range', 'NO PARKING MON-SATURD 8AM-9AM', 'NO_PARKING', [1, 2, 3, 4, 5, 6]],
+  ['THUR / THURS / TUES / WEDS prefixes', 'NO PARKING 8AM-9AM THUR TUES WEDS', 'NO_PARKING', [2, 3, 4]],
+  ['3-letter minimum: MON TUE WED THU FRI SAT SUN', 'NO PARKING 8AM-9AM MON TUE WED THU FRI SAT SUN', 'NO_PARKING', ALL],
+  ['SUNDA truncated', 'NO PARKING 8AM-9AM SUNDA', 'NO_PARKING', [0]],
+  // Misspelling that is not a prefix -> every day (fail safe), never a partial day set.
+  ['misspelled THRUSDAY -> every day', 'NO PARKING (SANITATION BROOM SYMBOL) MONDAY THRUSDAY 8AM-9AM', 'ASP_MON_THU', ALL],
+  ['misspelled TUESDY -> every day', 'NO PARKING 8AM-9AM TUESDY FRIDAY', 'NO_PARKING', ALL],
+  // Benign look-alike must not trigger the fail-safe.
+  ['MONEY is not a day', 'NO PARKING 8AM-9AM MONDAY MONEY', 'NO_PARKING', [1]],
 ];
 for (const [name, desc, cat, want] of DAYS) {
   const got = pre.parseSchedule(desc, cat).days;
@@ -76,5 +89,28 @@ const before = pre.DAY_PARSE_STATS.unparsedFallbackAllDays;
 const odd = pre.parseSchedule('2 HMP 8AM-6PM HOLIDAYS', 'METERED');
 check('fail-safe: unparsed day word -> all days', same(odd.days, ALL), JSON.stringify(odd.days));
 check('fail-safe: fallback counted', pre.DAY_PARSE_STATS.unparsedFallbackAllDays === before + 1);
+
+// Category must agree with the day parse for truncated broom signs (engine ANDs category days with rule days).
+check('classify: MONDAY THURSDA broom sign is ASP_MON_THU',
+  pre.classifySign('NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDA 8AM-9AM <->') === 'ASP_MON_THU');
+check('classify: TUES & FRI broom sign is ASP_TUE_FRI',
+  pre.classifySign('NO PARKING (SANITATION BROOM SYMBOL) TUES & FRI 8AM-9AM <->') === 'ASP_TUE_FRI');
+
+// Arrow glyphs: any double-headed shaft length is "both" (was: only the exact "<->").
+for (const [g, want] of [['<->', 'both'], ['<-->', 'both'], ['<--->', 'both'], ['<----->', 'both'], ['<------->', 'both'],
+  ['-->', 'towards'], ['<--', 'away'], ['<-------', 'away']]) {
+  const got = pre.parseSchedule(`TRUCK LOADING ONLY MONDAY-FRIDAY 8AM-1PM ${g}`, 'TRUCK_LOADING').arrow;
+  check(`arrow glyph ${g} -> ${want}`, got === want, `got ${got}`);
+}
+
+// Time fail-safe: a stray unparsed time next to a parsed range drops the ranges (all-day), never a partial list.
+const tp = pre.parseSchedule('NO PARKING 7AM-10A M 4PM-7PM MONDAY-FRIDAY', 'NO_PARKING');
+check('time fail-safe: unparsed window next to a parsed one -> all-day', same(tp.timeRanges, []), JSON.stringify(tp.timeRanges));
+const tg = pre.parseSchedule('NO PARKING 8AM-9AM MONDAY-FRIDAY', 'NO_PARKING');
+check('time fail-safe: clean sign keeps its range', same(tg.timeRanges, [{ start: 480, end: 540 }]));
+const mh = pre.parseSchedule('(PARKNYC LOGO) PARKNYC APP PAYMENT ONLY ZONE # 123456 (FOR METERLESS CURB PILOT)', 'METERED');
+check('metered with no readable hours -> all-day window', same(mh.timeRanges, [{ start: 0, end: 0 }]), JSON.stringify(mh.timeRanges));
+const mt = pre.parseSchedule('2 HMP MONDAY-FRIDAY 7PM-10PM SATURDAY 9AM-10PM <->', 'METERED');
+check('metered with hours keeps them', same(mt.clauses[0].timeRanges, [{ start: 1140, end: 1320 }]));
 
 process.exit(fail ? 1 : 0);

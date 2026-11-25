@@ -141,11 +141,13 @@ function classifySign(desc) {
   const hasMidnight = d.includes('MIDNIGHT');
 
   if (hasBroom) {
+    // Prefix-aware (>= 3 letters: MON, TUES, THURS, "THURSDA"): same day grammar as parseSchedule.
+    const hasDay = n => new RegExp('\\b' + dayPrefixSrc(n) + '\\b').test(d);
     const dayFlags = {
-      mon: /MONDAY|MON\b/.test(d), tue: /TUESDAY|TUE\b/.test(d),
-      wed: /WEDNESDAY|WED\b/.test(d), thu: /THURSDAY|THU\b/.test(d),
-      fri: /FRIDAY|FRI\b/.test(d), sat: /SATURDAY|SAT\b/.test(d),
-      sun: /SUNDAY|SUN\b/.test(d)
+      mon: hasDay('MONDAY'), tue: hasDay('TUESDAY'),
+      wed: hasDay('WEDNESDAY') || /\bWEDS\b/.test(d), thu: hasDay('THURSDAY'),
+      fri: hasDay('FRIDAY'), sat: hasDay('SATURDAY'),
+      sun: hasDay('SUNDAY')
     };
     const hasMonFri = /MON(DAY)?\s*(THRU|THROUGH|-|&)\s*FRI(DAY)?/i.test(d);
     const hasMonSat = /MON(DAY)?\s*(THRU|THROUGH|-|&)\s*SAT(URDAY)?/i.test(d);
@@ -197,10 +199,25 @@ function parseTimeStr(s) {
   return h * 60 + min;
 }
 
-const DAY_PARSE_STATS = { unparsedFallbackAllDays: 0, allDayClauseWidened: 0, unparsedSamples: [] };
+// Audit-only A/B switch for the residual-fake-spot fixes (PR "fix/tiles-residual-fake-spots"):
+// RESIDUAL_FIXES_OFF=glyph,companion,superseded,meteredhours rebuilds without that fix so
+// scripts/diff-tiles-residual.js can attribute every changed segment to exactly one fix.
+// Unset in every real regen.
+const FIX_OFF = new Set((process.env.RESIDUAL_FIXES_OFF || '').split(',').map(x => x.trim()).filter(Boolean));
 
-// Day words -> 0=Sun..6=Sat. Full names and NYC DOT abbreviations (MON, TUES, THURS, ...).
-const DAY_TOKEN = '(MON(?:DAY)?|TUE(?:S(?:DAY)?)?|WED(?:NESDAY)?|THU(?:RS?(?:DAY)?)?|FRI(?:DAY)?|SAT(?:URDAY)?|SUN(?:DAY)?)';
+const DAY_PARSE_STATS = { unparsedFallbackAllDays: 0, suspectDayWordAllDays: 0, allDayClauseWidened: 0, timeResidualWidened: 0, meteredNoHoursAllDay: 0, unparsedSamples: [] };
+
+// Day words -> 0=Sun..6=Sat. Full names, NYC DOT abbreviations (MON, TUES, THURS, ...) and any
+// truncated prefix of a day name of >= 3 letters ("THURSDA", "WEDNESD"). Built as nested optionals so
+// every prefix of the full name matches as one whole word (the \b after the group rejects "MONEY").
+const dayPrefixSrc = (full) => {
+  const head = full.slice(0, 3), rest = full.slice(3);
+  let tail = '';
+  for (let i = rest.length - 1; i >= 0; i--) tail = '(?:' + rest[i] + tail + ')?';
+  return head + tail;
+};
+const DAY_FULL = ['MONDAY', 'TUESDAY', 'WEDNESDAY', 'THURSDAY', 'FRIDAY', 'SATURDAY', 'SUNDAY'];
+const DAY_TOKEN = '(' + DAY_FULL.map(dayPrefixSrc).join('|') + '|WEDS)';
 const DAY_NUM = { MON:1, TUE:2, WED:3, THU:4, FRI:5, SAT:6, SUN:0 };
 const dayNum = tok => DAY_NUM[tok.slice(0, 3)];
 
@@ -283,7 +300,11 @@ function parseSchedule(desc, category) {
   const result = { days: [], timeRanges: [], anytime: false, arrow: null };
 
   // Arrow
-  if (d.includes('<->') || d.includes('<- ->')) result.arrow = 'both';
+  // Any double-headed glyph of any shaft length ("<->", "<--->", "<----->") is 'both'. Before this,
+  // only the exact "<->" was, so every longer shaft ("<--->" ... "<------->", ~1,100 signs) fell into
+  // the "-->" substring test and was read as one-directional, leaving the curb on the other side of
+  // the sign uncovered (green) by that sign.
+  if ((FIX_OFF.has('glyph') ? d.includes('<->') : /<-+>/.test(d)) || d.includes('<- ->')) result.arrow = 'both';
   else if (d.includes('-->')) result.arrow = 'towards';
   else if (d.includes('<--')) result.arrow = 'away';
 
@@ -322,6 +343,18 @@ function parseSchedule(desc, category) {
     if (DAY_PARSE_STATS.unparsedSamples.length < 20 && !DAY_PARSE_STATS.unparsedSamples.includes(desc)) DAY_PARSE_STATS.unparsedSamples.push(desc);
   }
 
+  // Fail-safe: a word that starts like a day name but is neither a day nor a >= 3-letter prefix of one
+  // (a misspelling such as "THRUSDAY") means we cannot trust the parsed day set; apply every day.
+  // "MONEY" is the one benign look-alike in the data.
+  const BENIGN_WORDS = new Set(['MONEY', 'WEEKDAY', 'WEEKDAYS', 'HOLIDAY', 'HOLIDAYS', 'EVERYDAY', 'SCHOOLDAY', 'SCHOOLDAYS']);
+  const suspectDay = (d.replace(/\([^)]*\)/g, ' ').match(/\b(?:MON|TUE|WED|THU|FRI|SAT|SUN)[A-Z]*\b|\b[A-Z]{3,}DAYS?\b/g) || [])
+    .some(w => !BENIGN_WORDS.has(w) && !new RegExp('^' + DAY_TOKEN + '$').test(w));
+  if (suspectDay) {
+    result.days = [0,1,2,3,4,5,6];
+    DAY_PARSE_STATS.suspectDayWordAllDays++;
+    if (DAY_PARSE_STATS.unparsedSamples.length < 20 && !DAY_PARSE_STATS.unparsedSamples.includes(desc)) DAY_PARSE_STATS.unparsedSamples.push(desc);
+  }
+
   if (result.days.length === 0) result.days = [1,2,3,4,5,6];
 
   // Parse times
@@ -331,6 +364,26 @@ function parseSchedule(desc, category) {
     const start = parseTimeStr(tm[1]);
     const end = parseTimeStr(tm[2]);
     if (start !== null && end !== null) result.timeRanges.push({ start, end });
+  }
+
+  // Fail-safe: a stray time token the range regex did not consume ("7AM-10A M", "11AM TO 12:30PM",
+  // "8-9:30AM") next to a parsed range means one window is unknown, so a partial list would leave
+  // that window green. Drop every range (the rule then applies all day on its days) and count it.
+  if (result.timeRanges.length > 0) {
+    const residual = d.replace(/\([^)]*\)/g, ' ').replace(timeRe, ' ');
+    if (/\b\d{1,2}(?::\d{2})?\s*(?:AM|PM|A\s?M|P\s?M)\b|\b\d{1,2}(?::\d{2})?\s*(?:-|TO)\s*\d{1,2}(?::\d{2})?\s*(?:AM|PM)\b/.test(residual)) {
+      result.timeRanges = [];
+      DAY_PARSE_STATS.timeResidualWidened++;
+    }
+  }
+
+  // Fail-safe: a METERED sign with no readable hours (ParkNYC meterless pilot "APP PAYMENT ONLY
+  // ZONE", bus-stop "HOUR METERED PARKING", a "DO NOT USE" muni-meter card) leaves empty ranges,
+  // which the engine reads as "no meter conflict" = free. We do not know the hours, so the meter is
+  // assumed to run all day (00:00-24:00) on its days.
+  if (category === 'METERED' && result.timeRanges.length === 0 && !FIX_OFF.has('meteredhours')) {
+    result.timeRanges = [{ start: 0, end: 0 }];
+    DAY_PARSE_STATS.meteredNoHoursAllDay++;
   }
 
   // "SATURDAY & SUNDAY ALL DAY" next to a timed weekday clause: a timed range list cannot
@@ -345,7 +398,11 @@ function parseSchedule(desc, category) {
   // Multi-clause signs: keep the per-clause schedules so each clause becomes its own rule and
   // one clause's window is never applied to another clause's days (no over-application).
   const clauses = (isRestriction || category === 'METERED') ? splitDayClauses(d) : null;
-  if (clauses) result.clauses = clauses;
+  if (clauses) {
+    // A metered clause with no window ("SAT ALL DAY") is a meter running all day, not "no meter".
+    if (category === 'METERED' && !FIX_OFF.has('meteredhours')) clauses.forEach(c => { if (c.timeRanges.length === 0) c.timeRanges = [{ start: 0, end: 0 }]; });
+    result.clauses = clauses;
+  }
 
   return result;
 }
@@ -1786,6 +1843,69 @@ function offsetPolyline(points, side, offsetMeters) {
 // (#26) so an authoritative arrow_direction reading can be converted into
 // coversBefore/coversAfter; every call site in this file computes it once per
 // block (constant across all signs on the same face) rather than per sign.
+// ---- Superseded signs ---------------------------------------------------------------------
+// "(SUPERSEDED BY PS-84B)" / "(REPLACED BY X)" / "(DO NOT USE AS PER ...)" mark a sign record that is
+// obsolete. "SUPERSEDES X" (this sign replaced an older one) is the normal case and is NOT a marker.
+// Handling: the sign keeps restricting (never less red than before), but a zone whose ONLY signs are
+// superseded with an unresolvable replacement, and none of them is "anytime", is emitted as NO DATA
+// (UNKNOWN dominant category + an always-on NO_PARKING "NO DATA" rule, see main()), because an
+// obsolete sign alone must not be what makes a curb read green.
+const NO_DATA_RULE_DESCRIPTION = 'NO DATA - ONLY A SUPERSEDED SIGN ON RECORD - TREATED AS NOT PARKABLE';
+const SUPERSEDED_STATS = { signs: 0, resolved: 0, unresolved: 0, noDataZones: 0, noDataSamples: [] };
+function parseSupersededBy(desc) {
+  const d = String(desc || '').toUpperCase();
+  const superseded = /\b(?:SUPERSEDED|SUPERCEDED)\s+BY\b|\bREPLACED\s+BY\b|\bDO NOT USE AS PER\b/.test(d);
+  const codes = [];
+  const re = /\b(?:SUPERSEDED|SUPERCEDED|REPLACED)\s+BY\s+([A-Z]{1,3}-?\d+[A-Z]*)/g;
+  let m;
+  while ((m = re.exec(d)) !== null) codes.push(m[1].replace(/\s+/g, ''));
+  return { superseded, codes };
+}
+function markNoDataZones(zones) {
+  if (FIX_OFF.has('superseded')) return zones;
+  zones.forEach(z => {
+    // UNKNOWN-category signs (info panels, "ANGLE PARKING ONLY", ...) never restrict in the engine, so
+    // they are not live data: they cannot be what makes the curb green either.
+    const live = z.rules.filter(sd => sd.category !== 'UNKNOWN');
+    if (live.length > 0 && live.every(sd => sd.supersededUnresolved && !sd.schedule.anytime)) {
+      z.noData = true;
+      SUPERSEDED_STATS.noDataZones++;
+      if (SUPERSEDED_STATS.noDataSamples.length < 30) SUPERSEDED_STATS.noDataSamples.push(z.rules[0].sign.sign_description);
+    }
+  });
+  return zones;
+}
+
+// ---- Meter companions (segmentation gap) ---------------------------------------------------
+// A timed "commercial vehicles only" / truck-loading / no-parking sign is posted on the SAME pole as a
+// metered sign (the meter covers the hours the commercial sign does not). The two carry independent
+// arrows (and arrow_direction), so on a block face the meter can span a sub-segment its pole-mate
+// does not, leaving that sub-segment with only the (e.g. 7PM-10PM) meter: green all day. Conservative
+// fix: wherever a metered sign applies, every timed hard-restriction sign on the same pole (same
+// distance) applies too. Only ever adds restrictions.
+const COMPANION_STATS = { extendedZones: 0, faces: new Set() };
+const COMPANION_CATEGORIES = new Set(['NO_PARKING', 'TRUCK_LOADING', 'SPECIAL', 'NO_STANDING']);
+function extendMeterCompanions(zones, signData, block) {
+  if (FIX_OFF.has('companion')) return;
+  const meters = signData.filter(sd => sd.category === 'METERED' && !sd.temporary);
+  if (meters.length === 0) return;
+  for (const m of meters) {
+    const companions = signData.filter(c => c !== m && c.distance === m.distance && COMPANION_CATEGORIES.has(c.category) &&
+      !c.temporary && !c.schedule.anytime && !c.superseded &&
+      (c.schedule.timeRanges.length > 0 || (c.schedule.clauses || []).some(k => k.timeRanges.length > 0)));
+    if (companions.length === 0) continue;
+    for (const z of zones) {
+      if (!z.rules.includes(m)) continue;
+      for (const c of companions) {
+        if (z.rules.includes(c)) continue;
+        z.rules.push(c);
+        COMPANION_STATS.extendedZones++;
+        COMPANION_STATS.faces.add(`${block.blockKey}|${block.side}`);
+      }
+    }
+  }
+}
+
 function createSubSegments(block, bearingVector) {
   const signData = block.signs
     .map(s => {
@@ -1798,6 +1918,21 @@ function createSubSegments(block, bearingVector) {
 
   if (signData.length === 0) return [];
   signData.sort((a, b) => a.distance - b.distance);
+
+  // Superseded signs: flag each, and whether its named replacement is on this face.
+  const faceCodes = block.signs
+    .filter(s => !parseSupersededBy(s.sign_description).superseded)
+    .map(s => String(s.sign_code || '').toUpperCase().replace(/\s+/g, ''));
+  signData.forEach(sd => {
+    const info = parseSupersededBy(sd.sign.sign_description);
+    sd.superseded = info.superseded;
+    sd.supersededUnresolved = info.superseded &&
+      !(info.codes.length > 0 && info.codes.some(c => faceCodes.some(fc => fc === c || (fc.startsWith(c) && fc.length <= c.length + 2))));
+    if (info.superseded) {
+      SUPERSEDED_STATS.signs++;
+      if (sd.supersededUnresolved) SUPERSEDED_STATS.unresolved++; else SUPERSEDED_STATS.resolved++;
+    }
+  });
 
   // #26: resolve + instrument every classified sign on this face once, up
   // front, before any zone-boundary math touches coversBefore/coversAfter.
@@ -1839,7 +1974,7 @@ function createSubSegments(block, bearingVector) {
     // Use a generous range: 0 to distance + 100ft (or at least 200ft for block coverage)
     const d = uniqueDists[0];
     const blockEnd = Math.max(d + 100, 200);
-    return [{ rules: signData, distStart: 0, distEnd: blockEnd }];
+    return markNoDataZones([{ rules: signData, distStart: 0, distEnd: blockEnd }]);
   }
 
   const signsByDist = {};
@@ -1981,7 +2116,8 @@ function createSubSegments(block, bearingVector) {
     });
   });
 
-  return zones.filter(z => z.rules.length > 0 && (z.distEnd - z.distStart) >= 1);
+  extendMeterCompanions(zones, signData, block);
+  return markNoDataZones(zones.filter(z => z.rules.length > 0 && (z.distEnd - z.distStart) >= 1));
 }
 
 // ==== Most restrictive category ====
@@ -2552,6 +2688,21 @@ async function main() {
           ...(r.temporary && { temporary: true })
         })));
 
+        // NO DATA zone (only obsolete superseded signs, replacement not on file). An empty rule
+        // list would draw GREEN in the goal modes (ParkingRulesEngine.isFree: "empty rules -> free"),
+        // so the no-data state is carried as an always-on restriction that reads as not parkable
+        // everywhere, with the superseded sign text kept below it for context.
+        if (zone.noData) {
+          rules.unshift({
+            category: 'NO_PARKING',
+            description: NO_DATA_RULE_DESCRIPTION,
+            days: [0,1,2,3,4,5,6],
+            timeRanges: [],
+            anytime: true,
+            arrow: null
+          });
+        }
+
         const segId = `${block.street}_${block.from}_${block.to}_${block.side}_${idx}`.replace(/\s+/g, '_');
         allSegments.push({
           id: segId,
@@ -2561,7 +2712,7 @@ async function main() {
           side: block.side,
           line: offsetLine,
           rules,
-          dominantCategory: mostRestrictiveCategory(zone.rules),
+          dominantCategory: zone.noData ? 'UNKNOWN' : mostRestrictiveCategory(zone.rules),
           oneway: onewayFields.oneway,
           ...(onewayFields.oneway_toward !== undefined && { oneway_toward: onewayFields.oneway_toward })
         });
@@ -2729,7 +2880,15 @@ async function main() {
   console.log('\n📅 day-parse fail-safe stats (parseSchedule calls):');
   console.log(`   unparsed day phrase -> applied to ALL days: ${DAY_PARSE_STATS.unparsedFallbackAllDays}`);
   console.log(`   mixed timed + "ALL DAY" clause -> widened to all-day: ${DAY_PARSE_STATS.allDayClauseWidened}`);
+  console.log(`   misspelled day word -> applied to ALL days: ${DAY_PARSE_STATS.suspectDayWordAllDays}`);
+  console.log(`   unparsed time token next to a range -> ranges dropped (all-day): ${DAY_PARSE_STATS.timeResidualWidened}`);
+  console.log(`   METERED with no readable hours -> meter assumed all day: ${DAY_PARSE_STATS.meteredNoHoursAllDay}`);
   DAY_PARSE_STATS.unparsedSamples.forEach(x => console.log(`     sample: ${x}`));
+  console.log('\n🪧 superseded-sign + meter-companion stats (counted per createSubSegments pass):');
+  console.log(`   superseded signs: ${SUPERSEDED_STATS.signs} (replacement on face: ${SUPERSEDED_STATS.resolved}, unresolved: ${SUPERSEDED_STATS.unresolved})`);
+  console.log(`   zones emitted as NO DATA (only unresolved superseded signs): ${SUPERSEDED_STATS.noDataZones}`);
+  SUPERSEDED_STATS.noDataSamples.forEach(x => console.log(`     sample: ${x}`));
+  console.log(`   meter-companion extensions: ${COMPANION_STATS.extendedZones} zone-rules on ${COMPANION_STATS.faces.size} block faces`);
   if (process.env.PREPROCESS_ARROW_STATS_JSON) {
     fs.writeFileSync(process.env.PREPROCESS_ARROW_STATS_JSON, JSON.stringify({
       classifiedSigns: ARROW_STATS.classifiedSigns,
@@ -3223,6 +3382,8 @@ if (require.main !== module) {
     classifySign,
     parseSchedule,
     parseDayPhrases,
+    parseSupersededBy,
+    NO_DATA_RULE_DESCRIPTION,
     DAY_PARSE_STATS,
     isSkippedSign,
     isTemporarySign,

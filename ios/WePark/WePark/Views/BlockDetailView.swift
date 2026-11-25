@@ -344,10 +344,19 @@ struct BlockDetailView: View {
 
     // MARK: - Rules list
 
+    /// A multi-clause sign ("MON-FRI 7PM-10PM SAT 9AM-10PM") ships as one tile rule per clause, all
+    /// carrying the full sign text, and two signs on one pole can repeat the same text. The row only
+    /// shows the text (the schedule lives in the map color), so show each distinct sign once.
+    /// Display only: the engine still evaluates every rule.
+    nonisolated static func dedupedForDisplay(_ rules: [ParkingRule]) -> [ParkingRule] {
+        var seen = Set<String>()
+        return rules.filter { seen.insert("\($0.category.rawValue)|\($0.description)").inserted }
+    }
+
     private var rulesSection: some View {
-        let sortedRules = segment.rules.sorted { lhs, rhs in
+        let sortedRules = Self.dedupedForDisplay(segment.rules.sorted { lhs, rhs in
             lhs.category.priority < rhs.category.priority
-        }
+        })
 
         return VStack(alignment: .leading, spacing: 8) {
             ForEach(Array(sortedRules.enumerated()), id: \.offset) { _, rule in
