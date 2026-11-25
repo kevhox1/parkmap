@@ -57,3 +57,9 @@ Rule: Kevin reviews first. Nothing below gets fixed until he says "live smoke co
 - FOLLOW-UP (fake-spot): segmentation gap, where a sub-segment carries only the evening-meter sign while its siblings carry a weekday commercial/truck sign, so it reads green on weekday daytime: `8TH_AVENUE_WEST_27TH_STREET_WEST_28TH_STREET_E_2`, `WEST_181ST_STREET_WADSWORTH_AVENUE_ST_NICHOLAS_AVENUE_S_1`, `ST_NICHOLAS_AVENUE_WEST_185TH_STREET_WEST_186TH_STREET_E_1`. Also `BROADWAY_TIEMANN_PLACE_WEST_125TH_STREET_E_1` rests on a sign marked "SUPERSEDED BY PS-84B". Also truncated day word "MONDAY THURSDA" (`WEST_62ND_STREET_BROADWAY_COLUMBUS_AVENUE_N_2`) still drops Thursday.
 - Judgment kept: FRI-SUN / SAT & SUN overnight windows are read literally (NYC DOT convention).
 - Cosmetic: a split sign lists its description twice in BlockDetailView.
+- MERGED #192: residual fake spots (1,138 double-arrow `<--->` signs that only covered one side; meter pole-mates; superseded signs now no-data; truncated day names). 1,269 segments, 0 red→green over 168 h × 3 goals.
+- MERGED #193: no-data curbs show "We don't know / No sign data" (never a fake "No Parking" badge); `isFree` is false for empty rules and the NO DATA rule.
+- MERGED #191: design-system foundation and the new app icon (icon visible in the next build; everything else behind the flag).
+- FOLLOW-UP (HIGH, live fake-spot): `isFree` treats UNKNOWN-category rules as free (about 238 UNKNOWN-only segments, about 2,650 mixed). Audit of UNKNOWN sign texts in progress, then an engine change: UNKNOWN = restriction.
+- FOLLOW-UP (perf, likely part of the "laggy zoom" complaint): a main-thread stall in `rebuildOverlays` → `ASPSuspensionService.isSuspended` → `Date.toETDateString`, which builds a new DateFormatter per call (51 of 92 samples). Causes 15–60 s of black on cold start in a Debug sim.
+- Minor: the "Remind me" toggle still shows on no-data curbs but can never fire.
