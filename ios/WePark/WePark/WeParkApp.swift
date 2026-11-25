@@ -446,7 +446,9 @@ struct WeParkApp: App {
                 // which this SwiftUI-scoped modifier does not reliably reach on its own.
                 // Both together, not an either/or: SwiftUI Previews and any future
                 // programmatic window creation still read this environment modifier.
-                .preferredColorScheme(.dark)
+                // Design system v0.1: with `designSystemV2Enabled` false (shipping) this is exactly
+                // `.dark`; with it true the scheme is left to the window (light browse, dark Drive Mode).
+                .preferredColorScheme(DesignSystemAppearance.preferredColorScheme())
         }
     }
 }

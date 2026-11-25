@@ -3851,7 +3851,10 @@ struct ContentView: View {
             // without a session.
             placementIndex: curbPlacement != nil ? curbPlacementIndex : nil,
             onPlacementOutcome: handleCurbPlacementOutcome(_:),
-            placementSeverity: curbPlacementSeverity(for:)
+            placementSeverity: curbPlacementSeverity(for:),
+            // Design system v0.1: five-state curb lines while "Show all sign details" is on.
+            // Inert unless `designSystemV2Enabled`. NB: declared after `placementSeverity`.
+            curbLineDetailMode: fullPaletteMode
         )
     }
 
@@ -7097,6 +7100,8 @@ struct ContentView: View {
     /// happens inside updateUIView. All camera mutations are driven from .onChange handlers
     /// in ContentView or from MapKit delegate callbacks.
     private func handleDriveModeAndCamera(_ active: Bool) {
+        // Design system v0.1: light browse / dark Drive Mode. No-op while the flag is off.
+        DesignSystemAppearance.apply(driveModeActive: active)
         // A3 (curb-pin placement), PR #140 QA #4 / (d): Drive Mode entry tears a live placement
         // session down THROUGH `endPlacement` (the entry guard makes this unreachable through the
         // UI; this is the self-healing backstop, same role as the block-select clear below). A
@@ -7236,6 +7241,7 @@ struct ContentView: View {
 
     private func handleOnAppear() {
         lastEvaluatedAt = .now
+        DesignSystemAppearance.apply(driveModeActive: driveModeActive)  // flag-gated no-op when off
         bannerState = aspService.suspensionState(at: .nowET)
     }
 

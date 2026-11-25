@@ -175,6 +175,17 @@ struct SettingsView: View {
                 if AppConstants.accountDeletionRowVisible() {
                     AccountDeletionSection()
                 }
+
+                #if DEBUG
+                // Design system v0.1 gallery: DEBUG builds only (never ships to TestFlight/App Store).
+                Section("Developer") {
+                    NavigationLink {
+                        DesignSystemGalleryView()
+                    } label: {
+                        Label("Design system v0.1", systemImage: "paintpalette")
+                    }
+                }
+                #endif
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)

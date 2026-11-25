@@ -368,6 +368,18 @@ enum AppConstants {
     /// Guard test: `MyCarSheetV2Tests.testFlag_defaultsFalse_andResolvesLegacy`.
     static let myCarSheetV2Enabled = false
 
+    /// DARK-SHIPS `false`. WePark design system v0.1 ("Stoop, straight",
+    /// `docs/design/wepark-design-system-v0.1/README.md`). When `true`: curb lines draw in the new
+    /// two-state (solid green = park, dashed coral = don't; unsure = don't) or five-state
+    /// ("Show all sign details") line styles, the map base is muted with POIs hidden, and the
+    /// app follows light/dark (light by default, dark in Drive Mode) instead of forcing dark.
+    /// With it `false` every one of those code paths is byte-for-byte today's behavior. The
+    /// token/type/component layer (`DesignSystem/`) is always compiled but nothing in the shipping
+    /// UI reads it; only the DEBUG gallery does. The screens adopt it in a follow-up PR.
+    ///
+    /// Guard test: `DesignSystemV01Tests.testFlag_defaultsFalse`.
+    static let designSystemV2Enabled = false
+
     /// UserDefaults key: set to true once the placement mode's first-use hint pill ("Drag the map
     /// to place the pin") has been shown on this install. `BackgroundNoteGate` convention (see
     /// `CurbPlacementHintGate`); naming mirrors the other `wepark_<feature>_shown` keys.
