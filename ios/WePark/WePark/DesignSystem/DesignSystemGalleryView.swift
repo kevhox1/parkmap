@@ -26,9 +26,18 @@ enum WPGallerySection: String, CaseIterable, Identifiable {
     case rows = "Rows"
     case sheet = "Sheet"
     case markers = "Markers"
-    case sticker = "Sticker"
+    case status = "Stamp, token, karma"
     case curbLines = "Curb lines"
     case mapBase = "Map base"
+    // Round 2 shared parts
+    case mapParts = "Toolbar and lever"
+    case verdictBlock = "Verdict block"
+    case scaffold = "Scaffold"
+    case choices = "Choice chips"
+    case lists = "List card"
+    case limit = "Limit row"
+    case coach = "Coach"
+    case trip = "Trip frame"
 
     var id: String { rawValue }
 }
@@ -116,15 +125,23 @@ struct WPGallerySectionView: View {
             case .rows: WPGalleryRows()
             case .sheet: WPGallerySheet()
             case .markers: WPGalleryMarkers()
-            case .sticker: WPGallerySticker()
+            case .status: WPGalleryStatus()
             case .curbLines: WPGalleryCurbLines()
             case .mapBase: WPGalleryMapBase()
+            case .mapParts: WPGalleryMapParts()
+            case .verdictBlock: WPGalleryVerdictBlock()
+            case .scaffold: WPGalleryScaffold()
+            case .choices: WPGalleryChoices()
+            case .lists: WPGalleryLists()
+            case .limit: WPGalleryLimit()
+            case .coach: WPGalleryCoach()
+            case .trip: WPGalleryTrip()
             }
         }
     }
 }
 
-private struct GalleryLabel: View {
+struct GalleryLabel: View {
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {
@@ -257,7 +274,7 @@ private struct WPGalleryButtons: View {
 
 private struct WPGalleryTiles: View {
     @State private var selected = 0
-    private let goals = [("Overnight", "until 7 AM"), ("A few hours", "until 3 PM"), ("Park & forget", "until Fri")]
+    private let goals = [("Overnight", "until 7 AM"), ("A few hours", "until 3 PM"), ("For days", "until Wed 12/2")]
 
     var body: some View {
         VStack(alignment: .leading, spacing: WP.Space.s4) {
@@ -409,22 +426,6 @@ private struct WPGalleryMarkers: View {
     }
 }
 
-// MARK: - Sticker
-
-private struct WPGallerySticker: View {
-    @State private var replay = 0
-    var body: some View {
-        VStack(alignment: .leading, spacing: WP.Space.s5) {
-            HStack(spacing: WP.Space.s6) {
-                WPSticker(text: "+5 karma", kind: .karma).id(replay)
-                WPSticker(text: "Spot passed", kind: .stamp).id(replay)
-            }
-            .padding(.vertical, WP.Space.s4)
-            Button("Replay pop-in") { replay += 1 }.buttonStyle(.wpSecondary)
-        }
-    }
-}
-
 // MARK: - Curb lines
 
 private struct WPGalleryCurbLines: View {
@@ -557,11 +558,36 @@ private struct GalleryPreviewHost: View {
 #Preview("Markers light") { GalleryPreviewHost(section: .markers).preferredColorScheme(.light) }
 #Preview("Markers dark") { GalleryPreviewHost(section: .markers).preferredColorScheme(.dark) }
 #Preview("Markers AX5") { GalleryPreviewHost(section: .markers).dynamicTypeSize(.accessibility5) }
-#Preview("Sticker light") { GalleryPreviewHost(section: .sticker).preferredColorScheme(.light) }
-#Preview("Sticker dark") { GalleryPreviewHost(section: .sticker).preferredColorScheme(.dark) }
-#Preview("Sticker AX5") { GalleryPreviewHost(section: .sticker).dynamicTypeSize(.accessibility5) }
 #Preview("Curb lines light") { GalleryPreviewHost(section: .curbLines).preferredColorScheme(.light) }
 #Preview("Curb lines dark") { GalleryPreviewHost(section: .curbLines).preferredColorScheme(.dark) }
 #Preview("Curb lines AX5") { GalleryPreviewHost(section: .curbLines).dynamicTypeSize(.accessibility5) }
+
+#Preview("Status light") { GalleryPreviewHost(section: .status).preferredColorScheme(.light) }
+#Preview("Status dark") { GalleryPreviewHost(section: .status).preferredColorScheme(.dark) }
+#Preview("Status AX5") { GalleryPreviewHost(section: .status).dynamicTypeSize(.accessibility5) }
+#Preview("Map parts light") { GalleryPreviewHost(section: .mapParts).preferredColorScheme(.light) }
+#Preview("Map parts dark") { GalleryPreviewHost(section: .mapParts).preferredColorScheme(.dark) }
+#Preview("Map parts AX5") { GalleryPreviewHost(section: .mapParts).dynamicTypeSize(.accessibility5) }
+#Preview("Verdict block light") { GalleryPreviewHost(section: .verdictBlock).preferredColorScheme(.light) }
+#Preview("Verdict block dark") { GalleryPreviewHost(section: .verdictBlock).preferredColorScheme(.dark) }
+#Preview("Verdict block AX5") { GalleryPreviewHost(section: .verdictBlock).dynamicTypeSize(.accessibility5) }
+#Preview("Scaffold light") { GalleryPreviewHost(section: .scaffold).preferredColorScheme(.light) }
+#Preview("Scaffold dark") { GalleryPreviewHost(section: .scaffold).preferredColorScheme(.dark) }
+#Preview("Scaffold AX5") { GalleryPreviewHost(section: .scaffold).dynamicTypeSize(.accessibility5) }
+#Preview("Choice chips light") { GalleryPreviewHost(section: .choices).preferredColorScheme(.light) }
+#Preview("Choice chips dark") { GalleryPreviewHost(section: .choices).preferredColorScheme(.dark) }
+#Preview("Choice chips AX5") { GalleryPreviewHost(section: .choices).dynamicTypeSize(.accessibility5) }
+#Preview("List card light") { GalleryPreviewHost(section: .lists).preferredColorScheme(.light) }
+#Preview("List card dark") { GalleryPreviewHost(section: .lists).preferredColorScheme(.dark) }
+#Preview("List card AX5") { GalleryPreviewHost(section: .lists).dynamicTypeSize(.accessibility5) }
+#Preview("Limit row light") { GalleryPreviewHost(section: .limit).preferredColorScheme(.light) }
+#Preview("Limit row dark") { GalleryPreviewHost(section: .limit).preferredColorScheme(.dark) }
+#Preview("Limit row AX5") { GalleryPreviewHost(section: .limit).dynamicTypeSize(.accessibility5) }
+#Preview("Coach light") { GalleryPreviewHost(section: .coach).preferredColorScheme(.light) }
+#Preview("Coach dark") { GalleryPreviewHost(section: .coach).preferredColorScheme(.dark) }
+#Preview("Coach AX5") { GalleryPreviewHost(section: .coach).dynamicTypeSize(.accessibility5) }
+#Preview("Trip frame light") { GalleryPreviewHost(section: .trip).preferredColorScheme(.light) }
+#Preview("Trip frame dark") { GalleryPreviewHost(section: .trip).preferredColorScheme(.dark) }
+#Preview("Trip frame AX5") { GalleryPreviewHost(section: .trip).dynamicTypeSize(.accessibility5) }
 
 #endif

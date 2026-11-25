@@ -147,7 +147,7 @@ struct WPTripPlanTag: View {
                 .wpText(.label)
             if let dates {
                 Text(dates)
-                    .font(WP.Font.fredoka(13, .medium, relativeTo: .caption))
+                    .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
             }
         }
         .foregroundStyle(Color.white)
@@ -155,7 +155,7 @@ struct WPTripPlanTag: View {
         .padding(.horizontal, WP.Space.s3)
         .padding(.vertical, WP.Space.s2)
         .background(WPStripes(base: WP.plan, stripe: WP.planStripe))
-        .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .accessibilityElement(children: .combine)
         .accessibilityLabel(dates.map { "Trip plan, not live. \($0)" } ?? "Trip plan, not live")
     }
@@ -165,7 +165,9 @@ struct WPTripPlanTag: View {
 struct WPStripes: View {
     let base: Color
     let stripe: Color
-    var period: CGFloat = 12
+    /// CSS `repeating-linear-gradient(135deg, a 0 10px, b 10px 20px)`: 10pt bands measured across
+    /// the stripe, so the horizontal period is 20 x sqrt(2).
+    var period: CGFloat = 20 * CGFloat(2).squareRoot()
 
     var body: some View {
         Canvas { context, size in

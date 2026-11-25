@@ -179,6 +179,8 @@ enum WP {
     /// Sizes of the raised/flat control family (spec "Parts").
     enum Control {
         nonisolated static let primaryHeight: CGFloat = 80
+        /// Round-2 full-screen commitment button (taxi, raised 6).
+        nonisolated static let commitmentHeight: CGFloat = 72
         nonisolated static let mediumHeight: CGFloat = 64
         nonisolated static let inkPillHeight: CGFloat = 64
         nonisolated static let secondaryHeight: CGFloat = 56

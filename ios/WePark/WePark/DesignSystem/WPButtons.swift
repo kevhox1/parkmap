@@ -76,15 +76,24 @@ struct WPRaisedPiece<S: InsettableShape, Content: View>: View {
 /// #A9A7B8 line, muted label, no raise.
 struct RaisedButtonStyle: ButtonStyle {
     enum Size {
-        case primary, medium
+        /// `commitment` is the round-2 full-screen primary (72 tall, raise 6, 24/700).
+        case primary, medium, commitment
 
-        var height: CGFloat { self == .primary ? WP.Control.primaryHeight : WP.Control.mediumHeight }
-        var raise: CGFloat { self == .primary ? WP.Raise.lg : WP.Raise.md }
-        var border: CGFloat { self == .primary ? WP.Border.raised : WP.Border.control }
+        var height: CGFloat {
+            switch self {
+            case .primary: return WP.Control.primaryHeight
+            case .medium: return WP.Control.mediumHeight
+            case .commitment: return WP.Control.commitmentHeight
+            }
+        }
+        var raise: CGFloat { self == .medium ? WP.Raise.md : WP.Raise.lg }
+        var border: CGFloat { self == .medium ? WP.Border.control : WP.Border.raised }
         var font: SwiftUI.Font {
-            self == .primary
-                ? WP.Font.fredoka(28, .bold, relativeTo: .title)
-                : WP.Font.fredoka(20, .semibold, relativeTo: .title3)
+            switch self {
+            case .primary: return WP.Font.fredoka(28, .bold, relativeTo: .title)
+            case .medium: return WP.Font.fredoka(20, .semibold, relativeTo: .title3)
+            case .commitment: return WP.Font.fredoka(24, .bold, relativeTo: .title2)
+            }
         }
     }
 

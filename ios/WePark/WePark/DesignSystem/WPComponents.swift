@@ -2,8 +2,8 @@
 //  WPComponents.swift
 //  WePark
 //
-//  Design system v0.1 components (spec "Parts"): goal tile, chips, switch, rows, sheet surface,
-//  sticker. Verdict blocks are in WPVerdictBlocks.swift, map markers in WPMarkers.swift.
+//  Design system v0.1 components (spec "Parts"): goal tile, chips, switch, rows, sheet surface.
+//  (Stickers: WPCoachTripParts.swift.) Verdict blocks are in WPVerdictBlocks.swift, map markers in WPMarkers.swift.
 //
 //  Fixed-size pieces use `minHeight`, never `height`, so Dynamic Type can grow them; text wraps.
 //
@@ -319,52 +319,5 @@ extension View {
     /// Sheet surface: card fill, top radius 30, 1.5pt top line, no shadow.
     func wpSheetSurface() -> some View {
         modifier(WPSheetSurfaceModifier())
-    }
-}
-
-// MARK: - Sticker
-
-/// Sticker (karma, "Spot passed"): raised 3 because it was earned. Pops in with a spring and
-/// settles at 6 degrees (karma) or -5 degrees (stamp).
-struct WPSticker: View {
-    enum Kind {
-        case karma, stamp
-
-        var degrees: Double { self == .karma ? 6 : -5 }
-    }
-
-    let text: String
-    var kind: Kind = .karma
-
-    @State private var settled = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    var body: some View {
-        WPRaisedPiece(
-            shape: RoundedRectangle(cornerRadius: WP.Radius.chip, style: .continuous),
-            fill: kind == .karma ? WP.taxi : WP.card,
-            border: WP.Border.control,
-            borderColor: kind == .karma ? WP.ink : WP.line,
-            raise: WP.Raise.sm,
-            isPressed: false
-        ) {
-            Text(text)
-                .font(WP.Font.fredoka(15, .bold, relativeTo: .callout))
-                .foregroundStyle(kind == .karma ? WP.ink : WP.text)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, WP.Space.s3)
-                .padding(.vertical, WP.Space.s2)
-                .frame(minHeight: WP.Target.minimum - WP.Space.s2)
-        }
-        .scaleEffect(settled ? 1 : 0.3)
-        .rotationEffect(.degrees(settled ? kind.degrees : 0))
-        .opacity(settled ? 1 : 0)
-        .onAppear {
-            if reduceMotion {
-                settled = true
-            } else {
-                withAnimation(WPMotion.pop) { settled = true }
-            }
-        }
     }
 }
