@@ -67,3 +67,34 @@ All route through `ParkingRulesEngine` (`isFree`, `nextRestriction`, `safetyLabe
 - The engine change is surgical and consistent: one `isUnknownRuleActive` predicate shared by `nextRestriction` and `isFree`'s day-walk semantics, UNKNOWN never produces "Free" copy while active.
 - Copy discipline: no path says "No parking" for a lone UNKNOWN cause, and the voice string avoids any specific claim.
 - Good test coverage of map vs drive-card agreement and the Node parity check, and no existing tests were edited.
+
+---
+
+# Re-QA (2026-11-25), head `c6c14db1`
+
+**Verdict:** SHIP. The prior BLOCK (finding #1, UNKNOWN free on Sundays) is fixed, and #198 stacks with it without conflict. One item is still not verified live (see below).
+
+## Delta review (`c6c14db1`, 4 files)
+- `ParkingRule.unknownDaysNormalized()` applies only when category is UNKNOWN, there is no time window, not anytime, and days are exactly 1...6. It is called in both `isFree` and `nextRestriction`. Census of the real tiles: all 2,180 windowless UNKNOWN rules are `[1..6]` on main's tiles, and the normalizer covers every one. The 8 windowed `[1..6]` UNKNOWN rules, 1 Mon-Fri and 2 Sunday-only rules keep their stated days. Correct.
+- Finding #2 (mixed-side wording) is fixed. A free-but-too-short curb no longer blocks the "Unclear sign" label. The new `anyUnclear && allUnclearOrNoData` also requires at least one unclear curb. A side of only no-data curbs still reads as no-data. Covered by `testSideLabel_unclearCurbPlusTooShortFreeCurb_saysUnclear` and `testSideLabel_specificRestrictionPlusUnclear_staysNoParking`.
+- Remaining minor items are unchanged: notification wording "starts / Move by", and the lossy voice line.
+
+## Both tile sets, Swift engine (real `ParkingRulesEngine.isFree`, A Few Hours, all 47,696 segments)
+A throwaway XCTest (deleted, not committed) loaded each tile directory.
+
+| Tile set | Sun 10 AM green | Sun 8 PM green | Tue 10 AM green | UNKNOWN-only segments (61) green on Sun |
+|---|---|---|---|---|
+| main's current tiles (+ #196) | 30,771 | 30,928 | 10,598 | 0 |
+| #198 tiles (+ #196) | 30,771 | 30,928 | 10,598 | 0 |
+
+- The counts are identical. #196's normalizer alone already produces the numbers the Node port predicts for #198 tiles (30,771 / 30,928). Tue 10 AM stays at 10,598, which matches the earlier parity test.
+- There are no double-count or conflict effects. On #198 tiles the normalizer's guard (days exactly 1...6) no longer matches, so it becomes a no-op. On main tiles it does the work. The two are redundant in the safe direction.
+- Not tested: windowed UNKNOWN with a defaulted Mon-Sat. The census found only 8 such rules, all with stated windows.
+
+## Tests
+- #196 with #198 cherry-picked (clean): full WeParkTests ran 2,973 passed and 5 failed. Another agent's `xcodebuild` was running on the same simulator at the time, so contention is likely. The 5 failures were `W7ToastServiceTests.autoDismiss` and 3 `CommunityPinServiceRequestTests` (timing and contention), plus `AmbientDrivingLookLocationPostureTests.testRestingFix...`. On an isolated rerun the Toast and CommunityPin tests passed. Only the known Ambient flake still fails (it also fails on main), so the effective result is 1 known flake. `UnknownIsRestrictionTests` passed.
+
+## Live simulator
+Not done. iPhone 17 sim, location set to Broadway/E 14th (40.7346,-73.9909), launched the combined build. The map and toolbar rendered, but no curb polylines drew, at a street-level zoom, so there was nothing to tap. This matches the previous QA, and polylines were also missing on main. The AXe taps I sent at the clock button changed nothing visible, and `axe describe-ui` exposes no segment elements. There is no DEBUG deep link or clock override in the app (grepped `onOpenURL`, launch arguments and environment). The simulator clock cannot be set to a Sunday, so a live Sunday check is impossible there anyway. No detail-wording screenshot was captured. Wording is covered by the `safetyLabel` and `aggregateSideDetail` tests only. Recommend a manual tap on `BROADWAY_EAST_14TH_STREET_CANAL_STREET_N_0` and `EAST_23RD_STREET_1ST_AVENUE_AVENUE_C_S_6` on a device. The latter's rules are NO_PARKING anytime plus UNKNOWN "7AM-6PM EXCEPT SUNDAY", so it is red regardless.
+
+Suggest a separate bug for "polylines never render in the sim at launch" (`@ios-engineer`).
