@@ -57,6 +57,17 @@ extension TimeRange {
 }
 
 extension ParkingRule {
+    /// The tile pipeline stamps every rule with no parsed days as Mon-Sat `[1...6]`, which would
+    /// exempt an unclassified sign on Sundays. An UNKNOWN rule with that exact default and no time
+    /// window is therefore read as every day. (Defensive; the data fix `fix/tiles-default-days`
+    /// makes the tiles say it. A real Mon-Sat-only UNKNOWN sign with no hours is indistinguishable
+    /// and is treated conservatively as every day.)
+    nonisolated func unknownDaysNormalized() -> ParkingRule {
+        guard category == .unknown, timeRanges.isEmpty, !anytime, Set(days) == Set(1...6) else { return self }
+        return ParkingRule(category: category, description: description, days: Array(0...6),
+                           timeRanges: timeRanges, anytime: anytime, arrow: arrow)
+    }
+
     /// Copy with every day set when the rule names none. Used for UNKNOWN rules, where "no days"
     /// means every day (the generic "days empty = never" convention would hide the window).
     nonisolated func withEveryDayIfUnspecified() -> ParkingRule {

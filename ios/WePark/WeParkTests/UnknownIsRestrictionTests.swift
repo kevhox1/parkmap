@@ -227,6 +227,60 @@ final class UnknownIsRestrictionTests: XCTestCase {
         XCTAssertFalse(spoken.localizedCaseInsensitiveContains("no parking"))
     }
 
+    // MARK: - Realistic tile shapes (Sunday)
+
+    /// Real tiles never carry `days: []` for an UNKNOWN sign: the pipeline stamps Mon-Sat.
+    func testUnknownPipelineDefaultMonSat_isNotFreeOnSunday() {
+        let seg = uirSegment(rules: [uirRule(.unknown, description: "BUS STOP SIGN (GENERIC PANEL)", days: [1, 2, 3, 4, 5, 6])])
+        for goal in allGoals {
+            XCTAssertFalse(matches(seg, goal, sun10AM), "Mon-Sat default must not exempt Sunday: \(goal)")
+            XCTAssertFalse(matches(seg, goal, tue10AM))
+        }
+        XCTAssertEqual(engine.currentState(for: seg, at: sun10AM), .restrictedNow)
+        XCTAssertEqual(engine.safetyLabel(for: seg, at: sun10AM).text, UnclearSign.headline)
+    }
+
+    func testUnknownAllSevenDays_isNotFreeOnSunday() {
+        let seg = uirSegment(rules: [uirRule(.unknown, days: [0, 1, 2, 3, 4, 5, 6])])
+        for goal in allGoals {
+            XCTAssertFalse(matches(seg, goal, sun10AM))
+        }
+        XCTAssertEqual(engine.currentState(for: seg, at: sun10AM), .restrictedNow)
+    }
+
+    func testUnknownMonSatWithRealTimeWindow_staysExemptOnSunday() {
+        // A stated window is a real schedule: the defensive rule must not stretch it to Sunday.
+        let seg = uirSegment(rules: [uirRule(.unknown, days: [1, 2, 3, 4, 5, 6], timeRanges: [TimeRange(start: 540, end: 1020)])])
+        XCTAssertTrue(matches(seg, .freeFewHours, sun10AM))
+        XCTAssertFalse(matches(seg, .freeFewHours, tue10AM))
+    }
+
+    // MARK: - Drive card side wording with a too-short free curb
+
+    func testSideLabel_unclearCurbPlusTooShortFreeCurb_saysUnclear() {
+        let unclear = uirSegment(rules: [uirRule(.unknown, days: [1, 2, 3, 4, 5, 6])])
+        // ~1 m: under the 6 m minimum, so it does not qualify as a free stretch.
+        let sliver = Segment(
+            id: "SLIVER", street: "E 2 ST", fromStreet: "AVE B", to: "AVE A", side: "N",
+            line: [[40.7260, -73.9840], [40.72601, -73.9840]],
+            rules: [uirRule(.free, description: "FREE")], dominantCategory: .free
+        )
+        let agg = DrivingContextService.aggregateSideDetail(
+            segments: [unclear, sliver], side: "N", engine: engine, date: tue10AM
+        )
+        XCTAssertEqual(agg.opportunity, .restricted)
+        XCTAssertEqual(SafetyLabel(for: agg).text, UnclearSign.headline)
+    }
+
+    func testSideLabel_specificRestrictionPlusUnclear_staysNoParking() {
+        let unclear = uirSegment(rules: [uirRule(.unknown)])
+        let np = uirSegment(rules: [uirRule(.noParking, days: [0, 1, 2, 3, 4, 5, 6], timeRanges: [TimeRange(start: 0, end: 1440)])])
+        let agg = DrivingContextService.aggregateSideDetail(
+            segments: [unclear, np], side: "N", engine: engine, date: tue10AM
+        )
+        XCTAssertEqual(SafetyLabel(for: agg).text, "No parking")
+    }
+
     // MARK: - Parity with the Node port (state iv)
 
     /// Green count at Tue 10 AM for A Few Hours over every bundled tile, versus

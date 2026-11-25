@@ -181,7 +181,8 @@ final class ParkingRulesEngine {
         // (the loop returns early for those), so copy names the real restriction when there is one.
         var activeUnknownRule: ParkingRule? = nil
 
-        for rule in rules {
+        for rawRule in rules {
+            let rule = rawRule.category == .unknown ? rawRule.unknownDaysNormalized() : rawRule
             let cat = rule.category
 
             // UNKNOWN: a restriction during its stated days/times; all the time when it states none.
@@ -739,7 +740,8 @@ final class ParkingRulesEngine {
             return max(0, comps.day ?? 0)
         }()
 
-        for rule in rules {
+        for rawRule in rules {
+            let rule = rawRule.category == .unknown ? rawRule.unknownDaysNormalized() : rawRule
             let cat = rule.category
 
             // Fast path: anytime restriction → always conflicts.

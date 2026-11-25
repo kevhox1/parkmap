@@ -653,11 +653,16 @@ final class DrivingContextService {
         var hasMetered = false
         var qualifyingFree: [(seg: Segment, label: SafetyLabel)] = []
         var allUnclearOrNoData = true
+        var anyUnclear = false
 
         // Steps 2–3: classify each segment.
         for seg in sideSegments {
             let label = engine.safetyLabel(for: seg, at: date)
-            if !(seg.hasNoSignData || label.text == UnclearSign.headline) { allUnclearOrNoData = false }
+            // A free stretch (too short to qualify) does not change why the side is red.
+            if label.severity != .free {
+                if label.text == UnclearSign.headline { anyUnclear = true }
+                else if !seg.hasNoSignData { allUnclearOrNoData = false }
+            }
             switch label.severity {
             case .free:
                 // Step 3: check minimum free-stretch length via haversine.
@@ -713,7 +718,7 @@ final class DrivingContextService {
             opportunity: .restricted,
             earliestFreeUntilText: nil,
             noSignData: sideSegments.allSatisfy { $0.hasNoSignData },
-            unclearSign: allUnclearOrNoData && !sideSegments.allSatisfy { $0.hasNoSignData }
+            unclearSign: anyUnclear && allUnclearOrNoData
         )
     }
 
