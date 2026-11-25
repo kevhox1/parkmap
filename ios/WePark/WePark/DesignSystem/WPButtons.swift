@@ -92,10 +92,10 @@ struct RaisedButtonStyle: ButtonStyle {
     var fill: Color = WP.taxi
 
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration, size: size, fill: fill)
+        StyleBody(configuration: configuration, size: size, fill: fill)
     }
 
-    private struct Body: View {
+    private struct StyleBody: View {
         let configuration: ButtonStyleConfiguration
         let size: Size
         let fill: Color
@@ -148,10 +148,10 @@ struct InkPillButtonStyle: ButtonStyle {
     var labelColor: Color = WP.taxi
 
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration, labelColor: labelColor)
+        StyleBody(configuration: configuration, labelColor: labelColor)
     }
 
-    private struct Body: View {
+    private struct StyleBody: View {
         let configuration: ButtonStyleConfiguration
         let labelColor: Color
         @Environment(\.isEnabled) private var isEnabled
@@ -180,10 +180,10 @@ struct InkPillButtonStyle: ButtonStyle {
 /// Secondary: card fill, 2.5pt line, height 56, label 17/600. Pressed: fill -> paper.
 struct SecondaryButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration)
+        StyleBody(configuration: configuration)
     }
 
-    private struct Body: View {
+    private struct StyleBody: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
 
@@ -211,10 +211,10 @@ struct SecondaryButtonStyle: ButtonStyle {
 /// Round: 72pt circle, card fill, 2.5pt line, label 14/600 (Report, Voice).
 struct RoundButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration)
+        StyleBody(configuration: configuration)
     }
 
-    private struct Body: View {
+    private struct StyleBody: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
 
@@ -242,10 +242,10 @@ struct RoundButtonStyle: ButtonStyle {
 /// Text link: 15/600 underlined, 48pt tall target. Pressed: dims.
 struct TextLinkButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration)
+        StyleBody(configuration: configuration)
     }
 
-    private struct Body: View {
+    private struct StyleBody: View {
         let configuration: ButtonStyleConfiguration
         @Environment(\.isEnabled) private var isEnabled
 

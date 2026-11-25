@@ -81,6 +81,8 @@ enum WP {
         nonisolated static let darkLine: UInt32 = 0x6B64A0
         nonisolated static let darkShadow: UInt32 = 0x100D24
         nonisolated static let darkNoParkText: UInt32 = 0xF5A79D
+        /// Dark row divider / map street (css `--map-street` in dark). Equal to `darkLifted`.
+        nonisolated static let darkDivider: UInt32 = 0x3F3870
     }
 
     // MARK: Adaptive color tokens
@@ -104,8 +106,9 @@ enum WP {
     /// Red text and the karma heart.
     static let noParkText = Color.wpAdaptive(light: Hex.noParkText, dark: Hex.darkNoParkText)
     /// Row dividers, off switch, map street. Light: #E4E3EC.
-    /// Dark value is not in the spec; `lifted` (#3F3870) is used (flagged in the PR).
-    static let divider = Color.wpAdaptive(light: Hex.divider, dark: Hex.darkLifted)
+    /// Dark = #3F3870: tokens/colors.css has no dark --divider, but README says divider is also the
+    /// "map street" colour and dark `--map-street` is #3F3870, so the same value applies.
+    static let divider = Color.wpAdaptive(light: Hex.divider, dark: Hex.darkDivider)
 
     // Same in light and dark. Text on taxi and on park is always `ink`.
     static let ink = Color(wpHex: Hex.ink)

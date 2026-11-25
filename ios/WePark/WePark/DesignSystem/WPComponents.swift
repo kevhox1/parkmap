@@ -42,10 +42,10 @@ struct WPGoalTileStyle: ButtonStyle {
     let isSelected: Bool
 
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration, isSelected: isSelected)
+        StyleBody(configuration: configuration, isSelected: isSelected)
     }
 
-    private struct Body: View {
+    private struct StyleBody: View {
         let configuration: ButtonStyleConfiguration
         let isSelected: Bool
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -196,10 +196,10 @@ struct WPKarmaChipStyle: ButtonStyle {
 /// The knob slides 23 in 180 ms. The row is at least 48 tall for the touch target.
 struct WPSwitchStyle: ToggleStyle {
     func makeBody(configuration: Configuration) -> some View {
-        Body(configuration: configuration)
+        StyleBody(configuration: configuration)
     }
 
-    private struct Body: View {
+    private struct StyleBody: View {
         let configuration: ToggleStyleConfiguration
         @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
