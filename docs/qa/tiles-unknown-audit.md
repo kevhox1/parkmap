@@ -15,7 +15,7 @@ Branch `fix/tiles-unknown-sign-audit`. Scope: `build/preprocess.js` (classifier 
 ## Classes
 
 - **(a) Real restriction the classifier missed: 14 text groups, 59 rule instances.** All are time-limited parking (`2 HOUR PARKING 9AM-7PM EXCEPT SUNDAY`, `1 HOUR PARKING SATURDAY 9AM-10PM`, `30 MINUTE LIMIT`, `15 MINUTE PARKING`). There is no time-limit category, so they map to `SPECIAL` (windowed hard restriction; no stated window means always). Days and times come from `parseSchedule`, verified in the tests (EXCEPT SUNDAY = Mon-Sat, SATURDAY = Sat, 8:30AM etc.). Red inside the window is correct for every goal: all three park longer than any of these limits.
-- **(b) Purely informational: 35 text groups, 3,774 rule instances.** New pipeline-internal category `INFO`. An INFO sign takes part in zone building exactly as before but is never emitted as a rule. Its text rides on the segment in a new optional `info: [String]` field (additive; iOS `Segment` has explicit CodingKeys, so it is ignored until the curb detail reads it). A zone with nothing but INFO signs is not drawn (an empty rule list reads "free" in the engine).
+- **(b) Purely informational: 35 text groups, 3,774 rule instances.** New pipeline-internal category `INFO`. An INFO sign takes part in zone building exactly as before but is never emitted as a rule. Its text rides on the segment in a new optional `info: [String]` field (additive; iOS `Segment` has explicit CodingKeys, so it is ignored until the curb detail reads it). A zone with nothing but INFO signs is emitted as no-data: the synthetic always-on NO_PARKING rule used by #192, described "NO DATA - ONLY INFORMATION PLATES ON FILE (no parking rules)", dominant UNKNOWN, with the plate text kept in `info`. iOS #193 renders that as "We don't know / No sign data", never free.
 - **(c) Left UNKNOWN: 19 text groups, 586 rule instances** (362 segments: 48 UNKNOWN-only, 314 mixed).
 
 Before: 4,419 UNKNOWN rule instances in 2,889 segments (104 only, 2,785 mixed). After: 586 in 362 segments.
@@ -24,13 +24,13 @@ Before: 4,419 UNKNOWN rule instances in 2,889 segments (104 only, 2,785 mixed). 
 
 - Kept UNKNOWN because each could restrict a private car: `OPEN STREETS (INFORMATION SIGN)` (134), `CARSHARE SIGN (INFORMATION)` (242, carshare bays are reserved), `MICROHUB SIGN` (24, micromobility corrals), `BUS STOP SIGN (GENERIC PANEL)` and the `DAY - DAY XYY-XYY (FOR BUS STOP ONLY)` template (a bus stop is a no-standing curb), `DESCRIPTION NOT AVAILABLE` (40), bare riders (`EXCEPT BUSES`, `7AM-6PM EXCEPT SUNDAY`, `OTHER TIMES ...`, `9:30AM-5PM INCLUDING SUNDAY`), `NO BUSES` / `NO BUS LAYOVER` (bus-only, but the brief says buses are never (b)), `GROUP RIDING TO AIRPORTS`, `PEDESTRIAN PLAZA RULES SIGN`, taxi pick-up/drop-off, MTA school-bus panels (the SCHOOL guard blocks them; 6 rules).
 - `METERS ARE NOT IN EFFECT ABOVE TIMES` (1,195, the biggest group) and `LIMITED PARKING IS NOT IN EFFECT ABOVE TIMES` are INFO: they only cancel a meter/limit during street cleaning, so they can only loosen. The classifier already refused to call them METERED.
-- Bus route / destination / night-service panels, NaviLens, real-time info boxes and `ACCESS A RIDE ... ROUTE PANEL` are INFO. They hang next to a bus stop that carries its own no-standing sign; if one is the only sign in a zone, the zone is no longer drawn instead of green.
+- Bus route / destination / night-service panels, NaviLens, real-time info boxes and `ACCESS A RIDE ... ROUTE PANEL` are INFO. They hang next to a bus stop that carries its own no-standing sign; if one is the only sign in a zone, the curb is emitted as no-data instead of green.
 - Time limits go to `SPECIAL`, so curb detail says "special" with the real sign text rather than a dedicated "time limit" label. A real `TIME_LIMIT` category is a schema change for both apps and is not done here.
 - Guard rails: an INFO match is vetoed by NO STOPPING/STANDING/PARKING, PERMIT, PLATE, COMMERCIAL, TRUCK, HYDRANT, SCHOOL, CONSTRUCTION, BUSES ONLY, TOW, AUTHORIZED, HANDICAP, CARSHARE, MICROHUB, OPEN STREETS. INFO is also reachable only after every restriction pattern has had its turn.
 
 ## Results
 
-Segments 47,696 -> 47,644 (52 no longer drawn). Those 52 were info-plate-only zones (idling-law, diamond-delineator, bus route panels, a meter-cancel rider) and were green in all 12 goal x time cells today, so they were fake spots. Segments that only lost INFO entries: 2,475. Segments that gained a (a) rule: 45. All other segments (45,124) are byte-identical.
+Segments 47,696 -> 47,696 (none removed). 52 segments were info-plate-only zones (idling-law, diamond-delineator, bus route panels, a meter-cancel rider) and were green in all 12 goal x time cells today (fake spots); they are now no-data (red, inspectable). Segments that only lost INFO entries: 2,475. Segments that gained a (a) rule: 45, plus the 52 no-data ones = 97 with new rules. All other segments (45,124) are byte-identical.
 
 ### Green counts, four states
 
@@ -63,11 +63,11 @@ Segments 47,696 -> 47,644 (52 no longer drawn). Those 52 were info-plate-only zo
 | (iii) main data, UNKNOWN=restriction | 9,299 | 14,933 | 19,748 | 8,874 |
 | (iv) new data, UNKNOWN=restriction | 9,674 | 15,531 | 20,417 | 9,176 |
 
-Reading: the engine change on today's data (iii vs i) would cost 450 to 1,640 green segments per cell (Sun 10 AM A Few Hours is the exception, -1). After this audit (iv vs i) the cost is 56 to 206 per cell: the 52 undrawn info-only segments plus the 45 time-limited segments, both intended.
+Reading: the engine change on today's data (iii vs i) would cost 450 to 1,640 green segments per cell (Sun 10 AM A Few Hours is the exception, -1). After this audit (iv vs i) the cost is 56 to 206 per cell: the 52 info-only segments now no-data plus the 45 time-limited segments, both intended.
 
 ### Red to green check
 
-State (ii) vs (i), every matched segment, 3 goals x 4 probe times: **0 red->green cells**, 219 green->red cells, all from the 45 segments that gained a time-limit rule (the 52 undrawn segments are not matched). Nothing is over-applied: each of the 59 (a) rules is a signed limit of 3 hours or less. State (iv) vs (iii): 8,296 green gains (INFO recoveries), 3 green->red cells (the (a) segments).
+State (ii) vs (i), every matched segment, 3 goals x 4 probe times: **0 red->green cells**, 843 green->red cells: 219 from the 45 time-limit segments plus 624 (52 x 12) from the 52 info-plate-only segments now no-data. Both intended. Nothing is over-applied: each of the 59 (a) rules is a signed limit of 3 hours or less. State (iv) vs (iii): 8,296 green gains (INFO recoveries), 55 green->red cells (the (a) and no-data segments).
 
 ### UNKNOWN-only segments remaining
 
@@ -104,7 +104,7 @@ All should read red under the new engine, which is intended.
 
 - Engine owner: the port's UNKNOWN semantics (no days and no times = always) are pinned in `test-unknown-classifier.js`; the Swift engine should match.
 - iOS: `BlockDetailView` can show `Segment.info` (decode an optional `info: [String]`); not needed for correctness.
-- Zones that carried only info plates are now absent from the map rather than green.
+- Zones that carried only info plates are drawn as no-data (not free), with their plates in `info`.
 
 ## Complete inventory of UNKNOWN rule groups in the committed tiles (before)
 

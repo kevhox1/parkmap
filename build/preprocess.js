@@ -1879,6 +1879,7 @@ function offsetPolyline(points, side, offsetMeters) {
 // superseded with an unresolvable replacement, and none of them is "anytime", is emitted as NO DATA
 // (UNKNOWN dominant category + an always-on NO_PARKING "NO DATA" rule, see main()), because an
 // obsolete sign alone must not be what makes a curb read green.
+const NO_DATA_INFO_ONLY_DESCRIPTION = 'NO DATA - ONLY INFORMATION PLATES ON FILE (no parking rules)';
 const NO_DATA_RULE_DESCRIPTION = 'NO DATA - ONLY A SUPERSEDED SIGN ON RECORD - TREATED AS NOT PARKABLE';
 const INFO_STATS = { infoRules: 0, zonesDropped: 0 };
 const SUPERSEDED_STATS = { signs: 0, resolved: 0, unresolved: 0, noDataZones: 0, noDataSamples: [] };
@@ -2711,12 +2712,13 @@ async function main() {
         const infoTexts = [...new Set(zone.rules.filter(r => r.category === 'INFO').map(r => r.sign.sign_description || ''))].filter(Boolean);
         const liveZoneRules = zone.rules.filter(r => r.category !== 'INFO');
         INFO_STATS.infoRules += zone.rules.length - liveZoneRules.length;
-        if (liveZoneRules.length === 0) { INFO_STATS.zonesDropped++; return; }
-        zone = { ...zone, rules: liveZoneRules };
+        const infoOnlyZone = liveZoneRules.length === 0;
+        if (infoOnlyZone) INFO_STATS.zonesDropped++; // counted as "info-only zones emitted as no-data"
+        else zone = { ...zone, rules: liveZoneRules };
 
         // A multi-clause sign ("MON-FRI 7PM-MIDNIGHT SAT 9AM-MIDNIGHT") emits one rule per
         // clause (same rule shape); everything else is exactly one rule per sign.
-        const rules = zone.rules.flatMap(r => (r.schedule.clauses || [r.schedule]).map(c => ({
+        const rules = (infoOnlyZone ? [] : zone.rules).flatMap(r => (r.schedule.clauses || [r.schedule]).map(c => ({
           category: r.category,
           description: r.sign.sign_description || '',
           days: c.days,
@@ -2731,10 +2733,10 @@ async function main() {
         // list would draw GREEN in the goal modes (ParkingRulesEngine.isFree: "empty rules -> free"),
         // so the no-data state is carried as an always-on restriction that reads as not parkable
         // everywhere, with the superseded sign text kept below it for context.
-        if (zone.noData) {
+        if (zone.noData || infoOnlyZone) {
           rules.unshift({
             category: 'NO_PARKING',
-            description: NO_DATA_RULE_DESCRIPTION,
+            description: infoOnlyZone ? NO_DATA_INFO_ONLY_DESCRIPTION : NO_DATA_RULE_DESCRIPTION,
             days: [0,1,2,3,4,5,6],
             timeRanges: [],
             anytime: true,
@@ -2751,7 +2753,7 @@ async function main() {
           side: block.side,
           line: offsetLine,
           rules,
-          dominantCategory: zone.noData ? 'UNKNOWN' : mostRestrictiveCategory(zone.rules),
+          dominantCategory: (zone.noData || infoOnlyZone) ? 'UNKNOWN' : mostRestrictiveCategory(zone.rules),
           ...(infoTexts.length > 0 && { info: infoTexts }),
           oneway: onewayFields.oneway,
           ...(onewayFields.oneway_toward !== undefined && { oneway_toward: onewayFields.oneway_toward })
@@ -2929,7 +2931,7 @@ async function main() {
   console.log(`   zones emitted as NO DATA (only unresolved superseded signs): ${SUPERSEDED_STATS.noDataZones}`);
   SUPERSEDED_STATS.noDataSamples.forEach(x => console.log(`     sample: ${x}`));
   console.log(`   meter-companion extensions: ${COMPANION_STATS.extendedZones} zone-rules on ${COMPANION_STATS.faces.size} block faces`);
-  console.log(`   info (class b) sign-rules removed from rules: ${INFO_STATS.infoRules}; info-only zones not drawn: ${INFO_STATS.zonesDropped}`);
+  console.log(`   info (class b) sign-rules removed from rules: ${INFO_STATS.infoRules}; info-only zones emitted as no-data: ${INFO_STATS.zonesDropped}`);
   if (process.env.PREPROCESS_ARROW_STATS_JSON) {
     fs.writeFileSync(process.env.PREPROCESS_ARROW_STATS_JSON, JSON.stringify({
       classifiedSigns: ARROW_STATS.classifiedSigns,

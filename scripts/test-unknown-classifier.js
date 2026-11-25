@@ -105,5 +105,24 @@ check('engine on: UNKNOWN restricts only in its window', eng.isFree(seg([unk([2]
   && eng.isFree(seg([unk([2], [{ start: 540, end: 660 }])]), SUN10, SUN10 + 60) === true);
 eng.setUnknownRestricts(false);
 
+// ---- emitted tiles: info-only curbs are no-data, never free, never rule-less ---------------------------
+const fs = require('fs'), path = require('path');
+const tdir = path.join(__dirname, '..', 'tiles');
+if (fs.existsSync(tdir)) {
+  let noInfo = 0, bad = 0, infoRule = 0;
+  for (const f of fs.readdirSync(tdir)) {
+    if (!f.startsWith('tile_')) continue;
+    for (const sg of JSON.parse(fs.readFileSync(path.join(tdir, f), 'utf8'))) {
+      if (sg.rules.some(r => r.category === 'INFO')) infoRule++;
+      if (sg.rules.some(r => r.description.startsWith('NO DATA - ONLY INFORMATION PLATES'))) {
+        noInfo++;
+        if (!(sg.rules[0].anytime && sg.rules[0].category === 'NO_PARKING' && sg.dominantCategory === 'UNKNOWN' && Array.isArray(sg.info) && sg.info.length)) bad++;
+      }
+    }
+  }
+  check('tiles: no INFO category leaks into rules', infoRule === 0);
+  check('tiles: info-only curbs are always-on no-data with plate text in info', noInfo > 0 && bad === 0, `${noInfo} segments, ${bad} bad`);
+}
+
 console.log(fail ? `\n${fail} FAILED` : '\nall passed');
 process.exit(fail ? 1 : 0);
