@@ -149,8 +149,8 @@ final class MidnightRangesTests: XCTestCase {
         for tr in rule.timeRanges {
             let closes = tr.end == 0 ? 1440 : tr.end
             let length = closes > tr.start ? closes - tr.start : closes + 1440 - tr.start
-            for anchor in [day - 1, day] where anchor >= 0 {
-                let weekday = anchor % 7
+            for anchor in [day - 1, day] {
+                let weekday = ((anchor % 7) + 7) % 7
                 let dayOK = rule.days.isEmpty ? true : rule.days.contains(weekday)
                 guard dayOK else { continue }
                 let opens = anchor * 1440 + tr.start

@@ -180,7 +180,7 @@ final class TripPlanningTests: XCTestCase {
         XCTAssertEqual(TripPlanning.windowLabel(for: plan), "Sat 11/28 10:00 AM → Sun 11/29 6:00 PM")
         XCTAssertEqual(
             TripPlanning.bannerLine(for: plan),
-            "Sat\u{00A0}11/28\u{00A0}10:00\u{00A0}AM →\u{00A0}Sun\u{00A0}11/29\u{00A0}6:00\u{00A0}PM · not live"
+            "Sat 11/28 10:00\u{00A0}AM → Sun 11/29 6:00\u{00A0}PM · not live"
         )
     }
 
