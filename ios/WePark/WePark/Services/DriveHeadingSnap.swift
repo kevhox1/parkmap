@@ -67,6 +67,12 @@ enum DriveHeadingSnapConstants {
     /// `.streetSnap` — the source may exit back to `.course` (requires speed to also clear
     /// `exitSpeedMPS`). Deliberately lower than `enterCourseAccuracyDeg` (hysteresis).
     static let exitCourseAccuracyDeg: Double = 25
+
+    /// Cross-street guard: when the matched segment's axis (either direction) is more than
+    /// this many degrees from the last good heading, the match is treated as a cross street
+    /// (the driver is crossing an intersection, not turning onto it) and the snap holds the
+    /// last good heading instead of rotating the camera 90 degrees. On-device-tunable.
+    static let crossStreetGuardDeg: Double = 60
 }
 
 // MARK: - DriveHeadingSnap
@@ -167,6 +173,12 @@ enum DriveHeadingSnap {
         // Two-way (or per-curb / wrong-way one-way): pick whichever direction is
         // circularly closer to the last known good heading.
         guard let last = lastGoodHeading else { return towardBearing }
+        // Cross-street guard: neither direction of this segment is near the way we were
+        // going, so it is most likely the cross street at an intersection. Hold the heading.
+        if min(circularDelta(towardBearing, last), circularDelta(reverseBearing, last))
+            > DriveHeadingSnapConstants.crossStreetGuardDeg {
+            return last
+        }
         return circularDelta(towardBearing, last) <= circularDelta(reverseBearing, last)
             ? towardBearing : reverseBearing
     }

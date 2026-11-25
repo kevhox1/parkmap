@@ -182,6 +182,15 @@ final class DrivingContextService {
     /// stationary or unreliable-heading period.
     private var sideTravel = DriveSideTravel()
 
+    /// Clears per-session travel/match state. ContentView builds a fresh service per drive, but
+    /// this makes the guarantee explicit (and survives any future service reuse).
+    func resetSession() {
+        sideTravel.reset()
+        matchedSegment = nil
+        matchedSiblings = []
+        lastBlockKey = nil
+    }
+
     /// Timestamp of the last voice cue. Used for minimum-gap enforcement.
     private var lastSpokenAt: Date = .distantPast
 

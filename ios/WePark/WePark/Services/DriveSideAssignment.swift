@@ -187,6 +187,14 @@ struct DriveSideTravel {
 
     nonisolated init() {}
 
+    /// Forgets all remembered direction. Called at drive start/end so the first fix of a new
+    /// drive cannot reuse a previous session's heading or street direction.
+    nonisolated mutating func reset() {
+        lastHeading = nil
+        lastBlockKey = nil
+        lastBearing = nil
+    }
+
     /// Resolves the bearing to classify sides against for this tick, or `nil` if no heading
     /// has ever been known (caller then uses the cardinal fallback).
     ///

@@ -610,3 +610,42 @@ final class DisplayedHeadingHoldTests: XCTestCase {
         XCTAssertLessThanOrEqual(maxSeen - minSeen, 3.0)
     }
 }
+
+
+// MARK: - Cross-street heading guard + session reset
+
+final class DriveCrossStreetGuardTests: XCTestCase {
+
+    /// Eastbound along E-W street, then a fix matches the N-S cross street at the intersection.
+    func testCrossStreetMatch_whileHeadingEast_holdsHeading() {
+        let cross = sidesTestNorthSouth(side: "E")
+        let h = DriveHeadingSnap.snappedHeading(segment: cross, siblings: [cross], lastGoodHeading: 90)
+        XCTAssertEqual(h, 90, accuracy: 0.001)
+    }
+
+    func testCrossStreetCrossing_synthetic_sequenceNeverRotatesNorthUp() {
+        let along = sidesTestEastWest(side: "N")
+        let cross = sidesTestNorthSouth(side: "E")
+        // E 14th, 2nd Ave crossing, E 14th again.
+        let sequence = [along, along, cross, cross, along]
+        for seg in sequence {
+            let h = DriveHeadingSnap.snappedHeading(segment: seg, siblings: [seg], lastGoodHeading: 85)
+            XCTAssertLessThan(abs(h - 85), 60, "snap rotated toward the cross street")
+        }
+    }
+
+    func testAlongStreetMatch_stillPicksClosestDirection() {
+        let along = sidesTestEastWest(side: "N")
+        let h = DriveHeadingSnap.snappedHeading(segment: along, siblings: [along], lastGoodHeading: 280)
+        XCTAssertEqual(h, 270, accuracy: 1.0)
+    }
+
+    func testSideTravelReset_forgetsPreviousHeadingAndDirection() {
+        var travel = DriveSideTravel()
+        let seg = sidesTestEastWest(side: "N")
+        _ = travel.resolve(heading: 270, segment: seg, siblings: [seg], blockKey: "k", coordinate: sidesTestAnchor)
+        travel.reset()
+        let fresh = travel.resolve(heading: nil, segment: seg, siblings: [seg], blockKey: "k", coordinate: sidesTestAnchor)
+        XCTAssertNil(fresh, "first fix of a new drive must not reuse the old heading")
+    }
+}
