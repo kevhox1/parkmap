@@ -192,16 +192,16 @@ function classifySign(desc) {
 // "2 HOUR PARKING 9AM-7PM EXCEPT SUNDAY", "30 MINUTE LIMIT", "15 MINUTE PARKING". Digit-led on purpose.
 const TIME_LIMIT_RE = /\b\d+\s*(?:HOURS?|HRS?|MINUTES?|MINS?)\s+(?:PARKING|LIMIT|LIMITED)\b/;
 // Words that make a sign potentially restrictive for a private car: never INFO.
-const INFO_BLOCKERS_RE = /NO STOPPING|NO STANDING|NO PARKING|PERMIT|PLATE|COMMERCIAL|TRUCK|HYDRANT|SCHOOL|CONSTRUCTION|BUSES ONLY|\bTOW(?:ED|ING|-AWAY| AWAY)?\b|AUTHORIZED|HANDICAP|DISABILIT|CARSHARE|MICROHUB|OPEN STREETS/;
+const INFO_BLOCKERS_RE = /NO STOPPING|NO STANDING|NO PARKING|PERMIT|PLATE|COMMERCIAL|TRUCK|HYDRANT|SCHOOL|CONSTRUCTION|BUSES ONLY|\bTOW(?:ED|ING|-AWAY| AWAY)?\b|AUTHORIZED|\bTAXI|\bBUS\b|NAVILENS|REAL TIME PUBLIC INFORMATION|(?:ROUTE|DESTINATION) PANEL|HANDICAP|DISABILIT|CARSHARE|MICROHUB|OPEN STREETS/;
+// Bus route/destination panels, NaviLens, real-time info boxes and taxi-stand plates are NOT here: they mark
+// a bus stop / taxi stand (QA #195), so they stay UNKNOWN (red) until a real stop/stand rule is on the pole.
 const INFORMATIONAL_RES = [
   /METERS? ARE NOT IN EFFECT ABOVE TIMES/,          // rider that CANCELS meters during street cleaning: can only loosen
   /LIMITED PARKING IS NOT IN EFFECT ABOVE TIMES/,   // same, for free limited-time parking
-  /\b(?:ROUTE|DESTINATION) PANEL\b|COMBINATION ROUTE PANEL|NAVILENS|REAL TIME PUBLIC INFORMATION BOX|ROUTE BUS RIDER/, // bus route / destination panels
   /(?:ANGLE|PARALLEL|\d+ DEG(?:REES?)?) PARKING ONLY/, // how to park, not whether
   /IDLING LAW|NO ENGINE IDLING|YOU IDLE YOU PAY/,
   /DIAMOND DELINEATOR/,
   /PAY-BY-APP INFORMATION|NYC PARKING CARD AVAILABLE/,
-  /NO TAXI DISPATCHERS|TAXI DRIVERS YOU MUST TAKE FARE/,
   /O'CLOCK ARROW|\bNEXT (?:RIGHT|LEFT)\b/,           // wayfinding plates
 ];
 function isInformationalSign(d) {
