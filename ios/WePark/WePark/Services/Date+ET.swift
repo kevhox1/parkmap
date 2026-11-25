@@ -55,12 +55,23 @@ extension Date {
 
     /// Returns "yyyy-MM-dd" representation in America/New_York time.
     /// PWA equivalent: toETDateStr(d) at index.html:1671
+    ///
+    /// perf: the formatter is built once. Creating a DateFormatter per call was the top main-thread
+    /// cost in `rebuildOverlays` (via `ASPSuspensionService.isSuspended`). DateFormatter is
+    /// thread-safe for formatting on iOS 7+. POSIX locale pins ASCII digits and Gregorian layout so
+    /// the key always matches the "yyyy-MM-dd" keys in asp-2026.json.
     func toETDateString() -> String {
+        Date.etDateKeyFormatter.string(from: self)
+    }
+
+    private static let etDateKeyFormatter: DateFormatter = {
         let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
         formatter.timeZone = .easternTime
         formatter.dateFormat = "yyyy-MM-dd"
-        return formatter.string(from: self)
-    }
+        return formatter
+    }()
 
     /// Minute of day in Eastern Time (0 = midnight, 1439 = 11:59pm).
     /// Used by the rules engine for time-range comparisons.

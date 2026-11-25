@@ -44,6 +44,13 @@ final class ASPSuspensionService {
     /// to warn when a trip reaches dates the calendar does not cover yet.
     private let coveredYear: Int?
 
+    /// perf: memo of `isSuspended` keyed by the whole UTC hour of the query. New York's UTC offsets
+    /// are whole hours, so every instant inside one UTC hour is on the same ET calendar date, which
+    /// makes the memo exact. A rebuild asks about the same handful of dates for thousands of segments.
+    /// Guarded by a lock: the service is documented as callable from any thread.
+    private var suspendedByHour: [Int: Bool] = [:]
+    private let suspendedByHourLock = NSLock()
+
     // MARK: - Init
 
     /// Loads and decodes asp-2026.json from the app bundle.
@@ -79,8 +86,17 @@ final class ASPSuspensionService {
     /// Returns true if the given date (evaluated in ET) is in the suspension calendar.
     /// PWA equivalent: isASPSuspended(dateStr) at index.html:2135.
     func isSuspended(_ date: Date) -> Bool {
-        let key = date.toETDateString()
-        return suspensionsByDate[key] != nil
+        if suspensionsByDate.isEmpty { return false }
+        let hour = Int((date.timeIntervalSince1970 / 3600).rounded(.down))
+        suspendedByHourLock.lock()
+        let cached = suspendedByHour[hour]
+        suspendedByHourLock.unlock()
+        if let cached { return cached }
+        let result = suspensionsByDate[date.toETDateString()] != nil
+        suspendedByHourLock.lock()
+        suspendedByHour[hour] = result
+        suspendedByHourLock.unlock()
+        return result
     }
 
     /// True when `date` (evaluated in ET) falls in the calendar year the bundled suspension
