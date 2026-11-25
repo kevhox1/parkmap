@@ -103,15 +103,19 @@ for (const d of NULLS) check(`info panel skipped: ${d.slice(0, 50)}`, pre.classi
 
 const UNKNOWNS = [
   'DESCRIPTION NOT AVAILABLE',
+  'OPEN STREETS (INFORMATION SIGN)', 'CARSHARE SIGN (INFORMATION) - (BLUE LETTERING)',
+  'NO TRUCKS (SYMBOL)', 'NO BUS LAYOVER',
+];
+for (const d of UNKNOWNS) check(`stays UNKNOWN: ${d.slice(0, 50)}`, pre.classifySign(d) === 'UNKNOWN', String(pre.classifySign(d)));
+// UNKNOWN-sign audit (docs/qa/tiles-unknown-audit.md, scripts/test-unknown-classifier.js): these moved.
+const INFOS = [
   'METERS ARE NOT IN EFFECT ABOVE TIMES (TO BE USED ONLY FOR CONFLICTING STREET CLEANING AND METERED PARKING REGULATIONS)',
   'BACK IN ANGLE PARKING ONLY', 'BACK IN 90 DEG PARKING ONLY', 'PARALLEL PARKING ONLY',
   'SELECT BUS SERVICE ROUTE PANEL (TEXT TO BE MODIFIED AS REQUESTED)',
-  'OPEN STREETS (INFORMATION SIGN)', 'CARSHARE SIGN (INFORMATION) - (BLUE LETTERING)',
-  'NO ENGINE IDLING (SYMBOL) NO ENGINE IDLING MAX FINE $XXXX', 'NO TRUCKS (SYMBOL)', 'NO BUS LAYOVER',
-  // #5 time-limited free parking: intentionally left as-is (see PR notes)
-  '2 HOUR PARKING SATURDAY 9AM-7PM',
+  'NO ENGINE IDLING (SYMBOL) NO ENGINE IDLING MAX FINE $XXXX',
 ];
-for (const d of UNKNOWNS) check(`stays UNKNOWN: ${d.slice(0, 50)}`, pre.classifySign(d) === 'UNKNOWN', String(pre.classifySign(d)));
+for (const d of INFOS) check(`now INFO: ${d.slice(0, 50)}`, pre.classifySign(d) === 'INFO', String(pre.classifySign(d)));
+check('time-limited parking is a windowed SPECIAL', pre.classifySign('2 HOUR PARKING SATURDAY 9AM-7PM') === 'SPECIAL');
 
 console.log(fail ? `\nRESULT: ${fail} FAILED` : '\nRESULT: PASS');
 process.exit(fail ? 1 : 0);
