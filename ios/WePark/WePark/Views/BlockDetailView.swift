@@ -208,7 +208,8 @@ struct BlockDetailView: View {
                     }
 
                     // 4. Rules list
-                    if !segment.rules.isEmpty {
+                    // (Hidden for no-sign-data curbs: the synthetic NO DATA rule is not a posted sign.)
+                    if !segment.rules.isEmpty, !segment.hasNoSignData {
                         rulesSection
                     }
 
@@ -327,6 +328,11 @@ struct BlockDetailView: View {
         // `engine.currentStateColor(...)`, untouched (never a new color, §0.8.6).
         let label = engine.safetyLabel(for: segment, at: now)
         return VStack(alignment: .leading, spacing: 4) {
+            // No usable sign data: "We don't know / No sign data / read the signs", never a
+            // "No parking" headline (a user would take it for a posted sign).
+            if tripVerdict == nil, goalGoodThroughLabel == nil, segment.hasNoSignData {
+                NoSignDataBlock(reason: segment.noSignDataReason)
+            } else {
             if tripVerdict != nil {
                 Text("TRIP PLAN · not live")
                     .font(.caption.weight(.heavy))
@@ -339,6 +345,7 @@ struct BlockDetailView: View {
                 // This is the first focusable accessibility element in the sheet
                 // per spec §3.5 and palette doc §5.1. The band above is hidden.
                 .accessibilityAddTraits(.isHeader)
+            }
         }
     }
 

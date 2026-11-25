@@ -127,7 +127,8 @@ final class DriveCardChipAgreementTests: XCTestCase {
 
     // Segments under 6 m never decide the color when a longer segment exists.
     func testShortSegmentIgnoredWhenLongExists() {
-        let long = dcaSegment(side: "N", rules: [])
+        // Amended (no-sign-data fix): empty rules are unknown/not-free; use a FREE-category rule.
+        let long = dcaSegment(side: "N", rules: [dcaRule(.free)])
         let tiny = dcaSegment(side: "N", rules: [dcaRule(.aspMonThu, days: [1, 4])], lengthLatDelta: 0.00001)
         XCTAssertLessThan(DrivingContextService.segmentLengthMeters(tiny), 6.0)
         XCTAssertEqual(chip([long, tiny]), .free)

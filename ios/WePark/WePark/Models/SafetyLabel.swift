@@ -119,7 +119,8 @@ extension SafetyLabel {
         case .metered:
             self.init(text: "Metered", severity: .metered)
         case .restricted:
-            self.init(text: "No parking", severity: .restricted)
+            // Still red/not free; honest wording when no curb on the side has sign data.
+            self.init(text: aggregation.noSignData ? NoSignData.headline : "No parking", severity: .restricted)
         case .unknown:
             self.init(text: "—", severity: .unknown)
         }

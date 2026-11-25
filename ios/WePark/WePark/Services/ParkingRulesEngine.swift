@@ -70,11 +70,13 @@ final class ParkingRulesEngine {
     ///   "paid until 7pm"          ← metered active (stripped from "Metered (paid until 7pm)")
     ///   "free until 9am"          ← metered, currently free
     ///   "Free"                    ← no restrictions at all
-    ///   "No data"                 ← empty rules array
+    ///   "No sign data"            ← empty rules array or synthetic NO DATA rule
     func safetyLabel(for segment: Segment, at now: Date = .nowET) -> SafetyLabel {
         let rules = segment.rules
-        guard !rules.isEmpty else {
-            return SafetyLabel(text: "No data", severity: .unknown)
+        // No usable sign data (empty rules or the synthetic "NO DATA" rule): say so plainly,
+        // never "No parking" (that would read as a posted sign).
+        guard !segment.hasNoSignData else {
+            return SafetyLabel(text: NoSignData.headline, severity: .unknown)
         }
 
         let restriction = nextRestriction(for: segment, at: now)
@@ -673,8 +675,9 @@ final class ParkingRulesEngine {
         ignoringMeteredPayment: Bool = false
     ) -> Bool {
         let rules = segment.rules
-        // Empty rules → always free.
-        guard !rules.isEmpty else { return true }
+        // Empty rules / synthetic NO DATA rule → unknown, which is NEVER free (a spot we
+        // can't verify must not read as a spot).
+        guard !segment.hasNoSignData else { return false }
 
         let cal = Calendar.easternTime
 

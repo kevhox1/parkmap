@@ -147,6 +147,11 @@ struct SideAggregation: Equatable {
     /// `SafetyLabel(for: SideAggregation)` bridge), or when `opportunity` is not
     /// `.free`/`.comingSoon`.
     let earliestFreeUntilText: String?
+
+    /// True when `opportunity` is `.restricted` only because every segment on the side has
+    /// no usable sign data. The label bridge then says "No sign data", not "No parking".
+    /// `var` with a default so existing memberwise call sites are unchanged.
+    var noSignData: Bool = false
 }
 
 // MARK: - DrivingContextService
@@ -690,7 +695,12 @@ final class DrivingContextService {
         }
 
         // Step 6: segments found but none free or metered.
-        return SideAggregation(opportunity: .restricted, earliestFreeUntilText: nil)
+        // Every segment lacks sign data: say so (still red / not free) rather than "No parking".
+        return SideAggregation(
+            opportunity: .restricted,
+            earliestFreeUntilText: nil,
+            noSignData: sideSegments.allSatisfy { $0.hasNoSignData }
+        )
     }
 
     // MARK: - fix/goal-aware-drive-card: goal-aware chip-color override

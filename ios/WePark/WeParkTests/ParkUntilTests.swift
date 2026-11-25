@@ -106,14 +106,14 @@ final class ParkUntilTests: XCTestCase {
     }
 
     // MARK: - testIsFree_noRules_returnsTrue
-    // Spec §7 / AC-W7.5.1: Empty rules → always free.
+    // Spec §7 / AC-W7.5.1: Empty rules → NOT free (unknown; no-sign-data fix).
 
-    func testIsFree_noRules_returnsTrue() {
+    func testIsFree_noRules_returnsFalse() {
         let segment = seg(rules: [])
         let from  = et(2026, 5, 11, 8, 0)
         let until = et(2026, 5, 11, 10, 0)
-        XCTAssertTrue(engine.isFree(segment: segment, from: from, until: until),
-                      "No rules → isFree must return true")
+        XCTAssertFalse(engine.isFree(segment: segment, from: from, until: until),
+                      "No rules → unknown → isFree must return false")
     }
 
     // MARK: - testIsFree_noParkingAnytime_returnsFalse

@@ -330,7 +330,7 @@ struct MyCarSheetV2View: View {
         case .freeComfortably: return "checkmark.circle.fill"
         case .freeButRestrictionSoon: return "exclamationmark.triangle.fill"
         case .meteredActive: return "dollarsign.circle.fill"
-        case .restrictedNow: return "xmark.octagon.fill"
+        case .restrictedNow: return resolvedSegment?.hasNoSignData == true ? "questionmark.circle.fill" : "xmark.octagon.fill"
         case .unknown: return "questionmark.circle.fill"
         }
     }
@@ -342,6 +342,8 @@ struct MyCarSheetV2View: View {
 
     private var nextLine: String? {
         guard let seg = resolvedSegment else { return nil }
+        // No sign data: the sub-line is the "read the signs" advice, not a "Next:" schedule.
+        if seg.hasNoSignData { return seg.noSignDataReason.map { $0 + " " + NoSignData.subline } ?? NoSignData.subline }
         return MyCarSheetV2Logic.nextMoveLine(
             restriction: engine.nextRestriction(for: seg, at: now),
             rules: seg.rules,
@@ -457,7 +459,7 @@ struct MyCarSheetV2View: View {
 
     @ViewBuilder
     private var signsSection: some View {
-        if let seg = resolvedSegment, !seg.rules.isEmpty {
+        if let seg = resolvedSegment, !seg.rules.isEmpty, !seg.hasNoSignData {
             let rules = MyCarSheetV2Logic.dedupedRules(seg.rules.sorted { $0.category.priority < $1.category.priority })
             VStack(alignment: .leading, spacing: 10) {
                 Button {

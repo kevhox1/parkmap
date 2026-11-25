@@ -102,6 +102,12 @@ struct ParkConfirmView: View {
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)
                             .accessibilityAddTraits(.isHeader)
+                        if seg.hasNoSignData {
+                            Text(NoSignData.subline)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
 
                     // W7: Reminder toggle
