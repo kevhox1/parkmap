@@ -315,7 +315,9 @@ struct ParkedCarDetailView: View {
         guard let pin = ownLiveLeavingSoonPin, let expiresAt = pin.expiresAt else {
             return "The crew's been told"
         }
-        let remainingMinutes = Int(max(0, expiresAt.timeIntervalSince(pinService?.nowProvider() ?? now)) / 60)
+        let remainingMinutes = MyCarSheetV2Logic.leavingSoonMinutesLeft(
+            expiresAt: expiresAt, now: pinService?.nowProvider() ?? now, leavingMinutes: pin.leavingMinutes
+        )
         guard remainingMinutes > 0 else { return "The crew's been told" }
         return "The crew's been told \u{2014} \(remainingMinutes) min left"
     }

@@ -248,9 +248,8 @@ final class ParkingRulesEngine {
         // Active right now? Check each metered rule's time ranges.
         // Port of JS lines 5391-5395.
         for rule in meterRules {
-            if !rule.days.isEmpty && !rule.days.contains(dow) { continue }
             for tr in rule.timeRanges {
-                if minute >= tr.start && minute <= tr.end {
+                if rule.rangeActive(tr, dayOfWeek: dow, minuteOfDay: minute, emptyDaysMeansEveryDay: true) {
                     return "Metered (paid until \(formatMinutes(tr.end)))"
                 }
             }
@@ -346,9 +345,8 @@ final class ParkingRulesEngine {
             let minuteOfDay = now.minuteOfDayET
             let meterRules = rules.filter { $0.category == .metered }
             let isMeteredNow = meterRules.contains { rule in
-                if !rule.days.isEmpty && !rule.days.contains(dayOfWeek) { return false }
-                return rule.timeRanges.contains { tr in
-                    minuteOfDay >= tr.start && minuteOfDay <= tr.end
+                rule.timeRanges.contains { tr in
+                    rule.rangeActive(tr, dayOfWeek: dayOfWeek, minuteOfDay: minuteOfDay, emptyDaysMeansEveryDay: true)
                 }
             }
             if isMeteredNow { return .meteredActive }
@@ -383,16 +381,12 @@ final class ParkingRulesEngine {
     func isScheduleActive(rule: ParkingRule, dayOfWeek: Int, minuteOfDay: Int) -> Bool {
         if rule.anytime { return true }
         guard !rule.days.isEmpty else { return false }
-        if !rule.days.contains(dayOfWeek) { return false }
-        if rule.timeRanges.isEmpty { return true }
+        if rule.timeRanges.isEmpty { return rule.days.contains(dayOfWeek) }
 
+        // Midnight-aware (see TimeRange): end 0 == 24:00 same day; 11PM-1AM spills into the
+        // NEXT day, so the 12AM-1AM tail is governed by the previous day's membership.
         return rule.timeRanges.contains { tr in
-            if tr.start < tr.end {
-                return minuteOfDay >= tr.start && minuteOfDay < tr.end
-            } else {
-                // Overnight range wraps midnight: e.g., start=1380 (11pm), end=60 (1am)
-                return minuteOfDay >= tr.start || minuteOfDay < tr.end
-            }
+            rule.rangeActive(tr, dayOfWeek: dayOfWeek, minuteOfDay: minuteOfDay, emptyDaysMeansEveryDay: false)
         }
     }
 
@@ -704,7 +698,7 @@ final class ParkingRulesEngine {
             }
 
             // Walk each calendar date in the window.
-            for dayOffset in 0...dayCount {
+            for dayOffset in -1...dayCount {
                 guard let dayMidnight = cal.date(byAdding: .day, value: dayOffset, to: fromMidnight) else {
                     continue
                 }
@@ -726,6 +720,7 @@ final class ParkingRulesEngine {
 
                     // No time ranges: rule is active all day on this ASP day.
                     if rule.timeRanges.isEmpty {
+                        if dayOffset < 0 { continue }
                         // The rule covers the entire calendar day. Any overlap with
                         // [windowStart, windowEnd] is a conflict.
                         // windowEnd > windowStart is always true for a non-degenerate window;
@@ -739,9 +734,11 @@ final class ParkingRulesEngine {
 
                     // Check each time range for overlap with the day's window.
                     for tr in rule.timeRanges {
-                        if timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
-                                             windowStart: windowStart, windowEnd: windowEnd,
-                                             cal: cal) {
+                        // dayOffset -1 only contributes the previous day's spill past midnight.
+                        if (dayOffset >= 0 || tr.wrapsPastMidnight)
+                            && timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
+                                                 windowStart: from, windowEnd: until,
+                                                 cal: cal) {
                             return false
                         }
                     }
@@ -752,6 +749,7 @@ final class ParkingRulesEngine {
 
                     // No time ranges: rule is active all day on matching days.
                     if rule.timeRanges.isEmpty {
+                        if dayOffset < 0 { continue }
                         if !rule.days.isEmpty {
                             // The rule is active all day on this day — overlap exists.
                             if windowEnd > windowStart { return false }
@@ -760,9 +758,11 @@ final class ParkingRulesEngine {
                     }
 
                     for tr in rule.timeRanges {
-                        if timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
-                                             windowStart: windowStart, windowEnd: windowEnd,
-                                             cal: cal) {
+                        // dayOffset -1 only contributes the previous day's spill past midnight.
+                        if (dayOffset >= 0 || tr.wrapsPastMidnight)
+                            && timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
+                                                 windowStart: from, windowEnd: until,
+                                                 cal: cal) {
                             return false
                         }
                     }
@@ -780,9 +780,11 @@ final class ParkingRulesEngine {
                     if rule.timeRanges.isEmpty { continue }   // No time ranges → no metered conflict.
 
                     for tr in rule.timeRanges {
-                        if timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
-                                             windowStart: windowStart, windowEnd: windowEnd,
-                                             cal: cal) {
+                        // dayOffset -1 only contributes the previous day's spill past midnight.
+                        if (dayOffset >= 0 || tr.wrapsPastMidnight)
+                            && timeRangeOverlaps(tr: tr, dayMidnight: dayMidnight,
+                                                 windowStart: from, windowEnd: until,
+                                                 cal: cal) {
                             return false
                         }
                     }
@@ -811,33 +813,23 @@ final class ParkingRulesEngine {
         windowEnd: Date,
         cal: Calendar
     ) -> Bool {
-        if tr.start < tr.end {
-            // Normal (non-overnight) range.
-            let startHour = tr.start / 60
-            let startMin  = tr.start % 60
-            let endHour   = tr.end / 60
-            let endMin    = tr.end % 60
-            guard let rStart = cal.date(bySettingHour: startHour, minute: startMin, second: 0, of: dayMidnight),
-                  let rEnd   = cal.date(bySettingHour: endHour,   minute: endMin,   second: 0, of: dayMidnight)
-            else { return false }
-            // Half-open interval: [rStart, rEnd) overlaps [windowStart, windowEnd)?
-            return rStart < windowEnd && rEnd > windowStart
-        } else {
-            // Overnight range: wraps midnight. Split into two sub-ranges.
-            // Sub-range 1: [tr.start, midnight) on dayMidnight's day.
-            let startHour  = tr.start / 60
-            let startMin   = tr.start % 60
-            let nextMidnight = dayMidnight.addingTimeInterval(24 * 3600)
-            guard let rStart = cal.date(bySettingHour: startHour, minute: startMin, second: 0, of: dayMidnight)
-            else { return false }
-            if rStart < windowEnd && nextMidnight > windowStart { return true }
+        // Midnight-aware (see TimeRange): end 0 == 24:00 of the SAME day; a range with
+        // 0 < end <= start wraps and ends on the NEXT calendar day. `dayMidnight` is the
+        // range's anchor day.
+        guard let nextMidnight = cal.date(byAdding: .day, value: 1, to: dayMidnight),
+              let rStart = cal.date(bySettingHour: tr.start / 60, minute: tr.start % 60, second: 0, of: dayMidnight)
+        else { return false }
 
-            // Sub-range 2: [midnight, tr.end) on the next calendar day.
-            let endHour = tr.end / 60
-            let endMin  = tr.end % 60
-            guard let rEnd = cal.date(bySettingHour: endHour, minute: endMin, second: 0, of: nextMidnight)
+        let rEnd: Date
+        if tr.endMinute == 1440 {
+            rEnd = nextMidnight
+        } else {
+            let endDay = tr.wrapsPastMidnight ? nextMidnight : dayMidnight
+            guard let e = cal.date(bySettingHour: tr.end / 60, minute: tr.end % 60, second: 0, of: endDay)
             else { return false }
-            return nextMidnight < windowEnd && rEnd > windowStart
+            rEnd = e
         }
+        // Half-open interval: [rStart, rEnd) overlaps [windowStart, windowEnd)?
+        return rStart < windowEnd && rEnd > windowStart
     }
 }

@@ -42,8 +42,18 @@ nonisolated enum MyCarSheetV2Logic {
         return "\(hour12):\(paddedMinute) \(suffix)"
     }
 
+    /// Like `clock`, but minute 0 / 1440 reads "midnight" (a bare "12" or "12 AM" next to a
+    /// shared meridiem reads like noon: "12\u{2013}3 AM").
+    static func clockOrMidnight(_ minutes: Int) -> String {
+        ((minutes % 1440) + 1440) % 1440 == 0 ? "midnight" : clock(minutes)
+    }
+
     /// "9\u{2013}10:30 AM" when both ends share a meridiem, "8 AM\u{2013}6 PM" otherwise.
+    /// A midnight end or start is spelled out: "9 AM\u{2013}midnight", "midnight\u{2013}3 AM".
     static func timeRange(_ range: TimeRange) -> String {
+        if range.start % 1440 == 0 || range.end % 1440 == 0 {
+            return "\(clockOrMidnight(range.start))\u{2013}\(clockOrMidnight(range.end))"
+        }
         let start = clock(range.start)
         let end = clock(range.end)
         let startParts = start.split(separator: " ")
@@ -114,10 +124,10 @@ nonisolated enum MyCarSheetV2Logic {
         for rule in rules where rule.category == .metered {
             guard rule.anytime || rule.days.isEmpty || rule.days.contains(dayOfWeek) else { continue }
             for range in rule.timeRanges {
-                let active = range.start < range.end
-                    ? (minuteOfDay >= range.start && minuteOfDay < range.end)
-                    : (minuteOfDay >= range.start || minuteOfDay < range.end)
-                if active { return "meter until \(clock(range.end))" }
+                // Same midnight-aware check the engine uses, so hero and this line agree.
+                if rule.rangeActive(range, dayOfWeek: dayOfWeek, minuteOfDay: minuteOfDay, emptyDaysMeansEveryDay: true) {
+                    return "meter until \(clockOrMidnight(range.end))"
+                }
             }
         }
         return nil
@@ -130,11 +140,22 @@ nonisolated enum MyCarSheetV2Logic {
         restriction: NextRestriction,
         rules: [ParkingRule],
         dayOfWeek: Int,
-        minuteOfDay: Int
+        minuteOfDay: Int,
+        now: Date? = nil
     ) -> String? {
         if let rule = restriction.rule, !restriction.isUnrestricted {
-            let text = plainRule(rule)
-            return restriction.isActiveNow ? "Now: \(text)" : "Next: \(text)"
+            if restriction.isActiveNow { return "Now: \(plainRule(rule))" }
+            // The engine already skipped suspended street-cleaning dates when it computed
+            // `hours`, so name only the weekday it actually landed on ("Mon", not "Mon & Thu"
+            // when Thursday is a holiday).
+            if let now, rule.category.isASP, !rule.anytime {
+                let target = now.addingTimeInterval(restriction.hours * 3600)
+                let day = dayPhrase([target.dayOfWeekET])
+                let times = timePhrase(rule.timeRanges)
+                let text = ["street cleaning", day, times].filter { !$0.isEmpty }.joined(separator: " ")
+                return "Next: \(text)"
+            }
+            return "Next: \(plainRule(rule))"
         }
         if let meter = meterUntil(rules: rules, dayOfWeek: dayOfWeek, minuteOfDay: minuteOfDay) {
             return "Now: \(meter)"
@@ -143,6 +164,20 @@ nonisolated enum MyCarSheetV2Logic {
     }
 
     // MARK: - Leaving
+
+    /// The server keeps a leaving-soon pin alive for the chosen minutes PLUS this grace period
+    /// (`derive_pin_expiry`: `now() + (leaving_minutes + 3) minutes`).
+    static let leavingSoonServerGraceMinutes = 3
+
+    /// Minutes to show in "Neighbors have been told \u{2014} N min left": the countdown the user
+    /// chose, not the server's padded expiry. Picks of 10 read "10", not "12"/"13".
+    static func leavingSoonMinutesLeft(expiresAt: Date, now: Date, leavingMinutes: Int?) -> Int {
+        let seconds = expiresAt.timeIntervalSince(now)
+        guard let leavingMinutes else { return max(0, Int((seconds / 60).rounded(.up))) }
+        let unpadded = seconds - Double(leavingSoonServerGraceMinutes * 60)
+        let minutes = Int((unpadded / 60).rounded(.up))
+        return min(leavingMinutes, max(0, minutes))
+    }
 
     /// The "I'm leaving" button opens the hand-off sheet only when it has something besides "Just
     /// clear my car" to offer (crew pin via community, or Spot Pass); otherwise it clears directly,

@@ -856,7 +856,7 @@ private struct GoalWindowRow: View {
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Text(windowLabel)
+                    Text(ParkingGoals.nonBreakingMeridiem(windowLabel))
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.primary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -872,7 +872,7 @@ private struct GoalWindowRow: View {
                         Image(systemName: goal.dockIcon)
                             .foregroundStyle(.blue)
                             .accessibilityHidden(true)
-                        Text("\(goal.dockPrimary) · \(windowLabel)")
+                        Text(ParkingGoals.nonBreakingMeridiem("\(goal.dockPrimary) · \(windowLabel)"))
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.primary)
                             .fixedSize(horizontal: false, vertical: true)

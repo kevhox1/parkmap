@@ -180,7 +180,7 @@ final class TripPlanningTests: XCTestCase {
         XCTAssertEqual(TripPlanning.windowLabel(for: plan), "Sat 11/28 10:00 AM → Sun 11/29 6:00 PM")
         XCTAssertEqual(
             TripPlanning.bannerLine(for: plan),
-            "Sat\u{00A0}11/28\u{00A0}10:00\u{00A0}AM →\u{00A0}Sun\u{00A0}11/29\u{00A0}6:00\u{00A0}PM · not live"
+            "Sat 11/28 10:00\u{00A0}AM → Sun 11/29 6:00\u{00A0}PM · not live"
         )
     }
 
@@ -356,8 +356,9 @@ final class TripPlanningTests: XCTestCase {
         XCTAssertTrue(line.contains("8:28\u{00A0}PM"))
         XCTAssertTrue(line.contains("9:00\u{00A0}AM"))
         XCTAssertFalse(line.contains("8:28 PM"))
-        // The only plain space before " · not live" is the one ahead of the arrow.
+        // Normal spaces remain between words so AX5 can wrap there:
+        // "Tue 11/24 8:28<nbsp>PM -> Wed 11/25 9:00<nbsp>AM" has 6 plain spaces.
         let window = TripPlanning.displayWindowLabel(for: plan)
-        XCTAssertEqual(window.filter { $0 == " " }.count, 1)
+        XCTAssertEqual(window.filter { $0 == " " }.count, 6)
     }
 }
