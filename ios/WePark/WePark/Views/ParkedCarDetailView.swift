@@ -371,7 +371,7 @@ struct ParkedCarDetailView: View {
                     // equality guard at the render site — mixed ASP+METERED blocks
                     // legitimately keep BOTH lines (the two derivations diverge there; see
                     // `ParkedCarDetailLogic.shouldSuppressStatusLine`'s doc comment).
-                    if let seg = resolvedSegment {
+                    if let seg = resolvedSegment, !seg.hasNoSignData {
                         let statusText = statusLineText(for: seg)
                         let headlineText = engine.safetyLabel(for: seg, at: now).text
                         if !ParkedCarDetailLogic.shouldSuppressStatusLine(
@@ -402,7 +402,7 @@ struct ParkedCarDetailView: View {
                     }
 
                     // 6. Rules list (only if we have a segment with rules).
-                    if let seg = resolvedSegment, !seg.rules.isEmpty {
+                    if let seg = resolvedSegment, !seg.rules.isEmpty, !seg.hasNoSignData {
                         rulesSection(for: seg)
                     }
 
@@ -531,12 +531,18 @@ struct ParkedCarDetailView: View {
 
     private func safetyLabelView(for seg: Segment) -> some View {
         let label = engine.safetyLabel(for: seg, at: now)
-        return Text(label.text)
-            .font(.title.bold())
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
-            // First focusable a11y element (same discipline as BlockDetailView).
-            .accessibilityAddTraits(.isHeader)
+        return Group {
+            if seg.hasNoSignData {
+                NoSignDataBlock(reason: seg.noSignDataReason)
+            } else {
+                Text(label.text)
+                    .font(.title.bold())
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    // First focusable a11y element (same discipline as BlockDetailView).
+                    .accessibilityAddTraits(.isHeader)
+            }
+        }
     }
 
     // MARK: - Parked-at timestamp

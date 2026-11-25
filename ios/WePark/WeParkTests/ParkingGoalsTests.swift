@@ -469,7 +469,9 @@ final class ParkingGoalsTests: XCTestCase {
     }
 
     func testGoodThroughLabel_noRulesAtAll_returnsNil() {
-        let segment = seg(rules: [])
+        // Amended (no-sign-data fix): empty rules are now unknown/not-free, so the "nothing ever
+        // restricts" fixture is a single FREE-category rule instead.
+        let segment = seg(rules: [r(category: .free, days: [])])
         let label = ParkingGoals.goodThroughLabel(for: segment, goal: .parkAndForget, from: et(2026, 5, 11, 9, 0), engine: engine)
         XCTAssertNil(label, "No rules at all → every day-window clears → goodThroughLabel must be nil, not a fabricated string")
     }
