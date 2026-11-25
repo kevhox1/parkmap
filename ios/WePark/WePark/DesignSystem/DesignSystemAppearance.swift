@@ -14,7 +14,7 @@
 //  frame), by `WindowAppearanceApplier`: flag off -> `.dark` (same as the old key, which forced
 //  system alerts, the keyboard and share sheets dark); flag on -> `.unspecified` (follows the
 //  system). The launch screen (the one thing that exists before any window) is pinned to black via
-//  `INFOPLIST_KEY_UILaunchScreen_BackgroundColor = LaunchBackground` (a black color set), which is
+//  Info.plist `UILaunchScreen.UIColorName = LaunchBackground` (a black color set), which is
 //  what the dark launch screen was. FLAG-FLIP TODO: give that color set a light variant (cream)
 //  when the flag ships on, so light-mode users don't see a black launch.
 //

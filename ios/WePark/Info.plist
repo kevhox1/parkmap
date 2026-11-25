@@ -2,6 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Phase 2a: the launch screen is pinned to black (what the dark launch screen was before the
+	     Info.plist UIUserInterfaceStyle=Dark key was removed). Flag-flip TODO: add a light variant. -->
+	<key>UILaunchScreen</key>
+	<dict>
+		<key>UIColorName</key>
+		<string>LaunchBackground</string>
+	</dict>
 	<key>UIAppFonts</key>
 	<array>
 		<string>Fredoka-Regular.ttf</string>
