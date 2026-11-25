@@ -35,3 +35,8 @@ Rule: Kevin reviews first. Nothing below gets fixed until he says "live smoke co
 - NEW: `AVSpeechSynthesisVoice(language:)` in `DrivingVoice.init` is a synchronous main-thread call at app init (hung 2+ min on a fresh sim).
 - Product call: a 6 m free sliver can make a side green. "Free until Sat 11/28 12:00 AM" reads oddly (should be "Fri night midnight" or "until Sat").
 - Copy to confirm with Kevin: "Not free through your window".
+
+## Wave 2 (2026-11-25)
+- MERGED #182 (re-QA MERGE-WITH-FOLLOWUPS): idle heading freezes the DISPLAYED bearing (0° drift vs 35.7°); sides follow travel direction; whole-street one-way rule (Bowery/E Houston per-curb tags no longer swap); wrong-way follows heading; canonical block key fixes "—" from reversed labels; camera snap uses the same rule (Bowery northbound faces north).
+- MERGED #183 goals rework (one free rule, now-anchored windows, overnight lever, window in banner, "Show all sign details") and #184 Plan a Trip (dark).
+- Follow-ups: camera briefly north-up at an intersection after resume (~6–9 s, 2nd Ave crossing; may be pre-existing; guard street snap when the matched segment is far from the last good heading). `DriveSideTravel` not reset between drive sessions. Bowery east-curb "—" from different cross streets in the data (same on main). A "My parked car" marker appeared during routed sim drives without tapping Park here (auto-detect flag on): investigate.
