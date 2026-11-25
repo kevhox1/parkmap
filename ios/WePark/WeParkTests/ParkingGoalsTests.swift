@@ -139,6 +139,32 @@ final class ParkingGoalsTests: XCTestCase {
         }
     }
 
+    func testTarget_freeOvernight_laterLeverAfterSevenAM_staysOnTomorrow() {
+        // 7:30 AM + 9 AM lever must end tomorrow 9 AM (not today 9 AM), so it can only add window.
+        let from = et(2026, 5, 12, 7, 30)
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 9), et(2026, 5, 13, 9, 0))
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 7), et(2026, 5, 13, 7, 0))
+    }
+
+    func testTarget_freeOvernight_sixAMLeverAlreadyPast_fallsBackToDefaultEnd() {
+        let from = et(2026, 5, 12, 6, 30)
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 6), et(2026, 5, 12, 7, 0))
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 9), et(2026, 5, 12, 9, 0))
+    }
+
+    func testTarget_freeOvernight_endIsMonotoneInLever_everyHalfHour() {
+        for halfHour in 0..<48 {
+            let from = et(2026, 5, 12, halfHour / 2, (halfHour % 2) * 30)
+            var previous = from
+            for hour in ParkingGoals.overnightMorningHourOptions {
+                let end = ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: hour)
+                XCTAssertGreaterThan(end, from)
+                XCTAssertGreaterThanOrEqual(end, previous, "lever \(hour) at \(from)")
+                previous = end
+            }
+        }
+    }
+
     func testTarget_freeOvernight_invalidLever_fallsBackToSeven() {
         let from = et(2026, 5, 11, 22, 0)
         XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 3), et(2026, 5, 12, 7, 0))

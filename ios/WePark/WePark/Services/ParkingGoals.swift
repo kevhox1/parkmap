@@ -124,23 +124,30 @@ enum ParkingGoals {
 
     // MARK: - Target resolution (§0.8.2, §0.8.5)
 
-    /// Next occurrence of `morningHour`:00 AM ET strictly after `from`: today's if `from` is
-    /// before it (e.g. 2 AM), otherwise tomorrow's (7:00 AM sharp counts as "already past").
+    /// Overnight's end. The DAY is anchored by the default 7:00 AM rule (today's 7 AM if `from`
+    /// is before it, otherwise tomorrow's; 7:00 sharp counts as already past), then the lever
+    /// hour is applied to that SAME day. This keeps the window monotone in the lever for every
+    /// `from` (a later lever end can only lengthen the window, i.e. only remove green): a naive
+    /// "next occurrence of the lever hour" would make a 9 AM lever at 7:30 AM end in 90 minutes
+    /// while 7 AM ends tomorrow. A lever hour earlier than the anchor that is already past
+    /// (6 AM lever at 6:30 AM) falls back to the default end rather than an empty window.
     nonisolated static func overnightEnd(
         from: Date = .nowET,
         morningHour: Int = defaultOvernightMorningHour
     ) -> Date {
         let cal = Calendar.easternTime
         let hour = sanitizedOvernightMorningHour(morningHour)
-        for dayOffset in 0...2 {
-            let day = from.startOfDayET(offsetDays: dayOffset)
-            if let candidate = cal.date(bySettingHour: hour, minute: 0, second: 0, of: day),
-               candidate > from {
-                return candidate
-            }
+
+        func morning(_ h: Int, dayOffset: Int) -> Date? {
+            cal.date(bySettingHour: h, minute: 0, second: 0, of: from.startOfDayET(offsetDays: dayOffset))
         }
-        // Unreachable in practice (offset 1 is always > from); defensive floor.
-        return from.addingTimeInterval(24 * 3600)
+        let todayAnchor = morning(defaultOvernightMorningHour, dayOffset: 0)
+        let dayOffset = (todayAnchor.map { $0 > from } ?? false) ? 0 : 1
+        guard let base = morning(defaultOvernightMorningHour, dayOffset: dayOffset) else {
+            return from.addingTimeInterval(24 * 3600)  // unreachable in practice; defensive floor
+        }
+        guard let candidate = morning(hour, dayOffset: dayOffset), candidate > from else { return base }
+        return candidate
     }
 
     /// Resolves a goal's SINGLE window end, from `from` (the window always STARTS at `from`).
