@@ -88,13 +88,15 @@ enum CurbLineStyleV2 {
 
     /// Nil for tags that are not parking-state curb lines (route, block-select, selected block):
     /// those keep their existing renderers.
+    // NB: the calls below are qualified `CurrentState.x`; bare `.x` also type-checks against
+    // `OverlayTag` and silently recursed forever (found by the Phase 2a live smoke).
     nonisolated static func kind(for tag: OverlayTag, detailMode: Bool) -> CurbLineKind? {
         switch tag {
-        case .freeComfortably: return kind(for: .freeComfortably, detailMode: detailMode)
-        case .freeButRestrictionSoon: return kind(for: .freeButRestrictionSoon, detailMode: detailMode)
-        case .meteredActive: return kind(for: .meteredActive, detailMode: detailMode)
-        case .restrictedNow: return kind(for: .restrictedNow, detailMode: detailMode)
-        case .unknown: return kind(for: .unknown, detailMode: detailMode)
+        case .freeComfortably: return kind(for: CurrentState.freeComfortably, detailMode: detailMode)
+        case .freeButRestrictionSoon: return kind(for: CurrentState.freeButRestrictionSoon, detailMode: detailMode)
+        case .meteredActive: return kind(for: CurrentState.meteredActive, detailMode: detailMode)
+        case .restrictedNow: return kind(for: CurrentState.restrictedNow, detailMode: detailMode)
+        case .unknown: return kind(for: CurrentState.unknown, detailMode: detailMode)
         case .selectedBlock, .routePolyline, .blockSelectHighlight: return nil
         }
     }

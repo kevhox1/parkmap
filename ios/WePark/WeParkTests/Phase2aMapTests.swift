@@ -146,6 +146,20 @@ final class Phase2aMapTests: XCTestCase {
         XCTAssertEqual(CurbLineStyleV2.kind(for: .freeButRestrictionSoon, detailMode: true), .soon)
     }
 
+    /// Regression: the OverlayTag overload once recursed into itself (bare `.freeComfortably`
+    /// also type-checks as an OverlayTag) and crashed the live map at first render.
+    func testTagOverload_resolvesWithoutRecursing() {
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.freeComfortably, detailMode: false), .park)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.freeButRestrictionSoon, detailMode: false), .dont)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.freeButRestrictionSoon, detailMode: true), .soon)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.meteredActive, detailMode: true), .metered)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.meteredActive, detailMode: false), .dont)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.restrictedNow, detailMode: false), .dont)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.unknown, detailMode: false), .dont)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: OverlayTag.unknown, detailMode: true), .noData)
+        XCTAssertNil(CurbLineStyleV2.kind(for: OverlayTag.routePolyline, detailMode: false))
+    }
+
     // MARK: Nesting over real tiles
 
     func testGreenNests_overRealSegments_atSeveralTimes() throws {

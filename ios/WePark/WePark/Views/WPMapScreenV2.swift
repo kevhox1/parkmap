@@ -182,7 +182,6 @@ struct WPGoalSheetV2: View {
         return WPSheetShell {
             ScrollView {
                 VStack(alignment: .leading, spacing: WP.Space.s3) {
-                    toolbar
                     headline
                     if leverOpen && input.selectedGoal == .freeOvernight { chips }
                     if let fact = input.factLine { factText(fact) }
@@ -198,10 +197,11 @@ struct WPGoalSheetV2: View {
                         .buttonStyle(WPGoalTileStyle(isSelected: goal == input.selectedGoal))
                         .accessibilityAddTraits(goal == input.selectedGoal ? .isSelected : [])
                     }
+                    // Search / More / Locate stay reachable, after the goals the sheet is about.
+                    toolbar
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
-            .fixedSize(horizontal: false, vertical: true)
             .frame(maxHeight: cap)
             startDriving.padding(.top, WP.Space.s3)
         }

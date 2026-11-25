@@ -22,8 +22,15 @@ struct WPMapToolbar: View {
     let onMore: () -> Void
     let onLocate: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
-        HStack(spacing: WP.Space.s2) {
+        // At accessibility sizes the field takes the full row and More / Locate sit below it,
+        // so "Search an address" never wraps into a tall narrow column.
+        let layout = typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: WP.Space.s2))
+            : AnyLayout(HStackLayout(spacing: WP.Space.s2))
+        layout {
             Button(action: onSearch) {
                 HStack(spacing: WP.Space.s2) {
                     Image(systemName: "magnifyingglass")
@@ -43,8 +50,10 @@ struct WPMapToolbar: View {
             .accessibilityLabel(searchPlaceholder)
             .accessibilityHint("Opens search")
 
-            WPToolbarCircle(systemImage: "ellipsis", label: "More", action: onMore)
-            WPToolbarCircle(systemImage: "location.fill", label: "Locate me", action: onLocate)
+            HStack(spacing: WP.Space.s2) {
+                WPToolbarCircle(systemImage: "ellipsis", label: "More", action: onMore)
+                WPToolbarCircle(systemImage: "location.fill", label: "Locate me", action: onLocate)
+            }
         }
     }
 }
