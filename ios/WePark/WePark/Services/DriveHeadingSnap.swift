@@ -143,27 +143,51 @@ enum DriveHeadingSnap {
     ///   - lastGoodHeading: `locationService.driveHeading` at the moment of the call
     ///     (the last trustworthy EMA value before confidence dropped), or `nil` if none
     ///     is available yet (e.g. first-ever tick in snap mode).
+    ///   - siblings: Every segment of the matched block (all curbs). Tile data tags one-way
+    ///     direction PER CURB on some two-way streets (Bowery, E Houston, Ave A), so the legal
+    ///     bearing is trusted only when the WHOLE street is one-way (>= 2 distinct curbs, all
+    ///     one-way, bearings agreeing within 45 degrees) AND `lastGoodHeading` is nil or within
+    ///     90 degrees of it. Empty means "no sibling info": the matched segment alone, which
+    ///     never qualifies as a whole street.
     /// - Returns: Compass bearing in degrees [0, 360).
-    static func snappedHeading(segment: Segment, lastGoodHeading: Double?) -> Double {
+    static func snappedHeading(
+        segment: Segment,
+        siblings: [Segment] = [],
+        lastGoodHeading: Double?
+    ) -> Double {
         let towardBearing = SegmentBearing.bearing(segment: segment, toward: .toward_to)
         let reverseBearing = (towardBearing + 180).truncatingRemainder(dividingBy: 360)
 
-        if segment.oneway == true {
-            switch segment.onewayToward {
-            case "to":
-                return towardBearing
-            case "from":
-                return reverseBearing
-            default:
-                break  // malformed data — fall through to two-way logic
-            }
+        let block = siblings.isEmpty ? [segment] : siblings
+        if let legal = wholeStreetLegalBearing(siblings: block) {
+            let agrees = lastGoodHeading.map { circularDelta(legal, $0) <= DriveSideConstants.oneWayLegalToleranceDeg } ?? true
+            if agrees { return legal }
         }
 
-        // Two-way (or oneway data missing/malformed): pick whichever direction is
+        // Two-way (or per-curb / wrong-way one-way): pick whichever direction is
         // circularly closer to the last known good heading.
         guard let last = lastGoodHeading else { return towardBearing }
         return circularDelta(towardBearing, last) <= circularDelta(reverseBearing, last)
             ? towardBearing : reverseBearing
+    }
+
+    /// Legal bearing when every sibling is one-way with a direction, at least two distinct
+    /// curbs exist, and the bearings agree within 45 degrees; otherwise nil.
+    static func wholeStreetLegalBearing(siblings: [Segment]) -> Double? {
+        guard Set(siblings.map { $0.side }).count >= 2 else { return nil }
+        var bearings: [Double] = []
+        for seg in siblings {
+            guard seg.oneway == true else { return nil }
+            let to = SegmentBearing.bearing(segment: seg, toward: .toward_to)
+            switch seg.onewayToward {
+            case "to": bearings.append(to)
+            case "from": bearings.append((to + 180).truncatingRemainder(dividingBy: 360))
+            default: return nil
+            }
+        }
+        guard let first = bearings.first,
+              bearings.allSatisfy({ circularDelta($0, first) <= 45 }) else { return nil }
+        return first
     }
 
     // MARK: - Private math

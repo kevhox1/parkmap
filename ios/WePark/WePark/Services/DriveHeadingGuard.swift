@@ -64,6 +64,108 @@ enum DriveHeadingGuardConstants {
     /// faster through noisy conditions (e.g. a slow, wandering reverse). Lower to require a
     /// cleaner signal before trusting the flip.
     static let flipConfirmToleranceDeg: Double = 30.0
+
+    // MARK: Idle hold (build-27 smoke finding 10)
+
+    /// Speed (m/s) a fix must reach, for `holdResumeFixes` CONSECUTIVE fixes, to release the
+    /// idle heading hold. Well above GPS Doppler noise at standstill (urban canyons report
+    /// phantom 0.5-1.5 m/s with a random course) yet below any real driving speed, so a car
+    /// pulling away from a light clears it in about two seconds. Raise if the heading still
+    /// wanders while stopped; lower if the heading lags noticeably after pulling away.
+    static let holdResumeSpeedMPS: Double = 2.0
+
+    /// Consecutive fixes at or above `holdResumeSpeedMPS` required to release the hold.
+    /// 2 rejects a single phantom speed spike (one noisy fix) while adding only ~1 s of
+    /// latency at 1 Hz GPS.
+    static let holdResumeFixes: Int = 2
+
+    /// Displacement (meters) from where the hold began that releases it regardless of
+    /// speed. Covers a slow creep (parking crawl below `holdResumeSpeedMPS`): once the car
+    /// has really travelled this far, its course is trustworthy again. Chosen above typical
+    /// urban GPS jitter at a standstill (3-8 m) so noise alone cannot release the hold.
+    static let holdResumeDistanceM: Double = 10.0
+}
+
+// MARK: - Idle hold
+
+/// Pure state machine (build-27 smoke finding 10): once the car is stopped, the drive
+/// heading HOLDS the last good value until the car has demonstrably moved again.
+///
+/// Before this, only fixes below `stoppedBelowSpeed` were frozen. GPS speed noise while
+/// idle (0.5-2 m/s with a random course, or a 4 m+ position jitter feeding the
+/// course-from-movement fallback) leaked through that single threshold and spun the puck.
+/// Now a stop ENGAGES the hold, and only sustained speed or real displacement RELEASES it.
+struct DriveHeadingHold {
+
+    /// True while the hold is engaged.
+    private(set) var isHeld: Bool = false
+
+    private var anchorLat: Double = 0
+    private var anchorLng: Double = 0
+    private var fastFixes: Int = 0
+
+    nonisolated init() {}
+
+    /// Feeds one fix. Returns `true` when this fix must NOT influence the heading.
+    ///
+    /// - Parameters:
+    ///   - speed: Fix speed in m/s (clamped >= 0 by the caller).
+    ///   - coordinate: Fix position.
+    ///   - stoppedBelowSpeed: Speed under which the car counts as stopped (engages the hold).
+    nonisolated mutating func shouldHold(
+        speed: Double,
+        coordinate: CLLocationCoordinate2D,
+        stoppedBelowSpeed: Double
+    ) -> Bool {
+        if speed < stoppedBelowSpeed {
+            if !isHeld {
+                isHeld = true
+                anchorLat = coordinate.latitude
+                anchorLng = coordinate.longitude
+            }
+            fastFixes = 0
+            return true
+        }
+        guard isHeld else { return false }
+
+        if speed >= DriveHeadingGuardConstants.holdResumeSpeedMPS {
+            fastFixes += 1
+        } else {
+            fastFixes = 0
+        }
+        let moved = DriveHeadingHold.distanceMeters(
+            lat1: anchorLat, lng1: anchorLng,
+            lat2: coordinate.latitude, lng2: coordinate.longitude
+        )
+        if fastFixes >= DriveHeadingGuardConstants.holdResumeFixes
+            || moved >= DriveHeadingGuardConstants.holdResumeDistanceM {
+            isHeld = false
+            fastFixes = 0
+            return false
+        }
+        return true
+    }
+
+    /// The bearing to DISPLAY (camera + puck) this tick. While the hold is engaged the last
+    /// displayed bearing is frozen regardless of its source (street-snap or raw course EMA),
+    /// so the hold can never rotate the map by changing source. With no previous bearing
+    /// (first fixes) the candidate is used.
+    nonisolated static func displayedHeading(
+        held: Bool,
+        candidate: Double?,
+        previousDisplayed: Double?
+    ) -> Double? {
+        if held, let previousDisplayed { return previousDisplayed }
+        return candidate
+    }
+
+    /// Equirectangular distance in meters (accurate to well under 1% at city scale).
+    nonisolated static func distanceMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double) -> Double {
+        let metersPerDegLat = 111_320.0
+        let dy = (lat2 - lat1) * metersPerDegLat
+        let dx = (lng2 - lng1) * metersPerDegLat * cos(((lat1 + lat2) / 2) * .pi / 180)
+        return (dx * dx + dy * dy).squareRoot()
+    }
 }
 
 // MARK: - Change 1: course-quality gate

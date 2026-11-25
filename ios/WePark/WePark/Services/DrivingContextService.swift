@@ -149,12 +149,6 @@ struct SideAggregation: Equatable {
     let earliestFreeUntilText: String?
 }
 
-// MARK: - Side bearing constants
-
-/// Compass bearing for each cardinal side (degrees from north, clockwise).
-/// Port of `SIDE_BEARING` constant from index.html:5532.
-private let sideBearing: [String: Double] = ["N": 0, "E": 90, "S": 180, "W": 270]
-
 // MARK: - DrivingContextService
 
 /// Parking commentary engine for Drive Mode.
@@ -176,10 +170,17 @@ final class DrivingContextService {
     /// input to `DriveHeadingSnap`.
     private(set) var matchedSegment: Segment?
 
+    /// All curbs of the matched block (direction-agnostic grouping), for the heading snap.
+    private(set) var matchedSiblings: [Segment] = []
+
     // MARK: - Block change detection (index.html:5905–5908)
 
     /// Block key from the most recent call. Nil on first call.
     private var lastBlockKey: String?
+
+    /// Finding 8: remembers the last heading / street direction so left/right survive a
+    /// stationary or unreliable-heading period.
+    private var sideTravel = DriveSideTravel()
 
     /// Timestamp of the last voice cue. Used for minimum-gap enforcement.
     private var lastSpokenAt: Date = .distantPast
@@ -314,6 +315,7 @@ final class DrivingContextService {
         guard !segments.isEmpty else {
             currentContext = nil
             matchedSegment = nil
+            matchedSiblings = []
             return
         }
 
@@ -321,6 +323,7 @@ final class DrivingContextService {
         guard let closest = findClosestSegment(to: coordinate, in: segments) else {
             currentContext = nil
             matchedSegment = nil
+            matchedSiblings = []
             return
         }
 
@@ -334,33 +337,36 @@ final class DrivingContextService {
         // Step 3: Find all sides (N/S/E/W) for this block.
         // TF2-7: We now resolve cardinal side strings, not individual segments.
         let allSides = ["N", "S", "E", "W"]
+        // Direction-agnostic: the two curbs of one block may list from/to reversed.
+        let blockSiblings = segments.filter { DriveSideAssignment.sameBlock($0, as: closest) }
+        matchedSiblings = blockSiblings
         let sidesPresent: [(side: String, segment: Segment)] = allSides.compactMap { s in
-            guard let seg = findSegment(
-                street: block.street, from: block.from, to: block.to, side: s, in: segments
-            ) else { return nil }
+            guard let seg = blockSiblings.first(where: { $0.side == s }) else { return nil }
             return (s, seg)
         }
 
-        // Step 4: Classify left/right cardinal sides (port of sideRelativeToHeading loop, index.html:5568–5571).
-        // TF2-7: Resolve cardinal side strings ("N"/"S"/"E"/"W"), not segment references.
+        // Step 4: Assign left/right curbs for the driver's TRAVEL direction (finding 8).
+        // The travel bearing follows the matched street's polyline (one-way streets use their
+        // legal direction); an unknown/unreliable heading keeps the last known direction
+        // instead of flipping or blanking. See DriveSideAssignment.swift.
+        let sideNames = sidesPresent.map { $0.side }
         var leftCardinalSide: String? = nil
         var rightCardinalSide: String? = nil
-
-        if let h = heading {
-            for (s, _) in sidesPresent {
-                let which = sideRelativeToHeading(heading: h, side: s)
-                if which == "left" && leftCardinalSide == nil { leftCardinalSide = s }
-                else if which == "right" && rightCardinalSide == nil { rightCardinalSide = s }
-            }
-        }
-
-        // Step 5: Fallback when heading unavailable (index.html:5575–5579).
-        // North/West → Left, South/East → Right.
-        if leftCardinalSide == nil && rightCardinalSide == nil && !sidesPresent.isEmpty {
-            leftCardinalSide = sidesPresent.first(where: { $0.side == "N" || $0.side == "W" })?.side
-                ?? sidesPresent.first?.side
-            rightCardinalSide = sidesPresent.first(where: { $0.side == "S" || $0.side == "E" })?.side
-                ?? (sidesPresent.count > 1 ? sidesPresent[1].side : nil)
+        let blockKeyForSides = DriveSideAssignment.canonicalBlockKey(
+            street: block.street, from: block.from, to: block.to
+        )
+        if let travel = sideTravel.resolve(
+            heading: heading, segment: closest, siblings: blockSiblings,
+            blockKey: blockKeyForSides, coordinate: coordinate
+        ) {
+            let assigned = DriveSideAssignment.assign(sides: sideNames, travelBearing: travel)
+            leftCardinalSide = assigned.left
+            rightCardinalSide = assigned.right
+        } else if !sideNames.isEmpty {
+            // Step 5: no heading has ever been known (first fixes of a session).
+            let fallback = DriveSideAssignment.cardinalFallback(sides: sideNames)
+            leftCardinalSide = fallback.left
+            rightCardinalSide = fallback.right
         }
 
         // Step 6: TF2-7 — side-level aggregation replaces single-segment safetyLabel calls.
@@ -369,9 +375,7 @@ final class DrivingContextService {
         // Pre-filter to the current block (street + from + to) so aggregation only sees
         // segments for this block, not other blocks on the same cardinal side.
         // (spec §3.5: "segments: [Segment] — all segments for the current street/from/to combination")
-        let blockSegments = segments.filter {
-            $0.street == block.street && $0.fromStreet == block.from && $0.to == block.to
-        }
+        let blockSegments = blockSiblings  // direction-agnostic block grouping (Step 3)
         let leftAgg  = leftCardinalSide.map  { DrivingContextService.aggregateSideDetail(segments: blockSegments, side: $0, engine: engine, date: date) }
             ?? SideAggregation(opportunity: .unknown, earliestFreeUntilText: nil)
         let rightAgg = rightCardinalSide.map { DrivingContextService.aggregateSideDetail(segments: blockSegments, side: $0, engine: engine, date: date) }
@@ -855,47 +859,6 @@ final class DrivingContextService {
         return closest
     }
 
-    /// Finds the segment matching a specific block (street + from + to + side).
-    private func findSegment(street: String, from: String, to: String, side: String, in segments: [Segment]) -> Segment? {
-        segments.first {
-            $0.street == street &&
-            $0.fromStreet == from &&
-            $0.to == to &&
-            $0.side == side
-        }
-    }
-
-    // MARK: - Side classification
-
-    /// Returns "left" or "right" for a cardinal side relative to the driver's heading.
-    /// Port of `sideRelativeToHeading` (index.html:5542–5551).
-    /// Returns nil if side is unknown.
-    private func sideRelativeToHeading(heading: Double, side: String) -> String? {
-        guard let sb = sideBearing[side] else { return nil }
-        let leftBearing  = (heading - 90 + 360).truncatingRemainder(dividingBy: 360)
-        let rightBearing = (heading + 90).truncatingRemainder(dividingBy: 360)
-        let dLeft  = bearingDelta(sb, leftBearing)
-        let dRight = bearingDelta(sb, rightBearing)
-        // TF2-7 QA Finding #1: on an exact tie (heading aligned with the side bearing or its
-        // reciprocal — e.g. due-north travel with N/S-labeled sides), the old `dLeft <= dRight`
-        // sent BOTH opposite sides to "left", leaving the right chip unassigned ("—"). Break the
-        // tie with the SIGNED angle from heading to the side bearing: clockwise (0..<180) → right,
-        // counterclockwise → left. Opposite sides then land on opposite relative sides.
-        if dLeft == dRight {
-            let signed = (sb - heading + 360).truncatingRemainder(dividingBy: 360)
-            return signed < 180 ? "right" : "left"
-        }
-        return dLeft < dRight ? "left" : "right"
-    }
-
-    /// Smallest angular distance between two compass bearings (0–180).
-    /// Port of `bearingDelta` (index.html:5535–5537).
-    private func bearingDelta(_ a: Double, _ b: Double) -> Double {
-        let d = abs(((a - b).truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360))
-        return d > 180 ? 360 - d : d
-    }
-
-    // MARK: - Geometry helpers
 
     /// Minimum distance from a point to a polyline defined by [lat, lng] pairs.
     private func pointToPolylineDistanceMeters(
