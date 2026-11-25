@@ -177,7 +177,36 @@ function classifySign(desc) {
   for (const re of RESERVED_CURB_RES) { if (re.test(d)) return 'SPECIAL'; }
   if ((d.includes('HMP') || d.includes('MUNI METER') || d.includes('METER')) && !d.includes('METERS ARE NOT IN EFFECT')) return 'METERED';
 
+  // UNKNOWN-sign audit (docs/qa/tiles-unknown-audit.md). Everything below was UNKNOWN, which the iOS
+  // engine reads as free. Class (a): a real time limit the classifier missed -> SPECIAL (a windowed
+  // hard restriction: a limit of 3h or less blocks every goal that parks for longer than the limit,
+  // so red in its window is correct for A Few Hours / Overnight / Park & Forget).
+  if (TIME_LIMIT_RE.test(d)) return 'SPECIAL';
+  // Class (b): purely informational, no effect on a private car -> INFO (never a rule; the text is
+  // kept on the segment as `info`). Only reachable for signs no restriction pattern above matched.
+  if (isInformationalSign(d)) return 'INFO';
+
   return 'UNKNOWN';
+}
+
+// "2 HOUR PARKING 9AM-7PM EXCEPT SUNDAY", "30 MINUTE LIMIT", "15 MINUTE PARKING". Digit-led on purpose.
+const TIME_LIMIT_RE = /\b\d+\s*(?:HOURS?|HRS?|MINUTES?|MINS?)\s+(?:PARKING|LIMIT|LIMITED)\b/;
+// Words that make a sign potentially restrictive for a private car: never INFO.
+const INFO_BLOCKERS_RE = /NO STOPPING|NO STANDING|NO PARKING|PERMIT|PLATE|COMMERCIAL|TRUCK|HYDRANT|SCHOOL|CONSTRUCTION|BUSES ONLY|\bTOW(?:ED|ING|-AWAY| AWAY)?\b|AUTHORIZED|\bTAXI|\bBUS\b|NAVILENS|REAL TIME PUBLIC INFORMATION|(?:ROUTE|DESTINATION) PANEL|HANDICAP|DISABILIT|CARSHARE|MICROHUB|OPEN STREETS/;
+// Bus route/destination panels, NaviLens, real-time info boxes and taxi-stand plates are NOT here: they mark
+// a bus stop / taxi stand (QA #195), so they stay UNKNOWN (red) until a real stop/stand rule is on the pole.
+const INFORMATIONAL_RES = [
+  /METERS? ARE NOT IN EFFECT ABOVE TIMES/,          // rider that CANCELS meters during street cleaning: can only loosen
+  /LIMITED PARKING IS NOT IN EFFECT ABOVE TIMES/,   // same, for free limited-time parking
+  /(?:ANGLE|PARALLEL|\d+ DEG(?:REES?)?) PARKING ONLY/, // how to park, not whether
+  /IDLING LAW|NO ENGINE IDLING|YOU IDLE YOU PAY/,
+  /DIAMOND DELINEATOR/,
+  /PAY-BY-APP INFORMATION|NYC PARKING CARD AVAILABLE/,
+  /O'CLOCK ARROW|\bNEXT (?:RIGHT|LEFT)\b/,           // wayfinding plates
+];
+function isInformationalSign(d) {
+  if (INFO_BLOCKERS_RE.test(d)) return false;
+  return INFORMATIONAL_RES.some(re => re.test(d));
 }
 
 // Categories that are hard restrictions in the iOS rules engine (day/time window,
@@ -1850,7 +1879,9 @@ function offsetPolyline(points, side, offsetMeters) {
 // superseded with an unresolvable replacement, and none of them is "anytime", is emitted as NO DATA
 // (UNKNOWN dominant category + an always-on NO_PARKING "NO DATA" rule, see main()), because an
 // obsolete sign alone must not be what makes a curb read green.
+const NO_DATA_INFO_ONLY_DESCRIPTION = 'NO DATA - ONLY INFORMATION PLATES ON FILE (no parking rules)';
 const NO_DATA_RULE_DESCRIPTION = 'NO DATA - ONLY A SUPERSEDED SIGN ON RECORD - TREATED AS NOT PARKABLE';
+const INFO_STATS = { infoRules: 0, zonesDropped: 0 };
 const SUPERSEDED_STATS = { signs: 0, resolved: 0, unresolved: 0, noDataZones: 0, noDataSamples: [] };
 function parseSupersededBy(desc) {
   const d = String(desc || '').toUpperCase();
@@ -1866,7 +1897,7 @@ function markNoDataZones(zones) {
   zones.forEach(z => {
     // UNKNOWN-category signs (info panels, "ANGLE PARKING ONLY", ...) never restrict in the engine, so
     // they are not live data: they cannot be what makes the curb green either.
-    const live = z.rules.filter(sd => sd.category !== 'UNKNOWN');
+    const live = z.rules.filter(sd => sd.category !== 'UNKNOWN' && sd.category !== 'INFO');
     if (live.length > 0 && live.every(sd => sd.supersededUnresolved && !sd.schedule.anytime)) {
       z.noData = true;
       SUPERSEDED_STATS.noDataZones++;
@@ -2675,9 +2706,19 @@ async function main() {
 
         zone.rules.forEach(r => rowsSurviving.add(r.sign));
 
+        // INFO signs (class (b), docs/qa/tiles-unknown-audit.md) are never rules. Their text rides on the
+        // segment as `info`. A zone with NOTHING but info signs has no regulation data at all: it is not
+        // drawn (an empty rule list reads "free" in the goal engine; an info plate is not a spot).
+        const infoTexts = [...new Set(zone.rules.filter(r => r.category === 'INFO').map(r => r.sign.sign_description || ''))].filter(Boolean);
+        const liveZoneRules = zone.rules.filter(r => r.category !== 'INFO');
+        INFO_STATS.infoRules += zone.rules.length - liveZoneRules.length;
+        const infoOnlyZone = liveZoneRules.length === 0;
+        if (infoOnlyZone) INFO_STATS.zonesDropped++; // counted as "info-only zones emitted as no-data"
+        else zone = { ...zone, rules: liveZoneRules };
+
         // A multi-clause sign ("MON-FRI 7PM-MIDNIGHT SAT 9AM-MIDNIGHT") emits one rule per
         // clause (same rule shape); everything else is exactly one rule per sign.
-        const rules = zone.rules.flatMap(r => (r.schedule.clauses || [r.schedule]).map(c => ({
+        const rules = (infoOnlyZone ? [] : zone.rules).flatMap(r => (r.schedule.clauses || [r.schedule]).map(c => ({
           category: r.category,
           description: r.sign.sign_description || '',
           days: c.days,
@@ -2692,10 +2733,10 @@ async function main() {
         // list would draw GREEN in the goal modes (ParkingRulesEngine.isFree: "empty rules -> free"),
         // so the no-data state is carried as an always-on restriction that reads as not parkable
         // everywhere, with the superseded sign text kept below it for context.
-        if (zone.noData) {
+        if (zone.noData || infoOnlyZone) {
           rules.unshift({
             category: 'NO_PARKING',
-            description: NO_DATA_RULE_DESCRIPTION,
+            description: infoOnlyZone ? NO_DATA_INFO_ONLY_DESCRIPTION : NO_DATA_RULE_DESCRIPTION,
             days: [0,1,2,3,4,5,6],
             timeRanges: [],
             anytime: true,
@@ -2712,7 +2753,8 @@ async function main() {
           side: block.side,
           line: offsetLine,
           rules,
-          dominantCategory: zone.noData ? 'UNKNOWN' : mostRestrictiveCategory(zone.rules),
+          dominantCategory: (zone.noData || infoOnlyZone) ? 'UNKNOWN' : mostRestrictiveCategory(zone.rules),
+          ...(infoTexts.length > 0 && { info: infoTexts }),
           oneway: onewayFields.oneway,
           ...(onewayFields.oneway_toward !== undefined && { oneway_toward: onewayFields.oneway_toward })
         });
@@ -2889,6 +2931,7 @@ async function main() {
   console.log(`   zones emitted as NO DATA (only unresolved superseded signs): ${SUPERSEDED_STATS.noDataZones}`);
   SUPERSEDED_STATS.noDataSamples.forEach(x => console.log(`     sample: ${x}`));
   console.log(`   meter-companion extensions: ${COMPANION_STATS.extendedZones} zone-rules on ${COMPANION_STATS.faces.size} block faces`);
+  console.log(`   info (class b) sign-rules removed from rules: ${INFO_STATS.infoRules}; info-only zones emitted as no-data: ${INFO_STATS.zonesDropped}`);
   if (process.env.PREPROCESS_ARROW_STATS_JSON) {
     fs.writeFileSync(process.env.PREPROCESS_ARROW_STATS_JSON, JSON.stringify({
       classifiedSigns: ARROW_STATS.classifiedSigns,

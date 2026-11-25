@@ -44,6 +44,11 @@ function overlaps(tr, dayMid, from, until) {
   const rEnd = endMinute(tr) === 1440 ? dayMid + 1440 : dayMid + (wraps(tr) ? 1440 : 0) + tr.end;
   return rStart < until && rEnd > from;
 }
+// UNKNOWN-is-restriction switch (the engine change Kevin is making: an UNKNOWN rule restricts during its
+// stated days/times, or all the time when it states none). Off = today's engine (UNKNOWN is a no-op).
+// Enable with env UNKNOWN_RESTRICTS=1 or setUnknownRestricts(true).
+let UNKNOWN_RESTRICTS = process.env.UNKNOWN_RESTRICTS === '1';
+function setUnknownRestricts(v) { UNKNOWN_RESTRICTS = !!v; }
 // t = minutes on a linear ET axis; day 0 = a Sunday.
 function isFree(seg, from, until) {
   const rules = seg.rules || [];
@@ -64,9 +69,14 @@ function isFree(seg, from, until) {
         if (r.days.length && !r.days.includes(dow)) continue;
         if (!r.timeRanges.length) { if (off < 0) continue; if (wEnd > wStart) return false; continue; }
         for (const tr of r.timeRanges) if (hit(tr)) return false;
-      } else if (['NO_PARKING', 'TRUCK_LOADING', 'NO_STANDING', 'SPECIAL'].includes(cat)) {
+      } else if (['NO_PARKING', 'TRUCK_LOADING', 'NO_STANDING', 'SPECIAL'].includes(cat) || (UNKNOWN_RESTRICTS && cat === 'UNKNOWN')) {
         if (r.days.length && !r.days.includes(dow)) continue;
-        if (!r.timeRanges.length) { if (off < 0) continue; if (r.days.length && wEnd > wStart) return false; continue; }
+        if (!r.timeRanges.length) {
+          if (off < 0) continue;
+          if (cat === 'UNKNOWN' && !r.days.length) { if (wEnd > wStart) return false; continue; } // states nothing: all the time
+          if (r.days.length && wEnd > wStart) return false;
+          continue;
+        }
         for (const tr of r.timeRanges) if (hit(tr)) return false;
       } else if (cat === 'METERED') {
         if (r.days.length && !r.days.includes(dow)) continue;
@@ -112,7 +122,47 @@ function family(desc) {
   return 'other';
 }
 
+// --green-table <mainDir> <newDir>: green counts per goal x probe time for the four states
+//   (i) main data / today's engine   (ii) new data / today's engine
+//   (iii) main data / UNKNOWN restricts   (iv) new data / UNKNOWN restricts (what ships)
+// plus red->green / green->red between states and the UNKNOWN-only census of each tile set.
+function greenTable(mainDir, newDir) {
+  const M = [...load(mainDir).values()], N = [...load(newDir).values()];
+  const states = [['(i) main data, current engine', M, false], ['(ii) new data, current engine', N, false],
+    ['(iii) main data, UNKNOWN=restriction', M, true], ['(iv) new data, UNKNOWN=restriction', N, true]];
+  const out = { states: {}, census: {} };
+  for (const [name, segs, unk] of states) {
+    setUnknownRestricts(unk);
+    out.states[name] = { segments: segs.length };
+    for (const [goal, fn] of Object.entries(GOALS)) for (const [tn, t] of Object.entries(TIMES)) {
+      let g = 0; for (const s of segs) if (fn(s, t)) g++;
+      out.states[name][`${goal} @ ${tn}`] = g;
+    }
+  }
+  const census = (segs) => {
+    let anyU = 0, onlyU = 0, mixed = 0;
+    for (const s of segs) { const u = (s.rules || []).filter(r => r.category === 'UNKNOWN').length; if (!u) continue; anyU++; if (u === s.rules.length) onlyU++; else mixed++; }
+    return { segmentsWithUnknown: anyU, unknownOnly: onlyU, mixed };
+  };
+  out.census.main = census(M); out.census.new = census(N);
+  // red->green of new data vs main under the SAME engine (matched by id; ids of untouched segments are stable)
+  const mainById = new Map(M.map(s => [s.id, s]));
+  for (const unk of [false, true]) {
+    setUnknownRestricts(unk);
+    let r2g = 0, g2r = 0; const ex = [];
+    for (const s of N) { const b = mainById.get(s.id); if (!b) continue;
+      for (const fn of Object.values(GOALS)) for (const t of Object.values(TIMES)) {
+        const bv = fn(b, t), av = fn(s, t);
+        if (!bv && av) { r2g++; if (ex.length < 10) ex.push(s.id); } else if (bv && !av) g2r++;
+      } }
+    out.census[unk ? 'vsMainUnknownRestricts' : 'vsMainCurrentEngine'] = { redToGreenCells: r2g, greenToRedCells: g2r, r2gExamples: ex };
+  }
+  setUnknownRestricts(false);
+  return out;
+}
+
 function main() {
+  if (process.argv[2] === '--green-table') { console.log(JSON.stringify(greenTable(process.argv[3], process.argv[4]), null, 1)); return; }
   const [bDir, aDir] = process.argv.slice(2);
   const jsonOut = process.argv.includes('--json') ? process.argv[process.argv.indexOf('--json') + 1] : null;
   const B = load(bDir), A = load(aDir);
@@ -177,4 +227,4 @@ function main() {
   console.log(JSON.stringify({ ...out, families: out.families.map(f => ({ family: f.family, n: f.n })), distinctChanged: undefined, redToGreen: out.redToGreen.length }, null, 1));
 }
 if (require.main === module) main();
-module.exports = { isFree, GOALS, TIMES, family };
+module.exports = { isFree, GOALS, TIMES, family, setUnknownRestricts, greenTable, load };
