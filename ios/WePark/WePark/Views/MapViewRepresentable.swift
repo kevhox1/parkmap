@@ -1035,6 +1035,13 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// own); nil renders the core as `.unknown` grey.
     var placementSeverity: ((Segment) -> CurrentState)? = nil
 
+    /// Design system v0.1 (`AppConstants.designSystemV2Enabled`): true while "Show all sign details"
+    /// is on, so curb lines draw in the five-state style; false draws the default two-state
+    /// (park solid / don't dashed, unsure = don't). Only read when the flag is on. Declared last
+    /// (after `placementSeverity`) so memberwise-init argument order is preserved for every
+    /// existing call site.
+    var curbLineDetailMode: Bool = false
+
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
     struct OverlayPayload: Equatable {
@@ -1275,6 +1282,15 @@ struct MapViewRepresentable: UIViewRepresentable {
         mapView.showsCompass = false
         mapView.showsScale = true
 
+        // Design system v0.1 map base (flag on only): muted emphasis, POIs excluded, so the
+        // curb lines are the loudest thing on the map. MapKit can mute but not recolor; the
+        // light/dark base follows the window appearance (light browse, dark in Drive Mode).
+        if AppConstants.designSystemV2Enabled {
+            let base = MKStandardMapConfiguration(emphasisStyle: .muted)
+            base.pointOfInterestFilter = .excludingAll
+            mapView.preferredConfiguration = base
+        }
+
         // Register the CarPinAnnotation view class. Open item #20 (2026-09-12): now
         // `MKMarkerAnnotationView` (was plain `MKAnnotationView` + a manually-drawn
         // mappin.circle.fill image) — see `viewFor annotation`'s `CarPinAnnotation` branch
@@ -1474,10 +1490,16 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         coordinatorActions.applyDriveMapStyle = { [weak coordinator] active, priorConfig in
             guard let mapView = coordinator?.mapView else { return }
-            mapView.preferredConfiguration = MapViewRepresentable.targetMapConfiguration(
+            let target = MapViewRepresentable.targetMapConfiguration(
                 forDriveModeActive: active,
                 priorConfiguration: priorConfig
             )
+            // Design system v0.1 (flag on only): keep POIs hidden in Drive Mode too.
+            if AppConstants.designSystemV2Enabled, active,
+               let standard = target as? MKStandardMapConfiguration {
+                standard.pointOfInterestFilter = .excludingAll
+            }
+            mapView.preferredConfiguration = target
         }
 
         // PR-2: Puck refresh closure — toggles showsUserLocation to force re-query of
@@ -1691,9 +1713,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         context.coordinator.parent = self
 
         // Apply overlay updates if the payload has changed (generation differs).
-        if context.coordinator.lastAppliedGeneration != overlayPayload.generation {
+        // Design system v0.1 (flag on only): a detail-mode flip must repaint the curb lines now,
+        // not at the next 60 s rebuild, because the renderer style depends on it.
+        let detailModeChanged = AppConstants.designSystemV2Enabled
+            && context.coordinator.lastAppliedDetailMode != curbLineDetailMode
+        if context.coordinator.lastAppliedGeneration != overlayPayload.generation || detailModeChanged {
             context.coordinator.applyOverlayPayload(overlayPayload, to: mapView)
             context.coordinator.lastAppliedGeneration = overlayPayload.generation
+            context.coordinator.lastAppliedDetailMode = curbLineDetailMode
         }
 
         // W5: Sync car pin annotation state.
@@ -1807,6 +1834,9 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         /// Tracks which payload generation we last applied to avoid redundant overlay swaps.
         var lastAppliedGeneration: Int = -1
+
+        /// Design system v0.1: the `curbLineDetailMode` the overlays were last built under.
+        var lastAppliedDetailMode: Bool = false
 
         // Current live overlays (strong refs so we can removeOverlay them later).
         private var multiPolylines: [OverlayTag: TaggedMultiPolyline] = [:]
@@ -2867,6 +2897,16 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MARK: - MKMapViewDelegate: renderer
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            // Design system v0.1 (flag on only): curb lines draw as park-solid / don't-dashed
+            // (or the five detail styles). Decisions are unchanged; only the drawing differs.
+            if AppConstants.designSystemV2Enabled,
+               let multi = overlay as? TaggedMultiPolyline,
+               let kind = CurbLineStyleV2.kind(for: multi.overlayTag, detailMode: parent.curbLineDetailMode) {
+                let renderer = MKMultiPolylineRenderer(multiPolyline: multi)
+                CurbLineStyleV2.apply(CurbLineStyleV2.style(for: kind), to: renderer)
+                return renderer
+            }
+
             if let multi = overlay as? TaggedMultiPolyline {
                 let renderer = MKMultiPolylineRenderer(multiPolyline: multi)
                 // .butt caps stop exactly at the polyline endpoint with no extension.
@@ -2916,6 +2956,13 @@ struct MapViewRepresentable: UIViewRepresentable {
                     renderer.lineWidth = 7
                     renderer.lineDashPattern = [8, 6]
                 }
+                return renderer
+            }
+
+            if AppConstants.designSystemV2Enabled, let sel = overlay as? SelectedPolyline {
+                let renderer = MKPolylineRenderer(polyline: sel)
+                let kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
+                CurbLineStyleV2.apply(CurbLineStyleV2.style(for: kind), to: renderer)
                 return renderer
             }
 
