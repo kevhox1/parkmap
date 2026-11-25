@@ -176,14 +176,35 @@ struct TripPlanBanner: View {
     let onEdit: () -> Void
     let onExit: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @State private var notesExpanded = false
+
+    /// Accessibility sizes get a compact layout so the banner never grows over the map controls.
+    private var compact: Bool { dynamicTypeSize.isAccessibilitySize }
+
+    @ViewBuilder
+    private var notes: some View {
+        if !calendarCovered {
+            Text(TripPlanning.calendarUnavailableNotice)
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        Text(TripPlanning.caveat)
+            .font(.footnote)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: compact ? 6 : 8) {
             HStack(spacing: 6) {
                 Image(systemName: "suitcase.fill")
                     .accessibilityHidden(true)
                 Text("TRIP PLAN")
                     .font(.caption.weight(.heavy))
                     .tracking(0.8)
+                    .lineLimit(1)
             }
             .foregroundStyle(TripPlanStyle.accent)
 
@@ -192,37 +213,60 @@ struct TripPlanBanner: View {
                 .foregroundStyle(.primary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if !calendarCovered {
-                Text(TripPlanning.calendarUnavailableNotice)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+            if compact {
+                // The notes sit behind a disclosure so they never push the banner over the
+                // map's controls.
+                Button {
+                    withAnimation { notesExpanded.toggle() }
+                } label: {
+                    Label(notesExpanded ? "Hide notes" : "Notes",
+                          systemImage: notesExpanded ? "chevron.up" : "chevron.down")
+                        .font(.footnote.weight(.semibold))
+                        .frame(minHeight: 44, alignment: .leading)
+                }
+                .tint(TripPlanStyle.accent)
+                .accessibilityHint("Shows the trip plan caveat")
+                if notesExpanded {
+                    notes
+                }
+            } else {
+                notes
             }
-
-            Text(TripPlanning.caveat)
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 10) {
                 Button(action: onEdit) {
-                    Text("Edit")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
+                    if compact {
+                        Image(systemName: "pencil")
+                            .font(.headline)
+                            .frame(minWidth: 48, minHeight: 48)
+                    } else {
+                        Text("Edit")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
                 }
                 .buttonStyle(.bordered)
                 .tint(TripPlanStyle.accent)
+                .accessibilityLabel(compact ? "Edit trip plan" : "Edit")
 
                 Button(action: onExit) {
-                    Text("Exit trip plan")
-                        .font(.headline)
-                        .frame(maxWidth: .infinity, minHeight: 48)
+                    if compact {
+                        Label("Exit", systemImage: "xmark")
+                            .font(.headline)
+                            .lineLimit(1)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    } else {
+                        Text("Exit trip plan")
+                            .font(.headline)
+                            .frame(maxWidth: .infinity, minHeight: 48)
+                    }
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(TripPlanStyle.accent)
+                .accessibilityLabel("Exit trip plan")
             }
         }
-        .padding(14)
+        .padding(compact ? 12 : 14)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 18))
         .overlay(
             RoundedRectangle(cornerRadius: 18)

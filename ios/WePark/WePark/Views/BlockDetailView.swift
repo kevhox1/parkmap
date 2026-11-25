@@ -215,12 +215,16 @@ struct BlockDetailView: View {
                     // 4c. S13b: "BLOCK CHATTER" — segment-anchored chat thread + compose bar.
                     blockChatterSection
 
-                    // 5. Park here stub button
-                    parkHereStub
+                    // Plan a Trip: Park here / Report are LIVE actions; a trip plan is "not live",
+                    // so both are hidden while a trip verdict is showing.
+                    if TripModeGating.showsLiveActions(tripActive: tripVerdict != nil) {
+                        // 5. Park here stub button
+                        parkHereStub
 
-                    // 6. Addendum 3: Report this block (flag-on + community only).
-                    if let onReportBlock {
-                        reportBlockButton(action: onReportBlock)
+                        // 6. Addendum 3: Report this block (flag-on + community only).
+                        if let onReportBlock {
+                            reportBlockButton(action: onReportBlock)
+                        }
                     }
                 }
                 .padding(.horizontal, 20)

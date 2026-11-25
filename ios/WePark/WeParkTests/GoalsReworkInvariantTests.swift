@@ -115,27 +115,72 @@ final class GoalsReworkInvariantTests: XCTestCase {
     }
 
     func testInvariant_noGoalIsGreenForARunningMeter() throws {
+        // Tuesday 1 PM (weekday 2, minute 780).
+        try assertNoGoalGreenForRunningMeter(now: et(2026, 11, 24, 13), weekday: 2, minute: 780)
+    }
+
+    func testInvariant_noGoalIsGreenForARunningMeter_wednesdayMorning() throws {
+        // Wednesday 11:00 AM (weekday 3, minute 660): a second weekday daytime point.
+        try assertNoGoalGreenForRunningMeter(now: et(2026, 11, 25, 11), weekday: 3, minute: 660)
+    }
+
+    /// Any segment with a metered rule whose paid hours cover `now` must be red for every goal.
+    private func assertNoGoalGreenForRunningMeter(now: Date, weekday: Int, minute: Int) throws {
         let segments = try sampleSegments()
-        // Tuesday 1 PM: any segment with a metered rule whose paid hours cover 1 PM Tuesday
-        // (minute 780) must be red for every goal.
-        let now = et(2026, 11, 24, 13)
         var checked = 0
         for segment in segments {
             let paidNow = segment.rules.contains { rule in
                 rule.category == .metered
-                    && rule.days.contains(2)
-                    && rule.timeRanges.contains { $0.start <= 780 && 780 < $0.end }
+                    && rule.days.contains(weekday)
+                    && rule.timeRanges.contains { $0.start <= minute && minute < $0.end }
             }
             guard paidNow else { continue }
             checked += 1
             for goal in ParkingGoal.allCases {
                 XCTAssertFalse(
                     ParkingGoals.match(segment: segment, goal: goal, from: now, engine: engine).matches,
-                    "\(goal): a running meter must never be green (\(segment.id))"
+                    "\(goal): a running meter must never be green (\(segment.id)) at \(now)"
                 )
             }
         }
         XCTAssertGreaterThan(checked, 0, "Sample must include metered curbs")
+    }
+
+    // MARK: - DST nights
+
+    private func assertETClock(_ date: Date, month: Int, day: Int, hour: Int, minute: Int = 0,
+                               file: StaticString = #filePath, line: UInt = #line) {
+        let c = Calendar.easternTime.dateComponents([.month, .day, .hour, .minute], from: date)
+        XCTAssertEqual(c.month, month, file: file, line: line)
+        XCTAssertEqual(c.day, day, file: file, line: line)
+        XCTAssertEqual(c.hour, hour, file: file, line: line)
+        XCTAssertEqual(c.minute, minute, file: file, line: line)
+    }
+
+    func testOvernightEnd_fallBackNight_endsAtSevenAMWallClock() {
+        // 2026-11-01 01:30 ET (clocks repeat 1 AM): Overnight ends 7:00 AM EST same day.
+        let now = et(2026, 11, 1, 1, 30)
+        let end = ParkingGoals.target(for: .freeOvernight, from: now)
+        assertETClock(end, month: 11, day: 1, hour: 7)
+        XCTAssertGreaterThan(end.timeIntervalSince(now), 6 * 3600)
+        // A Few Hours is an absolute 3h interval, still under the overnight end.
+        XCTAssertEqual(ParkingGoals.target(for: .freeFewHours, from: now), now.addingTimeInterval(3 * 3600))
+    }
+
+    func testOvernightEnd_springForwardNight_endsAtSevenAMWallClock() {
+        // 2026-03-08 01:30 ET (2 AM does not exist): Overnight ends 7:00 AM EDT same day.
+        let now = et(2026, 3, 8, 1, 30)
+        let end = ParkingGoals.target(for: .freeOvernight, from: now)
+        assertETClock(end, month: 3, day: 8, hour: 7)
+        XCTAssertEqual(end.timeIntervalSince(now), 4.5 * 3600, accuracy: 1)
+        XCTAssertEqual(ParkingGoals.target(for: .freeFewHours, from: now), now.addingTimeInterval(3 * 3600))
+    }
+
+    func testOvernightEnd_leverOnDSTNights() {
+        assertETClock(ParkingGoals.target(for: .freeOvernight, from: et(2026, 11, 1, 1, 30), overnightMorningHour: 9),
+                      month: 11, day: 1, hour: 9)
+        assertETClock(ParkingGoals.target(for: .freeOvernight, from: et(2026, 3, 8, 1, 30), overnightMorningHour: 9),
+                      month: 3, day: 8, hour: 9)
     }
 
     // MARK: - Window copy
