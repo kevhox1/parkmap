@@ -1702,54 +1702,7 @@ struct ContentView: View {
             .presentationCornerRadius(20)
 
         case .parkedCarDetail(let car):
-            ParkedCarDetailView(
-                parkedCar: car,
-                engine: engine,
-                loadedSegments: tileLoader.segments,
-                parkPinService: parkPinService,
-                // PR #106 QA Finding #2 fix: reuse the SAME `ASPSuspensionService` instance
-                // already held here (`@State private var aspService`, line ~488, built for
-                // the W7 top banner) rather than letting the sheet default-construct its own
-                // second copy — avoids a redundant `asp-2026.json` bundle parse on every My
-                // Car sheet presentation.
-                // NB: `ParkedCarDetailView.init` is hand-written (not memberwise), but Swift
-                // still requires labeled arguments in the init's DECLARED parameter order —
-                // aspService is declared directly after scheduler (which this call site
-                // omits, using its own `.shared` default).
-                aspService: aspService,
-                // FT-15/TF2-15 (§9.2): so the sheet can look up an active block-scoped
-                // restriction covering wherever this car is parked — "the highest-value
-                // consumption point in the whole spec."
-                pinService: pinService,
-                onDismiss: {
-                    activeSheet = dismissTargetOutsideBrowseNav
-                },
-                onClearPin: {
-                    activeSheet = dismissTargetOutsideBrowseNav
-                    // W6: Cancel notifications before clearing the pin.
-                    NotificationScheduler.shared.cancelAll(for: car)
-                    // Community 2.0 S13c garage-savings stat (§3 Option A): accrue this
-                    // completed session's duration BEFORE the pin (and its `parkedAt`) is
-                    // gone — `car` here is the closure's captured value, unaffected by
-                    // `clearPin()` clearing `parkPinService.parkedCar` below.
-                    if AppConstants.communityEnabled {
-                        GarageSavingsService().recordSessionEnded(parkedAt: car.parkedAt)
-                    }
-                    parkPinService.clearPin()
-                    // W7.5: Clear Park Until filter — no orphan filter for a non-existent car.
-                    parkUntilMode = false
-                    parkUntilTarget = nil
-                    rebuildOverlays(at: .nowET)
-                },
-                // FT-15/TF2-15 (§9.2): tap-through to PinDetailSheet, same
-                // activeSheet-reassignment pattern as blockDetailSheetContent's
-                // onOpenRestriction (and .signCheckConfirm's onConfirm precedent).
-                onOpenRestriction: { pin in activeSheet = .pinDetail(pin) }
-            )
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-            .presentationBackground(.regularMaterial)
-            .presentationCornerRadius(20)
+            myCarSheetContent(car)
 
         case .notificationRationale:
             // W6: One-time rationale sheet. interactiveDismissDisabled(true) prevents
@@ -2136,6 +2089,102 @@ struct ContentView: View {
     }
 
     // MARK: - Addendum 3 A3.4: More sheet
+
+    /// The My Car sheet: the redesigned V2 when `myCarSheetV2Enabled`, else the original sheet
+    /// (call site unchanged from before the flag existed, apart from sharing `performClearParkedCar`).
+    @ViewBuilder
+    private func myCarSheetContent(_ car: ParkedCar) -> some View {
+        switch MyCarSheetVariant.resolve() {
+        case .legacy:
+                ParkedCarDetailView(
+                    parkedCar: car,
+                    engine: engine,
+                    loadedSegments: tileLoader.segments,
+                    parkPinService: parkPinService,
+                    // PR #106 QA Finding #2 fix: reuse the SAME `ASPSuspensionService` instance
+                    // already held here (`@State private var aspService`, line ~488, built for
+                    // the W7 top banner) rather than letting the sheet default-construct its own
+                    // second copy — avoids a redundant `asp-2026.json` bundle parse on every My
+                    // Car sheet presentation.
+                    // NB: `ParkedCarDetailView.init` is hand-written (not memberwise), but Swift
+                    // still requires labeled arguments in the init's DECLARED parameter order —
+                    // aspService is declared directly after scheduler (which this call site
+                    // omits, using its own `.shared` default).
+                    aspService: aspService,
+                    // FT-15/TF2-15 (§9.2): so the sheet can look up an active block-scoped
+                    // restriction covering wherever this car is parked — "the highest-value
+                    // consumption point in the whole spec."
+                    pinService: pinService,
+                    onDismiss: {
+                        activeSheet = dismissTargetOutsideBrowseNav
+                    },
+                    onClearPin: { performClearParkedCar(car) },
+                    // FT-15/TF2-15 (§9.2): tap-through to PinDetailSheet, same
+                    // activeSheet-reassignment pattern as blockDetailSheetContent's
+                    // onOpenRestriction (and .signCheckConfirm's onConfirm precedent).
+                    onOpenRestriction: { pin in activeSheet = .pinDetail(pin) }
+                )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+        case .v2:
+            MyCarSheetV2View(
+                parkedCar: car,
+                engine: engine,
+                loadedSegments: tileLoader.segments,
+                parkPinService: parkPinService,
+                aspService: aspService,
+                pinService: pinService,
+                onDismiss: { activeSheet = dismissTargetOutsideBrowseNav },
+                onClearPin: { performClearParkedCar(car) },
+                onOpenRestriction: { pin in activeSheet = .pinDetail(pin) },
+                // Spot Pass entry reuses the More-sheet rows' exact actions; hidden in trip mode.
+                onOpenSpotPass: myCarSpotPassAction,
+                spotPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass
+            )
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(.regularMaterial)
+            .presentationCornerRadius(20)
+        }
+    }
+
+    /// Spot Pass entry for the My Car sheet's leaving sheet: the More-sheet rows' exact actions
+    /// (armed pass -> driver cover, else the seeker flow). `nil` (row hidden) when the flag is off or
+    /// a trip plan is active.
+    private var myCarSpotPassAction: (() -> Void)? {
+        guard AppConstants.spotHandoffEnabled, TripModeGating.showsSpotPass(tripActive: tripPlan != nil) else {
+            return nil
+        }
+        return {
+            activeSheet = dismissTargetOutsideBrowseNav
+            if SpotPassDriverRuntime.shared.hasArmedPass {
+                SpotPassDriverRuntime.shared.presentArmedPass()
+            } else {
+                presentSpotPass()
+            }
+        }
+    }
+
+    /// Clears the parked car (shared by both My Car sheets; body moved verbatim from the old inline closure).
+    private func performClearParkedCar(_ car: ParkedCar) {
+        activeSheet = dismissTargetOutsideBrowseNav
+        // W6: Cancel notifications before clearing the pin.
+        NotificationScheduler.shared.cancelAll(for: car)
+        // Community 2.0 S13c garage-savings stat (§3 Option A): accrue this
+        // completed session's duration BEFORE the pin (and its `parkedAt`) is
+        // gone — `car` here is the closure's captured value, unaffected by
+        // `clearPin()` clearing `parkPinService.parkedCar` below.
+        if AppConstants.communityEnabled {
+            GarageSavingsService().recordSessionEnded(parkedAt: car.parkedAt)
+        }
+        parkPinService.clearPin()
+        // W7.5: Clear Park Until filter — no orphan filter for a non-existent car.
+        parkUntilMode = false
+        parkUntilTarget = nil
+        rebuildOverlays(at: .nowET)
+    }
 
     /// The More sheet's content + presentation config (`Views/MoreMenuSheet.swift` is pure
     /// presentation; every action lives here). Rows come from `moreMenuVisibleRows(...)`, the
