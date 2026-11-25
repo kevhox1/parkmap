@@ -264,3 +264,15 @@ nonisolated enum TripPlanning {
         return "\(name) \(startLabel)–\(endLabel)"
     }
 }
+
+// MARK: - TripModeGating
+
+/// Pure rules for what the live UI shows while a trip plan is active. A trip plan is a what-if,
+/// so live actions (Park here, Report, long-press park) and the live ASP banner are hidden;
+/// exiting the plan restores them.
+enum TripModeGating {
+    nonisolated static func showsLiveActions(tripActive: Bool) -> Bool { !tripActive }
+    /// Live-only block-sheet content: sweeper badge, temporary restrictions, live pins, chatter.
+    nonisolated static func showsLiveBlockContent(tripActive: Bool) -> Bool { !tripActive }
+    nonisolated static func showsLiveASPBanner(tripActive: Bool) -> Bool { !tripActive }
+}

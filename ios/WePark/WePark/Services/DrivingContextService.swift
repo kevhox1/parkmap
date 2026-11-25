@@ -296,12 +296,10 @@ final class DrivingContextService {
     ///   - parkUntilTarget: `ContentView`'s own `parkUntilTarget` `@State`. Ignored when
     ///     `parkUntilMode` is `false`.
     ///   - parkUntilIgnoresMeteredPayment: `ContentView`'s own `parkUntilIgnoresMeteredPayment`
-    ///     `@State` — already resolved by `rebuildOverlays()`'s DM-2 goal-recompute block for
-    ///     the goal-first path (`ParkingGoals.ignoresMeteredPayment(for:)`) or left at its
-    ///     `false` default for the power-user clock-set `ParkUntilSheet` path. This function
-    ///     never imports `ParkingGoals` itself — it consumes whichever value the map's own
-    ///     `rebuildOverlays()` already resolved, so goal-active and clock-set Park Until are
-    ///     covered by the exact same mechanism.
+    ///     `@State` — always `false` on the goal path (no goal tolerates a running meter), and
+    ///     at its `false` default for the power-user clock-set `ParkUntilSheet` path. This
+    ///     function never imports `ParkingGoals` itself — it consumes whichever value the
+    ///     map's own `rebuildOverlays()` already resolved.
     func update(
         coordinate: CLLocationCoordinate2D,
         heading: CLLocationDirection?,
@@ -708,9 +706,7 @@ final class DrivingContextService {
     /// `parkUntilIgnoresMeteredPayment` triple in `ContentView`, so gating on `parkUntilMode`
     /// alone covers BOTH of the smoke finding's fix items with one mechanism and zero new
     /// `ParkingGoals` coupling in this file — `ContentView` has already resolved
-    /// `ignoringMeteredPayment` for whichever path is live (`ParkingGoals.ignoresMeteredPayment
-    /// (for:)` for the goal path; the clock-set path's own `false` default) by the time this
-    /// is called. This also means the fix applies correctly flag-OFF (clock-set Park Until
+    /// `ignoringMeteredPayment` (strict `false` on both paths) by the time this is called. This also means the fix applies correctly flag-OFF (clock-set Park Until
     /// has shipped and is reachable with `driveModeDefaultEnabled == false`) — see this
     /// fix's PR description for the alternative considered (gating on the flag) and why it
     /// was rejected.

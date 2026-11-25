@@ -119,10 +119,12 @@ nonisolated func moreMenuVisibleRows(
     fullPaletteMode: Bool,
     spotPassEnabled: Bool = false,
     driverPassArmed: Bool = false,
-    planTripEnabled: Bool = false
+    planTripEnabled: Bool = false,
+    tripActive: Bool = false
 ) -> [MoreMenuRow] {
     var rows: [MoreMenuRow] = []
-    if communityEnabled { rows.append(.report) }
+    // Report is a live action; hidden while a (not-live) trip plan is active.
+    if communityEnabled && TripModeGating.showsLiveActions(tripActive: tripActive) { rows.append(.report) }
     if spotPassEnabled { rows.append(.spotPass) }
     if spotPassEnabled && driverPassArmed { rows.append(.yourSpotPass) }
     if onboardingReplayAvailable { rows.append(.howWeParkWorks) }

@@ -2152,7 +2152,8 @@ struct ContentView: View {
                 fullPaletteMode: fullPaletteMode,
                 spotPassEnabled: AppConstants.spotHandoffEnabled,
                 driverPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass,
-                planTripEnabled: AppConstants.planTripEnabled
+                planTripEnabled: AppConstants.planTripEnabled,
+                tripActive: tripPlan != nil
             ),
             fullPaletteMode: fullPaletteMode,
             onSelect: { row in handleMoreMenuSelection(row) },
@@ -2744,7 +2745,11 @@ struct ContentView: View {
         // rendered polyline PAYLOAD, never the goal/filter state itself. Flag off: this block
         // is a no-op in both positions (guarded on `AppConstants.driveModeDefaultEnabled`), so
         // this reordering is byte-identical for flag-off builds.
-        if AppConstants.driveModeDefaultEnabled, !fullPaletteMode {
+        //
+        // Plan a Trip: skipped while a trip plan is active. The trip overlay branch below wins
+        // and never reads goal state; `exitTripPlan()` rebuilds immediately, which re-resolves
+        // everything here, so the live goal state is fresh the moment the trip ends.
+        if AppConstants.driveModeDefaultEnabled, !fullPaletteMode, tripPlan == nil {
             // Goals-rework §1: ONE free rule — a running meter is never free in any goal.
             parkUntilIgnoresMeteredPayment = false
             switch selectedGoal {
@@ -2975,7 +2980,8 @@ struct ContentView: View {
                         // #37 item 8: hidden while a placement session on a short phone / at AX1+
                         // is live (`hidesASPBanner`, frozen at entry); always shown otherwise
                         // (flag-off: `curbPlacement` is never non-nil, so this is unchanged).
-                        if curbPlacement?.hidesASPBanner != true {
+                        if curbPlacement?.hidesASPBanner != true,
+                           TripModeGating.showsLiveASPBanner(tripActive: tripPlan != nil) {
                             ASPBanner(state: bannerState)
                                 .onGeometryChange(for: CGFloat.self, of: { proxy in
                                     proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
@@ -6866,6 +6872,12 @@ struct ContentView: View {
         // interaction mode layered on top of the first. The user exits block-select via
         // the floating bar's Cancel/Continue before any other long-press action is available.
         guard !driveModeActive, !blockSelectModeActive else { return }
+
+        // Plan a Trip: long-press parks the car / files a report, both live actions.
+        guard TripModeGating.showsLiveActions(tripActive: tripPlan != nil) else {
+            ToastService.shared.show(message: "Exit your trip plan to park or report.")
+            return
+        }
 
         // A3 (curb-pin placement), spec A.7: flag-on, a resting long-press enters placement
         // centred on the pressed point (intent `.plant`) - and a long-press during spot

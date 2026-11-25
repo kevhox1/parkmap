@@ -235,12 +235,8 @@ enum ParkingGoals {
     /// precision only; §0.8.3a's "Good through <day>" label only ever needs the
     /// day, never a clock time.
     ///
-    /// `goal` is a REQUIRED parameter, not defaulted — this closes a QA-flagged trap
-    /// (pass 1, Finding #2): an earlier draft of this function hardcoded the
-    /// overnight family's `ignoringMeteredPayment: true` with no way for a future
-    /// caller evaluating Free a Few Hours to get the strict semantics that goal
-    /// actually requires. Requiring `goal` here means the metered tolerance can
-    /// never drift from `ignoresMeteredPayment(for:)`, for any caller.
+    /// `goal` is a REQUIRED parameter, not defaulted. There is no metered-payment
+    /// tolerance for any goal: every goal uses the one strict free rule.
     ///
     /// **Does NOT compose `ParkingRulesEngine.nextRestriction(for:at:)`** (QA pass 1,
     /// Finding #1, blocking). That function has a real, pre-existing asymmetry:

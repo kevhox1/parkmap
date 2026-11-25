@@ -838,49 +838,83 @@ private struct GoalWindowRow: View {
     let morningHour: Int
     let onSelectMorningHour: (Int) -> Void
 
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
     var body: some View {
-        HStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Image(systemName: goal.dockIcon)
-                    .foregroundStyle(.blue)
-                    .accessibilityHidden(true)
-                Text("\(goal.dockPrimary) · \(windowLabel)")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .accessibilityElement(children: .combine)
-            Spacer(minLength: 0)
-            if goal == .freeOvernight {
-                Menu {
-                    Picker("Morning end", selection: Binding(
-                        get: { morningHour },
-                        set: { onSelectMorningHour($0) }
-                    )) {
-                        ForEach(ParkingGoals.overnightMorningHourOptions, id: \.self) { hour in
-                            Text("\(hour):00 AM").tag(hour)
-                        }
-                    }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text("Until \(morningHour) AM")
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                // Accessibility sizes: stack the window text above the lever so neither is
+                // squeezed. The goal name keeps its own line (no mid-word breaks); only the
+                // window phrase wraps, at word boundaries.
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: goal.dockIcon)
+                            .foregroundStyle(.blue)
+                            .accessibilityHidden(true)
+                        Text(goal.dockPrimary)
                             .font(.subheadline.weight(.semibold))
-                        Image(systemName: "chevron.up.chevron.down")
-                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .padding(.horizontal, 12)
-                    .frame(minHeight: 44)
-                    .background(Capsule().fill(Color(.systemGray5)))
-                    .contentShape(Capsule())
+                    Text(windowLabel)
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    if goal == .freeOvernight {
+                        leverMenu
+                    }
                 }
-                .accessibilityLabel("Overnight morning end, \(morningHour) AM")
-                .accessibilityHint("Choose when overnight parking should end, 6 to 10 AM")
+                .accessibilityElement(children: .contain)
+            } else {
+                HStack(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Image(systemName: goal.dockIcon)
+                            .foregroundStyle(.blue)
+                            .accessibilityHidden(true)
+                        Text("\(goal.dockPrimary) · \(windowLabel)")
+                            .font(.subheadline.weight(.semibold))
+                            .foregroundStyle(.primary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .accessibilityElement(children: .combine)
+                    Spacer(minLength: 0)
+                    if goal == .freeOvernight {
+                        leverMenu
+                    }
+                }
             }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
+    }
+
+    private var leverMenu: some View {
+        Menu {
+            Picker("Morning end", selection: Binding(
+                get: { morningHour },
+                set: { onSelectMorningHour($0) }
+            )) {
+                ForEach(ParkingGoals.overnightMorningHourOptions, id: \.self) { hour in
+                    Text("\(hour):00 AM").tag(hour)
+                }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text("Until \(morningHour) AM")
+                    .font(.subheadline.weight(.semibold))
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.caption.weight(.semibold))
+            }
+            .padding(.horizontal, 12)
+            .frame(minHeight: 44)
+            .background(Capsule().fill(Color(.systemGray5)))
+            .contentShape(Capsule())
+        }
+        .accessibilityLabel("Overnight morning end, \(morningHour) AM")
+        .accessibilityHint("Choose when overnight parking should end, 6 to 10 AM")
     }
 }
 

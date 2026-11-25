@@ -277,4 +277,31 @@ final class TripPlanningTests: XCTestCase {
         XCTAssertFalse(TripPlanning.isFree(segment: segment, plan: plan, engine: engine))
         XCTAssertTrue(TripPlanning.verdict(segment: segment, plan: plan, engine: engine) != .free)
     }
+
+    // MARK: - Trip-mode gating (not live)
+
+    func testTripModeGating_hidesLiveActionsAndLiveASPBannerOnlyWhileTripActive() {
+        XCTAssertFalse(TripModeGating.showsLiveActions(tripActive: true))
+        XCTAssertFalse(TripModeGating.showsLiveASPBanner(tripActive: true))
+        XCTAssertTrue(TripModeGating.showsLiveActions(tripActive: false))
+        XCTAssertTrue(TripModeGating.showsLiveASPBanner(tripActive: false))
+        XCTAssertFalse(TripModeGating.showsLiveBlockContent(tripActive: true))
+        XCTAssertTrue(TripModeGating.showsLiveBlockContent(tripActive: false))
+    }
+
+    func testMoreMenu_reportRowHiddenWhileTripActive_restoredOnExit() {
+        func rows(tripActive: Bool) -> [MoreMenuRow] {
+            moreMenuVisibleRows(
+                communityEnabled: true,
+                onboardingReplayAvailable: false,
+                hasParkedCar: false,
+                fullPaletteMode: false,
+                planTripEnabled: true,
+                tripActive: tripActive
+            )
+        }
+        XCTAssertFalse(rows(tripActive: true).contains(.report))
+        XCTAssertTrue(rows(tripActive: false).contains(.report))
+        XCTAssertTrue(rows(tripActive: true).contains(.planTrip))
+    }
 }
