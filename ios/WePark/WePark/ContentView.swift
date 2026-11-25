@@ -608,6 +608,16 @@ struct ContentView: View {
     /// not because this default is somehow flag-aware itself).
     @State private var selectedGoal: ParkingGoal = .freeOvernight
 
+    /// Goals-rework §2: the user's Overnight morning end hour (6-10 AM ET, default 7),
+    /// persisted. Changing it re-runs `rebuildOverlays` so the map recolors live.
+    @AppStorage(ParkingGoals.overnightMorningHourDefaultsKey)
+    private var storedOvernightMorningHour: Int = ParkingGoals.defaultOvernightMorningHour
+
+    /// `storedOvernightMorningHour` coerced into the valid option set.
+    private var overnightMorningHour: Int {
+        ParkingGoals.sanitizedOvernightMorningHour(storedOvernightMorningHour)
+    }
+
     /// True once the user has toggled OUT of goal-first (§0.8.8) — functionally identical to
     /// today's `clearParkUntilFilter()` plus "don't let the goal-recompute block in
     /// `rebuildOverlays` touch `parkUntilMode`/`parkUntilTarget` anymore," so the power-user
@@ -2514,7 +2524,10 @@ struct ContentView: View {
     private func goalGoodThroughLabel(for segment: Segment) -> String? {
         guard AppConstants.driveModeDefaultEnabled, !fullPaletteMode else { return nil }
         let now: Date = .nowET
-        let result = ParkingGoals.match(segment: segment, goal: selectedGoal, from: now, engine: engine)
+        let result = ParkingGoals.match(
+            segment: segment, goal: selectedGoal, from: now, engine: engine,
+            overnightMorningHour: overnightMorningHour
+        )
         guard result.matches else { return nil }
         guard let label = ParkingGoals.goodThroughLabel(
             for: segment, goal: selectedGoal, from: now, engine: engine
@@ -2558,14 +2571,8 @@ struct ContentView: View {
         case .parkAndForget:  icon = "parkingsign.circle.fill";  shortName = "Park & Forget"
         }
 
-        let trailingClause: String
-        switch goal {
-        case .freeOvernight, .parkAndForget:
-            let day = ParkingGoals.relativeDayLabel(for: target, from: now)
-            trailingClause = "Good through " + ((day == "Today" || day == "Tomorrow") ? "tomorrow" : day)
-        case .freeFewHours:
-            trailingClause = "until \(ParkUntilSheet.formatTime(target))"
-        }
+        // Goals-rework §2: every goal states its explicit window ("Now → 7:00 AM tomorrow").
+        let trailingClause = ParkingGoals.windowLabel(for: goal, end: target, from: now)
         return (icon, shortName, trailingClause)
     }
 
@@ -2708,10 +2715,13 @@ struct ContentView: View {
         // is a no-op in both positions (guarded on `AppConstants.driveModeDefaultEnabled`), so
         // this reordering is byte-identical for flag-off builds.
         if AppConstants.driveModeDefaultEnabled, !fullPaletteMode {
-            parkUntilIgnoresMeteredPayment = ParkingGoals.ignoresMeteredPayment(for: selectedGoal)
+            // Goals-rework §1: ONE free rule — a running meter is never free in any goal.
+            parkUntilIgnoresMeteredPayment = false
             switch selectedGoal {
             case .freeOvernight, .freeFewHours:
-                parkUntilTarget = ParkingGoals.target(for: selectedGoal, from: now)
+                parkUntilTarget = ParkingGoals.target(
+                    for: selectedGoal, from: now, overnightMorningHour: overnightMorningHour
+                )
                 parkAndForgetGuardState = nil
             case .parkAndForget:
                 let resolution = resolveParkAndForgetViewport(
@@ -3816,7 +3826,10 @@ struct ContentView: View {
                     },
                     onTileRowFrameChange: { onboardingTileRowFrame = $0 },
                     onTileFrameChange: { goal, frame in onboardingTileFrames[goal.rawValue] = frame },
-                    onGoalSheetPresentedChange: { goalSheetPresented = $0 }
+                    onGoalSheetPresentedChange: { goalSheetPresented = $0 },
+                    windowLabel: goalWindowLabel,
+                    overnightMorningHour: overnightMorningHour,
+                    onSelectOvernightMorningHour: { setOvernightMorningHour($0) }
                 )
                 .onGeometryChange(for: CGRect.self, of: { proxy in
                     proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
@@ -3905,6 +3918,23 @@ struct ContentView: View {
     /// `driveModeActive` (AC-30).
     private func selectGoal(_ goal: ParkingGoal) {
         selectedGoal = goal
+        rebuildOverlays(at: .nowET)
+    }
+
+    /// Goals-rework §2: the dock banner's window copy for the active goal. Uses the resolved
+    /// global `parkUntilTarget` (Park & Forget's rung included) once a rebuild has run, and the
+    /// goal's own target before that, so the row is never blank.
+    private var goalWindowLabel: String? {
+        guard AppConstants.driveModeDefaultEnabled, !fullPaletteMode else { return nil }
+        let end = parkUntilTarget ?? ParkingGoals.target(
+            for: selectedGoal, from: lastEvaluatedAt, overnightMorningHour: overnightMorningHour
+        )
+        return ParkingGoals.windowLabel(for: selectedGoal, end: end, from: lastEvaluatedAt)
+    }
+
+    /// Goals-rework §2: applies a new Overnight morning end hour and recolors live.
+    private func setOvernightMorningHour(_ hour: Int) {
+        storedOvernightMorningHour = ParkingGoals.sanitizedOvernightMorningHour(hour)
         rebuildOverlays(at: .nowET)
     }
 
@@ -7885,9 +7915,8 @@ enum ParkAndForgetViewportResolution: Equatable {
 /// rung's match COUNT is computed up front (not just a boolean) specifically to make this
 /// density comparison possible.
 ///
-/// `ignoringMeteredPayment: true` always — Park & Forget shares Free Overnight's
-/// metered-tolerant predicate (§0.8.4) regardless of caller, same as
-/// `ParkingGoals.ignoresMeteredPayment(for: .parkAndForget)`.
+/// `ignoringMeteredPayment: false` always — goals-rework §1: running meters are never free
+/// in any goal, so Park & Forget uses the same strict predicate as every other goal.
 ///
 /// `nonisolated` — same sync-XCTest reason as every other pure function in this file;
 /// `segments`/`engine` are passed in explicitly so this is directly testable with a small
@@ -7907,7 +7936,7 @@ nonisolated func resolveParkAndForgetViewport(
         return segments.reduce(0) { total, segment in
             guard segment.coordinates.count >= 2 else { return total }
             let clears = engine.isFree(
-                segment: segment, from: from, until: until, ignoringMeteredPayment: true
+                segment: segment, from: from, until: until, ignoringMeteredPayment: false
             )
             return clears ? total + 1 : total
         }

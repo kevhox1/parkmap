@@ -140,26 +140,22 @@ final class GoalParkUntilPillContentTests: XCTestCase {
         XCTAssertEqual(content.shortName, "Overnight")
     }
 
-    func testGoalPillContent_freeOvernight_goodThroughTomorrow() {
-        // 2026-05-12 is the day after `now` (2026-05-11) — "Tomorrow" tier.
+    func testGoalPillContent_freeOvernight_explicitWindowTomorrow() {
         let content = ContentView.goalPillContent(
             for: .freeOvernight,
-            target: et(2026, 5, 12, 0, 0),
+            target: et(2026, 5, 12, 7, 0),
             now: et(2026, 5, 11, 20, 0)
         )
-        XCTAssertEqual(content.trailingClause, "Good through tomorrow")
+        XCTAssertEqual(content.trailingClause, "Now → 7:00 AM tomorrow")
     }
 
-    func testGoalPillContent_freeOvernight_neverRendersGoodThroughToday() {
-        // Defensive floor: if `target` somehow lands on the SAME calendar day as `now`
-        // (shouldn't happen given every goal's 2-day-or-wider floor), this must still read
-        // "tomorrow," never a same-day-sounding "today."
+    func testGoalPillContent_freeOvernight_afterMidnight_sameDayWindowHasNoTomorrow() {
         let content = ContentView.goalPillContent(
             for: .freeOvernight,
-            target: et(2026, 5, 11, 23, 0),
-            now: et(2026, 5, 11, 9, 0)
+            target: et(2026, 5, 11, 7, 0),
+            now: et(2026, 5, 11, 2, 0)
         )
-        XCTAssertEqual(content.trailingClause, "Good through tomorrow")
+        XCTAssertEqual(content.trailingClause, "Now → 7:00 AM")
     }
 
     func testGoalPillContent_parkAndForget_iconAndShortNameAndWeekdayTier() {
@@ -171,7 +167,7 @@ final class GoalParkUntilPillContentTests: XCTestCase {
         )
         XCTAssertEqual(content.icon, "parkingsign.circle.fill")
         XCTAssertEqual(content.shortName, "Park & Forget")
-        XCTAssertEqual(content.trailingClause, "Good through Thu")
+        XCTAssertEqual(content.trailingClause, "Now → Thu 5/14")
     }
 
     func testGoalPillContent_parkAndForget_beyondWeekTier() {
@@ -181,7 +177,7 @@ final class GoalParkUntilPillContentTests: XCTestCase {
             target: et(2026, 5, 25, 0, 0),
             now: et(2026, 5, 11, 9, 0)
         )
-        XCTAssertEqual(content.trailingClause, "Good through May 25")
+        XCTAssertEqual(content.trailingClause, "Now → Mon 5/25")
     }
 
     func testGoalPillContent_freeFewHours_iconAndShortName() {
@@ -194,14 +190,11 @@ final class GoalParkUntilPillContentTests: XCTestCase {
         XCTAssertEqual(content.shortName, "A Few Hours")
     }
 
-    /// "Do not write a fourth date formatter" — this must be the literal
-    /// `ParkUntilSheet.formatTime(_:)` output for a same-day target, prefixed with "until ".
-    func testGoalPillContent_freeFewHours_reusesParkUntilSheetFormatTimeUnchanged() {
+    func testGoalPillContent_freeFewHours_explicitWindow() {
         let target = et(2026, 5, 11, 14, 45)
         let now = et(2026, 5, 11, 11, 45)
         let content = ContentView.goalPillContent(for: .freeFewHours, target: target, now: now)
-        let expected = "until \(ParkUntilSheet.formatTime(target))"
-        XCTAssertEqual(content.trailingClause, expected)
+        XCTAssertEqual(content.trailingClause, "Now → 2:45 PM")
     }
 
     // MARK: - activeGoalForParkUntilPill

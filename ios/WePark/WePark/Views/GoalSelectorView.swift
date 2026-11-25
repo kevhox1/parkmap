@@ -291,6 +291,16 @@ struct GoalSelectorView: View {
     /// onboarding coach bubble while it is up. Defaulted no-op.
     let onGoalSheetPresentedChange: (Bool) -> Void
 
+    /// Goals-rework §2: the explicit window copy for the active goal ("Now → 7:00 AM
+    /// tomorrow"), already resolved by the caller. `nil` hides the window row.
+    let windowLabel: String?
+
+    /// Goals-rework §2: the Overnight morning end hour (6-10, ET) shown by the lever.
+    let overnightMorningHour: Int
+
+    /// Fired when the user picks a new Overnight morning end hour from the lever.
+    let onSelectOvernightMorningHour: (Int) -> Void
+
     /// Addendum 4: local sheet state (deliberately NOT `ContentView.activeSheet`).
     @State private var goalSheetPresented = false
     /// QA #5: current sheet detent; set to `.large` on open at AX4+ (`goalSheetOpensLarge`).
@@ -313,8 +323,14 @@ struct GoalSelectorView: View {
         onStartDriving: @escaping () -> Void,
         onTileRowFrameChange: @escaping (CGRect) -> Void = { _ in },
         onTileFrameChange: @escaping (ParkingGoal, CGRect) -> Void = { _, _ in },
-        onGoalSheetPresentedChange: @escaping (Bool) -> Void = { _ in }
+        onGoalSheetPresentedChange: @escaping (Bool) -> Void = { _ in },
+        windowLabel: String? = nil,
+        overnightMorningHour: Int = ParkingGoals.defaultOvernightMorningHour,
+        onSelectOvernightMorningHour: @escaping (Int) -> Void = { _ in }
     ) {
+        self.windowLabel = windowLabel
+        self.overnightMorningHour = overnightMorningHour
+        self.onSelectOvernightMorningHour = onSelectOvernightMorningHour
         self.selectedGoal = selectedGoal
         self.fullPaletteMode = fullPaletteMode
         self.emptyMapGuardKind = emptyMapGuardKind
@@ -350,6 +366,14 @@ struct GoalSelectorView: View {
                         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                 }
                 startDrivingRow
+            }
+            if !fullPaletteMode, let windowLabel {
+                GoalWindowRow(
+                    goal: selectedGoal,
+                    windowLabel: windowLabel,
+                    morningHour: overnightMorningHour,
+                    onSelectMorningHour: onSelectOvernightMorningHour
+                )
             }
             if fullPaletteMode {
                 pickGoalRow
@@ -800,6 +824,63 @@ private struct GoalPickerSheet: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - GoalWindowRow (goals-rework §2)
+
+/// The goal banner: states the active goal's explicit window ("Overnight · Now → 7:00 AM
+/// tomorrow") and, for Overnight only, carries the morning-end lever (6-10 AM menu).
+/// Neutral material styling (blue is the live accent; green/red are reserved for curbs).
+private struct GoalWindowRow: View {
+    let goal: ParkingGoal
+    let windowLabel: String
+    let morningHour: Int
+    let onSelectMorningHour: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 8) {
+                Image(systemName: goal.dockIcon)
+                    .foregroundStyle(.blue)
+                    .accessibilityHidden(true)
+                Text("\(goal.dockPrimary) · \(windowLabel)")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .accessibilityElement(children: .combine)
+            Spacer(minLength: 0)
+            if goal == .freeOvernight {
+                Menu {
+                    Picker("Morning end", selection: Binding(
+                        get: { morningHour },
+                        set: { onSelectMorningHour($0) }
+                    )) {
+                        ForEach(ParkingGoals.overnightMorningHourOptions, id: \.self) { hour in
+                            Text("\(hour):00 AM").tag(hour)
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Text("Until \(morningHour) AM")
+                            .font(.subheadline.weight(.semibold))
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.caption.weight(.semibold))
+                    }
+                    .padding(.horizontal, 12)
+                    .frame(minHeight: 44)
+                    .background(Capsule().fill(Color(.systemGray5)))
+                    .contentShape(Capsule())
+                }
+                .accessibilityLabel("Overnight morning end, \(morningHour) AM")
+                .accessibilityHint("Choose when overnight parking should end, 6 to 10 AM")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14))
     }
 }
 

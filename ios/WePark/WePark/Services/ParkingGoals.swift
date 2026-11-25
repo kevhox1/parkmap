@@ -23,8 +23,14 @@
 //       Implemented to the offsets; never surfaced to users as "rung" numbers —
 //       the "Good through <day>" label (§0.8.3a) is the only user-facing framing.
 //    2. "Free a few hours" = +3h — RULED, confirmed ("sure good idea").
-//    5. "Free a few hours" metered tolerance — RULED strict (Kevin: "it's a meter
-//       so that's not free") — `ignoringMeteredPayment: false` for this goal only.
+//    5. Metered tolerance — SUPERSEDED 2026-11-24 (docs/specs/goals-rework.md §1): a
+//       running meter is NOT free in ANY goal. One rule, `ignoringMeteredPayment: false`
+//       everywhere; the per-goal tolerance is deleted.
+//    6. Goals-rework (2026-11-24): every goal's window starts NOW. A Few Hours = now -> +3h
+//       (capped at Overnight's end so green(A Few Hours) is always a superset of
+//       green(Overnight)); Overnight = now -> next morning (6-10 AM lever, default 7);
+//       Park & Forget = now -> the existing ladder rung. Invariant, test-enforced:
+//       green(A Few Hours) ⊇ green(Overnight) ⊇ green(Park & Forget).
 //
 //  Port map (this file has no PWA equivalent — goal-first is iOS-only, §3.2):
 //    n/a — composes `ParkingRulesEngine.isFree(...)` / `nextRestriction(...)`,
@@ -89,13 +95,20 @@ enum ParkingGoals {
 
     // MARK: - Constants (Kevin's 2026-10-20 rulings)
 
-    /// Free Overnight's day-boundary offset (§0.8.2). `offsetDays: 2` from
-    /// `Date.nowET.startOfDayET(...)` = midnight at the start of the day AFTER
-    /// tomorrow — the SAME idiom `ParkUntilSheet.tonightMidnight()` uses with
-    /// `offsetDays: 1`, one day further out. A day-boundary target makes the
-    /// per-zone ASP start hour irrelevant: the window fully contains tomorrow's
-    /// entire calendar day regardless of what hour the sweep actually starts.
-    nonisolated static let freeOvernightOffsetDays = 2
+    /// Overnight's selectable morning end hours (ET), 24h clock. Goals-rework §2: the lever.
+    nonisolated static let overnightMorningHourOptions: [Int] = [6, 7, 8, 9, 10]
+
+    /// Overnight's default morning end hour (7:00 AM ET).
+    nonisolated static let defaultOvernightMorningHour = 7
+
+    /// UserDefaults key persisting the user's chosen Overnight morning end hour.
+    nonisolated static let overnightMorningHourDefaultsKey = "wepark.overnightMorningEndHour"
+
+    /// Coerces any stored/passed value into one of `overnightMorningHourOptions`
+    /// (a corrupt or stale stored value falls back to the default, never to garbage).
+    nonisolated static func sanitizedOvernightMorningHour(_ hour: Int) -> Int {
+        overnightMorningHourOptions.contains(hour) ? hour : defaultOvernightMorningHour
+    }
 
     /// Free a Few Hours' fixed interval (§0.8.5, RULED LOCKED 2026-10-20: "sure good
     /// idea"). Splits the difference between `ParkUntilSheet`'s existing 2hr/4hr
@@ -111,33 +124,54 @@ enum ParkingGoals {
 
     // MARK: - Target resolution (§0.8.2, §0.8.5)
 
-    /// Resolves a goal's SINGLE target date, from `from`. For `.parkAndForget`, this
-    /// returns the top (widest) rung's target only — callers that need the real
-    /// per-segment step-down behavior should use `match(segment:goal:from:engine:)`
-    /// instead, which walks the full ladder per segment rather than committing to one
-    /// fixed target up front.
-    nonisolated static func target(for goal: ParkingGoal, from: Date = .nowET) -> Date {
-        switch goal {
-        case .freeOvernight:
-            return from.startOfDayET(offsetDays: freeOvernightOffsetDays)
-        case .freeFewHours:
-            return from.addingTimeInterval(freeFewHoursInterval)
-        case .parkAndForget:
-            return from.startOfDayET(offsetDays: parkAndForgetLadderOffsetDays[0])
+    /// Overnight's end. The DAY is anchored by the default 7:00 AM rule (today's 7 AM if `from`
+    /// is before it, otherwise tomorrow's; 7:00 sharp counts as already past), then the lever
+    /// hour is applied to that SAME day. This keeps the window monotone in the lever for every
+    /// `from` (a later lever end can only lengthen the window, i.e. only remove green): a naive
+    /// "next occurrence of the lever hour" would make a 9 AM lever at 7:30 AM end in 90 minutes
+    /// while 7 AM ends tomorrow. A lever hour earlier than the anchor that is already past
+    /// (6 AM lever at 6:30 AM) falls back to the default end rather than an empty window.
+    nonisolated static func overnightEnd(
+        from: Date = .nowET,
+        morningHour: Int = defaultOvernightMorningHour
+    ) -> Date {
+        let cal = Calendar.easternTime
+        let hour = sanitizedOvernightMorningHour(morningHour)
+
+        func morning(_ h: Int, dayOffset: Int) -> Date? {
+            cal.date(bySettingHour: h, minute: 0, second: 0, of: from.startOfDayET(offsetDays: dayOffset))
         }
+        let todayAnchor = morning(defaultOvernightMorningHour, dayOffset: 0)
+        let dayOffset = (todayAnchor.map { $0 > from } ?? false) ? 0 : 1
+        guard let base = morning(defaultOvernightMorningHour, dayOffset: dayOffset) else {
+            return from.addingTimeInterval(24 * 3600)  // unreachable in practice; defensive floor
+        }
+        guard let candidate = morning(hour, dayOffset: dayOffset), candidate > from else { return base }
+        return candidate
     }
 
-    /// Whether a goal's `isFree(...)` call ignores metered payment (§0.8.4).
-    /// `true` for the overnight family (Free Overnight, Park & Forget) — their job is
-    /// "would I have to MOVE it," and paying a meter doesn't force relocation.
-    /// `false` for Free a Few Hours (RULED LOCKED strict, §0.8.5 — Kevin: "it's a
-    /// meter so that's not free").
-    nonisolated static func ignoresMeteredPayment(for goal: ParkingGoal) -> Bool {
+    /// Resolves a goal's SINGLE window end, from `from` (the window always STARTS at `from`).
+    /// For `.parkAndForget`, this returns the top (widest) rung's target only — callers that
+    /// need the real per-segment step-down behavior should use `match(...)` instead.
+    ///
+    /// `.freeFewHours` is `from + 3h`, capped at Overnight's end: between midnight and the
+    /// morning end, "3 hours" would otherwise outlast Overnight and break the
+    /// green(A Few Hours) ⊇ green(Overnight) invariant (docs/specs/goals-rework.md §1).
+    nonisolated static func target(
+        for goal: ParkingGoal,
+        from: Date = .nowET,
+        overnightMorningHour: Int = defaultOvernightMorningHour
+    ) -> Date {
         switch goal {
-        case .freeOvernight, .parkAndForget:
-            return true
+        case .freeOvernight:
+            return overnightEnd(from: from, morningHour: overnightMorningHour)
         case .freeFewHours:
-            return false
+            return min(
+                from.addingTimeInterval(freeFewHoursInterval),
+                overnightEnd(from: from, morningHour: overnightMorningHour)
+            )
+        case .parkAndForget:
+            return from.startOfDayET(offsetDays: parkAndForgetLadderOffsetDays[0])
         }
     }
 
@@ -155,25 +189,24 @@ enum ParkingGoals {
     /// "never clears" state — the empty-map guard (§0.8.10) is a UI-layer concern
     /// (DM-2), not this function's.
     ///
-    /// `ignoringMeteredPayment` is always derived from `ignoresMeteredPayment(for:)`
-    /// internally — never accepted as a separate parameter — so a goal's metered
-    /// tolerance can't drift between this function and `target(for:from:)`.
+    /// Running meters are never free in any goal (`ignoringMeteredPayment: false`), and it is
+    /// deliberately not a parameter, so the one "free" rule can't drift per caller.
     nonisolated static func match(
         segment: Segment,
         goal: ParkingGoal,
         from: Date = .nowET,
-        engine: ParkingRulesEngine
+        engine: ParkingRulesEngine,
+        overnightMorningHour: Int = defaultOvernightMorningHour
     ) -> GoalMatchResult {
-        let ignoringMetered = ignoresMeteredPayment(for: goal)
 
         switch goal {
         case .freeOvernight, .freeFewHours:
-            let checkpoint = target(for: goal, from: from)
+            let checkpoint = target(for: goal, from: from, overnightMorningHour: overnightMorningHour)
             let ok = engine.isFree(
                 segment: segment,
                 from: from,
                 until: checkpoint,
-                ignoringMeteredPayment: ignoringMetered
+                ignoringMeteredPayment: false
             )
             return GoalMatchResult(matches: ok, clearedRungOffsetDays: nil)
 
@@ -184,7 +217,7 @@ enum ParkingGoals {
                     segment: segment,
                     from: from,
                     until: checkpoint,
-                    ignoringMeteredPayment: ignoringMetered
+                    ignoringMeteredPayment: false
                 )
                 if ok {
                     return GoalMatchResult(matches: true, clearedRungOffsetDays: offsetDays)
@@ -196,9 +229,8 @@ enum ParkingGoals {
 
     // MARK: - Ranking / labeling (§0.8.3a)
 
-    /// The actual next move-forcing restriction date for a segment, honoring
-    /// `goal`'s own metered tolerance (§0.8.4 — `ignoringMeteredPayment: true` for
-    /// the overnight family, `false` for Free a Few Hours). Returns the ET midnight
+    /// The actual next move-forcing restriction date for a segment (running meters count,
+    /// for every goal — goals-rework §1; `goal` is kept for API stability). Returns the ET midnight
     /// of the first calendar day carrying a move-forcing restriction — day-level
     /// precision only; §0.8.3a's "Good through <day>" label only ever needs the
     /// day, never a clock time.
@@ -247,8 +279,6 @@ enum ParkingGoals {
         engine: ParkingRulesEngine,
         searchHorizonDays: Int = 14
     ) -> Date? {
-        let ignoringMetered = ignoresMeteredPayment(for: goal)
-
         for dayOffset in 0..<searchHorizonDays {
             let windowStart = dayOffset == 0 ? from : from.startOfDayET(offsetDays: dayOffset)
             let windowEnd = from.startOfDayET(offsetDays: dayOffset + 1)
@@ -258,7 +288,7 @@ enum ParkingGoals {
                 segment: segment,
                 from: windowStart,
                 until: windowEnd,
-                ignoringMeteredPayment: ignoringMetered
+                ignoringMeteredPayment: false
             )
             if !clearThisDay {
                 return from.startOfDayET(offsetDays: dayOffset)
@@ -316,18 +346,53 @@ enum ParkingGoals {
             return "Today"
         case 1:
             return "Tomorrow"
-        case 2...6:
-            let fmt = DateFormatter()
-            fmt.timeZone = .easternTime
-            fmt.locale = Locale(identifier: "en_US")
-            fmt.dateFormat = "EEE"
-            return fmt.string(from: date)
         default:
-            let fmt = DateFormatter()
-            fmt.timeZone = .easternTime
-            fmt.locale = Locale(identifier: "en_US")
-            fmt.dateFormat = "MMM d"
-            return fmt.string(from: date)
+            // Goals-rework §2: 2+ days out always carries the date ("Mon 11/30"), matching
+            // the drive-card labels (#179).
+            return weekdayDateLabel(for: date)
+        }
+    }
+
+    // MARK: - Window copy (goals-rework §2)
+
+    /// Weekday + numeric date, ET — "Mon 11/30". Same style as the drive-card date labels.
+    nonisolated static func weekdayDateLabel(for date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.timeZone = .easternTime
+        fmt.locale = Locale(identifier: "en_US")
+        fmt.dateFormat = "EEE M/d"
+        return fmt.string(from: date)
+    }
+
+    /// Clock time, ET — "8:15 PM".
+    nonisolated static func clockTimeLabel(for date: Date) -> String {
+        let fmt = DateFormatter()
+        fmt.timeZone = .easternTime
+        fmt.locale = Locale(identifier: "en_US")
+        fmt.dateFormat = "h:mm a"
+        return fmt.string(from: date)
+    }
+
+    /// The explicit window every goal shows, always anchored at "Now":
+    ///   - A Few Hours -> "Now → 8:15 PM"
+    ///   - Overnight   -> "Now → 7:00 AM tomorrow" (or "Now → 7:00 AM" before the morning end)
+    ///   - Park & Forget (`end` = the cleared rung's day midnight) -> "Now → Mon 11/30"
+    /// Dates replace "tomorrow" once the end is 2+ days out.
+    nonisolated static func windowLabel(for goal: ParkingGoal, end: Date, from: Date = .nowET) -> String {
+        "Now → " + windowEndLabel(for: goal, end: end, from: from)
+    }
+
+    nonisolated static func windowEndLabel(for goal: ParkingGoal, end: Date, from: Date = .nowET) -> String {
+        if goal == .parkAndForget { return weekdayDateLabel(for: end) }
+        let cal = Calendar.easternTime
+        let dayDiff = cal.dateComponents(
+            [.day], from: cal.startOfDay(for: from), to: cal.startOfDay(for: end)
+        ).day ?? 0
+        let time = clockTimeLabel(for: end)
+        switch dayDiff {
+        case ...0: return time
+        case 1: return "\(time) tomorrow"
+        default: return "\(weekdayDateLabel(for: end)) \(time)"
         }
     }
 }

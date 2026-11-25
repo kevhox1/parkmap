@@ -193,9 +193,9 @@ final class DM2GoalSelectorTests: XCTestCase {
 
     func testResolveParkAndForgetViewport_topRungClears_noStepDown() {
         // Reuses ParkingGoalsTests.testMatch_parkAndForget_clearsTopRung_meteredOnlySegment's
-        // fixture verbatim: no weekly move-forcing rule at all.
+        // fixture verbatim: no weekly move-forcing rule at all (a .free rule; running meters are no longer free, goals-rework §1).
         let from = et(2026, 6, 4, 10, 0)  // Thursday
-        let segment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let segment = seg(rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let result = resolveParkAndForgetViewport(segments: [segment], from: from, engine: engine)
         XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
                        "a viewport where SOMEONE clears the top rung must resolve to the top rung with no step-down banner")
@@ -243,7 +243,7 @@ final class DM2GoalSelectorTests: XCTestCase {
         // for Finding #1's actual realistic repro — segments that clear SOME rungs but not
         // the top one, which is what creates a density mismatch.)
         let from = et(2026, 6, 4, 10, 0)
-        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let badSegment = seg(id: "BAD", rules: [r(category: .noParking, days: [], anytime: true)])
         let result = resolveParkAndForgetViewport(segments: [badSegment, goodSegment], from: from, engine: engine)
         XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
@@ -261,7 +261,7 @@ final class DM2GoalSelectorTests: XCTestCase {
     /// below the default 25% density threshold.
     func testResolveParkAndForgetViewport_bannerFires_whenPickedRungIsALonelyOutlier() {
         let from = et(2026, 6, 7, 10, 0)  // Sunday — matches ParkingGoalsTests' bottomRungOnly fixture
-        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
         let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 4)  // 1 of 5 clears top → density 0.2
         let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)
@@ -275,7 +275,7 @@ final class DM2GoalSelectorTests: XCTestCase {
     /// genuinely-good case.
     func testResolveParkAndForgetViewport_healthyViewport_mostSegmentsClearTopRung_noBanner() {
         let from = et(2026, 6, 4, 10, 0)  // Thursday
-        let goodSegment1 = seg(id: "GOOD1", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let goodSegment1 = seg(id: "GOOD1", rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let goodSegment2 = seg(id: "GOOD2", rules: [])  // no rules at all — always free, clears every rung
         let result = resolveParkAndForgetViewport(segments: [goodSegment1, goodSegment2], from: from, engine: engine)
         XCTAssertEqual(result, .resolved(offsetDays: 8, banner: nil),
@@ -288,7 +288,7 @@ final class DM2GoalSelectorTests: XCTestCase {
     /// landing exactly on the boundary is the "still fine" side.
     func testResolveParkAndForgetViewport_densityExactlyAtThreshold_bannerDoesNotFire() {
         let from = et(2026, 6, 7, 10, 0)
-        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
         let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 3)  // 1 of 4 clears top → density exactly 0.25
         let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)
@@ -301,7 +301,7 @@ final class DM2GoalSelectorTests: XCTestCase {
     /// threshold (0.25) must NOT fire it under a looser, explicitly-passed threshold (0.1).
     func testResolveParkAndForgetViewport_customThreshold_isRespected() {
         let from = et(2026, 6, 7, 10, 0)
-        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
         let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 4)  // density 0.2
         let result = resolveParkAndForgetViewport(
@@ -326,7 +326,7 @@ final class DM2GoalSelectorTests: XCTestCase {
 
     func testResolveParkAndForgetViewport_caseB_densityOnly_isSparseNotSteppedDown() {
         let from = et(2026, 6, 7, 10, 0)
-        let goodSegment = seg(id: "GOOD", rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let goodSegment = seg(id: "GOOD", rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let bottomOnlySegment = seg(id: "BOTTOM_ONLY", rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
         let segments = [goodSegment] + Array(repeating: bottomOnlySegment, count: 4)
         let result = resolveParkAndForgetViewport(segments: segments, from: from, engine: engine)

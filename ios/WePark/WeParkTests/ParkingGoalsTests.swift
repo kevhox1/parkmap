@@ -114,11 +114,67 @@ final class ParkingGoalsTests: XCTestCase {
 
     // MARK: - Sanity: target resolution
 
-    func testTarget_freeOvernight_isStartOfDayOffsetTwo() {
+    func testTarget_freeOvernight_afternoon_isTomorrowSevenAM() {
         let from = et(2026, 5, 11, 15, 0)
-        let expected = et(2026, 5, 13, 0, 0)
-        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from), expected,
-                       "Free Overnight target must be startOfDayET(offsetDays: 2) — a calendar-day boundary, not a clock hour")
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from), et(2026, 5, 12, 7, 0))
+    }
+
+    func testTarget_freeOvernight_afterMidnightBeforeSeven_isTodaySevenAM() {
+        let from = et(2026, 5, 12, 2, 30)
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from), et(2026, 5, 12, 7, 0))
+    }
+
+    func testTarget_freeOvernight_exactlySevenAM_isTomorrowSevenAM() {
+        let from = et(2026, 5, 12, 7, 0)
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from), et(2026, 5, 13, 7, 0))
+    }
+
+    func testTarget_freeOvernight_lever_honorsMorningHour() {
+        let from = et(2026, 5, 11, 22, 0)
+        for hour in ParkingGoals.overnightMorningHourOptions {
+            XCTAssertEqual(
+                ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: hour),
+                et(2026, 5, 12, hour, 0)
+            )
+        }
+    }
+
+    func testTarget_freeOvernight_laterLeverAfterSevenAM_staysOnTomorrow() {
+        // 7:30 AM + 9 AM lever must end tomorrow 9 AM (not today 9 AM), so it can only add window.
+        let from = et(2026, 5, 12, 7, 30)
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 9), et(2026, 5, 13, 9, 0))
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 7), et(2026, 5, 13, 7, 0))
+    }
+
+    func testTarget_freeOvernight_sixAMLeverAlreadyPast_fallsBackToDefaultEnd() {
+        let from = et(2026, 5, 12, 6, 30)
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 6), et(2026, 5, 12, 7, 0))
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 9), et(2026, 5, 12, 9, 0))
+    }
+
+    func testTarget_freeOvernight_endIsMonotoneInLever_everyHalfHour() {
+        for halfHour in 0..<48 {
+            let from = et(2026, 5, 12, halfHour / 2, (halfHour % 2) * 30)
+            var previous = from
+            for hour in ParkingGoals.overnightMorningHourOptions {
+                let end = ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: hour)
+                XCTAssertGreaterThan(end, from)
+                XCTAssertGreaterThanOrEqual(end, previous, "lever \(hour) at \(from)")
+                previous = end
+            }
+        }
+    }
+
+    func testTarget_freeOvernight_invalidLever_fallsBackToSeven() {
+        let from = et(2026, 5, 11, 22, 0)
+        XCTAssertEqual(ParkingGoals.target(for: .freeOvernight, from: from, overnightMorningHour: 3), et(2026, 5, 12, 7, 0))
+    }
+
+    func testTarget_freeFewHours_nearMorning_isCappedAtOvernightEnd() {
+        // 5 AM + 3h would be 8 AM, past Overnight's 7 AM end; the cap preserves the
+        // green(A Few Hours) superset-of green(Overnight) invariant.
+        let from = et(2026, 5, 12, 5, 0)
+        XCTAssertEqual(ParkingGoals.target(for: .freeFewHours, from: from), et(2026, 5, 12, 7, 0))
     }
 
     func testTarget_freeFewHours_isPlusThreeHours() {
@@ -128,58 +184,57 @@ final class ParkingGoalsTests: XCTestCase {
                        "Free a Few Hours target must be from + 3h (§0.8.5, RULED LOCKED)")
     }
 
-    func testIgnoresMeteredPayment_perGoal() {
-        XCTAssertTrue(ParkingGoals.ignoresMeteredPayment(for: .freeOvernight),
-                      "Free Overnight must ignore metered payment (§0.8.4)")
-        XCTAssertTrue(ParkingGoals.ignoresMeteredPayment(for: .parkAndForget),
-                      "Park & Forget must ignore metered payment (§0.8.4)")
-        XCTAssertFalse(ParkingGoals.ignoresMeteredPayment(for: .freeFewHours),
-                       "Free a Few Hours must NOT ignore metered payment — strict, RULED LOCKED (§0.8.5)")
-    }
+    // MARK: - One free rule: running meters are never free, in any goal
 
-    // MARK: - Sanity: metered-tolerance wiring
-
-    func testMatch_freeOvernight_meteredOnlySegment_matchesDespitePaidHoursRightNow() {
-        // Metered Mon-Fri 8am-10pm only, no ASP/no-standing/no-parking rules at all.
-        // Free Overnight's job is "would I have to MOVE it" — paying a meter isn't
-        // moving (§0.8.2's own worked example).
-        let from = et(2026, 5, 11, 9, 0)   // Monday 9am — inside the metered paid window right now.
-        let segment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
-        let result = ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine)
-        XCTAssertTrue(result.matches,
-                      "A metered-only segment must match Free Overnight even while actively paid right now (§0.8.2)")
-    }
-
-    func testMatch_freeFewHours_meteredActiveInWindow_nonMatching() {
-        // Metered Mon-Fri 8am-10pm. +3h window from 9am is [9am, noon] — inside paid hours.
+    func testMatch_meteredActiveInWindow_nonMatching_everyGoal() {
+        // Metered Mon-Fri 8am-10pm. From Monday 9am every goal's window runs through paid hours.
         let from = et(2026, 5, 11, 9, 0)
         let segment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
-        let result = ParkingGoals.match(segment: segment, goal: .freeFewHours, from: from, engine: engine)
-        XCTAssertFalse(result.matches,
-                       "Free a Few Hours is strict — an active meter inside the +3h window disqualifies (§0.8.5)")
+        for goal in ParkingGoal.allCases {
+            XCTAssertFalse(
+                ParkingGoals.match(segment: segment, goal: goal, from: from, engine: engine).matches,
+                "\(goal): an active meter inside the window must disqualify (goals-rework section 1)"
+            )
+        }
+    }
+
+    func testMatch_meteredOnlyOvernight_afterMeterHours_matchesOvernightButNotParkAndForget() {
+        // Monday 11 PM: meter (8am-10pm) is off tonight; Overnight ends 7 AM Tuesday, before the
+        // meter restarts at 8 AM. Park & Forget's longer window runs into Tuesday's paid hours.
+        let from = et(2026, 5, 11, 23, 0)
+        let segment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        XCTAssertTrue(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine).matches)
+        XCTAssertFalse(ParkingGoals.match(segment: segment, goal: .parkAndForget, from: from, engine: engine).matches)
+        XCTAssertTrue(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine, overnightMorningHour: 6).matches)
+        XCTAssertFalse(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine, overnightMorningHour: 9).matches,
+                       "A 9 AM lever end reaches the 8 AM meter start")
     }
 
     // MARK: - AC-24: Free Overnight day-boundary, any ASP start hour
 
-    func testMatch_freeOvernight_aspTomorrowEarlyStart_nonMatching() {
-        // ASP_TUE_FRI, early start (7:00-9:30am). "Tomorrow" (Tuesday) is fully inside
-        // the [now, day-after-tomorrow midnight) window regardless of the sweep's hour.
-        let from = et(2026, 5, 11, 20, 0)  // Monday 8:00 PM
+    func testMatch_freeOvernight_aspTomorrowEarlyStart_matchesAt7_butNotWithLaterLever() {
+        // ASP_TUE_FRI, 7:00-9:30am Tuesday. Window [Mon 8pm, Tue 7:00 AM) ends exactly as the
+        // sweep begins (half-open) -> free. A 9 AM lever pulls the sweep in -> not free.
+        let from = et(2026, 5, 11, 20, 0)
         let segment = seg(rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
-        let result = ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine)
-        XCTAssertFalse(result.matches,
-                       "ASP tomorrow (early start) must be non-matching — the car would have to move")
+        XCTAssertTrue(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine).matches)
+        XCTAssertFalse(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine, overnightMorningHour: 9).matches,
+                       "Later lever end can only remove green")
     }
 
-    func testMatch_freeOvernight_aspTomorrowLateStart_nonMatching() {
-        // Same window as above, but the ASP sweep starts LATE (11:30am-1pm, 690-780).
-        // A naive "now → tomorrow 8am" cutoff would have MISSED this; the day-boundary
-        // target must still catch it (§0.8.2's reason #1 for rejecting a clock-hour cutoff).
-        let from = et(2026, 5, 11, 20, 0)  // Monday 8:00 PM
-        let segment = seg(rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(690, 780)])])
-        let result = ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine)
-        XCTAssertFalse(result.matches,
-                       "ASP tomorrow with a LATE start hour must still be non-matching — day boundary, not clock hour")
+    func testMatch_freeOvernight_aspTomorrowMidMorning_nonMatchingWhenLeverReachesIt() {
+        // ASP Tuesday 8:30-10:00 (510-600): free at the default 7 AM end, red at 9 AM.
+        let from = et(2026, 5, 11, 20, 0)
+        let segment = seg(rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(510, 600)])])
+        XCTAssertTrue(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine).matches)
+        XCTAssertFalse(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine, overnightMorningHour: 9).matches)
+    }
+
+    func testMatch_freeOvernight_aspTonight_nonMatching() {
+        // ASP today (Monday) later this evening 6-8pm -> inside [now, 7 AM).
+        let from = et(2026, 5, 11, 15, 0)
+        let segment = seg(rules: [r(category: .aspMonThu, days: [1, 4], timeRanges: [(1080, 1200)])])
+        XCTAssertFalse(ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine).matches)
     }
 
     func testMatch_freeOvernight_nextAspDayDayAfterTomorrowOrLater_matching() {
@@ -197,10 +252,10 @@ final class ParkingGoalsTests: XCTestCase {
     // MARK: - AC-25: Park & Forget ladder + ranking
 
     func testMatch_parkAndForget_clearsTopRung_meteredOnlySegment() {
-        // No weekly move-forcing rule at all (metered-only) — clears any window once
-        // meters are ignored, including the top rung (amendment banner ruling #1).
+        // No weekly move-forcing rule at all (a .free rule only) — clears any window,
+        // including the top rung (amendment banner ruling #1).
         let from = et(2026, 6, 4, 10, 0)  // Thursday
-        let segment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let segment = seg(rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let result = ParkingGoals.match(segment: segment, goal: .parkAndForget, from: from, engine: engine)
         XCTAssertTrue(result.matches)
         XCTAssertEqual(result.clearedRungOffsetDays, 8,
@@ -248,7 +303,7 @@ final class ParkingGoalsTests: XCTestCase {
         // §0.8.3a: "a block that clears the top rung is labeled/ranked above one that
         // only clears the bottom." clearedRungOffsetDays is directly comparable —
         // larger offsetDays == a stronger, further-out clearance.
-        let topSegment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let topSegment = seg(rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let bottomSegment = seg(rules: [r(category: .aspTueFri, days: [2, 5], timeRanges: [(420, 570)])])
 
         let topFrom = et(2026, 6, 4, 10, 0)     // Thursday
@@ -303,7 +358,7 @@ final class ParkingGoalsTests: XCTestCase {
                        "Must find the real Wednesday NO_STANDING restriction, not report nil/'indefinitely clear'")
 
         let label = ParkingGoals.goodThroughLabel(for: segment, goal: .parkAndForget, from: from, engine: engine)
-        XCTAssertEqual(label, "Good through Wed")
+        XCTAssertEqual(label, "Good through Wed 5/13")
     }
 
     func testNextMoveForcingDate_scheduledSpecialNotAnytime_findsRealRestriction_notNil() {
@@ -325,7 +380,7 @@ final class ParkingGoalsTests: XCTestCase {
         // segment's nextMoveForcingDate was nil — "indefinitely clear" — which
         // incorrectly outranked the genuinely-top-rung metered-only segment.
         let bottomSegment = seg(rules: [r(category: .noStanding, days: [3])])
-        let topSegment = seg(rules: [r(category: .metered, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
+        let topSegment = seg(rules: [r(category: .free, days: [1, 2, 3, 4, 5], timeRanges: [(480, 1320)])])
         let from = et(2026, 5, 11, 10, 0)  // Monday
 
         let bottomResult = ParkingGoals.match(segment: bottomSegment, goal: .parkAndForget, from: from, engine: engine)
@@ -350,7 +405,11 @@ final class ParkingGoalsTests: XCTestCase {
         // inside [Wed 10am, Fri midnight) is that suspended Thursday — a non-event.
         let from = et(2026, 5, 13, 10, 0)  // Wednesday
         let segment = seg(rules: [r(category: .aspMonThu, days: [1, 4], timeRanges: [(420, 570)])])
-        let result = ParkingGoals.match(segment: segment, goal: .freeOvernight, from: from, engine: engine)
+        // 9 AM lever: window runs to Thu 9 AM, which WOULD overlap the 7:00-9:30 sweep were
+        // the day not suspended.
+        let result = ParkingGoals.match(
+            segment: segment, goal: .freeOvernight, from: from, engine: engine, overnightMorningHour: 9
+        )
         XCTAssertTrue(result.matches,
                       "A suspended ASP day inside the window must be a non-event — segment still matches")
     }
@@ -373,7 +432,7 @@ final class ParkingGoalsTests: XCTestCase {
                        "Must resolve to Monday 05-18, skipping the suspended Thursday 05-14 entirely")
 
         let label = ParkingGoals.goodThroughLabel(for: segment, goal: .freeOvernight, from: from, engine: engine)
-        XCTAssertEqual(label, "Good through Mon",
+        XCTAssertEqual(label, "Good through Mon 5/18",
                        "Label must reflect the next REAL restriction day (Mon), not the suspended Thursday")
     }
 
@@ -397,7 +456,7 @@ final class ParkingGoalsTests: XCTestCase {
         // 2026-05-14 is a Thursday, 3 days after Monday 2026-05-11.
         XCTAssertEqual(
             ParkingGoals.relativeDayLabel(for: et(2026, 5, 14, 9, 0), from: et(2026, 5, 11, 9, 0)),
-            "Thu"
+            "Thu 5/14"
         )
     }
 
@@ -405,7 +464,7 @@ final class ParkingGoalsTests: XCTestCase {
         // 2026-05-25 is 14 days after Monday 2026-05-11.
         XCTAssertEqual(
             ParkingGoals.relativeDayLabel(for: et(2026, 5, 25, 9, 0), from: et(2026, 5, 11, 9, 0)),
-            "May 25"
+            "Mon 5/25"
         )
     }
 
