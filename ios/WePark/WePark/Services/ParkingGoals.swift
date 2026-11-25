@@ -360,6 +360,14 @@ enum ParkingGoals {
         return fmt.string(from: date)
     }
 
+    /// Replaces the space before AM/PM with a non-breaking space ("10:00 AM" -> "10:00\u{00A0}AM").
+    /// Display-only: a wrapped line can break between words but never inside a time.
+    nonisolated static func nonBreakingMeridiem(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: " AM", with: "\u{00A0}AM")
+            .replacingOccurrences(of: " PM", with: "\u{00A0}PM")
+    }
+
     /// Clock time, ET — "8:15 PM".
     nonisolated static func clockTimeLabel(for date: Date) -> String {
         let fmt = DateFormatter()

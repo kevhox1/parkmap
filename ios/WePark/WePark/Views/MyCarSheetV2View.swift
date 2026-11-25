@@ -148,7 +148,9 @@ struct MyCarSheetV2View: View {
         guard let pin = ownLiveLeavingSoonPin, let expiresAt = pin.expiresAt else {
             return "Neighbors have been told"
         }
-        let remaining = Int(max(0, expiresAt.timeIntervalSince(currentNow)) / 60)
+        let remaining = MyCarSheetV2Logic.leavingSoonMinutesLeft(
+            expiresAt: expiresAt, now: currentNow, leavingMinutes: pin.leavingMinutes
+        )
         guard remaining > 0 else { return "Neighbors have been told" }
         return "Neighbors have been told \u{2014} \(remaining) min left"
     }
@@ -344,7 +346,8 @@ struct MyCarSheetV2View: View {
             restriction: engine.nextRestriction(for: seg, at: now),
             rules: seg.rules,
             dayOfWeek: now.dayOfWeekET,
-            minuteOfDay: now.minuteOfDayET
+            minuteOfDay: now.minuteOfDayET,
+            now: now
         )
     }
 
@@ -596,6 +599,15 @@ struct MyCarSheetV2View: View {
         }
     }
 
+    /// Four chips in a row at normal sizes; a fixed 2x2 grid at accessibility sizes so each chip
+    /// has half the sheet width and never has to break its label.
+    private var leavingChipColumns: [GridItem] {
+        if isAccessibilitySize {
+            return [GridItem(.flexible(), spacing: 8), GridItem(.flexible(), spacing: 8)]
+        }
+        return [GridItem(.adaptive(minimum: 76), spacing: 8)]
+    }
+
     private var tellNeighborsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Tell neighbors")
@@ -612,7 +624,7 @@ struct MyCarSheetV2View: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityElement(children: .combine)
             } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 76), spacing: 8)], spacing: 8) {
+                LazyVGrid(columns: leavingChipColumns, spacing: 8) {
                     ForEach(ParkedCarDetailLogic.leavingSoonChipMinutes, id: \.self) { minutes in
                         minuteChip(minutes)
                     }
@@ -629,12 +641,16 @@ struct MyCarSheetV2View: View {
                         if leavingSoonSubmitting {
                             ProgressView()
                         } else {
-                            Text("Tell neighbors \u{2014} leaving in \(leavingMinutes) min")
+                            Text("Tell neighbors \u{2014} leaving in \(leavingMinutes)\u{00A0}min")
+                                .multilineTextAlignment(.center)
                         }
                     }
                     .frame(maxWidth: .infinity, minHeight: 52)
                 }
                 .buttonStyle(.borderedProminent)
+                // Rounded rectangle, not the default capsule: at AX5 the label wraps to several
+                // lines and a capsule turns into a large oval.
+                .buttonBorderShape(.roundedRectangle(radius: 16))
                 .controlSize(.large)
                 .disabled(leavingSoonSubmitting)
                 .accessibilityLabel("Leaving in \(leavingMinutes) minutes. Tell neighbors.")
@@ -649,13 +665,17 @@ struct MyCarSheetV2View: View {
         return Button {
             leavingMinutes = minutes
         } label: {
-            Text("\(minutes) min")
+            // Non-breaking space: "min" can never split from its number, and the chip wraps as
+            // a whole unit (2x2 grid at accessibility sizes) rather than mid-word.
+            Text("\(minutes)\u{00A0}min")
                 .font(.subheadline.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
                 .frame(maxWidth: .infinity, minHeight: 48)
         }
         .buttonStyle(.plain)
         .foregroundStyle(selected ? Color.white : Color.primary)
-        .background(selected ? Color.accentColor : Color(.systemGray5), in: Capsule())
+        .background(selected ? Color.accentColor : Color(.systemGray5), in: RoundedRectangle(cornerRadius: 24))
         .accessibilityAddTraits(selected ? [.isSelected] : [])
         .accessibilityLabel("\(minutes) minutes")
     }

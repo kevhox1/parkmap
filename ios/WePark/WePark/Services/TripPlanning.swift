@@ -160,14 +160,10 @@ nonisolated enum TripPlanning {
         "\(displayWindowLabel(for: plan)) · not live"
     }
 
-    /// `windowLabel` with non-breaking spaces inside each stamp, and between the arrow and the
-    /// departure, so a narrow (AX5) line can only wrap before the arrow, never mid-time.
+    /// `windowLabel` with a non-breaking space ONLY between a time and its AM/PM, so a narrow
+    /// (AX5) line can wrap between words ("Sat" / "11/28" / "10:00 AM") but never inside a time.
     static func displayWindowLabel(for plan: TripPlan) -> String {
-        "\(nonBreaking(stamp(plan.arrival))) →\u{00A0}\(nonBreaking(stamp(plan.departure)))"
-    }
-
-    static func nonBreaking(_ text: String) -> String {
-        text.replacingOccurrences(of: " ", with: "\u{00A0}")
+        ParkingGoals.nonBreakingMeridiem(windowLabel(for: plan))
     }
 
     /// "Sat 11/28 10:00 AM"
