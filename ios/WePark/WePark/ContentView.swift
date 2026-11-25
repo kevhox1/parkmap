@@ -5385,6 +5385,7 @@ struct ContentView: View {
             // setCamera has applied so we don't capture the pre-transition altitude here).
             // Create DrivingContextService and wire the voice service.
             let service = DrivingContextService(voice: drivingVoice)
+            service.resetSession()
             drivingContextService = service
             drivingContext = nil
             // CM-3: Enable Cruise Mode voice policy when entering in Cruise Mode.
@@ -5411,6 +5412,7 @@ struct ContentView: View {
             locationService.endDriveMode()
             // CM-3: Reset cruise mode flag for the next session.
             drivingContextService?.setCruiseMode(false)
+            drivingContextService?.resetSession()
             drivingContextService = nil
             drivingContext = nil
             // Option A: clear follow state on Drive Mode exit.
