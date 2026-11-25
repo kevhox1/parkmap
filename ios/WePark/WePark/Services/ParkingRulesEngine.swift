@@ -477,10 +477,12 @@ final class ParkingRulesEngine {
         from now: Date
     ) -> Double {
         let cal = Calendar.easternTime
+        // perf: ET midnight of today, computed once (was recomputed on every loop iteration).
+        let todayMidnight = now.startOfDayET()
 
         for offset in 0..<14 {
             // Construct the ET midnight of the candidate date.
-            guard let checkMidnight = cal.date(byAdding: .day, value: offset, to: now.startOfDayET()) else {
+            guard let checkMidnight = cal.date(byAdding: .day, value: offset, to: todayMidnight) else {
                 continue
             }
 
@@ -593,16 +595,21 @@ final class ParkingRulesEngine {
         }
 
         // Format the time string — must match JS toLocaleTimeString en-US output exactly.
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US")
-        formatter.timeZone = .easternTime
-        // "h:mm a" produces "9:30 AM" — hour (no leading zero), 2-digit minute, uppercase AM/PM.
-        // This matches JS { hour: 'numeric', minute: '2-digit', hour12: true } in en-US.
-        formatter.dateFormat = "h:mm a"
-        let timeStr = formatter.string(from: target)
+        let timeStr = ParkingRulesEngine.clockTimeFormatter.string(from: target)
 
         return "\(dayLabel) \(timeStr)"
     }
+
+    /// perf: built once (a DateFormatter per `safetyLabel` call was a per-segment allocation).
+    /// "h:mm a" produces "9:30 AM" — hour (no leading zero), 2-digit minute, uppercase AM/PM.
+    /// This matches JS { hour: 'numeric', minute: '2-digit', hour12: true } in en-US.
+    private static let clockTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US")
+        formatter.timeZone = .easternTime
+        formatter.dateFormat = "h:mm a"
+        return formatter
+    }()
 
     // MARK: - Private: metered time format
 
