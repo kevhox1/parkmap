@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="position:absolute;inset:0;background:#fbf6e6;color:#241f45;font-family:'Fredoka',sans-serif">
+<div style="position:absolute;left:18px;right:18px;top:64px;bottom:34px;display:flex;flex-direction:column">
+<div style="display:flex;justify-content:space-between;align-items:center"><div><div style="font:500 14px 'Fredoka',sans-serif">My car</div><div style="font:600 22px 'Fredoka',sans-serif">{{ address }}</div></div><div style="width:48px;height:48px;flex:none;box-sizing:border-box;border-radius:50%;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="position:relative;flex:none;height:120px;margin-top:14px;border-radius:24px;overflow:hidden;background:#e4e3ec;border:1.5px solid #241f45">
+<dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:28%;top:50%;margin:-20px 0 0 -20px;width:40px;height:40px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center"><div style="width:18px;height:11px;border-radius:4px 4px 2px 2px;background:#241f45"></div></div>
+<div style="position:absolute;right:8px;bottom:8px;height:44px;padding:0 14px;display:flex;align-items:center;background:#fff;border:2.5px solid #241f45;border-radius:22px;box-shadow:0 3px 0 #241f45;font:600 14px 'Fredoka',sans-serif">Walk there · 4 min</div>
+</div>
+<div style="{{ blockStyle }}"><div style="{{ overStyle }}">{{ over }}</div><div style="font:700 44px/1.05 'Fredoka',sans-serif">{{ big }}</div><sc-if value="{{ hasBar }}" hint-placeholder-val="{{ true }}"><div style="display:flex;height:10px;margin-top:10px;border-radius:5px;overflow:hidden;background:#241f45"><div style="{{ barFill }}"></div></div></sc-if><div style="font:500 14px/1.35 'Fredoka',sans-serif;margin-top:8px">{{ sub }}</div></div>
+<sc-if value="{{ hasWarn }}" hint-placeholder-val="{{ false }}"><div style="margin-top:10px;padding:11px 14px;display:flex;align-items:center;justify-content:space-between;gap:10px;border:3px dashed #e39a90;border-radius:20px"><div style="font:600 15px/1.3 'Fredoka',sans-serif">{{ warn }}</div><div style="flex:none;height:48px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #241f45;border-radius:24px;font:600 15px 'Fredoka',sans-serif">{{ warnCta }}</div></div></sc-if><sc-if value="{{ hasBanner }}" hint-placeholder-val="{{ false }}"><div style="margin-top:10px;padding:12px 16px;background:#e3f8ec;border:1.5px solid #17803f;border-radius:20px;font:500 14px/1.35 'Fredoka',sans-serif">{{ banner }}</div></sc-if>
+<div style="margin-top:10px;min-height:64px;padding:10px 14px 10px 18px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div><div style="font:600 18px/1.2 'Fredoka',sans-serif">{{ remindTitle }}</div><div style="font:400 14px 'Fredoka',sans-serif">{{ remindSub }}</div></div><div style="{{ swStyle }}"><div style="{{ knobStyle }}"></div></div></div>
+<sc-if value="{{ pass }}" hint-placeholder-val="{{ true }}"><div style="position:relative;margin-top:14px;padding:14px 18px;background:#ffd23f;border:2.5px solid #241f45;border-radius:24px;box-shadow:0 4px 0 #241f45"><div style="font:600 18px 'Fredoka',sans-serif">Leaving soon?</div><div style="font:400 15px 'Fredoka',sans-serif">Pass your spot to a neighbor.</div><div style="position:absolute;right:14px;top:-14px;padding:6px 12px;background:#fff;border:2.5px solid #241f45;border-radius:16px;box-shadow:0 3px 0 #241f45;transform:rotate(6deg);font:700 14px 'Fredoka',sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span> +5 karma</div></div></sc-if>
+<div style="flex:1"></div>
+<div style="height:64px;flex:none;display:flex;align-items:center;justify-content:center;background:#241f45;color:#fff;border-radius:32px;font:600 22px 'Fredoka',sans-serif">{{ primary }}</div>
+<div style="height:48px;flex:none;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif;text-decoration:underline">{{ signsLabel }}</div>
+</div>
+{{ children }}
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:375,&quot;height&quot;:812},&quot;kind&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;park&quot;,&quot;soon&quot;,&quot;dont&quot;,&quot;meter&quot;,&quot;nodata&quot;],&quot;default&quot;:&quot;park&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;address&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;In front of 50 E 1st St&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;over&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Free to stay until&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;big&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Mon 9:00 AM&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;sub&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;4 days 11 h left, then street cleaning&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;barPct&quot;:{&quot;editor&quot;:&quot;int&quot;,&quot;default&quot;:90,&quot;min&quot;:0,&quot;max&quot;:100,&quot;tsType&quot;:&quot;number&quot;},&quot;banner&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;remindTitle&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Remind me before it changes&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;remindSub&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;1 hr before + the night before&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;remindOn&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;pass&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;primary&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;I left&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;signsLabel&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;See the 2 signs on this curb&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const kind = p.kind ?? 'park';
+    const B = { marginTop: 14, padding: '16px 18px', borderRadius: 24 };
+    const blocks = {
+      park: { ...B, background: '#3ccf7a' },
+      soon: { ...B, background: '#f2a23a' },
+      dont: { ...B, background: '#fff', border: '3px dashed #e39a90', padding: '13px 15px' },
+      meter: { ...B, background: '#fff', border: '3px dotted #5b7cfa', padding: '13px 15px' },
+      nodata: { ...B, background: '#fff', border: '2px solid #a9a7b8', padding: '14px 16px' },
+    };
+    const pct = p.barPct;
+    const on = p.remindOn !== false;
+    return {
+      children: p.children ?? null,
+      address: p.address ?? 'In front of 50 E 1st St',
+      blockStyle: blocks[kind],
+      overStyle: { font: "500 15px 'Fredoka',sans-serif", color: kind === 'dont' ? '#b8322a' : kind === 'nodata' ? '#5a5578' : '#241f45' },
+      over: p.over ?? 'Free to stay until', big: p.big ?? 'Mon 9:00 AM', sub: p.sub ?? '4 days 11 h left, then street cleaning',
+      hasBar: pct !== false, barFill: { width: (pct ?? 90) + '%', background: '#fff' },
+      hasWarn: !!p.warn, warn: p.warn, warnCta: p.warnCta ?? 'Settings',
+      hasBanner: !!p.banner, banner: p.banner,
+      remindTitle: p.remindTitle ?? 'Remind me before it changes', remindSub: p.remindSub ?? '1 hr before + the night before',
+      swStyle: { width: 56, height: 34, flex: 'none', boxSizing: 'border-box', borderRadius: 17, background: on ? '#3ccf7a' : '#e4e3ec', border: '2.5px solid #241f45', padding: '0 3px', display: 'flex', alignItems: 'center', justifyContent: on ? 'flex-end' : 'flex-start' },
+      knobStyle: { width: 22, height: 22, boxSizing: 'border-box', borderRadius: '50%', background: '#fff', border: '2.5px solid #241f45' },
+      pass: p.pass !== false, primary: p.primary ?? 'I left', signsLabel: p.signsLabel ?? 'See the 2 signs on this curb',
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,28 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="width:391px;height:828px;border-radius:54px;background:#0b0b0c;padding:8px;box-sizing:border-box;flex:none"><div style="{{ screenStyle }}">{{ children }}<div style="position:absolute;top:11px;left:50%;margin-left:-55px;width:110px;height:31px;border-radius:16px;background:#000"></div><div style="{{ timeStyle }}">{{ time }}</div><div style="{{ barStyle }}"></div></div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:391,&quot;height&quot;:828},&quot;dark&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;bg&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;default&quot;:&quot;#fbf6e6&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const dark = !!this.props.dark;
+    const bg = this.props.bg ?? (dark ? '#241f45' : '#fbf6e6');
+    const fg = dark ? '#fbf6e6' : '#241f45';
+    return {
+      time: this.props.time ?? '10:11',
+      screenStyle: { position: 'relative', width: '100%', height: '100%', borderRadius: 46, overflow: 'hidden', background: bg, fontFamily: "'Fredoka',sans-serif", color: fg },
+      timeStyle: { position: 'absolute', top: 17, left: 34, font: '600 15px system-ui,sans-serif', color: fg },
+      barStyle: { position: 'absolute', bottom: 8, left: '50%', marginLeft: -67, width: 134, height: 5, borderRadius: 3, background: fg },
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"><link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet"><style>body{margin:0;background:#ece9df;font-family:'Fredoka',system-ui,sans-serif;color:#241f45}a{color:#241f45}a:hover{color:#5a5578}code{font:500 12px ui-monospace,Menlo,monospace}</style></helmet>
+
+<section id="intro" style="padding:44px 44px 8px;max-width:900px">
+<div style="font:600 12px 'Fredoka',sans-serif;letter-spacing:.08em;color:#5a5578">WEPARK · ROUND 2 · BATCH 5 OF 5 · PART B</div>
+<h1 style="margin:6px 0 8px;font:600 40px/1.05 'Fredoka',sans-serif">More, Settings, Parking 101, web pages</h1>
+<p style="margin:0;font:400 16px/1.45 'Fredoka',sans-serif;text-wrap:pretty">Covers B15 to B17. Everything here is flat: these screens hold facts and settings, and the only raised things are a chosen option and the one yellow action on the web pass.</p>
+</section>
+
+<section id="b15" data-screen-label="B15 More and Settings" style="padding:36px 44px;border-bottom:1px solid rgba(36,31,69,.15)">
+<h2 style="margin:0 0 6px;font:600 26px 'Fredoka',sans-serif">B15 · More and Settings</h2>
+<p style="margin:0 0 22px;max-width:820px;font:400 15px/1.45 'Fredoka',sans-serif;text-wrap:pretty">One list part does all of it: a white card with a 1.5 line, rows 56 tall, a hairline between rows. A row ends in a chevron, a switch or a value.</p>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b15-more" data-screen-label="B15 More sheet" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.1 · More sheet</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;inset:0;background:rgba(36,31,69,.45)"></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:20px 18px 36px">
+<div style="display:flex;justify-content:space-between;align-items:center;padding:0 4px"><div style="font:600 24px 'Fredoka',sans-serif">More</div><div style="width:48px;height:48px;box-sizing:border-box;border-radius:50%;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:600 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="margin-top:12px;padding:0 18px;border:1.5px solid #241f45;border-radius:20px;font:600 17px 'Fredoka',sans-serif">
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Report</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Spot Pass</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>How WePark works</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>What the colors mean</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Parking 101</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Show all sign details</span><div style="width:56px;height:34px;flex:none;box-sizing:border-box;border-radius:17px;background:#e4e3ec;border:2.5px solid #241f45;padding:0 3px;display:flex;align-items:center"><div style="width:22px;height:22px;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45"></div></div></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Plan a trip</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px"><span>Settings</span><span style="font-size:22px">›</span></div>
+</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">While a pass is active the second row reads "Your Spot Pass" with "Waiting for a scan" beside the chevron. Symbols, in order: <code>exclamationmark.bubble.fill</code>, <code>qrcode</code>, <code>play.circle.fill</code>, <code>paintpalette.fill</code>, <code>book.fill</code>, <code>list.bullet.rectangle</code>, <code>suitcase.fill</code>, <code>gearshape.fill</code>.</div></div>
+
+<div id="b15-settings" data-screen-label="B15 Settings" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.2 · Settings</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">Settings</div><div style="width:48px;height:48px;box-sizing:border-box;border-radius:50%;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:12px;font:600 17px 'Fredoka',sans-serif">
+<div style="padding:0 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Reminders</span><span style="font:400 15px 'Fredoka',sans-serif">1 hour before ›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Voice while driving</span><div style="width:56px;height:34px;flex:none;box-sizing:border-box;border-radius:17px;background:#3ccf7a;border:2.5px solid #241f45;padding:0 3px;display:flex;align-items:center;justify-content:flex-end"><div style="width:22px;height:22px;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45"></div></div></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px"><span>Notifications</span><span style="font:400 15px 'Fredoka',sans-serif">Allowed ›</span></div>
+</div>
+<div style="padding:0 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Account</span><span style="font:400 15px 'Fredoka',sans-serif">Bodega Cat · 12 karma ›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px"><span style="color:#b8322a">Delete account</span><span style="font-size:22px">›</span></div>
+</div>
+<div style="padding:0 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Suggest a neighborhood</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Help and FAQ</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px"><span>About</span><span style="font-size:22px">›</span></div>
+</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Three groups: how the app behaves, who you are, and help. Notifications opens iOS Settings. Symbols: <code>bell.fill</code>, <code>speaker.wave.2.fill</code>, <code>app.badge.fill</code>, <code>person.crop.circle.fill</code>, <code>trash.fill</code>, <code>mappin.and.ellipse</code>, <code>questionmark.circle.fill</code>, <code>info.circle.fill</code>.</div></div>
+
+<div id="b15-reminders" data-screen-label="B15 Reminder defaults" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.3 · Reminder defaults</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">Reminders</div><div style="min-width:48px;height:48px;padding:0 10px;box-sizing:border-box;border-radius:24px;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Back</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:12px">
+<div style="padding:0 4px;font:400 16px/1.4 'Fredoka',sans-serif">How long before a curb changes should WePark remind you?</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;padding-top:4px;font:600 17px 'Fredoka',sans-serif">
+<div style="height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #241f45;border-radius:20px">30 min</div>
+<div style="height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:2.5px solid #241f45;border-radius:20px;box-shadow:0 4px 0 #241f45;transform:translateY(-4px)">1 hour</div>
+<div style="height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #241f45;border-radius:20px">2 hours</div>
+</div>
+<div style="padding:0 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px;font:600 17px 'Fredoka',sans-serif">
+<div style="min-height:64px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Also the night before</span><div style="width:56px;height:34px;flex:none;box-sizing:border-box;border-radius:17px;background:#3ccf7a;border:2.5px solid #241f45;padding:0 3px;display:flex;align-items:center;justify-content:flex-end"><div style="width:22px;height:22px;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45"></div></div></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px"><span>Night-before time</span><span style="font:400 15px 'Fredoka',sans-serif">8:00 PM ›</span></div>
+</div>
+<div style="padding:0 4px;font:400 14px/1.4 'Fredoka',sans-serif;color:#5a5578">Used each time you park. You can still switch reminders off for one parked car in My Car.</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The chosen lead time is raised, the same way a chosen goal is.</div></div>
+
+<div id="b15-delete" data-screen-label="B15 Delete account" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.4 · Delete account, confirmation</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">Settings</div></div>
+<div style="position:absolute;inset:0;background:rgba(36,31,69,.45)"></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="padding:0 4px"><div style="font:600 24px/1.15 'Fredoka',sans-serif">Delete your account?</div><div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">This removes your alias Bodega Cat, your 12 karma and your Spot Pass history. It can't be undone.</div></div>
+<div style="margin-top:12px;padding:12px 16px;border:1.5px solid #241f45;border-radius:20px;font:400 14px/1.4 'Fredoka',sans-serif">Your parked car and its reminders stay on this phone.</div>
+<div style="height:64px;margin-top:16px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2.5px solid #b8322a;color:#b8322a;border-radius:32px;font:600 20px 'Fredoka',sans-serif">Delete account</div>
+<div style="height:64px;margin-top:10px;display:flex;align-items:center;justify-content:center;background:#241f45;color:#fff;border-radius:32px;font:600 20px 'Fredoka',sans-serif">Keep my account</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Says exactly what goes and what stays. Keeping is the filled button; deleting is the outlined one. After deleting, a flat chip on the map reads "Account deleted".</div></div>
+
+<div id="b15-suggest" data-screen-label="B15 Suggest a neighborhood" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.5 · Suggest a neighborhood</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPPass" close-label="Back" title="Where should WePark go next?" sub="We cover Manhattan today. Suggestions decide the order of what comes after." primary="Send suggestion" primary-kind="ink" style="position:absolute;inset:0" hint-size="100%,100%">
+<div><div style="padding:0 4px 4px;font:500 14px 'Fredoka',sans-serif">Neighborhood</div><div style="min-height:56px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;background:#fff;border:2px solid #241f45;border-radius:20px;font:600 17px 'Fredoka',sans-serif">Astoria, Queens</div></div>
+<div><div style="padding:0 4px 4px;font:500 14px 'Fredoka',sans-serif">Anything we should know? (optional)</div><div style="min-height:96px;padding:14px 18px;box-sizing:border-box;background:#fff;border:2px solid #241f45;border-radius:20px;font:400 16px/1.4 'Fredoka',sans-serif;color:#5a5578">Street cleaning days, tricky blocks…</div></div>
+</dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The neighborhood is filled in from the phone's location when it is outside Manhattan. After sending, the headline becomes "Thanks. Astoria is on the list." and the button becomes Done.</div></div>
+
+<div id="b15-colors" data-screen-label="B15 What the colors mean" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.6 · What the colors mean</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">What the colors mean</div><div style="width:48px;height:48px;flex:none;box-sizing:border-box;border-radius:50%;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:8px">
+<div style="padding:0 4px;font:600 15px 'Fredoka',sans-serif">The map</div>
+<div style="padding:4px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="display:flex;align-items:center;gap:14px;min-height:48px;border-bottom:1px solid #e4e3ec"><div style="width:56px;flex:none;height:7px;border-radius:4px;background:#3ccf7a"></div><div style="font:600 16px 'Fredoka',sans-serif">Park<span style="font-weight:400"> · free for the time you picked</span></div></div>
+<div style="display:flex;align-items:center;gap:14px;min-height:48px"><div style="width:56px;flex:none;border-top:7px dashed #e39a90"></div><div style="font:600 16px 'Fredoka',sans-serif">Don't<span style="font-weight:400"> · not free for that long</span></div></div>
+</div>
+<div style="padding:6px 4px 0;font:600 15px 'Fredoka',sans-serif">With "Show all sign details" on</div>
+<div style="padding:4px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px;font:600 16px 'Fredoka',sans-serif">
+<div style="display:flex;align-items:center;gap:14px;min-height:44px;border-bottom:1px solid #e4e3ec"><div style="width:56px;flex:none;height:7px;border-radius:4px;background:#3ccf7a"></div>Free</div>
+<div style="display:flex;align-items:center;gap:14px;min-height:44px;border-bottom:1px solid #e4e3ec"><div style="width:56px;flex:none;height:7px;background:repeating-linear-gradient(90deg,#f2a23a 0 18px,transparent 18px 26px)"></div>Changes soon</div>
+<div style="display:flex;align-items:center;gap:14px;min-height:44px;border-bottom:1px solid #e4e3ec"><div style="width:56px;flex:none;border-top:7px dotted #5b7cfa"></div>Metered</div>
+<div style="display:flex;align-items:center;gap:14px;min-height:44px;border-bottom:1px solid #e4e3ec"><div style="width:56px;flex:none;border-top:7px dashed #e39a90"></div>No parking</div>
+<div style="display:flex;align-items:center;gap:14px;min-height:44px"><div style="width:56px;flex:none;border-top:2px solid #a9a7b8"></div>No sign data</div>
+</div>
+<div style="padding:6px 4px 0;font:600 15px 'Fredoka',sans-serif">Pins from neighbors</div>
+<div style="display:flex;flex-wrap:wrap;gap:6px;font:500 14px 'Fredoka',sans-serif">
+<div style="height:34px;padding:0 12px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:17px">Open spot</div>
+<div style="height:34px;padding:0 12px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:17px">Leaving soon</div>
+<div style="height:34px;padding:0 12px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:17px">Street swept</div>
+<div style="height:34px;padding:0 12px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:17px">Ticketing now</div>
+<div style="height:34px;padding:0 12px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:17px">No parking today</div>
+<div style="height:34px;padding:0 12px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:17px">Filming</div>
+<div style="height:34px;padding:0 12px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:17px">Construction</div>
+</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Every state has its own line pattern as well as its own color, so the legend still works without color vision. In the build, each pin chip leads with its pin from B8.6.</div></div>
+
+<div id="b15-help" data-screen-label="B15 Help and FAQ" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.7 · Help and FAQ</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">Help</div><div style="min-width:48px;height:48px;padding:0 10px;box-sizing:border-box;border-radius:24px;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Back</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:12px;font:600 16px/1.3 'Fredoka',sans-serif">
+<div style="padding:0 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="min-height:56px;padding:8px 0;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>What if the app and the sign disagree?</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;padding:8px 0;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Where do the parking rules come from?</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;padding:8px 0;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>How do reminders work?</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;padding:8px 0;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>What is a Spot Pass?</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;padding:8px 0;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px"><span>What is karma for?</span><span style="font-size:22px">›</span></div>
+</div>
+<div style="padding:0 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px"><span>Email us</span><span style="font-size:22px">›</span></div></div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Each question opens an answer on the same full-screen scaffold. The question list is my draft; replace it with your real FAQ.</div></div>
+
+<div id="b15-about" data-screen-label="B15 About" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B15.8 · About</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">About</div><div style="min-width:48px;height:48px;padding:0 10px;box-sizing:border-box;border-radius:24px;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Back</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:12px;font:600 17px 'Fredoka',sans-serif">
+<div style="padding:0 4px"><div style="font:600 32px/1.1 'Fredoka',sans-serif">WePark</div><div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:4px">NYC street parking. The sign on the street always wins.</div></div>
+<div style="padding:0 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Version</span><span style="font:400 15px ui-monospace,Menlo,monospace;color:#5a5578">version · build</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Where the rules come from</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><span>Privacy</span><span style="font-size:22px">›</span></div>
+<div style="min-height:56px;display:flex;align-items:center;justify-content:space-between;gap:10px"><span>Terms</span><span style="font-size:22px">›</span></div>
+</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The version value is a placeholder. "Where the rules come from" should name your actual data sources.</div></div>
+
+</div></section>
+
+<section id="b16" data-screen-label="B16 Parking 101" style="padding:36px 44px;border-bottom:1px solid rgba(36,31,69,.15)">
+<h2 style="margin:0 0 6px;font:600 26px 'Fredoka',sans-serif">B16 · Parking 101</h2>
+<p style="margin:0 0 22px;max-width:820px;font:400 15px/1.45 'Fredoka',sans-serif;text-wrap:pretty">One scrolling page, shown here in three parts. Each card is a sign in one or two sentences, then the line WePark draws for it, so the lesson and the map use the same marks. Please check the rule wording against your own copy before it ships.</p>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b16-1" data-screen-label="B16 Parking 101, part 1" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B16.1 · Top of the page</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">Parking 101</div><div style="width:48px;height:48px;box-sizing:border-box;border-radius:50%;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:10px">
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">Street cleaning</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">The sign with a broom. No parking on the posted days and hours so the sweeper can pass. It is suspended on some holidays.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;height:6px;border-radius:3px;background:#3ccf7a"></div>Free outside those hours</div><div style="display:flex;align-items:center;gap:10px;margin-top:6px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dashed #e39a90"></div>No parking during them</div></div>
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">No stopping, no standing, no parking</div>
+<div style="margin-top:6px;font:400 15px/1.4 'Fredoka',sans-serif"><span style="font-weight:600">No stopping:</span> don't stop at all, not even for a moment.</div>
+<div style="margin-top:6px;font:400 15px/1.4 'Fredoka',sans-serif"><span style="font-weight:600">No standing:</span> you can stop only to let people in or out.</div>
+<div style="margin-top:6px;font:400 15px/1.4 'Fredoka',sans-serif"><span style="font-weight:600">No parking:</span> you can stop to load or unload, but you can't leave the car.</div>
+<div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dashed #e39a90"></div>All three: No parking</div></div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The three "no" signs share a card because the useful thing is how they differ. For leaving a car they all mean the same, and the card says so.</div></div>
+
+<div id="b16-2" data-screen-label="B16 Parking 101, part 2" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B16.2 · Middle</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">Parking 101</div><div style="width:48px;height:48px;box-sizing:border-box;border-radius:50%;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:10px">
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">Meters</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">Pay during the posted hours, up to the posted time limit.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dotted #5b7cfa"></div>Metered, with the hours and the limit</div></div>
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">Commercial-only meters</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">During the posted hours, only commercial vehicles can use them.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dashed #e39a90"></div>No parking during those hours</div></div>
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">Truck loading only</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">Reserved for trucks making deliveries during the posted hours.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dashed #e39a90"></div>No parking during those hours</div></div>
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">Taxi stands</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">For taxis waiting for a fare. Not for you.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dashed #e39a90"></div>No parking</div></div>
+</div></dc-import></div>
+
+<div id="b16-3" data-screen-label="B16 Parking 101, part 3" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B16.3 · End of the page</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="font:600 24px 'Fredoka',sans-serif">Parking 101</div><div style="width:48px;height:48px;box-sizing:border-box;border-radius:50%;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="position:absolute;left:18px;right:18px;top:118px;display:flex;flex-direction:column;gap:10px">
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">Diplomat and permit curbs</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">Only for vehicles with the plates or permit named on the sign.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dashed #e39a90"></div>No parking</div></div>
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">School days</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">The rule applies only on days school is open. WePark treats it as on unless it knows school is closed.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:6px dashed #e39a90"></div>No parking on school days</div></div>
+<div style="padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.25 'Fredoka',sans-serif">Temporary construction and filming</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">Paper signs taped up for a few days. WePark can't see these unless a neighbor reports one, so look for them.</div><div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="width:40px;flex:none;border-top:2px solid #a9a7b8"></div>Shown as a neighbor's pin, if reported</div></div>
+<div style="padding:12px 4px 0;font:600 17px/1.35 'Fredoka',sans-serif">The sign on the street always wins.</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The school-days behavior is my assumption about how the app decides. Tell me the real rule and I'll reword it.</div></div>
+
+</div></section>
+
+<section id="b17" data-screen-label="B17 Web pages" style="padding:36px 44px 72px">
+<h2 style="margin:0 0 6px;font:600 26px 'Fredoka',sans-serif">B17 · Web pages, getwepark.com</h2>
+<p style="margin:0 0 22px;max-width:820px;font:400 15px/1.45 'Fredoka',sans-serif;text-wrap:pretty">Shown at phone width, since nearly everyone arrives by scanning a QR badge. On a wider screen the same column is centered at 420 wide on the cream ground. The web pass uses the same words and the same order as the App Clip. The one difference is stated on the page: a web page can't remind you.</p>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b17-waiting" data-screen-label="B17 Web pass, waiting" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.1 · /p · Waiting, leave-time chips</div>
+<dc-import name="WPPhone" bg="#fbf6e6" time="4:02" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com/p</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="display:flex;align-items:center;gap:12px;margin-top:14px"><div style="width:56px;height:56px;flex:none;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;text-align:center;font:500 9px/1.2 ui-monospace,Menlo,monospace;color:#5a5578">cat<br>glyph</div><div><div style="font:600 20px/1.2 'Fredoka',sans-serif">Bodega Cat</div><div style="font:400 14px 'Fredoka',sans-serif">A neighbor nearby</div></div></div>
+<div style="font:600 28px/1.1 'Fredoka',sans-serif;margin-top:12px;text-wrap:balance">Bodega Cat is waiting for your spot</div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">When are you leaving? They won't see who you are.</div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:18px;font:600 17px 'Fredoka',sans-serif">
+<div style="height:56px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #241f45;border-radius:20px">Now</div>
+<div style="height:56px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:2.5px solid #241f45;border-radius:20px;box-shadow:0 4px 0 #241f45;transform:translateY(-4px)">About 10 min</div>
+<div style="height:56px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #241f45;border-radius:20px">About 30 min</div>
+<div style="height:56px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #241f45;border-radius:20px">About 1 hour</div>
+<div style="grid-column:1 / -1;height:56px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#fff;border:2px solid #241f45;border-radius:20px">Pick a time</div>
+</div>
+<div style="flex:1"></div>
+<div style="height:72px;flex:none;box-sizing:border-box;margin-bottom:6px;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:36px;box-shadow:0 6px 0 #241f45;font:700 24px 'Fredoka',sans-serif">Tell Bodega Cat</div>
+<div style="display:flex;justify-content:space-between;font:600 15px 'Fredoka',sans-serif"><div style="height:48px;display:flex;align-items:center">I'm not leaving</div><div style="height:48px;display:flex;align-items:center;text-decoration:underline">Report this pass</div></div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Pick a time opens the same 15-minute grid as B10.2, as an in-page sheet.</div></div>
+
+<div id="b17-armed" data-screen-label="B17 Web pass, armed" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.2 · /p · Armed, keep this page open</div>
+<dc-import name="WPPhone" bg="#fbf6e6" time="4:03" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com/p</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="font:600 28px/1.1 'Fredoka',sans-serif;margin-top:14px">You're on, neighbor.</div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">We'll tell Bodega Cat when you leave, around 4:10 PM.</div>
+<div style="margin-top:16px;padding:14px 18px;background:#fff;border:2.5px solid #241f45;border-radius:20px"><div style="font:600 18px/1.3 'Fredoka',sans-serif">Keep this page open</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:2px">A web page can't remind you. Come back here and tap Leaving now right before you pull out.</div></div>
+<div style="margin-top:10px;padding:14px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:500 14px 'Fredoka',sans-serif">Leaving in</div><div style="font:700 44px/1.05 'Fredoka',sans-serif">8:12</div></div>
+<div style="flex:1"></div>
+<div style="height:72px;flex:none;box-sizing:border-box;margin-bottom:6px;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:36px;box-shadow:0 6px 0 #241f45;font:700 24px 'Fredoka',sans-serif">Leaving now</div>
+<div style="height:48px;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif">Not leaving after all</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The instruction card has the heavier line because it is the one thing the web version needs from the driver that the app does not.</div></div>
+
+<div id="b17-sent" data-screen-label="B17 Web pass, leaving sent" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.3 · /p · Leaving sent</div>
+<dc-import name="WPPhone" bg="#fbf6e6" time="4:10" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com/p</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="font:600 28px/1.1 'Fredoka',sans-serif;margin-top:14px">Heads-up sent.</div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">Bodega Cat knows you're pulling out. You can put your phone down.</div>
+<div style="margin-top:16px;padding:16px 18px;background:#3ccf7a;border-radius:24px"><div style="font:500 15px 'Fredoka',sans-serif">Sent at</div><div style="font:700 44px/1.05 'Fredoka',sans-serif">4:10 PM</div></div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">No buttons at all: the driver is about to drive.</div></div>
+
+<div id="b17-finished" data-screen-label="B17 Web pass, finished" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.4 · /p · Finished</div>
+<dc-import name="WPPhone" bg="#fbf6e6" time="4:11" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com/p</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="font:600 28px/1.1 'Fredoka',sans-serif;margin-top:14px">Thanks, neighbor.</div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">Bodega Cat says thanks for the spot.</div>
+<div style="display:flex;padding:24px 4px 14px"><div style="padding:10px 16px;border:2.5px dashed #241f45;border-radius:16px;transform:rotate(-5deg);font:700 16px 'Fredoka',sans-serif;letter-spacing:.1em">SPOT PASSED</div></div>
+<div style="padding:12px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 17px/1.3 'Fredoka',sans-serif">Park in NYC yourself?</div><div style="font:400 14px/1.35 'Fredoka',sans-serif">WePark shows every curb you can park on, and for how long.</div></div>
+<div style="flex:1"></div>
+<div style="height:64px;flex:none;display:flex;align-items:center;justify-content:center;background:#241f45;color:#fff;border-radius:32px;font:600 22px 'Fredoka',sans-serif">Get WePark</div>
+</div></dc-import></div>
+
+<div id="b17-get" data-screen-label="B17 Get WePark" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.5 · Get WePark (TestFlight for now)</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com/get</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="font:600 28px/1.1 'Fredoka',sans-serif;margin-top:14px">Get WePark</div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">WePark is in beta, so it installs through Apple's TestFlight app. iPhone only.</div>
+<div style="margin-top:16px;padding:4px 16px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #e4e3ec"><div style="width:32px;height:32px;flex:none;border-radius:50%;background:#241f45;color:#fff;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif">1</div><div style="font:500 16px/1.3 'Fredoka',sans-serif">Install TestFlight from the App Store.</div></div>
+<div style="display:flex;gap:12px;align-items:center;padding:10px 0"><div style="width:32px;height:32px;flex:none;border-radius:50%;background:#241f45;color:#fff;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif">2</div><div style="font:500 16px/1.3 'Fredoka',sans-serif">Come back here and tap Open in TestFlight.</div></div>
+</div>
+<div style="flex:1"></div>
+<div style="height:64px;flex:none;display:flex;align-items:center;justify-content:center;background:#241f45;color:#fff;border-radius:32px;font:600 22px 'Fredoka',sans-serif">Open in TestFlight</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">When the app is on the App Store, this page goes away and Get WePark links straight to it. The page path is my suggestion.</div></div>
+
+<div id="b17-report" data-screen-label="B17 Report a pass" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.6 · /p · Report a pass</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com/p</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="font:600 28px/1.1 'Fredoka',sans-serif;margin-top:14px">Report this pass</div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">What's wrong? We don't know who you are, and neither does the person who left it.</div>
+<div style="display:flex;flex-direction:column;gap:8px;margin-top:18px;font:600 17px/1.25 'Fredoka',sans-serif">
+<div style="min-height:56px;padding:8px 18px;box-sizing:border-box;display:flex;align-items:center;background:#fff;border:2px solid #241f45;border-radius:20px">I don't want notes on my car</div>
+<div style="min-height:56px;padding:8px 18px;box-sizing:border-box;display:flex;align-items:center;background:#ffd23f;border:2.5px solid #241f45;border-radius:20px;box-shadow:0 4px 0 #241f45;transform:translateY(-4px)">Someone is pressuring me to leave</div>
+<div style="min-height:56px;padding:8px 18px;box-sizing:border-box;display:flex;align-items:center;background:#fff;border:2px solid #241f45;border-radius:20px">It looks like an ad or a scam</div>
+<div style="min-height:56px;padding:8px 18px;box-sizing:border-box;display:flex;align-items:center;background:#fff;border:2px solid #241f45;border-radius:20px">Something else</div>
+</div>
+<div style="flex:1"></div>
+<div style="height:64px;flex:none;display:flex;align-items:center;justify-content:center;background:#241f45;color:#fff;border-radius:32px;font:600 22px 'Fredoka',sans-serif">Send report</div>
+<div style="height:48px;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif">Cancel</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">After sending: "Thanks. This pass is paused while we look." The reasons are my draft; swap in your moderation categories.</div></div>
+
+<div id="b17-ended" data-screen-label="B17 Web pass, unavailable" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.7 · /p · Unavailable or not live yet</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com/p</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="font:600 28px/1.1 'Fredoka',sans-serif;margin-top:14px">This pass has ended</div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:6px">Bodega Cat stopped waiting or already found a spot. There's nothing you need to do.</div>
+<div style="display:flex;align-items:center;gap:14px;margin-top:18px"><div style="width:56px;height:56px;flex:none;box-sizing:border-box;border-radius:50%;border:2.5px dashed #a9a7b8"></div><div style="font:400 15px/1.35 'Fredoka',sans-serif;color:#5a5578">You can throw the badge away.</div></div>
+<div style="flex:1"></div>
+<div style="height:64px;flex:none;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2.5px solid #241f45;border-radius:32px;font:600 20px 'Fredoka',sans-serif">What is WePark?</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Not live yet uses the same layout with "Spot Pass isn't open yet" and "It's coming to NYC soon. This pass can't be used today."</div></div>
+
+<div id="b17-landing" data-screen-label="B17 Landing page" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B17.8 · getwepark.com landing page</div>
+<dc-import name="WPPhone" bg="#fbf6e6" hint-size="391px,828px">
+<div style="position:absolute;left:14px;right:14px;top:52px;height:36px;border-radius:18px;background:#e4e3ec;display:flex;align-items:center;justify-content:center;font:500 14px system-ui,sans-serif">getwepark.com</div>
+<div style="position:absolute;left:18px;right:18px;top:104px;bottom:34px;display:flex;flex-direction:column">
+<div style="font:600 20px 'Fredoka',sans-serif">WePark</div>
+<div style="font:600 34px/1.08 'Fredoka',sans-serif;margin-top:14px;text-wrap:balance">See where you can park in NYC, and for how long</div>
+<div style="margin-top:16px;padding:2px 18px;background:#fff;border:1.5px solid #241f45;border-radius:24px">
+<div style="display:flex;align-items:center;gap:16px;padding:12px 0;border-bottom:1px solid #e4e3ec"><div style="width:72px;flex:none;height:8px;border-radius:4px;background:#3ccf7a"></div><div style="font:700 22px/1.1 'Fredoka',sans-serif">Park</div></div>
+<div style="display:flex;align-items:center;gap:16px;padding:12px 0"><div style="width:72px;flex:none;border-top:8px dashed #e39a90"></div><div style="font:700 22px/1.1 'Fredoka',sans-serif">Don't</div></div>
+</div>
+<div style="margin-top:10px;padding:14px 18px;background:#3ccf7a;border-radius:24px"><div style="font:500 15px 'Fredoka',sans-serif">Free to stay until</div><div style="font:700 40px/1.05 'Fredoka',sans-serif">Mon 9:00 AM</div></div>
+<div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:12px">WePark reads the signs on every curb, tells you when your time is up, and reminds you before it is.</div>
+<div style="flex:1"></div>
+<div style="height:72px;flex:none;box-sizing:border-box;margin-bottom:6px;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:36px;box-shadow:0 6px 0 #241f45;font:700 24px 'Fredoka',sans-serif">Get WePark</div>
+<div style="height:40px;display:flex;align-items:center;justify-content:center;font:400 14px 'Fredoka',sans-serif;color:#5a5578">Manhattan, on iPhone. More of NYC next.</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The whole page fits one phone screen: the two lines, one verdict, one sentence, one button. Privacy and Terms links sit below the fold.</div></div>
+
+</div></section>
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="position:absolute;inset:0;background:#2e2856;color:#241f45;font-family:'Fredoka',sans-serif">
+<div style="position:absolute;left:127px;top:0;width:120px;height:100%;background:#3f3870"></div>
+<div style="position:absolute;left:186px;top:0;height:100%;border-left:3px dashed #6b64a0"></div>
+<div style="{{ lLine }}"></div><div style="{{ rLine }}"></div>
+<div style="position:absolute;left:0;right:0;top:130px;height:30px;background:#3f3870"></div>
+<div style="position:absolute;left:0;right:0;top:268px;height:30px;background:#3f3870"></div>
+<div style="{{ puck }}"><div style="width:0;height:0;border-left:11px solid transparent;border-right:11px solid transparent;border-bottom:22px solid #241f45;margin-top:-4px"></div></div>
+<div style="position:absolute;top:60px;left:14px;display:flex;flex-direction:column;gap:8px;align-items:flex-start"><div style="height:52px;padding:0 18px;display:flex;align-items:center;background:#fff;border-radius:26px;font:600 19px 'Fredoka',sans-serif">{{ street }}</div><sc-if value="{{ hasDest }}" hint-placeholder-val="{{ false }}"><div style="{{ destStyle }}">{{ dest }}</div></sc-if></div>
+<div style="position:absolute;top:60px;right:14px;height:52px;padding:0 20px;display:flex;align-items:center;background:#fff;border-radius:26px;font:600 17px 'Fredoka',sans-serif">End</div>
+<sc-if value="{{ bubbles }}" hint-placeholder-val="{{ true }}">
+<div style="{{ l.box }}"><div style="{{ l.label }}">LEFT SIDE</div><div style="{{ l.word }}">{{ l.text }}</div><div style="{{ l.sub }}">{{ l.subText }}</div></div>
+<div style="{{ r.box }}"><div style="{{ r.label }}">RIGHT SIDE</div><div style="{{ r.word }}">{{ r.text }}</div><div style="{{ r.sub }}">{{ r.subText }}</div></div>
+</sc-if>
+<sc-if value="{{ bar }}" hint-placeholder-val="{{ true }}"><div style="position:absolute;left:14px;right:14px;bottom:36px;display:flex;gap:10px;align-items:center">
+<div style="width:72px;height:72px;flex:none;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:600 14px 'Fredoka',sans-serif">Report</div>
+<div style="{{ ctaStyle }}">{{ cta }}</div>
+<div style="{{ voiceStyle }}">{{ voiceText }}</div>
+</div></sc-if>
+{{ children }}
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:375,&quot;height&quot;:812},&quot;lk&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;park&quot;,&quot;dont&quot;,&quot;nodata&quot;,&quot;unsure&quot;],&quot;default&quot;:&quot;park&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rk&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;park&quot;,&quot;dont&quot;,&quot;nodata&quot;,&quot;unsure&quot;],&quot;default&quot;:&quot;dont&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;lWord&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rWord&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;lSub&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;rSub&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;street&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;2nd Ave&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;dest&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;destHot&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;voice&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;bubbles&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;bar&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;cta&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Park here&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const lk = p.lk ?? 'park', rk = p.rk ?? 'dont';
+    const both = lk === 'park' && rk === 'park';
+    const none = lk !== 'park' && rk !== 'park';
+    const F = "'Fredoka',sans-serif";
+    const words = { park: 'Park', dont: 'No parking', nodata: 'No sign data', unsure: 'Checking' };
+    const line = (k, left) => {
+      const pos = { position: 'absolute', top: 0, height: '100%' };
+      if (k === 'park') return { ...pos, left: left ? 120 : 247, width: 7, background: '#3ccf7a' };
+      if (k === 'dont') return { ...pos, left: left ? 120 : 247, borderLeft: '7px dashed #e39a90' };
+      if (k === 'nodata') return { ...pos, left: left ? 124 : 247, borderLeft: '2px solid #a9a7b8' };
+      return { ...pos, left: left ? 122 : 247, borderLeft: '4px dotted #6b64a0' };
+    };
+    const side = (k, left, text, sub) => {
+      const edge = left ? { left: 0 } : { right: 0 };
+      const align = left ? 'left' : 'right';
+      let box, label, word, subS;
+      if (k === 'park') {
+        const w = both ? 176 : 210;
+        box = { position: 'absolute', ...edge, top: 396, width: w, height: 228, boxSizing: 'border-box', background: '#3ccf7a', borderRadius: left ? '0 48px 48px 0' : '48px 0 0 48px', padding: both ? '20px 18px' : '20px 22px', textAlign: align };
+        label = { font: '600 14px ' + F, letterSpacing: '.08em' };
+        word = { font: '700 ' + (both ? 56 : 68) + 'px/1 ' + F, marginTop: 6 };
+        subS = { font: '600 ' + (both ? 21 : 24) + 'px/1.15 ' + F, marginTop: 10, whiteSpace: 'pre-line' };
+      } else {
+        const w = none ? 180 : 156, h = none ? 184 : 160;
+        const b = k === 'dont' ? '3px dashed #e39a90' : k === 'nodata' ? '2px solid #a9a7b8' : '3px dotted #6b64a0';
+        box = { position: 'absolute', ...edge, top: none ? 418 : 446, width: w, height: h, boxSizing: 'border-box', background: '#3f3870', border: b, [left ? 'borderLeft' : 'borderRight']: 0, borderRadius: left ? '0 40px 40px 0' : '40px 0 0 40px', padding: '18px 16px', textAlign: align, color: '#fff' };
+        label = { font: '600 12px ' + F, letterSpacing: '.08em' };
+        word = { font: '700 ' + (none ? 26 : 22) + 'px/1.1 ' + F, marginTop: 8 };
+        subS = { font: '500 ' + (none ? 17 : 15) + 'px/1.25 ' + F, marginTop: 8, whiteSpace: 'pre-line' };
+      }
+      return { box, label, word, sub: subS, text: text ?? words[k], subText: sub ?? '' };
+    };
+    const voice = p.voice !== false;
+    const round = { width: 72, height: 72, flex: 'none', boxSizing: 'border-box', borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 14px/1.1 ' + F, textAlign: 'center', whiteSpace: 'pre-line' };
+    const ctaBase = { flex: 1, height: 80, boxSizing: 'border-box', borderRadius: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' };
+    return {
+      children: p.children ?? null,
+      puck: { position: 'absolute', left: 157, top: Number(p.puckTop ?? 318), width: 60, height: 60, boxSizing: 'border-box', borderRadius: '50%', background: '#ffd23f', border: '3px solid #241f45', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+      street: p.street ?? '2nd Ave', hasDest: !!p.dest, dest: p.dest,
+      destStyle: p.destHot ? { minHeight: 48, padding: '4px 16px', boxSizing: 'border-box', display: 'flex', alignItems: 'center', background: '#ffd23f', border: '2.5px solid #241f45', borderRadius: 24, font: '600 16px ' + F } : { minHeight: 48, padding: '4px 16px', boxSizing: 'border-box', display: 'flex', alignItems: 'center', background: '#3f3870', border: '1.5px solid #6b64a0', color: '#fff', borderRadius: 24, font: '600 16px ' + F },
+      lLine: line(lk, true), rLine: line(rk, false),
+      bubbles: p.bubbles !== false, bar: p.bar !== false,
+      l: side(lk, true, p.lWord, p.lSub ?? (lk === 'park' ? 'Free until\nMon 9 AM' : undefined)),
+      r: side(rk, false, p.rWord, p.rSub ?? (rk === 'dont' ? 'Street cleaning\nat 7 AM' : undefined)),
+      cta: p.cta ?? 'Park here',
+      ctaStyle: none ? { ...ctaBase, background: '#fff', border: '2.5px solid #241f45', font: '600 ' + ((p.cta ?? '').length > 10 ? 20 : 24) + 'px ' + F } : { ...ctaBase, background: '#ffd23f', border: '3px solid #241f45', boxShadow: '0 6px 0 #241f45', font: '700 28px ' + F },
+      voiceText: voice ? 'Voice\non' : 'Voice\noff',
+      voiceStyle: voice ? { ...round, background: '#fff', border: '2.5px solid #241f45' } : { ...round, background: '#2e2856', border: '2.5px solid #c3bfdc', color: '#fbf6e6' },
+    };
+  }
+}
+</script>
+</body>
+</html>

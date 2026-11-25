@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"><link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet"><style>body{margin:0;background:#ece9df;font-family:'Fredoka',system-ui,sans-serif;color:#241f45}a{color:#241f45}a:hover{color:#5a5578}</style></helmet>
+
+<section id="intro" style="padding:44px 44px 8px;max-width:900px">
+<div style="font:600 12px 'Fredoka',sans-serif;letter-spacing:.08em;color:#5a5578">WEPARK · ROUND 2 · BATCH 2 OF 5</div>
+<h1 style="margin:6px 0 8px;font:600 40px/1.05 'Fredoka',sans-serif">Search, curb detail, parking a car</h1>
+<p style="margin:0;font:400 16px/1.45 'Fredoka',sans-serif;text-wrap:pretty">Covers B3, B4 and B6. New parts in this batch: selected-curb highlight (the curb line with an ink outline), result rows, fact card, neighbor report banner, drag label. Words in round buttons stand in for SF Symbols.</p>
+</section>
+
+<section id="b3" data-screen-label="B3 Search" style="padding:36px 44px;border-bottom:1px solid rgba(36,31,69,.15)">
+<h2 style="margin:0 0 20px;font:600 26px 'Fredoka',sans-serif">B3 · Search</h2>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b3-peek" data-screen-label="B3 Search peek" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B3.1 · Search peek (field tapped)</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;top:120px;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 0">
+<div style="display:flex;gap:8px;align-items:center"><div style="flex:1;height:56px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #241f45;border-radius:28px;font:500 17px 'Fredoka',sans-serif;color:#5a5578"><span style="width:2px;height:22px;background:#241f45;margin-right:4px"></span>Search an address or place</div><div style="height:48px;display:flex;align-items:center;padding:0 6px;font:600 16px 'Fredoka',sans-serif">Cancel</div></div>
+<div style="margin-top:14px;border:1.5px solid #241f45;border-radius:20px;overflow:hidden">
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;gap:12px;border-bottom:1px solid #e4e3ec"><div style="width:36px;height:36px;flex:none;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center"><div style="width:16px;height:10px;border-radius:4px 4px 2px 2px;background:#241f45"></div></div><div><div style="font:600 16px 'Fredoka',sans-serif">My car</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">In front of 50 E 1st St</div></div></div>
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center;border-bottom:1px solid #e4e3ec"><div style="font:600 16px 'Fredoka',sans-serif">The Museum of Modern Art</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">Recent · 11 W 53rd St</div></div>
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;flex-direction:column;justify-content:center"><div style="font:600 16px 'Fredoka',sans-serif">205 E Houston St</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">Recent · Lower East Side</div></div>
+</div>
+<div style="position:absolute;left:0;right:0;bottom:0;height:290px;background:repeating-linear-gradient(135deg,#d9d8e2 0 8px,#e4e3ec 8px 16px);display:flex;align-items:center;justify-content:center;font:12px ui-monospace,Menlo,monospace;color:#5a5578">iOS keyboard</div>
+</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Symbols: <code>magnifyingglass</code>, <code>car.fill</code>, <code>clock.fill</code> for recents.</div></div>
+
+<div id="b3-typing" data-screen-label="B3 Typing" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B3.2 · Typing with suggestions</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;top:120px;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 0">
+<div style="display:flex;gap:8px;align-items:center"><div style="flex:1;height:56px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #241f45;border-radius:28px;font:500 17px 'Fredoka',sans-serif">moma<span style="width:2px;height:22px;background:#241f45;margin-left:2px"></span></div><div style="height:48px;display:flex;align-items:center;padding:0 6px;font:600 16px 'Fredoka',sans-serif">Cancel</div></div>
+<div style="margin-top:14px;border:1.5px solid #241f45;border-radius:20px;overflow:hidden">
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><div><div style="font:600 16px 'Fredoka',sans-serif">The Museum of Modern Art</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">11 W 53rd St</div></div><div style="font:500 13px 'Fredoka',sans-serif;flex:none">3.4 mi</div></div>
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;border-bottom:1px solid #e4e3ec"><div><div style="font:600 16px 'Fredoka',sans-serif">MoMA Design Store</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">44 W 53rd St</div></div><div style="font:500 13px 'Fredoka',sans-serif;flex:none">3.4 mi</div></div>
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;color:#5a5578"><div><div style="font:600 16px 'Fredoka',sans-serif">MoMA PS1</div><div style="font:400 13px 'Fredoka',sans-serif">Queens · not covered yet</div></div><div style="font:500 13px 'Fredoka',sans-serif;flex:none">4.1 mi</div></div>
+</div>
+<div style="position:absolute;left:0;right:0;bottom:0;height:290px;background:repeating-linear-gradient(135deg,#d9d8e2 0 8px,#e4e3ec 8px 16px);display:flex;align-items:center;justify-content:center;font:12px ui-monospace,Menlo,monospace;color:#5a5578">iOS keyboard</div>
+</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Places outside coverage stay in the list, muted, with "not covered yet" so nobody drives there expecting curbs.</div></div>
+
+<div id="b3-dest" data-screen-label="B3 Destination card" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B3.3 · Destination card</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:170px;top:180px;width:36px;height:36px;box-sizing:border-box;border-radius:50% 50% 50% 6px;transform:rotate(-45deg);background:#241f45;border:3px solid #fff;display:flex;align-items:center;justify-content:center"><div style="width:10px;height:10px;border-radius:50%;background:#fff"></div></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 36px">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font:600 22px/1.2 'Fredoka',sans-serif">The Museum of Modern Art</div><div style="font:500 14px 'Fredoka',sans-serif;color:#5a5578">11 W 53rd St · 3.4 mi away</div></div><div style="flex:none;width:48px;height:48px;box-sizing:border-box;border-radius:50%;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:600 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="margin-top:14px;padding:14px 18px;border:1.5px solid #241f45;border-radius:24px;display:flex;align-items:center;gap:16px"><div style="font:700 44px/1 'Fredoka',sans-serif;color:#17803f">6</div><div><div style="font:600 16px/1.25 'Fredoka',sans-serif">free curbs within 2 blocks</div><div style="font:400 14px/1.3 'Fredoka',sans-serif">from now until 7 AM tomorrow</div></div></div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:12px;text-align:center;font:600 14px 'Fredoka',sans-serif"><div style="height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2px solid #241f45;border-radius:16px">A few hours</div><div style="height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#241f45;color:#fff;border-radius:16px">Overnight</div><div style="height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2px solid #241f45;border-radius:16px">For days</div></div>
+<div style="height:64px;margin-top:16px;display:flex;align-items:center;justify-content:center;background:#241f45;color:#ffd23f;border-radius:32px;font:600 22px 'Fredoka',sans-serif">Drive here</div>
+</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">New part: fact card with a count. The goal is a compact chip row here. When the count is 0 the card reads "No free curbs within 2 blocks. The nearest is 5 blocks away." Symbols: <code>mappin</code>, <code>steeringwheel</code>.</div></div>
+
+<div id="b3-ax5" data-screen-label="B3 Destination AX5" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B3.4 · Destination card, AX5</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;top:110px;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 0">
+<div style="font:600 34px/1.1 'Fredoka',sans-serif">The Museum of Modern Art</div><div style="font:500 24px/1.2 'Fredoka',sans-serif;color:#5a5578;margin-top:4px">11 W 53rd St<br>3.4 mi away</div>
+<div style="margin-top:14px;padding:14px 18px;border:1.5px solid #241f45;border-radius:24px"><div style="font:700 60px/1 'Fredoka',sans-serif;color:#17803f">6</div><div style="font:600 26px/1.15 'Fredoka',sans-serif">free curbs within 2 blocks</div><div style="font:400 24px/1.2 'Fredoka',sans-serif;margin-top:4px">from now until 7 AM tomorrow</div></div>
+<div style="position:absolute;left:0;right:0;bottom:0;padding:12px 18px 36px;background:#fff;border-top:1.5px solid #241f45"><div style="min-height:84px;display:flex;align-items:center;justify-content:center;background:#241f45;color:#ffd23f;border-radius:42px;font:600 34px 'Fredoka',sans-serif">Drive here</div></div>
+</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Everything stacks; the goal chips and Close move below the fold and scroll. "Drive here" stays pinned.</div></div>
+</div>
+</section>
+
+<section id="b4" data-screen-label="B4 Curb detail" style="padding:36px 44px;border-bottom:1px solid rgba(36,31,69,.15)">
+<h2 style="margin:0 0 4px;font:600 26px 'Fredoka',sans-serif">B4 · Curb detail sheet</h2>
+<p style="margin:0 0 20px;max-width:760px;font:400 15px/1.45 'Fredoka',sans-serif">One sheet, one verdict block. "Park here" is the yellow raised button only when parking is allowed; otherwise it drops to a flat outline "Park here anyway". Symbols: <code>exclamationmark.bubble.fill</code> (Report), <code>xmark</code> (Close).</p>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b4-free" data-screen-label="B4 Free" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.1 · Free for the window</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="park" bar="{{ true }}" sub="4 days 11 h left. Then street cleaning, Mon 9 to 10:30 AM." hint-size="100%,400px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The tapped curb gets an ink outline (new part: selected-curb highlight).</div></div>
+
+<div id="b4-soon" data-screen-label="B4 Changes soon" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.2 · Free now, changes soon (detail mode)</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="detail" sel="7" sel-state="a" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="soon" street="E 2nd St · South side" over="Free until" big="6:00 AM" sub="7 h 49 min left, then street cleaning. That is before your Overnight window ends at 7 AM." hint-size="100%,400px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">In the default two-state map this curb is drawn as don't. Parking is still legal now, so "Park here" stays yellow and the reminder defaults on.</div></div>
+
+<div id="b4-dont" data-screen-label="B4 No parking now" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.3 · No parking right now</div>
+<dc-import name="WPPhone" time="9:48" hint-size="391px,828px"><dc-import name="WPMap" variant="less" sel="7" sel-state="r" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="dont" over="Right now" big="No parking" sub="Street cleaning until 10:30 AM. Free after that until Mon 9:00 AM." cta="Park here anyway" cta-kind="outline" hint-size="100%,400px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Shown at 9:48 AM on a cleaning day. No yellow button on this screen.</div></div>
+
+<div id="b4-meter" data-screen-label="B4 Metered" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.4 · Metered now</div>
+<dc-import name="WPPhone" time="9:48" hint-size="391px,828px"><dc-import name="WPMap" variant="detail" sel="7" sel-state="b" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="meter" street="2nd Ave · East side" cross="Between E 1st St and E 2nd St" over="Pay the meter until" big="7:00 PM" sub="2 hour limit. Free from 7 PM until 8 AM tomorrow." signs-label="See the 3 signs on this curb" hint-size="100%,400px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Dotted blue outline matches the metered curb line. Meter price is left out unless the data has it. Symbol: <code>dollarsign.circle.fill</code>.</div></div>
+
+<div id="b4-nodata" data-screen-label="B4 No sign data" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.5 · No sign data</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="detail" sel="7" sel-state="n" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="nodata" street="Extra Pl · West side" cross="Off E 1st St" over="We don't know" big="No sign data" sub="Read the posted signs on this curb before you park." signs="{{ false }}" cta="Park here anyway" cta-kind="outline" hint-size="100%,360px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Never green. If parked here, My Car shows the same block and no countdown. Symbol: <code>questionmark.circle</code>.</div></div>
+
+<div id="b4-planfree" data-screen-label="B4 Trip plan free" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.6 · Trip plan: free</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;inset:0;border:4px dashed #6a4cff;border-radius:46px;pointer-events:none"></div>
+<dc-import name="WPCurbSheet" kind="planpark" over="Sat 10 AM to Sun 6 PM" big="Free for your whole trip" sub="Rules can change. Check again when you arrive." hint-size="100%,360px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">No Park here, Report or Spot Pass. The striped tag sits inside the sheet as well as on the map.</div></div>
+
+<div id="b4-plandont" data-screen-label="B4 Trip plan not free" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.7 · Trip plan: not free</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="less" sel="7" sel-state="r" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;inset:0;border:4px dashed #6a4cff;border-radius:46px;pointer-events:none"></div>
+<dc-import name="WPCurbSheet" kind="plandont" over="Not free for your trip" big="Street cleaning" sub="Sat 11 AM to 12:30 PM. You would have to move the car." hint-size="100%,360px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Names the exact conflict inside the visit dates.</div></div>
+
+<div id="b4-temp" data-screen-label="B4 Temporary restriction" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.8 · With a neighbor-reported restriction</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="r" dx="-60" dy="-30" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="dont" over="Neighbors say" big="Blocked for filming" sub="By the signs this curb is free until Mon 9:00 AM." cta="Park here anyway" cta-kind="outline" hint-size="100%,480px">
+<div style="margin-top:10px;padding:12px 14px;border:1.5px solid #241f45;border-radius:20px"><div style="font:500 14px/1.35 'Fredoka',sans-serif">Reported 20 min ago by Stoop Pigeon. Mid-block, about 4 car lengths. Expires at 6 AM.</div><div style="display:flex;gap:8px;margin-top:10px;font:600 14px 'Fredoka',sans-serif"><div style="flex:1;height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2px solid #241f45;border-radius:24px">Still there</div><div style="flex:1;height:48px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2px solid #241f45;border-radius:24px">It's gone</div></div></div>
+</dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">A live block report turns the verdict to don't (unsure is don't) and the signs become the second line. New part: report banner with "Still there" / "It's gone". Symbol: <code>video.fill</code>.</div></div>
+
+<div id="b4-swept" data-screen-label="B4 Swept" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.9 · With a swept badge</div>
+<dc-import name="WPPhone" time="9:48" hint-size="391px,828px"><dc-import name="WPMap" variant="less" sel="7" sel-state="r" dx="-60" dy="-30" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="dont" over="By the sign, until 10:30 AM" big="No parking" sub="Street cleaning, 9 to 10:30 AM." cta="Park here anyway" cta-kind="outline" hint-size="100%,460px">
+<div style="margin-top:10px;padding:12px 14px;background:#e3f8ec;border:1.5px solid #17803f;border-radius:20px"><div style="font:600 16px 'Fredoka',sans-serif;color:#17803f">Swept at 9:31 AM</div><div style="font:400 14px/1.35 'Fredoka',sans-serif">3 neighbors saw the sweeper pass. The sign still runs until 10:30 AM.</div></div>
+</dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The badge is a flat fact and never changes the verdict. Owner to confirm the wording about parking after the sweeper passes. Symbol: <code>bubbles.and.sparkles.fill</code>.</div></div>
+
+<div id="b4-chatter" data-screen-label="B4 Pins and chatter" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.10 · Live pins and block chatter (sheet pulled up)</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;top:64px;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 0">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font:600 22px/1.2 'Fredoka',sans-serif">E 1st St · North side</div><div style="font:500 14px 'Fredoka',sans-serif;color:#5a5578">Between 1st Ave and 2nd Ave</div></div><div style="flex:none;width:48px;height:48px;box-sizing:border-box;border-radius:50%;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:600 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="margin-top:12px;padding:12px 16px;background:#3ccf7a;border-radius:20px;display:flex;justify-content:space-between;align-items:baseline;gap:8px"><div style="font:500 14px 'Fredoka',sans-serif">Free until</div><div style="font:700 24px 'Fredoka',sans-serif">Mon 9:00 AM</div></div>
+<div style="font:600 12px 'Fredoka',sans-serif;letter-spacing:.08em;color:#5a5578;margin:16px 0 8px">ON THIS BLOCK NOW</div>
+<div style="border:1.5px solid #241f45;border-radius:20px;overflow:hidden">
+<div style="min-height:60px;padding:8px 14px;box-sizing:border-box;display:flex;align-items:center;gap:12px;border-bottom:1px solid #e4e3ec"><div style="width:40px;height:40px;flex:none;box-sizing:border-box;border-radius:13px;background:#ffd23f;border:2.5px solid #241f45;box-shadow:0 3px 0 #241f45;display:flex;align-items:center;justify-content:center;font:600 8px 'Fredoka',sans-serif">symbol</div><div><div style="font:600 16px 'Fredoka',sans-serif">Leaving soon, near 2nd Ave</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">Bodega Cat · in about 10 min</div></div></div>
+<div style="min-height:60px;padding:8px 14px;box-sizing:border-box;display:flex;align-items:center;gap:12px"><div style="width:40px;height:40px;flex:none;box-sizing:border-box;border-radius:13px;background:#fff;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:600 8px 'Fredoka',sans-serif;color:#5a5578">symbol</div><div><div style="font:600 16px 'Fredoka',sans-serif">Ticketing seen</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">Stoop Pigeon · 35 min ago · expires in 25 min</div></div></div>
+</div>
+<div style="font:600 12px 'Fredoka',sans-serif;letter-spacing:.08em;color:#5a5578;margin:16px 0 8px">BLOCK CHATTER</div>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="align-self:flex-start;max-width:80%;padding:10px 14px;border:1.5px solid #241f45;border-radius:18px 18px 18px 4px"><div style="font:600 12px 'Fredoka',sans-serif;color:#5a5578">Halal Cart · 9:52 PM</div><div style="font:400 15px/1.35 'Fredoka',sans-serif">Moving truck just left the middle of the block.</div></div>
+<div style="align-self:flex-end;max-width:80%;padding:10px 14px;background:#241f45;color:#fff;border-radius:18px 18px 4px 18px"><div style="font:600 12px 'Fredoka',sans-serif;color:#c3bfdc">You · 10:03 PM</div><div style="font:400 15px/1.35 'Fredoka',sans-serif">Thanks, got it.</div></div>
+</div>
+<div style="position:absolute;left:0;right:0;bottom:0;padding:10px 18px 36px;background:#fff;border-top:1.5px solid #241f45;display:flex;gap:8px;align-items:center"><div style="flex:1;height:52px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;border:2px solid #241f45;border-radius:26px;font:400 16px 'Fredoka',sans-serif;color:#5a5578">Say something to the block</div><div style="height:52px;padding:0 20px;display:flex;align-items:center;background:#241f45;color:#fff;border-radius:26px;font:600 16px 'Fredoka',sans-serif">Send</div></div>
+</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Pulling the sheet up shrinks the verdict to one line and shows pins, chatter and the compose bar. Park here and Report return when the sheet is pulled back down. Only "leaving soon" is raised: it is an offer. Symbols: <code>figure.walk.departure</code>, <code>ticket.fill</code>, <code>bubble.left.and.bubble.right.fill</code>.</div></div>
+
+<div id="b4-signs" data-screen-label="B4 Signs list" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.11 · Sign list open</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<dc-import name="WPCurbSheet" kind="park" sub="4 days 11 h left." signs-label="Hide the signs" hint-size="100%,560px">
+<div style="margin-top:10px;border:1.5px solid #241f45;border-radius:20px;overflow:hidden">
+<div style="padding:10px 16px;border-bottom:1px solid #e4e3ec"><div style="font:600 15px/1.3 'Fredoka',sans-serif">NO PARKING (SANITATION BROOM SYMBOL) MONDAY THURSDAY 9AM-10:30AM</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">Street cleaning. Next: Mon 9:00 AM.</div></div>
+<div style="padding:10px 16px"><div style="font:600 15px/1.3 'Fredoka',sans-serif">NO STANDING ANYTIME (ARROW) — corner only</div><div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578">First 20 ft from 2nd Ave. Not part of this curb's free stretch.</div></div>
+</div>
+</dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Full posted text in the city's own wording, duplicates merged, each with a plain line underneath.</div></div>
+
+<div id="b4-ax5" data-screen-label="B4 AX5" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B4.12 · AX5</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;top:90px;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 0">
+<div style="font:600 32px/1.1 'Fredoka',sans-serif">E 1st St<br>North side</div><div style="font:500 22px/1.2 'Fredoka',sans-serif;color:#5a5578;margin-top:4px">Between 1st Ave and 2nd Ave</div>
+<div style="margin-top:12px;padding:16px 18px;background:#3ccf7a;border-radius:24px"><div style="font:500 24px/1.15 'Fredoka',sans-serif">Free to stay until</div><div style="font:700 56px/1 'Fredoka',sans-serif;margin-top:4px">Mon 9:00&nbsp;AM</div><div style="font:500 24px/1.2 'Fredoka',sans-serif;margin-top:8px">4 days 11 h left, then street cleaning</div></div>
+<div style="position:absolute;left:0;right:0;bottom:0;padding:12px 18px 36px;background:#fff;border-top:1.5px solid #241f45"><div style="min-height:88px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:44px;box-shadow:0 6px 0 #241f45;font:700 36px 'Fredoka',sans-serif">Park here</div></div>
+</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The time wraps onto two lines rather than shrinking. Report, signs and Close scroll below; "Park here" stays pinned.</div></div>
+</div>
+</section>
+
+<section id="b6" data-screen-label="B6 Parking a car" style="padding:36px 44px 72px">
+<h2 style="margin:0 0 4px;font:600 26px 'Fredoka',sans-serif">B6 · Parking a car</h2>
+<p style="margin:0 0 20px;max-width:760px;font:400 15px/1.45 'Fredoka',sans-serif">While dragging, the sheet drops out of the way and a label on the token says what the curb under it is. Symbol on the token: <code>car.fill</code>.</p>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b6-drag" data-screen-label="B6 Dragging" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B6.1 · Token picked up</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:158px;top:196px;width:56px;height:56px;box-sizing:border-box;border-radius:50%;border:2.5px dashed #241f45"></div>
+<div style="position:absolute;left:204px;top:292px;width:64px;height:64px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:3px solid #241f45;box-shadow:0 12px 0 rgba(36,31,69,.35);display:flex;align-items:center;justify-content:center"><div style="width:30px;height:18px;border-radius:7px 7px 3px 3px;background:#241f45"></div></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:20px 22px 40px"><div style="font:600 22px 'Fredoka',sans-serif">Drop the car where you parked</div><div style="font:400 15px 'Fredoka',sans-serif;margin-top:4px">It snaps to the nearest curb.</div></div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Lifted: the token grows to 64 and its shadow drops further away and lightens. A dashed ring marks where it came from. Light haptic on pick-up.</div></div>
+
+<div id="b6-snap-park" data-screen-label="B6 Snapped park" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B6.2 · Snapped to a park curb</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="10" sel-state="g" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:212px;top:269px;width:64px;height:64px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:3px solid #241f45;box-shadow:0 8px 0 rgba(36,31,69,.35);display:flex;align-items:center;justify-content:center"><div style="width:30px;height:18px;border-radius:7px 7px 3px 3px;background:#241f45"></div></div>
+<div style="position:absolute;left:144px;top:197px;width:200px;box-sizing:border-box;padding:10px 14px;background:#3ccf7a;border:1.5px solid #241f45;border-radius:18px;text-align:center"><div style="font:700 18px 'Fredoka',sans-serif">Park</div><div style="font:500 14px 'Fredoka',sans-serif">Free until Mon 9:00 AM</div></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:20px 22px 40px"><div style="font:600 22px 'Fredoka',sans-serif">Let go to place your car</div><div style="font:400 15px 'Fredoka',sans-serif;margin-top:4px">E 1st St · North side</div></div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">New part: drag label. Green fill for park, same words as the verdict block. Haptic tick on each snap.</div></div>
+
+<div id="b6-snap-dont" data-screen-label="B6 Snapped don't" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B6.3 · Snapped to a don't curb</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="10" sel-state="r" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:212px;top:269px;width:64px;height:64px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:3px solid #241f45;box-shadow:0 8px 0 rgba(36,31,69,.35);display:flex;align-items:center;justify-content:center"><div style="width:30px;height:18px;border-radius:7px 7px 3px 3px;background:#241f45"></div></div>
+<div style="position:absolute;left:134px;top:189px;width:220px;box-sizing:border-box;padding:10px 14px;background:#fff;border:3px dashed #e39a90;border-radius:18px;text-align:center"><div style="font:700 18px 'Fredoka',sans-serif">No parking</div><div style="font:500 14px 'Fredoka',sans-serif">Street cleaning at 7 AM tomorrow</div></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:20px 22px 40px"><div style="font:600 22px 'Fredoka',sans-serif">You can't park here overnight</div><div style="font:400 15px 'Fredoka',sans-serif;margin-top:4px">Keep dragging, or let go to mark it anyway.</div></div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">White label with the dashed coral outline, and a warning haptic. The reason and time are always named.</div></div>
+
+<div id="b6-confirm" data-screen-label="B6 Confirm" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B6.4 · Placed, with address: confirm</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:217px;top:169px;width:56px;height:56px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:3px solid #241f45;box-shadow:0 4px 0 #241f45;display:flex;align-items:center;justify-content:center"><div style="width:26px;height:16px;border-radius:6px 6px 3px 3px;background:#241f45"></div></div>
+<dc-import name="WPCurbSheet" kind="park" street="In front of 50 E 1st St" cross="E 1st St · North side" bar="{{ true }}" sub="4 days 11 h left, then street cleaning." side-label="Move" hint-size="100%,400px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The token lands with one bounce and stays raised until confirmed. "Move" puts it back in the hand. The address line is editable by dragging again.</div></div>
+
+<div id="b6-confirm-dont" data-screen-label="B6 Confirm on don't" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B6.5 · Placed on a don't curb: warning</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="r" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:217px;top:169px;width:56px;height:56px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:3px solid #241f45;box-shadow:0 4px 0 #241f45;display:flex;align-items:center;justify-content:center"><div style="width:26px;height:16px;border-radius:6px 6px 3px 3px;background:#241f45"></div></div>
+<dc-import name="WPCurbSheet" kind="dont" street="In front of 61 E 1st St" cross="E 1st St · South side" over="You'd have to move by" big="7:00 AM tomorrow" sub="Street cleaning, 7 to 8:30 AM. That is 8 h 49 min from now." cta="Park here anyway" cta-kind="outline" side-label="Move" hint-size="100%,420px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">People do park here for an hour, so it is allowed, but the button is flat and the deadline leads. A reminder is switched on by default.</div></div>
+
+<div id="b6-notify" data-screen-label="B6 Notification priming" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B6.6 · Reminder priming (first park only)</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:166px;top:166px;width:40px;height:40px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center"><div style="width:18px;height:11px;border-radius:4px 4px 2px 2px;background:#241f45"></div></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="padding:0 4px"><div style="font:500 14px 'Fredoka',sans-serif;color:#17803f">Parked. Free until Mon 9:00 AM.</div><div style="font:600 26px/1.15 'Fredoka',sans-serif;margin-top:4px">Want a reminder before street cleaning?</div><div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:8px">We'll remind you the night before and 1 hour before. You can change this any time.</div></div>
+<div style="height:72px;margin-top:20px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:36px;box-shadow:0 6px 0 #241f45;font:700 24px 'Fredoka',sans-serif">Remind me</div>
+<div style="height:56px;margin-top:16px;display:flex;align-items:center;justify-content:center;font:600 17px 'Fredoka',sans-serif">Not now</div>
+</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">"Remind me" then shows the iOS permission prompt. The marker is already flat: the car is parked whether or not they allow. Symbol: <code>bell.fill</code>.</div></div>
+
+<div id="b6-parked" data-screen-label="B6 Parked marker" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B6.7 · Parked-car marker on the map</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:166px;top:196px;width:40px;height:40px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center"><div style="width:18px;height:11px;border-radius:4px 4px 2px 2px;background:#241f45"></div></div>
+<div style="position:absolute;left:212px;top:190px;height:48px;padding:0 14px;display:flex;flex-direction:column;justify-content:center;background:#fff;border:1.5px solid #241f45;border-radius:16px 16px 16px 4px"><div style="font:600 13px 'Fredoka',sans-serif">My car</div><div style="font:500 12px 'Fredoka',sans-serif;color:#17803f">Free until Mon 9 AM</div></div>
+<div style="position:absolute;left:246px;top:380px;width:22px;height:22px;box-sizing:border-box;border-radius:50%;background:#241f45;border:4px solid #fff;box-shadow:0 0 0 1.5px #241f45"></div>
+<div style="position:absolute;top:60px;left:14px;height:48px;padding:0 16px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:24px;font:500 14px 'Fredoka',sans-serif">Street cleaning in effect today</div>
+<div style="position:absolute;top:60px;right:14px;height:48px;padding:0 14px;display:flex;align-items:center;gap:6px;background:#ffd23f;border:2.5px solid #241f45;border-radius:24px;box-shadow:0 3px 0 #241f45;font:700 15px 'Fredoka',sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span>12</div>
+<dc-import name="WPGoalSheet" goal="{{ 1 }}" lever="{{ true }}" hint-size="100%,300px"></dc-import>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Flat 40 marker with a flat label that always carries the end time. Tapping either opens My Car. The draggable token is gone while a car is parked.</div></div>
+</div>
+</section>
+</x-dc>
+</body>
+</html>

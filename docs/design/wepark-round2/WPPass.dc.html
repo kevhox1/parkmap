@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="position:absolute;inset:0;background:#fbf6e6;color:#241f45;font-family:'Fredoka',sans-serif">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="display:flex;align-items:center;gap:8px"><div style="font:600 20px 'Fredoka',sans-serif">WePark</div><sc-if value="{{ clip }}" hint-placeholder-val="{{ false }}"><div style="height:28px;padding:0 10px;display:flex;align-items:center;border:1.5px solid #241f45;border-radius:14px;font:500 13px 'Fredoka',sans-serif">App Clip</div></sc-if></div><div style="min-width:48px;height:48px;padding:0 10px;flex:none;box-sizing:border-box;border-radius:24px;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">{{ closeLabel }}</div></div>
+<div style="position:absolute;left:18px;right:18px;top:122px;bottom:34px;display:flex;flex-direction:column">
+<sc-if value="{{ glyph }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:12px;margin-bottom:14px"><div style="width:64px;height:64px;flex:none;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;text-align:center;font:500 9px/1.2 ui-monospace,Menlo,monospace;color:#5a5578">cat<br>glyph</div><div><div style="font:600 20px/1.2 'Fredoka',sans-serif">{{ alias }}</div><div style="font:400 14px 'Fredoka',sans-serif">{{ aliasSub }}</div></div></div></sc-if>
+<sc-if value="{{ hasOver }}" hint-placeholder-val="{{ false }}"><div style="font:500 15px 'Fredoka',sans-serif;margin-bottom:2px">{{ over }}</div></sc-if>
+<div style="font:600 32px/1.1 'Fredoka',sans-serif;text-wrap:balance">{{ title }}</div>
+<sc-if value="{{ hasSub }}" hint-placeholder-val="{{ true }}"><div style="font:400 17px/1.4 'Fredoka',sans-serif;margin-top:8px;text-wrap:pretty">{{ sub }}</div></sc-if>
+<div style="display:flex;flex-direction:column;gap:10px;margin-top:16px">{{ children }}</div>
+<div style="flex:1"></div>
+<sc-if value="{{ hasPrimary }}" hint-placeholder-val="{{ true }}"><div style="{{ primaryStyle }}">{{ primary }}</div></sc-if>
+<sc-if value="{{ hasSecondary }}" hint-placeholder-val="{{ true }}"><div style="height:56px;flex:none;display:flex;align-items:center;justify-content:center;font:600 17px 'Fredoka',sans-serif">{{ secondary }}</div></sc-if>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:375,&quot;height&quot;:812},&quot;clip&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;closeLabel&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Close&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;glyph&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:false,&quot;tsType&quot;:&quot;boolean&quot;},&quot;alias&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Bodega Cat&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;aliasSub&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;A neighbor nearby&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;over&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;title&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;You're on, neighbor.&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;sub&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;primary&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;Leaving now&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;primaryKind&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;taxi&quot;,&quot;ink&quot;,&quot;outline&quot;],&quot;default&quot;:&quot;taxi&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;secondary&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const F = "'Fredoka',sans-serif";
+    const base = { flex: 'none', boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center' };
+    const kinds = {
+      taxi: { ...base, height: 72, marginBottom: 6, background: '#ffd23f', border: '3px solid #241f45', borderRadius: 36, boxShadow: '0 6px 0 #241f45', font: '700 24px ' + F },
+      ink: { ...base, height: 64, background: '#241f45', color: '#fff', borderRadius: 32, font: '600 22px ' + F },
+      outline: { ...base, height: 64, background: '#fff', border: '2.5px solid #241f45', borderRadius: 32, font: '600 20px ' + F },
+    };
+    return {
+      children: p.children ?? null,
+      clip: !!p.clip, closeLabel: p.closeLabel ?? 'Close',
+      glyph: !!p.glyph, alias: p.alias ?? 'Bodega Cat', aliasSub: p.aliasSub ?? 'A neighbor nearby',
+      hasOver: !!p.over, over: p.over, title: p.title ?? '', hasSub: !!p.sub, sub: p.sub,
+      hasPrimary: !!p.primary, primary: p.primary, primaryStyle: kinds[p.primaryKind ?? 'taxi'],
+      hasSecondary: !!p.secondary, secondary: p.secondary,
+    };
+  }
+}
+</script>
+</body>
+</html>

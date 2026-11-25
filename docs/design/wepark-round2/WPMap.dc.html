@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<div style="position:absolute;inset:0;overflow:hidden;background:#e4e3ec"><div style="{{ grid }}"><sc-for list="{{ blocks }}" as="b" hint-placeholder-count="24"><div style="{{ b.style }}"><sc-if value="{{ b.sel }}" hint-placeholder-val="{{ false }}"><div style="{{ b.bar }}"></div></sc-if><sc-if value="{{ b.hasMark }}" hint-placeholder-val="{{ false }}"><div style="{{ b.seg }}"></div><div style="{{ b.h1 }}"></div><div style="{{ b.h2 }}"></div></sc-if></div></sc-for></div></div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:375,&quot;height&quot;:812},&quot;variant&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;live&quot;,&quot;more&quot;,&quot;less&quot;,&quot;sparse&quot;,&quot;detail&quot;,&quot;blank&quot;,&quot;nodata&quot;],&quot;default&quot;:&quot;live&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;sel&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;selState&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;g&quot;,&quot;r&quot;,&quot;a&quot;,&quot;b&quot;,&quot;n&quot;],&quot;default&quot;:&quot;g&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;dx&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;0&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;dy&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;0&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+class Component extends DCLogic {
+  renderVals() {
+    const p = this.props;
+    const v = p.variant ?? 'live';
+    const sel = p.sel == null || p.sel === '' ? -1 : Number(p.sel);
+    const selState = p.selState ?? 'g';
+    const live = ['grgr','rrgg','grgr','ggrr','rrrr','grrr','grgg','grgr','rrgg','grrr','grgr','ggrr','rrrr','grgr','grgg','rrgg','grgr','rrrr','grgr','ggrr','grrr','grgg','rrgg','grgr'];
+    const C = { g: ['#3ccf7a', 'solid', 6], r: ['#e39a90', 'dashed', 6], a: ['#f2a23a', 'dashed', 6], b: ['#5b7cfa', 'dotted', 6], n: ['#a9a7b8', 'solid', 2], x: ['transparent', 'solid', 6] };
+    const BAR = { g: '#3ccf7a', r: 'repeating-linear-gradient(90deg,#e39a90 0 12px,#fff 12px 20px)', a: 'repeating-linear-gradient(90deg,#f2a23a 0 24px,#fff 24px 32px)', b: 'repeating-linear-gradient(90deg,#5b7cfa 0 8px,#fff 8px 16px)', n: '#a9a7b8' };
+    let k = 0;
+    const blocks = live.map((s, bi) => {
+      const isSel = bi === sel;
+      const sides = s.split('').map((c, si) => {
+        const i = k++;
+        if (isSel && si === 0) return selState;
+        if (v === 'more') return c === 'r' && i % 3 === 0 ? 'g' : c;
+        if (v === 'less') return c === 'g' && i % 8 === 4 ? 'r' : c;
+        if (v === 'sparse') return c === 'g' && i % 7 !== 0 ? 'r' : c;
+        if (v === 'detail') { if (c === 'r' && i % 4 === 1) return 'b'; if (c === 'g' && i % 5 === 2) return 'a'; if (c === 'r' && i % 9 === 3) return 'n'; return c; }
+        if (v === 'blank') return 'x';
+        if (v === 'nodata') return 'n';
+        return c;
+      }).map(c => C[c]);
+      const thin = selState === 'n';
+      const bw = sides[0][2];
+      const mk = isSel && p.mark ? String(p.mark).split(',').map(Number) : null;
+      const barTop = thin ? -bw / 2 - 3 : -bw / 2 - 5;
+      const cy = barTop + (thin ? 3 : 5);
+      const hx = f => -6 + f * 240 - 14;
+      const handle = f => ({ position: 'absolute', left: hx(f), top: cy - 14, width: 28, height: 28, boxSizing: 'border-box', borderRadius: '50%', background: '#fff', border: '3px solid #241f45' });
+      return {
+        hasMark: !!mk,
+        seg: mk ? { position: 'absolute', left: -6 + mk[0] * 240, width: (mk[1] - mk[0]) * 240, top: cy - 8, height: 16, background: '#b8322a', boxShadow: '0 0 0 3px #241f45', display: mk[1] > mk[0] ? 'block' : 'none' } : {},
+        h1: mk ? handle(mk[0]) : {}, h2: mk ? handle(mk[1]) : {},
+        sel: isSel,
+        bar: { position: 'absolute', left: -6, right: -6, top: thin ? -bw / 2 - 3 : -bw / 2 - 5, height: thin ? 6 : 10, borderRadius: 5, background: BAR[selState], boxShadow: '0 0 0 3px #241f45' },
+        style: { position: 'relative', boxSizing: 'border-box', height: 102, borderRadius: 4, background: '#f5f1e6', borderColor: sides.map(x => x[0]).join(' '), borderStyle: sides.map(x => x[1]).join(' '), borderWidth: sides.map(x => x[2] + 'px').join(' ') },
+      };
+    });
+    return { blocks, grid: { position: 'absolute', left: -218 + Number(p.dx ?? 0), top: -80 + Number(p.dy ?? 0), width: 812, display: 'grid', gridTemplateColumns: 'repeat(3,240px)', gap: '26px 46px', transform: 'rotate(29deg)' } };
+  }
+}
+</script>
+</body>
+</html>

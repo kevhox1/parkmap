@@ -119,7 +119,11 @@ No new data requirements. The system only changes presentation. Existing state i
 - Detail-mode amber and blue have not been tested on the real map.
 - "Walk there": in-app walking directions vs handing off to Apple Maps.
 
+## Round 2
+Every screen has since been designed with this system. See the sibling package `design_handoff_wepark_round2/` (keep the two folders side by side so the links in the spec sheet work). It also lists the parts added in v0.2.
+
 ## Files
+- `screenshots/` — PNGs at 2x. Look at these first: `2a-map.png`, `2a-drive.png`, `2a-my-car.png` (the three reference screens, 375 × 812 pt plus device bezel) and `system-1-rules.png` … `system-8-wording.png` (each section of the spec sheet). Use the PNGs to see the design and this README for exact values; where they disagree, the README and `tokens/` win.
 - `WePark Design System.dc.html` — the spec sheet (open first).
 - `WePark Directions.dc.html` — reference screens (use option 2a only).
 - `DESIGN_GUIDE.md` — the short written guide.

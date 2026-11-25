@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"><link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet"><style>body{margin:0;background:#ece9df;font-family:'Fredoka',system-ui,sans-serif;color:#241f45}a{color:#241f45}a:hover{color:#5a5578}code{font:500 12px ui-monospace,Menlo,monospace}</style></helmet>
+
+<section id="intro" style="padding:44px 44px 8px;max-width:900px">
+<div style="font:600 12px 'Fredoka',sans-serif;letter-spacing:.08em;color:#5a5578">WEPARK · ROUND 2 · BATCH 4 OF 5 · PART A</div>
+<h1 style="margin:6px 0 8px;font:600 40px/1.05 'Fredoka',sans-serif">Community and Spot Pass, seeker side</h1>
+<p style="margin:0;font:400 16px/1.45 'Fredoka',sans-serif;text-wrap:pretty">Covers B8 and B9. Reports and passes are facts, so they stay flat. Only karma and the one button that sends something are raised. The alias glyph and the QR code are placeholders for real artwork.</p>
+</section>
+
+<section id="b8" data-screen-label="B8 Community" style="padding:36px 44px;border-bottom:1px solid rgba(36,31,69,.15)">
+<h2 style="margin:0 0 6px;font:600 26px 'Fredoka',sans-serif">B8 · Community: report, neighbors, chatter</h2>
+<p style="margin:0 0 22px;max-width:820px;font:400 15px/1.45 'Fredoka',sans-serif;text-wrap:pretty">A report is three steps at most: what, where on the block, post. Every post names who said it and when it clears, so a reader can judge it.</p>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b8-type" data-screen-label="B8 Report type" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.1 · Report type picker</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 4px"><div><div style="font:600 24px/1.15 'Fredoka',sans-serif">What's happening here?</div><div style="font:400 15px 'Fredoka',sans-serif">E 1st St · North side</div></div><div style="width:48px;height:48px;flex:none;box-sizing:border-box;border-radius:50%;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:14px">
+<div style="min-height:64px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;background:#fbf6e6;border:2px solid #241f45;border-radius:20px;font:600 17px/1.15 'Fredoka',sans-serif">Street swept</div>
+<div style="min-height:64px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;background:#fbf6e6;border:2px solid #241f45;border-radius:20px;font:600 17px/1.15 'Fredoka',sans-serif">Ticketing now</div>
+<div style="min-height:64px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;background:#fbf6e6;border:2px solid #241f45;border-radius:20px;font:600 17px/1.15 'Fredoka',sans-serif">No parking today</div>
+<div style="min-height:64px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;background:#fbf6e6;border:2px solid #241f45;border-radius:20px;font:600 17px/1.15 'Fredoka',sans-serif">Filming</div>
+<div style="min-height:64px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;background:#fbf6e6;border:2px solid #241f45;border-radius:20px;font:600 17px/1.15 'Fredoka',sans-serif">Construction</div>
+<div style="min-height:64px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;background:#fbf6e6;border:2px solid #241f45;border-radius:20px;font:600 17px/1.15 'Fredoka',sans-serif">Open spot</div>
+<div style="grid-column:1 / -1;min-height:64px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fbf6e6;border:2px solid #241f45;border-radius:20px;font:600 17px/1.15 'Fredoka',sans-serif"><div>Leaving soon</div><div style="font:400 14px 'Fredoka',sans-serif">from your parked car</div></div>
+</div>
+<div style="margin:12px 4px 0;font:400 14px/1.35 'Fredoka',sans-serif;color:#5a5578">Posts as Bodega Cat. Every report clears on its own.</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Opens from a long press on a curb or from Report. Symbols, leading each tile: <code>bubbles.and.sparkles.fill</code>, <code>ticket.fill</code>, <code>nosign</code>, <code>video.fill</code>, <code>cone.fill</code>, <code>parkingsign</code>, <code>hand.wave.fill</code>.</div></div>
+
+<div id="b8-mark" data-screen-label="B8 Mark stretch" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.2 · Mark the blocked part, a stretch</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" mark="0.3,0.75" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="padding:0 4px"><div style="font:500 15px 'Fredoka',sans-serif">No parking today</div><div style="font:600 24px/1.15 'Fredoka',sans-serif">Mark the blocked part</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">Drag the two ends along the curb. Tap the curb once to drop a pin instead.</div></div>
+<div style="margin-top:12px;padding:12px 16px;border:1.5px solid #241f45;border-radius:20px;display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font:600 17px 'Fredoka',sans-serif">About 90 ft, mid-block</div><div style="font:400 14px 'Fredoka',sans-serif">Clears tonight at midnight</div></div><div style="flex:none;height:48px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #241f45;border-radius:24px;font:600 15px 'Fredoka',sans-serif">Whole block</div></div>
+<div style="position:relative;height:64px;margin-top:22px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:32px;box-shadow:0 5px 0 #241f45;font:700 22px 'Fredoka',sans-serif">Post<div style="position:absolute;right:10px;top:-16px;padding:5px 10px;background:#fff;border:2.5px solid #241f45;border-radius:16px;box-shadow:0 3px 0 #241f45;transform:rotate(6deg);font:700 13px 'Fredoka',sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span> +2 karma</div></div>
+<div style="height:48px;margin-top:10px;display:flex;align-items:center;justify-content:center;font:600 16px 'Fredoka',sans-serif">Back</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">For the three blocked types only. The marked stretch is solid red with an ink outline and two round handles, 44 pt touch area each. The rest of the curb keeps its own state.</div></div>
+
+<div id="b8-pin" data-screen-label="B8 Mark pin" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.3 · Mark the blocked part, a pin</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" mark="0.55,0.55" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="padding:0 4px"><div style="font:500 15px 'Fredoka',sans-serif">Construction</div><div style="font:600 24px/1.15 'Fredoka',sans-serif">Mark the blocked part</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">Pin dropped. Drag it out along the curb to cover a stretch.</div></div>
+<div style="margin-top:12px;padding:12px 16px;border:1.5px solid #241f45;border-radius:20px;display:flex;justify-content:space-between;align-items:center;gap:10px"><div><div style="font:600 17px 'Fredoka',sans-serif">In front of 61 E 1st St</div><div style="font:400 14px 'Fredoka',sans-serif">Clears in 3 days</div></div><div style="flex:none;height:48px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #241f45;border-radius:24px;font:600 15px 'Fredoka',sans-serif">Whole block</div></div>
+<div style="position:relative;height:64px;margin-top:22px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:32px;box-shadow:0 5px 0 #241f45;font:700 22px 'Fredoka',sans-serif">Post<div style="position:absolute;right:10px;top:-16px;padding:5px 10px;background:#fff;border:2.5px solid #241f45;border-radius:16px;box-shadow:0 3px 0 #241f45;transform:rotate(6deg);font:700 13px 'Fredoka',sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span> +2 karma</div></div>
+<div style="height:48px;margin-top:10px;display:flex;align-items:center;justify-content:center;font:600 16px 'Fredoka',sans-serif">Back</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">One handle. It snaps to the curb the same way the car token does.</div></div>
+
+<div id="b8-crew" data-screen-label="B8 Crew identity" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.4 · Crew identity, first post only</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;inset:0;background:rgba(36,31,69,.45)"></div>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="padding:0 4px"><div style="font:600 24px/1.15 'Fredoka',sans-serif">Pick the name neighbors see</div><div style="font:400 15px/1.4 'Fredoka',sans-serif;margin-top:4px">No account and no real name.</div></div>
+<div style="margin-top:14px;padding:12px 12px 12px 14px;display:flex;align-items:center;gap:12px;border:1.5px solid #241f45;border-radius:24px"><div style="width:64px;height:64px;flex:none;box-sizing:border-box;border-radius:50%;background:#fbf6e6;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;text-align:center;font:500 9px/1.2 ui-monospace,Menlo,monospace;color:#5a5578">cat<br>glyph</div><div style="flex:1;font:600 24px/1.1 'Fredoka',sans-serif">Bodega Cat</div><div style="flex:none;height:48px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #241f45;border-radius:24px;font:600 15px 'Fredoka',sans-serif">Shuffle</div></div>
+<div style="margin-top:10px;height:56px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;border:1.5px solid #241f45;border-radius:20px;font:400 17px 'Fredoka',sans-serif;color:#5a5578">Or type your own</div>
+<div style="height:64px;margin-top:20px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:32px;box-shadow:0 5px 0 #241f45;font:700 22px 'Fredoka',sans-serif">Post as Bodega Cat</div>
+<div style="margin:16px 4px 0;text-align:center;font:400 14px/1.35 'Fredoka',sans-serif;color:#5a5578">You can change it any time in Settings.</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Appears once, between Post and posted. Shuffle draws a new NYC alias and glyph.</div></div>
+
+<div id="b8-posted" data-screen-label="B8 Posted" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.5 · Posted, karma earned</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" mark="0.3,0.75" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="padding:0 4px"><div style="font:600 26px/1.15 'Fredoka',sans-serif">Posted. Thanks, Bodega Cat.</div><div style="font:400 16px/1.4 'Fredoka',sans-serif;margin-top:4px">Neighbors see "No parking today" on this stretch until midnight.</div></div>
+<div style="display:flex;align-items:center;gap:14px;margin-top:18px;padding:0 4px"><div style="height:56px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;gap:8px;background:#ffd23f;border:2.5px solid #241f45;border-radius:28px;box-shadow:0 4px 0 #241f45;font:700 20px 'Fredoka',sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span> 14 karma</div><div style="padding:6px 12px;background:#fff;border:2.5px solid #241f45;border-radius:16px;box-shadow:0 3px 0 #241f45;transform:rotate(6deg);font:700 14px 'Fredoka',sans-serif">+2</div></div>
+<div style="height:64px;margin-top:24px;display:flex;align-items:center;justify-content:center;background:#241f45;color:#fff;border-radius:32px;font:600 22px 'Fredoka',sans-serif">Done</div>
+<div style="height:48px;margin-top:8px;display:flex;align-items:center;justify-content:center;font:600 16px 'Fredoka',sans-serif">Undo the post</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The +2 sticker pops and tilts, then the karma count ticks from 12 to 14. A neighbor confirming the report later adds +1.</div></div>
+
+<div id="b8-pins" data-screen-label="B8 Map pins" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.6 · Map pins, one per report type</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:305px;top:206px;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#241f45"></div><div style="position:absolute;left:305px;top:194px;transform:translate(-50%,-100%);padding:6px 10px;background:#fff;border-radius:16px;white-space:nowrap;text-align:center"><div style="font:600 14px/1.2 'Fredoka',sans-serif">Swept</div><div style="font:400 12px/1.2 'Fredoka',sans-serif">9:31 AM · 2 h left</div></div>
+<div style="position:absolute;left:175px;top:193px;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#241f45"></div><div style="position:absolute;left:175px;top:181px;transform:translate(-50%,-100%);padding:6px 10px;background:#fff;border-radius:16px;white-space:nowrap;text-align:center"><div style="font:600 14px/1.2 'Fredoka',sans-serif">Ticketing</div><div style="font:400 12px/1.2 'Fredoka',sans-serif">12 min ago</div></div>
+<div style="position:absolute;left:244px;top:318px;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#241f45"></div><div style="position:absolute;left:244px;top:306px;transform:translate(-50%,-100%);padding:6px 10px;background:#fff;border-radius:16px;white-space:nowrap;text-align:center"><div style="font:600 14px/1.2 'Fredoka',sans-serif">No parking today</div><div style="font:400 12px/1.2 'Fredoka',sans-serif">until midnight</div></div>
+<div style="position:absolute;left:182px;top:430px;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#241f45"></div><div style="position:absolute;left:182px;top:418px;transform:translate(-50%,-100%);padding:6px 10px;background:#fff;border-radius:16px;white-space:nowrap;text-align:center"><div style="font:600 14px/1.2 'Fredoka',sans-serif">Filming</div><div style="font:400 12px/1.2 'Fredoka',sans-serif">until 8 PM</div></div>
+<div style="position:absolute;left:52px;top:417px;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#241f45"></div><div style="position:absolute;left:56px;top:405px;transform:translate(-50%,-100%);padding:6px 10px;background:#fff;border-radius:16px;white-space:nowrap;text-align:center"><div style="font:600 14px/1.2 'Fredoka',sans-serif">Construction</div><div style="font:400 12px/1.2 'Fredoka',sans-serif">3 days left</div></div>
+<div style="position:absolute;left:120px;top:542px;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#241f45"></div><div style="position:absolute;left:120px;top:530px;transform:translate(-50%,-100%);padding:6px 10px;background:#fff;border-radius:16px;white-space:nowrap;text-align:center"><div style="font:600 14px/1.2 'Fredoka',sans-serif">Open spot</div><div style="font:400 12px/1.2 'Fredoka',sans-serif">2 min ago</div></div>
+<div style="position:absolute;left:302px;top:556px;width:12px;height:12px;margin:-6px 0 0 -6px;border-radius:50%;background:#241f45"></div><div style="position:absolute;left:302px;top:544px;transform:translate(-50%,-100%);padding:6px 10px;background:#fff;border-radius:16px;white-space:nowrap;text-align:center"><div style="font:600 14px/1.2 'Fredoka',sans-serif">Leaving soon</div><div style="font:400 12px/1.2 'Fredoka',sans-serif">in 10 min</div></div>
+<div style="position:absolute;left:14px;right:14px;bottom:36px;padding:12px 16px;background:#fff;border:1.5px solid #241f45;border-radius:20px;font:400 14px/1.4 'Fredoka',sans-serif">Each pin shows what and until when. Pins fade in their last 10 minutes, then leave the map.</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Flat white chips with no outline, like the other map chips. Each sits on the curb it is about. The symbol from B8.1 leads the first line. Lifetimes: swept until the cleaning window ends, ticketing 30 min, no parking today until midnight, filming and construction until the time the reporter picks, open spot 10 min, leaving soon until the stated time.</div></div>
+
+<div id="b8-detail" data-screen-label="B8 Pin detail" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.7 · A pin's detail</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" sel="7" sel-state="g" dx="-60" dy="-30" mark="0.3,0.75" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:22px 18px 36px">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 4px"><div><div style="font:600 22px/1.2 'Fredoka',sans-serif">E 1st St · North side</div><div style="font:400 15px 'Fredoka',sans-serif">Mid-block, about 90 ft</div></div><div style="width:48px;height:48px;flex:none;box-sizing:border-box;border-radius:50%;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="margin-top:12px;padding:13px 15px;border:3px dashed #e39a90;border-radius:24px"><div style="font:500 15px 'Fredoka',sans-serif;color:#b8322a">Neighbors say, until 8:00 PM today</div><div style="font:700 36px/1.1 'Fredoka',sans-serif">Blocked for filming</div></div>
+<div style="margin-top:10px;padding:12px 16px;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 16px/1.3 'Fredoka',sans-serif">Reported 20 min ago by Stoop Pigeon</div><div style="font:400 14px/1.35 'Fredoka',sans-serif">41 karma · 2 neighbors confirmed it</div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:14px"><div style="height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2.5px solid #241f45;border-radius:32px;font:600 18px 'Fredoka',sans-serif">Still there</div><div style="height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;border:2.5px solid #241f45;border-radius:32px;font:600 18px 'Fredoka',sans-serif">It's gone</div></div>
+<div style="height:48px;margin-top:8px;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif;text-decoration:underline">See what the signs say for this curb</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Who, when, how many agree and when it ends are always shown. Still there adds a confirmation. Two "It's gone" taps clear the pin early.</div></div>
+
+<div id="b8-chatter" data-screen-label="B8 Chatter thread" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.8 · Block chatter thread</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;top:64px;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 0;display:flex;flex-direction:column">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 4px"><div><div style="font:600 24px/1.15 'Fredoka',sans-serif">Block chatter</div><div style="font:400 15px 'Fredoka',sans-serif">E 1st St, 1st Ave to 2nd Ave</div></div><div style="width:48px;height:48px;flex:none;box-sizing:border-box;border-radius:50%;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="margin-top:14px;border:1.5px solid #241f45;border-radius:20px;overflow:hidden">
+<div style="padding:12px 16px;border-bottom:1px solid #e4e3ec"><div style="display:flex;justify-content:space-between;gap:8px;font:600 15px 'Fredoka',sans-serif"><span>Stoop Pigeon</span><span style="font-weight:400;color:#5a5578">8:40 PM</span></div><div style="font:400 16px/1.35 'Fredoka',sans-serif;margin-top:2px">Film crew is packing up. Cones should be gone by 9.</div></div>
+<div style="padding:12px 16px;border-bottom:1px solid #e4e3ec"><div style="display:flex;justify-content:space-between;gap:8px;font:600 15px 'Fredoka',sans-serif"><span>Fire Escape Fern</span><span style="font-weight:400;color:#5a5578">9:02 PM</span></div><div style="font:400 16px/1.35 'Fredoka',sans-serif;margin-top:2px">Ticket agent was on the south side around 7.</div></div>
+<div style="padding:12px 16px;border-bottom:1px solid #e4e3ec"><div style="display:flex;justify-content:space-between;gap:8px;font:600 15px 'Fredoka',sans-serif"><span>Halal Cart Hawk</span><span style="font-weight:400;color:#5a5578">9:48 PM</span></div><div style="font:400 16px/1.35 'Fredoka',sans-serif;margin-top:2px">Is cleaning on for Thursday?</div></div>
+<div style="padding:12px 16px;background:#fbf6e6"><div style="display:flex;justify-content:space-between;gap:8px;font:600 15px 'Fredoka',sans-serif"><span>Bodega Cat · you</span><span style="font-weight:400;color:#5a5578">9:55 PM</span></div><div style="font:400 16px/1.35 'Fredoka',sans-serif;margin-top:2px">No. Suspended for Thanksgiving.</div></div>
+</div>
+<div style="margin:12px 4px 0;font:400 14px/1.35 'Fredoka',sans-serif;color:#5a5578">Messages clear after 24 hours.</div>
+<div style="flex:1"></div>
+<div style="margin:0 -18px;padding:12px 18px 36px;border-top:1.5px solid #241f45;display:flex;gap:10px;align-items:center"><div style="flex:1;height:56px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;border:1.5px solid #241f45;border-radius:28px;font:400 17px 'Fredoka',sans-serif;color:#5a5578">Say something to this block</div><div style="flex:none;height:56px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #a9a7b8;border-radius:28px;font:600 17px 'Fredoka',sans-serif;color:#5a5578">Send</div></div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Opens from the curb sheet. Plain rows, newest last, your own on cream. No avatars, likes or replies.</div></div>
+
+<div id="b8-compose" data-screen-label="B8 Chatter compose" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B8.9 · Chatter compose</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPMap" variant="live" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import>
+<div style="position:absolute;left:0;right:0;top:64px;bottom:0;background:#fff;border-top:1.5px solid #241f45;border-radius:30px 30px 0 0;padding:18px 18px 0;display:flex;flex-direction:column">
+<div style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:0 4px"><div><div style="font:600 24px/1.15 'Fredoka',sans-serif">Block chatter</div><div style="font:400 15px 'Fredoka',sans-serif">E 1st St, 1st Ave to 2nd Ave</div></div><div style="width:48px;height:48px;flex:none;box-sizing:border-box;border-radius:50%;border:1.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:500 12px 'Fredoka',sans-serif">Close</div></div>
+<div style="margin-top:14px;border:1.5px solid #241f45;border-radius:20px;overflow:hidden">
+<div style="padding:12px 16px;border-bottom:1px solid #e4e3ec"><div style="display:flex;justify-content:space-between;gap:8px;font:600 15px 'Fredoka',sans-serif"><span>Halal Cart Hawk</span><span style="font-weight:400;color:#5a5578">9:48 PM</span></div><div style="font:400 16px/1.35 'Fredoka',sans-serif;margin-top:2px">Is cleaning on for Thursday?</div></div>
+<div style="padding:12px 16px;background:#fbf6e6"><div style="display:flex;justify-content:space-between;gap:8px;font:600 15px 'Fredoka',sans-serif"><span>Bodega Cat · you</span><span style="font-weight:400;color:#5a5578">9:55 PM</span></div><div style="font:400 16px/1.35 'Fredoka',sans-serif;margin-top:2px">No. Suspended for Thanksgiving.</div></div>
+</div>
+<div style="flex:1"></div>
+<div style="margin:0 -18px;padding:12px 18px;border-top:1.5px solid #241f45;display:flex;gap:10px;align-items:flex-end"><div style="flex:1;min-height:56px;padding:14px 18px;box-sizing:border-box;border:2.5px solid #241f45;border-radius:28px;font:400 17px/1.35 'Fredoka',sans-serif">Sweeper skipped the south side today.<div style="font:400 13px 'Fredoka',sans-serif;color:#5a5578;margin-top:2px">103 left</div></div><div style="flex:none;height:56px;margin-bottom:5px;padding:0 18px;box-sizing:border-box;display:flex;align-items:center;background:#ffd23f;border:3px solid #241f45;border-radius:28px;box-shadow:0 5px 0 #241f45;font:700 17px 'Fredoka',sans-serif">Send</div></div>
+<div style="margin:0 -18px;height:291px;flex:none;display:flex;align-items:center;justify-content:center;background:repeating-linear-gradient(135deg,#e4e3ec 0 10px,#eeedf3 10px 20px);font:500 12px ui-monospace,Menlo,monospace;color:#5a5578">iOS keyboard</div>
+</div></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">140 characters. Send is raised only once there is text. The field border thickens on focus.</div></div>
+
+</div></section>
+
+<section id="b9" data-screen-label="B9 Spot Pass seeker" style="padding:36px 44px;border-bottom:1px solid rgba(36,31,69,.15)">
+<h2 style="margin:0 0 6px;font:600 26px 'Fredoka',sans-serif">B9 · Spot Pass, seeker</h2>
+<p style="margin:0 0 22px;max-width:820px;font:400 15px/1.45 'Fredoka',sans-serif;text-wrap:pretty">One scaffold for every Spot Pass screen, on both sides and in the App Clip: wordmark, close, a headline, a few flat fact rows, one button and one text link. The seeker's privacy line is on the first screen and again on the pass.</p>
+<div style="display:flex;flex-wrap:wrap;gap:28px;align-items:flex-start">
+
+<div id="b9-intro" data-screen-label="B9 Intro" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.1 · Intro</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="Ask a driver for their spot" sub="For when you see someone walking back to their car." primary="Make a pass" secondary="Not now" style="position:absolute;inset:0" hint-size="100%,100%">
+<div style="padding:4px 16px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #e4e3ec"><div style="width:32px;height:32px;flex:none;border-radius:50%;background:#241f45;color:#fff;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif">1</div><div style="font:500 16px/1.3 'Fredoka',sans-serif">Show them your pass. They scan it with their camera.</div></div>
+<div style="display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid #e4e3ec"><div style="width:32px;height:32px;flex:none;border-radius:50%;background:#241f45;color:#fff;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif">2</div><div style="font:500 16px/1.3 'Fredoka',sans-serif">They tell you when they're leaving.</div></div>
+<div style="display:flex;gap:12px;align-items:center;padding:10px 0"><div style="width:32px;height:32px;flex:none;border-radius:50%;background:#241f45;color:#fff;display:flex;align-items:center;justify-content:center;font:600 15px 'Fredoka',sans-serif">3</div><div style="font:500 16px/1.3 'Fredoka',sans-serif">You get a heads-up the moment they pull out.</div></div>
+</div>
+<div style="padding:12px 16px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 17px/1.3 'Fredoka',sans-serif">They won't see who you are or where you are.</div><div style="font:400 14px/1.35 'Fredoka',sans-serif">They see a nickname and a code. Nothing else.</div></div>
+</dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Shown the first time only. Symbol beside the privacy line: <code>eye.slash.fill</code>.</div></div>
+
+<div id="b9-create" data-screen-label="B9 Create pass" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.2 · Create pass</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="Your pass" sub="This is all the driver sees." primary="Show my pass" secondary="Cancel" close-label="Back" style="position:absolute;inset:0" hint-size="100%,100%">
+<div style="padding:12px 12px 12px 14px;display:flex;align-items:center;gap:12px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div style="width:64px;height:64px;flex:none;box-sizing:border-box;border-radius:50%;background:#fbf6e6;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;text-align:center;font:500 9px/1.2 ui-monospace,Menlo,monospace;color:#5a5578">cat<br>glyph</div><div style="flex:1;font:600 24px/1.1 'Fredoka',sans-serif">Bodega Cat</div><div style="flex:none;height:48px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;border:2.5px solid #241f45;border-radius:24px;font:600 15px 'Fredoka',sans-serif">Shuffle</div></div>
+<div style="min-height:64px;padding:10px 14px 10px 18px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:10px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div><div style="font:600 18px/1.2 'Fredoka',sans-serif">Show my first name</div><div style="font:400 14px 'Fredoka',sans-serif">Adds "Sam" under Bodega Cat</div></div><div style="width:56px;height:34px;flex:none;box-sizing:border-box;border-radius:17px;background:#e4e3ec;border:2.5px solid #241f45;padding:0 3px;display:flex;align-items:center"><div style="width:22px;height:22px;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45"></div></div></div>
+<div style="padding:12px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 17px/1.3 'Fredoka',sans-serif">Good for 20 minutes</div><div style="font:400 14px/1.35 'Fredoka',sans-serif">Then it ends on its own. Your location is never shared.</div></div>
+</dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">First name is off by default. Some drivers say yes more easily to a name.</div></div>
+
+<div id="b9-qr" data-screen-label="B9 QR badge" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.3 · QR badge, waiting</div>
+<dc-import name="WPPhone" hint-size="391px,828px">
+<div style="position:absolute;left:18px;right:18px;top:58px;display:flex;justify-content:space-between;align-items:center"><div style="height:48px;display:flex;align-items:center;font:600 17px 'Fredoka',sans-serif">Done</div><div style="height:48px;padding:0 14px;box-sizing:border-box;border-radius:24px;background:#fff;border:1.5px solid #241f45;display:flex;align-items:center;font:500 14px 'Fredoka',sans-serif">Brighter</div></div>
+<div style="position:absolute;left:14px;right:14px;top:116px;padding:18px 18px 16px;background:#fff;border:3px solid #241f45;border-radius:30px">
+<div style="font:700 34px/1.1 'Fredoka',sans-serif">Leaving soon?</div><div style="font:500 20px/1.25 'Fredoka',sans-serif">Scan to pass me your spot.</div>
+<div style="position:relative;width:296px;height:296px;margin:12px auto 0;box-sizing:border-box;border:1.5px solid #241f45;border-radius:12px;background:repeating-linear-gradient(135deg,#f0eff4 0 10px,#fff 10px 20px);display:flex;align-items:center;justify-content:center;font:500 12px ui-monospace,Menlo,monospace;color:#5a5578">QR code, 296 pt<div style="position:absolute;left:14px;top:14px;width:56px;height:56px;box-sizing:border-box;border:12px solid #241f45;border-radius:6px;background:#fff"></div><div style="position:absolute;right:14px;top:14px;width:56px;height:56px;box-sizing:border-box;border:12px solid #241f45;border-radius:6px;background:#fff"></div><div style="position:absolute;left:14px;bottom:14px;width:56px;height:56px;box-sizing:border-box;border:12px solid #241f45;border-radius:6px;background:#fff"></div></div>
+<div style="display:flex;align-items:center;gap:12px;margin-top:14px"><div style="width:56px;height:56px;flex:none;box-sizing:border-box;border-radius:50%;background:#fbf6e6;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;text-align:center;font:500 9px/1.2 ui-monospace,Menlo,monospace;color:#5a5578">cat<br>glyph</div><div style="flex:1;font:600 28px/1.1 'Fredoka',sans-serif">Bodega Cat</div><div style="flex:none;height:40px;padding:0 12px;box-sizing:border-box;display:flex;align-items:center;gap:6px;background:#ffd23f;border:2.5px solid #241f45;border-radius:20px;box-shadow:0 3px 0 #241f45;font:700 16px 'Fredoka',sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span> 12</div></div>
+<div style="display:flex;justify-content:space-between;margin-top:14px;font:500 15px 'Fredoka',sans-serif"><span>Waiting for a scan</span><span>Good for 19:44</span></div>
+<div style="display:flex;height:8px;margin-top:6px;border-radius:4px;overflow:hidden;background:#e4e3ec"><div style="width:98%;background:#241f45"></div></div>
+</div>
+<div style="position:absolute;left:18px;right:18px;bottom:36px;height:64px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#fff;border:2.5px solid #241f45;border-radius:32px;font:600 20px 'Fredoka',sans-serif">Stop waiting</div>
+</dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">White card, ink code, widest the screen allows, so it scans through glass. The screen goes to full brightness and stays awake. Karma shows the driver this is someone who helps too.</div></div>
+
+<div id="b9-armed" data-screen-label="B9 Neighbor's on it" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.4 · Neighbor's on it</div>
+<dc-import name="WPPhone" time="4:02" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="A neighbor's on it" primary="Show my pass again" primary-kind="outline" secondary="Cancel my pass" style="position:absolute;inset:0" hint-size="100%,100%">
+<div style="padding:16px 18px;background:#3ccf7a;border-radius:24px"><div style="font:500 15px 'Fredoka',sans-serif">Leaving around</div><div style="font:700 44px/1.05 'Fredoka',sans-serif">4:15 PM</div><div style="font:500 14px/1.35 'Fredoka',sans-serif;margin-top:6px">About 13 min from now</div></div>
+<div style="padding:12px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 17px/1.3 'Fredoka',sans-serif">We'll tell you the moment they pull out.</div><div style="font:400 14px/1.35 'Fredoka',sans-serif">Stay close to the spot. Keep notifications on.</div></div>
+</dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The time is the driver's own estimate, so it reads "around".</div></div>
+
+<div id="b9-headsup" data-screen-label="B9 Leaving now" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.5 · Heads-up: leaving now</div>
+<dc-import name="WPPhone" time="4:13" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="Go to the spot" primary="Say thanks" secondary="I missed it" style="position:absolute;inset:0" hint-size="100%,100%">
+<div style="padding:16px 18px;background:#3ccf7a;border-radius:24px"><div style="font:500 15px 'Fredoka',sans-serif">Your neighbor is</div><div style="font:700 44px/1.05 'Fredoka',sans-serif">Leaving now</div><div style="font:500 14px/1.35 'Fredoka',sans-serif;margin-top:6px">Sent at 4:13 PM</div></div>
+<div style="padding:12px 18px;background:#fff;border:1.5px solid #241f45;border-radius:20px"><div style="font:600 17px/1.3 'Fredoka',sans-serif">Check the signs before you park</div><div style="font:400 14px/1.35 'Fredoka',sans-serif">A passed spot still follows the curb rules.</div></div>
+</dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Arrives with a notification and a strong haptic. Say thanks gives the driver karma.</div></div>
+
+<div id="b9-thanks" data-screen-label="B9 Thanks sent" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.6 · Thanks sent</div>
+<dc-import name="WPPhone" time="4:14" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="Thanks sent." sub="Your neighbor earned 5 karma for passing the spot." primary="Park my car" primary-kind="ink" secondary="Done" style="position:absolute;inset:0" hint-size="100%,100%">
+<div style="display:flex;padding:14px 4px"><div style="padding:10px 16px;border:2.5px dashed #241f45;border-radius:16px;transform:rotate(-5deg);font:700 16px 'Fredoka',sans-serif;letter-spacing:.1em">SPOT PASSED</div></div>
+</dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">The stamp lands with one bounce. Park my car opens the token flow in B6.</div></div>
+
+<div id="b9-expired" data-screen-label="B9 Expired" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.7 · Expired</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="Your pass ended" sub="It was good for 20 minutes and no one scanned it." primary="Make a new pass" secondary="Back to the map" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import></dc-import></div>
+
+<div id="b9-cancelled" data-screen-label="B9 Cancelled" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.8 · Driver isn't leaving after all</div>
+<dc-import name="WPPhone" time="4:09" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="They're not leaving after all" sub="The driver changed their plan. Your pass is still good for 11:20." primary="Show my pass again" primary-kind="outline" secondary="Stop waiting" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import></dc-import></div>
+
+<div id="b9-unavailable" data-screen-label="B9 Unavailable" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.9 · Unavailable</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPPass" over="Spot Pass" title="Spot Pass can't connect" sub="Check your connection and try again. Nothing was sent." primary="Try again" primary-kind="ink" secondary="Back to the map" style="position:absolute;inset:0" hint-size="100%,100%"></dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Symbol above the headline: <code>wifi.slash</code>.</div></div>
+
+<div id="b9-karma" data-screen-label="B9 Karma" style="display:flex;flex-direction:column;gap:10px;width:391px;flex:none"><div style="font:600 14px 'Fredoka',sans-serif">B9.10 · Karma</div>
+<dc-import name="WPPhone" hint-size="391px,828px"><dc-import name="WPPass" over="Bodega Cat" title="Your karma" sub="Karma shows neighbors that you help. It can't be bought." primary="Done" primary-kind="ink" style="position:absolute;inset:0" hint-size="100%,100%">
+<div style="display:flex;padding:4px 0 8px"><div style="height:64px;padding:0 22px;box-sizing:border-box;display:flex;align-items:center;gap:8px;background:#ffd23f;border:2.5px solid #241f45;border-radius:32px;box-shadow:0 4px 0 #241f45;font:700 26px 'Fredoka',sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span> 12 karma</div></div>
+<div style="padding:4px 16px;background:#fff;border:1.5px solid #241f45;border-radius:20px">
+<div style="display:flex;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid #e4e3ec;font:500 16px/1.3 'Fredoka',sans-serif"><span>Passed your spot</span><span style="font-weight:700">+5</span></div>
+<div style="display:flex;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid #e4e3ec;font:500 16px/1.3 'Fredoka',sans-serif"><span>Told neighbors you were leaving</span><span style="font-weight:700">+5</span></div>
+<div style="display:flex;justify-content:space-between;gap:10px;padding:12px 0;border-bottom:1px solid #e4e3ec;font:500 16px/1.3 'Fredoka',sans-serif"><span>Posted a report</span><span style="font-weight:700">+2</span></div>
+<div style="display:flex;justify-content:space-between;gap:10px;padding:12px 0;font:500 16px/1.3 'Fredoka',sans-serif"><span>A neighbor confirmed your report</span><span style="font-weight:700">+1</span></div>
+</div>
+</dc-import></dc-import>
+<div style="font:400 13px/1.4 'Fredoka',sans-serif;color:#5a5578">Opens from any karma chip. The point values are placeholders until you confirm them.</div></div>
+
+</div></section>
+</x-dc>
+</body>
+</html>
