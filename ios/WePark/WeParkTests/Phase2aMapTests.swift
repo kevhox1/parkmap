@@ -39,11 +39,12 @@ final class Phase2aMapTests: XCTestCase {
         _ category: WePark.Category,
         days: [Int] = [],
         ranges: [(Int, Int)] = [],
-        anytime: Bool = false
+        anytime: Bool = false,
+        description: String = ""
     ) -> ParkingRule {
         let dict: [String: Any] = [
             "category": category.rawValue,
-            "description": "",
+            "description": description,
             "days": days,
             "timeRanges": ranges.map { ["start": $0.0, "end": $0.1] },
             "anytime": anytime,
@@ -57,7 +58,7 @@ final class Phase2aMapTests: XCTestCase {
         let ruleJSON = rules.map { rule -> [String: Any] in
             [
                 "category": rule.category.rawValue,
-                "description": "",
+                "description": rule.description,
                 "days": rule.days,
                 "timeRanges": rule.timeRanges.map { ["start": $0.start, "end": $0.end] },
                 "anytime": rule.anytime,
@@ -88,6 +89,21 @@ final class Phase2aMapTests: XCTestCase {
         let empty = makeSegment([])
         XCTAssertTrue(WPCurbVerdict.hasUnreadableSigns(empty))
         for goal in ParkingGoal.allCases { XCTAssertFalse(parkable(empty, goal: goal)) }
+    }
+
+    /// #193's synthetic "NO DATA" rule (restrictive-looking category, NO DATA description) is the
+    /// shared no-sign-data state: never green, and "no data" (not "no parking") in detail mode.
+    func testSyntheticNoDataRule_neverParkable_andIsNoDataInDetail() {
+        let synthetic = makeSegment([makeRule(.noParking, anytime: true, description: "NO DATA: SUPERSEDED SIGN")])
+        XCTAssertTrue(synthetic.hasNoSignData)
+        XCTAssertTrue(WPCurbVerdict.hasUnreadableSigns(synthetic))
+        for goal in ParkingGoal.allCases { XCTAssertFalse(parkable(synthetic, goal: goal)) }
+        XCTAssertEqual(
+            WPCurbVerdict.detailTag(segment: synthetic, engine: engine, from: now, until: now.addingTimeInterval(3600)),
+            .unknown
+        )
+        XCTAssertEqual(CurbLineStyleV2.kind(for: CurrentState.unknown, detailMode: false), .dont)
+        XCTAssertEqual(CurbLineStyleV2.kind(for: CurrentState.unknown, detailMode: true), .noData)
     }
 
     func testUnknownRule_neverParkable_evenWithOtherClearRules() {

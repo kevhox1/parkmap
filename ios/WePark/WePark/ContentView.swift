@@ -3038,7 +3038,9 @@ struct ContentView: View {
             // by the selectedBlock overlay at lineWidth:6 instead.
             if segment.id == selectedSegmentID { continue }
             let state = currentStateCache.value(for: segment.id, key: currentStateKey, compute: {
-                engine.currentState(for: segment, at: now)
+                AppConstants.designSystemV2Enabled
+                    ? WPCurbVerdict.currentState(segment: segment, engine: engine, at: now)
+                    : engine.currentState(for: segment, at: now)
             })
             switch state {
             case .freeComfortably:        freeComfortably.append(coords)
@@ -3056,7 +3058,9 @@ struct ContentView: View {
             let coords = seg.coordinates
             if coords.count >= 2 {
                 selectedCoords = coords
-                selectedState = engine.currentState(for: seg, at: now)
+                selectedState = AppConstants.designSystemV2Enabled
+                    ? WPCurbVerdict.currentState(segment: seg, engine: engine, at: now)
+                    : engine.currentState(for: seg, at: now)
             }
         }
 
@@ -5378,7 +5382,8 @@ struct ContentView: View {
         let span = AmbientDrivingLook.span(for: step, cruiseSpan: MapViewRepresentable.driveModeCameraSpan)
         coordinatorActions.setAmbientDrivingLook?(
             center,
-            MapViewRepresentable.driveModePitch,
+            // Design system flag on: top-down (round-2 mocks). Flag off: today's tilted look.
+            AppConstants.designSystemV2Enabled ? 0 : MapViewRepresentable.driveModePitch,
             AmbientDrivingLook.heading,
             MapViewRepresentable.altitudeForSpan(span),
             animated

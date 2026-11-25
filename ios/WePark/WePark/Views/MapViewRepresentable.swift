@@ -1288,6 +1288,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         if AppConstants.designSystemV2Enabled {
             let base = MKStandardMapConfiguration(emphasisStyle: .muted)
             base.pointOfInterestFilter = .excludingAll
+            // Flat: no 3D buildings hiding curb lines (round-2 mocks are top-down).
+            base.elevationStyle = .flat
             mapView.preferredConfiguration = base
         }
 
@@ -1498,6 +1500,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             if AppConstants.designSystemV2Enabled, active,
                let standard = target as? MKStandardMapConfiguration {
                 standard.pointOfInterestFilter = .excludingAll
+                // Ambient look (flag on, not driving): flat map. Drive Mode keeps today's.
+                if AppConstants.driveModeDefaultEnabled, !(coordinator?.parent.driveModeActive ?? false) {
+                    standard.elevationStyle = .flat
+                }
             }
             mapView.preferredConfiguration = target
         }

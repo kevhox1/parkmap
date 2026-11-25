@@ -18,14 +18,22 @@ import Foundation
 
 enum WPCurbVerdict {
 
-    /// True when the segment carries no readable sign data: no rules at all, or any rule the
-    /// tile pipeline could not classify (`UNKNOWN`). Such a curb must never draw green.
+    /// True when the segment carries no readable sign data: the shared no-sign-data state
+    /// (`Segment.hasNoSignData`: empty rules or the synthetic "NO DATA" rule, which `isFree`
+    /// already treats as never free), or any rule the tile pipeline could not classify
+    /// (`UNKNOWN`). Such a curb never draws green.
     ///
-    /// `ParkingRulesEngine.isFree` treats empty rules as "always free" and ignores `UNKNOWN`
-    /// rules; that is right for the legacy map and untouched, but for the flag-on map unsure
-    /// has to read as "don't park".
+    /// The `UNKNOWN`-category part is a flag-on-only extra: `isFree` still ignores `UNKNOWN`
+    /// rules for the live app (a separate data audit decides that), so only this gate refuses
+    /// them.
     nonisolated static func hasUnreadableSigns(_ segment: Segment) -> Bool {
-        segment.rules.isEmpty || segment.rules.contains { $0.category == .unknown }
+        segment.hasNoSignData || segment.rules.contains { $0.category == .unknown }
+    }
+
+    /// Non-goal fallback state (no window): the engine's current state, except that unreadable
+    /// signs are `.unknown` (the synthetic NO DATA rule would otherwise read as "restricted").
+    nonisolated static func currentState(segment: Segment, engine: ParkingRulesEngine, at now: Date) -> CurrentState {
+        hasUnreadableSigns(segment) ? .unknown : engine.currentState(for: segment, at: now)
     }
 
     /// Base-map green: readable signs AND nothing restricts a private car anywhere in
