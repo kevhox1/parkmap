@@ -152,6 +152,12 @@ struct SideAggregation: Equatable {
     /// no usable sign data. The label bridge then says "No sign data", not "No parking".
     /// `var` with a default so existing memberwise call sites are unchanged.
     var noSignData: Bool = false
+
+    /// True when `opportunity` is `.restricted` and every restricted curb on the side is so only
+    /// because of an UNKNOWN sign (or has no sign data). The label bridge then says "Unclear
+    /// sign: check the posted sign", never a specific restriction. `var` with a default so
+    /// existing memberwise call sites are unchanged.
+    var unclearSign: Bool = false
 }
 
 // MARK: - DrivingContextService
@@ -526,7 +532,12 @@ final class DrivingContextService {
             clause = "Metered on the right."
         } else if leftRestricted && rightRestricted {
             // Destination mode: announce all-restricted blocks (spec §4.3 meaningful difference).
-            clause = "No parking on either side."
+            // An UNKNOWN sign is the reason on either side: never claim "No parking".
+            if context.leftLabel.text == UnclearSign.headline || context.rightLabel.text == UnclearSign.headline {
+                clause = UnclearSign.spoken
+            } else {
+                clause = "No parking on either side."
+            }
         } else {
             // One restricted + one unknown, or both unknown — no announcement value.
             // Return empty string; speakContext's min-gap guard still fires but the
@@ -641,10 +652,12 @@ final class DrivingContextService {
 
         var hasMetered = false
         var qualifyingFree: [(seg: Segment, label: SafetyLabel)] = []
+        var allUnclearOrNoData = true
 
         // Steps 2–3: classify each segment.
         for seg in sideSegments {
             let label = engine.safetyLabel(for: seg, at: date)
+            if !(seg.hasNoSignData || label.text == UnclearSign.headline) { allUnclearOrNoData = false }
             switch label.severity {
             case .free:
                 // Step 3: check minimum free-stretch length via haversine.
@@ -699,7 +712,8 @@ final class DrivingContextService {
         return SideAggregation(
             opportunity: .restricted,
             earliestFreeUntilText: nil,
-            noSignData: sideSegments.allSatisfy { $0.hasNoSignData }
+            noSignData: sideSegments.allSatisfy { $0.hasNoSignData },
+            unclearSign: allUnclearOrNoData && !sideSegments.allSatisfy { $0.hasNoSignData }
         )
     }
 

@@ -33,6 +33,18 @@ enum NoSignData {
     }
 }
 
+/// An UNKNOWN-category rule is a sign the tile pipeline could not classify (carshare, Open Streets,
+/// microhub, bus-stop panel, taxi plate, "Description Not Available"). The engine treats it as a
+/// restriction during its stated days/times (all the time when it states none), so the curb is
+/// never green. Copy must not claim a specific restriction: we do not know which one it is.
+enum UnclearSign {
+    nonisolated static let headline = "Unclear sign: check the posted sign"
+    /// Short label for an upcoming (not active now) unclear-sign window.
+    nonisolated static let upcomingLabel = "Unclear sign"
+    /// Spoken, drive mode, when the restricted side(s) are restricted only by unclear signs.
+    nonisolated static let spoken = "Unclear signs here. Check the posted signs."
+}
+
 extension Segment {
     /// True when there is no usable sign data: empty rules, or the synthetic "NO DATA" rule.
     nonisolated var hasNoSignData: Bool {

@@ -101,7 +101,7 @@ nonisolated enum MyCarSheetV2Logic {
         case .noStanding: return "no standing"
         case .special: return "special rule"
         case .free: return "free parking"
-        case .unknown: return "posted rule"
+        case .unknown: return "unclear sign"
         }
     }
 
@@ -144,7 +144,10 @@ nonisolated enum MyCarSheetV2Logic {
         now: Date? = nil
     ) -> String? {
         if let rule = restriction.rule, !restriction.isUnrestricted {
-            if restriction.isActiveNow { return "Now: \(plainRule(rule))" }
+            if restriction.isActiveNow {
+                if rule.category == .unknown { return "Now: unclear sign, check the posted sign" }
+                return "Now: \(plainRule(rule))"
+            }
             // The engine already skipped suspended street-cleaning dates when it computed
             // `hours`, so name only the weekday it actually landed on ("Mon", not "Mon & Thu"
             // when Thursday is a holiday).

@@ -57,6 +57,14 @@ extension TimeRange {
 }
 
 extension ParkingRule {
+    /// Copy with every day set when the rule names none. Used for UNKNOWN rules, where "no days"
+    /// means every day (the generic "days empty = never" convention would hide the window).
+    nonisolated func withEveryDayIfUnspecified() -> ParkingRule {
+        guard days.isEmpty else { return self }
+        return ParkingRule(category: category, description: description, days: Array(0...6),
+                           timeRanges: timeRanges, anytime: anytime, arrow: arrow)
+    }
+
     /// Whether `tr` (one of this rule's ranges) is in effect at (`dayOfWeek`, `minuteOfDay`),
     /// honoring the rule's days for the anchor day and the previous day's spill past midnight.
     /// Empty `days` means every day when `emptyDaysMeansEveryDay` (the metered convention).
