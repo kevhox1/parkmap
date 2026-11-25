@@ -197,6 +197,86 @@ function parseTimeStr(s) {
   return h * 60 + min;
 }
 
+const DAY_PARSE_STATS = { unparsedFallbackAllDays: 0, allDayClauseWidened: 0, unparsedSamples: [] };
+
+// Day words -> 0=Sun..6=Sat. Full names and NYC DOT abbreviations (MON, TUES, THURS, ...).
+const DAY_TOKEN = '(MON(?:DAY)?|TUE(?:S(?:DAY)?)?|WED(?:NESDAY)?|THU(?:RS?(?:DAY)?)?|FRI(?:DAY)?|SAT(?:URDAY)?|SUN(?:DAY)?)';
+const DAY_NUM = { MON:1, TUE:2, WED:3, THU:4, FRI:5, SAT:6, SUN:0 };
+const dayNum = tok => DAY_NUM[tok.slice(0, 3)];
+
+// Parses every day phrase in an uppercase sign description into a sorted day list
+// (0=Sunday..6=Saturday). Handles ranges incl. wraparound (MON THRU FRI, FRI-SUN),
+// lists (SATURDAY & SUNDAY), WEEKDAYS/WEEKENDS, ALL DAYS / DAILY / EVERY DAY / 7 DAYS,
+// and EXCEPT <day list>. "ALL DAYS" next to explicit days unions to all seven (fail-safe).
+// Returns { days, hadDayException }.
+function parseDayPhrases(d) {
+  const set = new Set();
+  let text = d;
+  const except = new Set();
+  let hadDayException = false;
+  const exRe = new RegExp('EXCEPT\\s+' + DAY_TOKEN + '(?:\\s*(?:&|AND|,)\\s*' + DAY_TOKEN + ')*\\b', 'g');
+  text = text.replace(exRe, m => {
+    hadDayException = true;
+    (m.match(new RegExp('\\b' + DAY_TOKEN + '\\b', 'g')) || []).forEach(t => except.add(dayNum(t)));
+    return ' ';
+  });
+  const rangeRe = new RegExp('\\b' + DAY_TOKEN + '\\s*(?:THRU|THROUGH|TO|-)\\s*' + DAY_TOKEN + '\\b', 'g');
+  text = text.replace(rangeRe, (m, a, b) => {
+    let i = dayNum(a); const j = dayNum(b);
+    for (let n = 0; n < 7; n++) { set.add(i); if (i === j) break; i = (i + 1) % 7; }
+    return ' ';
+  });
+  (text.match(new RegExp('\\b' + DAY_TOKEN + '\\b', 'g')) || []).forEach(t => set.add(dayNum(t)));
+  if (/\bWEEKDAYS?\b/.test(text)) [1,2,3,4,5].forEach(x => set.add(x));
+  if (/\bWEEKENDS?\b/.test(text)) [0,6].forEach(x => set.add(x));
+  const allToken = /\bALL DAYS\b|\bDAILY\b|\bEVERY DAY\b|\b(?:7|SEVEN) DAYS\b/.test(text);
+  if (allToken) [0,1,2,3,4,5,6].forEach(x => set.add(x));
+  // Only exceptions named (EXCEPT SATURDAY): applies every other day.
+  if (set.size === 0 && except.size > 0) [0,1,2,3,4,5,6].forEach(x => set.add(x));
+  except.forEach(x => set.delete(x));
+  return { days: [...set].sort((x, y) => x - y), hadDayException };
+}
+
+// Splits a sign into per-clause (days, timeRanges) pairs when it is written days-first as
+// repeated "<DAYS> <TIMES> <DAYS> <TIMES>" ("MONDAY-FRIDAY 7PM-MIDNIGHT SATURDAY 9AM-MIDNIGHT",
+// "MON-FRI 6PM-2AM SAT & SUN ALL DAY"). Returns null for anything else (single clause, times
+// first, EXCEPT/ALL DAYS combos) so the caller keeps the fail-safe union reading.
+function splitDayClauses(d) {
+  if (/EXCEPT|ANYTIME|\bALL DAYS\b|\bDAILY\b/.test(d)) return null;
+  const T = '(\\d{1,2}(?::\\d{2})?\\s*(?:AM|PM)|MIDNIGHT|NOON)';
+  const re = new RegExp(
+    '\\b' + DAY_TOKEN + '\\s*(?:THRU|THROUGH|TO|-)\\s*' + DAY_TOKEN + '\\b' +
+    '|' + T + '[\\s-]+' + T +
+    '|\\b' + DAY_TOKEN + '\\b' +
+    '|(\\bALL DAY\\b(?!S))', 'g');
+  const groups = [];
+  let cur = null, m;
+  while ((m = re.exec(d)) !== null) {
+    if (m[1] && m[2]) { // day range
+      if (cur && (cur.times.length || cur.allDay)) { groups.push(cur); cur = null; }
+      cur = cur || { days: new Set(), times: [], allDay: false };
+      let i = dayNum(m[1]); const j = dayNum(m[2]);
+      for (let n = 0; n < 7; n++) { cur.days.add(i); if (i === j) break; i = (i + 1) % 7; }
+    } else if (m[3] && m[4]) { // time range
+      if (!cur) return null;
+      const a = parseTimeStr(m[3]), b = parseTimeStr(m[4]);
+      if (a === null || b === null) return null;
+      cur.times.push({ start: a, end: b });
+    } else if (m[5]) { // single day
+      if (cur && (cur.times.length || cur.allDay)) { groups.push(cur); cur = null; }
+      cur = cur || { days: new Set(), times: [], allDay: false };
+      cur.days.add(dayNum(m[5]));
+    } else if (m[6]) { // ALL DAY
+      if (!cur || cur.times.length) return null;
+      cur.allDay = true;
+    }
+  }
+  if (cur) groups.push(cur);
+  if (groups.length < 2) return null;
+  if (!groups.every(g => g.days.size > 0 && (g.times.length > 0 || g.allDay))) return null;
+  return groups.map(g => ({ days: [...g.days].sort((x, y) => x - y), timeRanges: g.times, anytime: false }));
+}
+
 function parseSchedule(desc, category) {
   if (!desc) return { days: [], timeRanges: [], anytime: false, arrow: null };
   const d = desc.toUpperCase();
@@ -214,44 +294,33 @@ function parseSchedule(desc, category) {
     return result;
   }
 
-  // Day ranges
-  const hasMonFri = /MON(DAY)?\s*(THRU|THROUGH|-)\s*FRI(DAY)?/i.test(d);
-  const hasMonSat = /MON(DAY)?\s*(THRU|THROUGH|-)\s*SAT(URDAY)?/i.test(d);
-
-  if (hasMonSat) result.days = [1,2,3,4,5,6];
-  else if (hasMonFri) result.days = [1,2,3,4,5];
-  else {
-    const dClean = d.replace(/EXCEPT\s+(SUNDAY|SATURDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY)/gi, '');
-    const dayMap = { MONDAY:1, TUESDAY:2, WEDNESDAY:3, THURSDAY:4, FRIDAY:5, SATURDAY:6, SUNDAY:0 };
-    for (const [name, num] of Object.entries(dayMap)) {
-      if (dClean.includes(name)) result.days.push(num);
-    }
-  }
-
-  // Exceptions
-  const exceptMatch = d.match(/EXCEPT\s+(SUNDAY|SATURDAY|MONDAY|TUESDAY|WEDNESDAY|THURSDAY|FRIDAY)/gi);
-  if (exceptMatch) {
-    const dayMap = { MONDAY:1, TUESDAY:2, WEDNESDAY:3, THURSDAY:4, FRIDAY:5, SATURDAY:6, SUNDAY:0 };
-    exceptMatch.forEach(m => {
-      const day = m.replace(/EXCEPT\s+/i, '').trim().toUpperCase();
-      if (dayMap[day] !== undefined) result.days = result.days.filter(x => x !== dayMap[day]);
-    });
-  }
-
-  // "ALL DAYS" / DAILY / EVERY DAY: the sign applies all seven days (previously fell
-  // through to the Mon-Sat default, leaving Sunday falsely free).
-  const allDaysToken = /ALL DAYS|\bDAILY\b|EVERY DAY/.test(d);
-  if (result.days.length === 0 && allDaysToken) result.days = [0,1,2,3,4,5,6];
+  // Days. Union of EVERY day phrase on the sign (see parseDayPhrases): a sign can carry
+  // several clauses ("MONDAY-FRIDAY 7PM-MIDNIGHT SATURDAY 9AM-MIDNIGHT", "7PM-7AM ALL DAYS
+  // SUNDAY 7AM-7PM"). The schedule model is one day-set + one range-list per rule, so the
+  // union is the fail-safe reading: it can over-apply a clause's window to a neighbouring
+  // clause's days (red) but never leaves a stated day uncovered (fake green).
+  const dp = parseDayPhrases(d);
+  result.days = dp.days;
 
   // Sign reclassification: a hard-restriction sign (NO_STANDING / NO_PARKING /
-  // TRUCK_LOADING / SPECIAL) that names NO day and NO exception applies EVERY day.
+  // TRUCK_LOADING / SPECIAL) that names NO day applies EVERY day.
   // Previously these (bus stops, hotel loading zones, fire zones, AVO police/fire,
   // doctor, taxi, diplomat...) fell through to the Mon-Sat default, so Sunday showed
   // green on a bus stop. With no stated time window it is "anytime".
-  const impliedAllDays = category && WINDOWED_RESTRICTION_CATEGORIES.has(category) &&
-    result.days.length === 0 &&
-    !/\b(MON|TUE|WED|THU|FRI|SAT|SUN)[A-Z]*\b|SCHOOL DAYS|EXCEPT/.test(d);
+  // SCHOOL DAYS keeps the historical Mon-Sat default (a known phrase, over-applies Saturday).
+  const isRestriction = category && WINDOWED_RESTRICTION_CATEGORIES.has(category);
+  const impliedAllDays = isRestriction && result.days.length === 0 &&
+    !dp.hadDayException && !/SCHOOL DAYS/.test(d);
   if (impliedAllDays) result.days = [0,1,2,3,4,5,6];
+
+  // Fail-safe: day words are present but nothing parsed from them. Apply every day
+  // (never none / Sunday-only) and count it.
+  if (result.days.length === 0 && !/SCHOOL DAYS/.test(d) &&
+      (new RegExp('\\b' + DAY_TOKEN + '\\b').test(d) || /\bWEEK|DAILY|EVERY|HOLIDAY/.test(d))) {
+    result.days = [0,1,2,3,4,5,6];
+    DAY_PARSE_STATS.unparsedFallbackAllDays++;
+    if (DAY_PARSE_STATS.unparsedSamples.length < 20 && !DAY_PARSE_STATS.unparsedSamples.includes(desc)) DAY_PARSE_STATS.unparsedSamples.push(desc);
+  }
 
   if (result.days.length === 0) result.days = [1,2,3,4,5,6];
 
@@ -264,7 +333,19 @@ function parseSchedule(desc, category) {
     if (start !== null && end !== null) result.timeRanges.push({ start, end });
   }
 
+  // "SATURDAY & SUNDAY ALL DAY" next to a timed weekday clause: a timed range list cannot
+  // express the all-day clause, so drop the ranges (rule applies all day on the unioned days).
+  if (isRestriction && /\bALL DAY\b(?!S)/.test(d) && result.timeRanges.length > 0 && dp.days.length > 0 && !splitDayClauses(d)) {
+    result.timeRanges = [];
+    DAY_PARSE_STATS.allDayClauseWidened++;
+  }
+
   if (impliedAllDays && result.timeRanges.length === 0) result.anytime = true;
+
+  // Multi-clause signs: keep the per-clause schedules so each clause becomes its own rule and
+  // one clause's window is never applied to another clause's days (no over-application).
+  const clauses = (isRestriction || category === 'METERED') ? splitDayClauses(d) : null;
+  if (clauses) result.clauses = clauses;
 
   return result;
 }
@@ -2458,16 +2539,18 @@ async function main() {
 
         zone.rules.forEach(r => rowsSurviving.add(r.sign));
 
-        const rules = zone.rules.map(r => ({
+        // A multi-clause sign ("MON-FRI 7PM-MIDNIGHT SAT 9AM-MIDNIGHT") emits one rule per
+        // clause (same rule shape); everything else is exactly one rule per sign.
+        const rules = zone.rules.flatMap(r => (r.schedule.clauses || [r.schedule]).map(c => ({
           category: r.category,
           description: r.sign.sign_description || '',
-          days: r.schedule.days,
-          timeRanges: r.schedule.timeRanges,
-          anytime: r.schedule.anytime,
+          days: c.days,
+          timeRanges: c.timeRanges,
+          anytime: c.anytime,
           arrow: r.schedule.arrow,
           // Optional, additive: hard-hat temporary construction regulation.
           ...(r.temporary && { temporary: true })
-        }));
+        })));
 
         const segId = `${block.street}_${block.from}_${block.to}_${block.side}_${idx}`.replace(/\s+/g, '_');
         allSegments.push({
@@ -2643,6 +2726,10 @@ async function main() {
   console.log(`   present + confident, glyph was non-committal (both/null) -- now pinned to one side: ${ARROW_STATS.narrowed}`);
   console.log(`   blockfaces with >=1 flipped sign: ${ARROW_STATS.blockFacesWithFlip.size}`);
   console.log(`   blockfaces with >=1 narrowed sign: ${ARROW_STATS.blockFacesWithNarrowed.size}`);
+  console.log('\n📅 day-parse fail-safe stats (parseSchedule calls):');
+  console.log(`   unparsed day phrase -> applied to ALL days: ${DAY_PARSE_STATS.unparsedFallbackAllDays}`);
+  console.log(`   mixed timed + "ALL DAY" clause -> widened to all-day: ${DAY_PARSE_STATS.allDayClauseWidened}`);
+  DAY_PARSE_STATS.unparsedSamples.forEach(x => console.log(`     sample: ${x}`));
   if (process.env.PREPROCESS_ARROW_STATS_JSON) {
     fs.writeFileSync(process.env.PREPROCESS_ARROW_STATS_JSON, JSON.stringify({
       classifiedSigns: ARROW_STATS.classifiedSigns,
@@ -3135,6 +3222,8 @@ if (require.main !== module) {
     // test fixture.
     classifySign,
     parseSchedule,
+    parseDayPhrases,
+    DAY_PARSE_STATS,
     isSkippedSign,
     isTemporarySign,
     normalizeNYCName,
