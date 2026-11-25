@@ -361,6 +361,13 @@ enum AppConstants {
     /// which only improve strings.
     static let addressAnchoredParkingEnabled = false
 
+    /// DARK-SHIPS `false`. The redesigned "My Car" sheet (`Views/MyCarSheetV2View.swift`): address
+    /// title, one hero status card, one reminder row, one "I'm leaving" button, signs behind a
+    /// disclosure. With it `false` the original `ParkedCarDetailView` is presented unchanged.
+    ///
+    /// Guard test: `MyCarSheetV2Tests.testFlag_defaultsFalse_andResolvesLegacy`.
+    static let myCarSheetV2Enabled = false
+
     /// UserDefaults key: set to true once the placement mode's first-use hint pill ("Drag the map
     /// to place the pin") has been shown on this install. `BackgroundNoteGate` convention (see
     /// `CurbPlacementHintGate`); naming mirrors the other `wepark_<feature>_shown` keys.
