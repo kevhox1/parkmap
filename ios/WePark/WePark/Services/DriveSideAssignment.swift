@@ -36,6 +36,11 @@ enum DriveSideConstants {
     /// perpendicular to the street, e.g. mid-turn at a corner) the previous direction on
     /// this block is kept so the chips do not flip mid-intersection.
     static let alongStreetToleranceDeg: Double = 60.0
+
+    /// On a true one-way street the legal direction is used while a reliable heading is
+    /// within this many degrees of it; beyond it the car is going the wrong way and the
+    /// sides follow the heading.
+    static let oneWayLegalToleranceDeg: Double = 90.0
 }
 
 // MARK: - Assignment
@@ -127,6 +132,43 @@ enum DriveSideAssignment {
         return (fwd, (fwd + 180).truncatingRemainder(dividingBy: 360))
     }
 
+    /// Direction-agnostic block identity: street plus the two cross streets SORTED, so the
+    /// two curbs of one block match even when the tiles list their from/to reversed
+    /// (e.g. N curb "2ND to 3RD", S curb "3RD to 2ND"). Mirrors the pipeline's
+    /// order-independent cache-key convention.
+    nonisolated static func canonicalBlockKey(street: String, from: String, to: String) -> String {
+        let (a, b) = from <= to ? (from, to) : (to, from)
+        return "\(street)|\(a)|\(b)"
+    }
+
+    nonisolated static func sameBlock(_ segment: Segment, as other: Segment) -> Bool {
+        canonicalBlockKey(street: segment.street, from: segment.fromStreet, to: segment.to)
+            == canonicalBlockKey(street: other.street, from: other.fromStreet, to: other.to)
+    }
+
+    /// The legal travel bearing when the WHOLE street is one-way: at least two distinct
+    /// curbs present, every sibling `oneway == true` with a direction, and all of their
+    /// legal bearings (compared geographically, since reversed labels flip from/to) agree
+    /// within 45 degrees. Otherwise `nil` (treat as two-way for side assignment).
+    nonisolated static func wholeStreetLegalBearing(
+        siblings: [Segment],
+        near coordinate: CLLocationCoordinate2D
+    ) -> Double? {
+        guard Set(siblings.map { $0.side }).count >= 2 else { return nil }
+        var bearings: [Double] = []
+        for seg in siblings {
+            guard seg.oneway == true, let local = localBearings(of: seg, near: coordinate) else { return nil }
+            switch seg.onewayToward {
+            case "to": bearings.append(local.forward)
+            case "from": bearings.append(local.reverse)
+            default: return nil
+            }
+        }
+        guard let first = bearings.first else { return nil }
+        guard bearings.allSatisfy({ circularDelta($0, first) <= 45 }) else { return nil }
+        return first
+    }
+
     nonisolated static func circularDelta(_ a: Double, _ b: Double) -> Double {
         let d = abs(((a - b).truncatingRemainder(dividingBy: 360) + 360).truncatingRemainder(dividingBy: 360))
         return d > 180 ? 360 - d : d
@@ -149,26 +191,29 @@ struct DriveSideTravel {
     /// has ever been known (caller then uses the cardinal fallback).
     ///
     /// - `heading`: stabilized drive heading; `nil` means unknown/unreliable.
+    /// - `siblings`: every segment of the matched block (all curbs). The tile data tags
+    ///   one-way direction PER CURB, even on some two-way streets (Bowery, E Houston, Ave A),
+    ///   so the legal direction is only used when the WHOLE street (>= 2 distinct curbs, all
+    ///   one-way, geographically agreeing) is one-way.
     nonisolated mutating func resolve(
         heading: Double?,
         segment: Segment,
+        siblings: [Segment],
         blockKey: String,
         coordinate: CLLocationCoordinate2D
     ) -> Double? {
         if let heading { lastHeading = heading }
         let local = DriveSideAssignment.localBearings(of: segment, near: coordinate)
 
-        // One-way: the legal direction wins; heading noise cannot flip sides.
-        if segment.oneway == true, let local {
-            let bearing: Double?
-            switch segment.onewayToward {
-            case "to": bearing = local.forward
-            case "from": bearing = local.reverse
-            default: bearing = nil
-            }
-            if let bearing {
-                remember(blockKey, bearing)
-                return bearing
+        // True one-way street: the legal direction wins unless a RELIABLE heading is more
+        // than 90 degrees against it (wrong-way travel: the sides follow the car, not the law).
+        if let legal = DriveSideAssignment.wholeStreetLegalBearing(siblings: siblings, near: coordinate) {
+            let agrees = heading.map {
+                DriveSideAssignment.circularDelta(legal, $0) <= DriveSideConstants.oneWayLegalToleranceDeg
+            } ?? true
+            if agrees {
+                remember(blockKey, legal)
+                return legal
             }
         }
 

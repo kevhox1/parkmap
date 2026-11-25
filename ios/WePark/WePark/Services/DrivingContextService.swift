@@ -332,10 +332,10 @@ final class DrivingContextService {
         // Step 3: Find all sides (N/S/E/W) for this block.
         // TF2-7: We now resolve cardinal side strings, not individual segments.
         let allSides = ["N", "S", "E", "W"]
+        // Direction-agnostic: the two curbs of one block may list from/to reversed.
+        let blockSiblings = segments.filter { DriveSideAssignment.sameBlock($0, as: closest) }
         let sidesPresent: [(side: String, segment: Segment)] = allSides.compactMap { s in
-            guard let seg = findSegment(
-                street: block.street, from: block.from, to: block.to, side: s, in: segments
-            ) else { return nil }
+            guard let seg = blockSiblings.first(where: { $0.side == s }) else { return nil }
             return (s, seg)
         }
 
@@ -346,9 +346,12 @@ final class DrivingContextService {
         let sideNames = sidesPresent.map { $0.side }
         var leftCardinalSide: String? = nil
         var rightCardinalSide: String? = nil
-        let blockKeyForSides = "\(block.street)|\(block.from)|\(block.to)"
+        let blockKeyForSides = DriveSideAssignment.canonicalBlockKey(
+            street: block.street, from: block.from, to: block.to
+        )
         if let travel = sideTravel.resolve(
-            heading: heading, segment: closest, blockKey: blockKeyForSides, coordinate: coordinate
+            heading: heading, segment: closest, siblings: blockSiblings,
+            blockKey: blockKeyForSides, coordinate: coordinate
         ) {
             let assigned = DriveSideAssignment.assign(sides: sideNames, travelBearing: travel)
             leftCardinalSide = assigned.left
@@ -366,9 +369,7 @@ final class DrivingContextService {
         // Pre-filter to the current block (street + from + to) so aggregation only sees
         // segments for this block, not other blocks on the same cardinal side.
         // (spec §3.5: "segments: [Segment] — all segments for the current street/from/to combination")
-        let blockSegments = segments.filter {
-            $0.street == block.street && $0.fromStreet == block.from && $0.to == block.to
-        }
+        let blockSegments = blockSiblings  // direction-agnostic block grouping (Step 3)
         let leftAgg  = leftCardinalSide.map  { DrivingContextService.aggregateSideDetail(segments: blockSegments, side: $0, engine: engine, date: date) }
             ?? SideAggregation(opportunity: .unknown, earliestFreeUntilText: nil)
         let rightAgg = rightCardinalSide.map { DrivingContextService.aggregateSideDetail(segments: blockSegments, side: $0, engine: engine, date: date) }

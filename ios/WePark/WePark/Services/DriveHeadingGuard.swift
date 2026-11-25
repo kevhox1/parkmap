@@ -146,6 +146,19 @@ struct DriveHeadingHold {
         return true
     }
 
+    /// The bearing to DISPLAY (camera + puck) this tick. While the hold is engaged the last
+    /// displayed bearing is frozen regardless of its source (street-snap or raw course EMA),
+    /// so the hold can never rotate the map by changing source. With no previous bearing
+    /// (first fixes) the candidate is used.
+    nonisolated static func displayedHeading(
+        held: Bool,
+        candidate: Double?,
+        previousDisplayed: Double?
+    ) -> Double? {
+        if held, let previousDisplayed { return previousDisplayed }
+        return candidate
+    }
+
     /// Equirectangular distance in meters (accurate to well under 1% at city scale).
     nonisolated static func distanceMeters(lat1: Double, lng1: Double, lat2: Double, lng2: Double) -> Double {
         let metersPerDegLat = 111_320.0

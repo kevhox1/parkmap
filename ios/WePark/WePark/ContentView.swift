@@ -5487,17 +5487,18 @@ struct ContentView: View {
                     courseAccuracy: locationService.driveCourseAccuracy
                 )
                 driveHeadingSource = nextSource
+                defer {
+                    #if DEBUG
+                    HeadingDiag.log("held=\(locationService.driveHeadingHeld) src=\(nextSource) spd=\(locationService.driveSpeed ?? -1) rawEMA=\(locationService.driveHeading ?? -1) eff=\(effectiveDriveHeading ?? -1)")
+                    #endif
+                }
+                let candidateHeading: Double?
                 switch nextSource {
                 case .course:
-                    effectiveDriveHeading = locationService.driveHeading
+                    candidateHeading = locationService.driveHeading
                 case .streetSnap:
-                    if locationService.driveHeadingHeld, let held = locationService.driveHeading {
-                        // Finding 10: idle at a light. GPS jitter can flip the matched segment
-                        // between two streets at an intersection, which would spin the snapped
-                        // bearing. Hold the last good heading until the car moves again.
-                        effectiveDriveHeading = held
-                    } else if let segment = service.matchedSegment {
-                        effectiveDriveHeading = DriveHeadingSnap.snappedHeading(
+                    if let segment = service.matchedSegment {
+                        candidateHeading = DriveHeadingSnap.snappedHeading(
                             segment: segment,
                             lastGoodHeading: locationService.driveHeading
                         )
@@ -5505,9 +5506,17 @@ struct ContentView: View {
                         // Defensive fallback — nextHeadingSource only returns .streetSnap
                         // when hasBlockMatch was true, so this branch is unreachable in
                         // practice; kept to avoid a force-unwrap.
-                        effectiveDriveHeading = locationService.driveHeading
+                        candidateHeading = locationService.driveHeading
                     }
                 }
+                // Finding 10: while the idle hold is engaged, freeze the last DISPLAYED bearing
+                // (whatever its source). Switching source on hold (street-snapped -> raw EMA)
+                // itself rotated the map ~35 degrees in the PR #182 QA repro.
+                effectiveDriveHeading = DriveHeadingHold.displayedHeading(
+                    held: locationService.driveHeadingHeld,
+                    candidate: candidateHeading,
+                    previousDisplayed: effectiveDriveHeading
+                )
             }
             // W8.5c-polish PR-1 (Feature A): update distance to destination.
             let clLocation = CLLocation(latitude: coord.latitude, longitude: coord.longitude)
@@ -8059,3 +8068,11 @@ nonisolated func ambientOverlayBottomPadding(
         regularsService: RegularsService(authService: previewAuthService)
     )
 }
+
+#if DEBUG
+import os
+enum HeadingDiag {
+    static let logger = Logger(subsystem: "com.wepark.app", category: "headingdiag")
+    static func log(_ m: String) { logger.notice("\(m, privacy: .public)") }
+}
+#endif
