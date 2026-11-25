@@ -36,6 +36,8 @@ enum MoreMenuRow: Equatable {
     case showAllRules
     case findMyCar
     case parkUntil
+    /// Plan a Trip (`AppConstants.planTripEnabled`): a future what-if map, not one of the "now" goals.
+    case planTrip
     case settings
 
     nonisolated var title: String {
@@ -49,6 +51,7 @@ enum MoreMenuRow: Equatable {
         case .showAllRules: return "Show all sign details"
         case .findMyCar: return "Find my car"
         case .parkUntil: return "Park until a set time"
+        case .planTrip: return "Plan a trip"
         case .settings: return "Settings"
         }
     }
@@ -64,6 +67,7 @@ enum MoreMenuRow: Equatable {
         case .showAllRules: return "Full color detail: metered, street cleaning soon, and more"
         case .findMyCar: return "Show where you parked"
         case .parkUntil: return "Pick your own time"
+        case .planTrip: return TripPlanning.plannerPrompt
         case .settings: return "Reminders, help, and app info"
         }
     }
@@ -79,6 +83,7 @@ enum MoreMenuRow: Equatable {
         case .showAllRules: return "paintpalette.fill"
         case .findMyCar: return "car.fill"
         case .parkUntil: return "clock.fill"
+        case .planTrip: return "suitcase.fill"
         case .settings: return "gearshape.fill"
         }
     }
@@ -113,7 +118,8 @@ nonisolated func moreMenuVisibleRows(
     hasParkedCar: Bool,
     fullPaletteMode: Bool,
     spotPassEnabled: Bool = false,
-    driverPassArmed: Bool = false
+    driverPassArmed: Bool = false,
+    planTripEnabled: Bool = false
 ) -> [MoreMenuRow] {
     var rows: [MoreMenuRow] = []
     if communityEnabled { rows.append(.report) }
@@ -125,6 +131,7 @@ nonisolated func moreMenuVisibleRows(
     rows.append(.showAllRules)
     if hasParkedCar { rows.append(.findMyCar) }
     if fullPaletteMode { rows.append(.parkUntil) }
+    if planTripEnabled { rows.append(.planTrip) }
     rows.append(.settings)
     return rows
 }

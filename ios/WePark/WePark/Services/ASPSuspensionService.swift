@@ -40,6 +40,10 @@ final class ASPSuspensionService {
     /// Populated from asp-2026.json on init; never mutated after that.
     private let suspensionsByDate: [String: String]   // date → reason
 
+    /// Calendar year the bundled file covers (`nil` if it failed to load). Plan a Trip uses this
+    /// to warn when a trip reaches dates the calendar does not cover yet.
+    private let coveredYear: Int?
+
     // MARK: - Init
 
     /// Loads and decodes asp-2026.json from the app bundle.
@@ -49,6 +53,7 @@ final class ASPSuspensionService {
         guard let url = Bundle.main.url(forResource: "asp-2026", withExtension: "json") else {
             print("[ASPSuspensionService] asp-2026.json not found in bundle — suspension calendar unavailable")
             suspensionsByDate = [:]
+            coveredYear = nil
             return
         }
         do {
@@ -60,10 +65,12 @@ final class ASPSuspensionService {
                 dict[entry.date] = entry.reason
             }
             suspensionsByDate = dict
+            coveredYear = calendar.year
             print("[ASPSuspensionService] loaded \(dict.count) suspension dates for \(calendar.year)")
         } catch {
             print("[ASPSuspensionService] failed to decode asp-2026.json: \(error)")
             suspensionsByDate = [:]
+            coveredYear = nil
         }
     }
 
@@ -74,6 +81,13 @@ final class ASPSuspensionService {
     func isSuspended(_ date: Date) -> Bool {
         let key = date.toETDateString()
         return suspensionsByDate[key] != nil
+    }
+
+    /// True when `date` (evaluated in ET) falls in the calendar year the bundled suspension
+    /// calendar covers. Outside it, no suspension is known, so street cleaning is assumed in effect.
+    func calendarCovers(_ date: Date) -> Bool {
+        guard let coveredYear else { return false }
+        return Calendar.easternTime.component(.year, from: date) == coveredYear
     }
 
     /// Returns the suspension reason if the given date is suspended, nil otherwise.

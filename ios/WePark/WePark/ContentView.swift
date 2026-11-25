@@ -362,6 +362,8 @@ enum ActiveSheet: Identifiable {
     /// swipe-dismiss resolve through `dismissTargetOutsideBrowseNav` / the `.sheet(item:)`
     /// `onDismiss` catch-all back to the rest state (`driveModeDefaultRestStateSheet()`).
     case moreMenu
+    /// Plan a Trip (`AppConstants.planTripEnabled`): arrival/departure picker.
+    case tripPlanner
 
     var id: String {
         switch self {
@@ -383,6 +385,7 @@ enum ActiveSheet: Identifiable {
         case .mapKeyLegend:               return "mapKeyLegend"
         case .regularsInviteRedemption(let token): return "regularsInviteRedemption-\(token.uuidString)"
         case .moreMenu:                   return "moreMenu"
+        case .tripPlanner:                return "tripPlanner"
         }
     }
 }
@@ -607,6 +610,13 @@ struct ContentView: View {
     /// AC-2's "no goal-filtered overlay render anywhere" holds because the READER is gated,
     /// not because this default is somehow flag-aware itself).
     @State private var selectedGoal: ParkingGoal = .freeOvernight
+
+    /// Plan a Trip: non-nil while a trip plan is active (`AppConstants.planTripEnabled`).
+    /// Read ONLY by the trip branch of `rebuildOverlays`, the TRIP PLAN banner, and the curb-tap
+    /// verdict. It is deliberately never copied into `parkUntilTarget`/`parkUntilMode`, which feed
+    /// the drive card and voice, and Drive Mode entry clears it (`exitTripPlan`).
+    @State private var tripPlan: TripPlan? = nil
+    @State private var tripFreeCache = OverlayClassificationCache<Bool>()
 
     /// Goals-rework §2: the user's Overnight morning end hour (6-10 AM ET, default 7),
     /// persisted. Changing it re-runs `rebuildOverlays` so the map recolors live.
@@ -2105,6 +2115,20 @@ struct ContentView: View {
         case .moreMenu:
             moreMenuSheetContent
 
+        case .tripPlanner:
+            TripPlannerSheet(
+                initialPlan: tripPlan,
+                calendarCovers: { TripPlanning.calendarCovers($0, service: aspService) },
+                onConfirm: { plan in
+                    activeSheet = dismissTargetOutsideBrowseNav
+                    tripPlan = plan
+                    rebuildOverlays(at: .nowET)
+                },
+                onCancel: { activeSheet = dismissTargetOutsideBrowseNav }
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+
         case .browseNav:
             browseNavigationSheetContent
 
@@ -2127,7 +2151,8 @@ struct ContentView: View {
                 hasParkedCar: parkPinService.parkedCar != nil,
                 fullPaletteMode: fullPaletteMode,
                 spotPassEnabled: AppConstants.spotHandoffEnabled,
-                driverPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass
+                driverPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass,
+                planTripEnabled: AppConstants.planTripEnabled
             ),
             fullPaletteMode: fullPaletteMode,
             onSelect: { row in handleMoreMenuSelection(row) },
@@ -2183,6 +2208,8 @@ struct ContentView: View {
             recenterOnCar()
         case .parkUntil:
             activeSheet = .parkUntil
+        case .planTrip:
+            activeSheet = .tripPlanner
         case .settings:
             // Same destination as Search's gear (`onSettingsTapped: { activeSheet = .settings }`).
             activeSheet = .settings
@@ -2469,7 +2496,10 @@ struct ContentView: View {
             // for the action and the backstop that keeps Report discoverable now that the
             // floating pill is gone flag-on. `nil` (no button) flag-off or community-off.
             // Declared last to match `BlockDetailView`'s property declaration order.
-            onReportBlock: blockDetailReportAction(for: segment)
+            onReportBlock: blockDetailReportAction(for: segment),
+            // Plan a Trip: the trip verdict replaces the live label while a plan is active.
+            // Declared last to match `BlockDetailView`'s property declaration order.
+            tripVerdict: tripPlan.map { TripPlanning.verdict(segment: segment, plan: $0, engine: engine) }
         )
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -2754,6 +2784,54 @@ struct ContentView: View {
         guard region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold else {
             overlayGeneration += 1
             overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
+            return
+        }
+
+        // Plan a Trip: binary green/red for [arrival, departure] with the same one free rule as
+        // every live goal. Wins over the goal/park-until branches; never touches their state.
+        if let plan = tripPlan {
+            if plan.departure <= now {
+                // Trip is over; fall back to live.
+                tripPlan = nil
+                ToastService.shared.show(message: "Trip plan ended.")
+                rebuildOverlays(at: now)
+                return
+            }
+            var freeCoords: [[CLLocationCoordinate2D]] = []
+            var notFreeCoords: [[CLLocationCoordinate2D]] = []
+            let tripKey = OverlayClassificationKey(
+                now: now, mode: .trip(arrival: plan.arrival, departure: plan.departure)
+            )
+            for segment in tileLoader.segments {
+                let coords = segment.coordinates
+                guard coords.count >= 2 else { continue }
+                if segment.id == selectedSegmentID { continue }
+                if tripFreeCache.value(for: segment.id, key: tripKey, compute: {
+                    TripPlanning.isFree(segment: segment, plan: plan, engine: engine)
+                }) {
+                    freeCoords.append(coords)
+                } else {
+                    notFreeCoords.append(coords)
+                }
+            }
+            var selectedCoords: [CLLocationCoordinate2D]? = nil
+            var selectedState: CurrentState = .unknown
+            if let seg = selectedSegment, seg.coordinates.count >= 2 {
+                selectedCoords = seg.coordinates
+                selectedState = TripPlanning.isFree(segment: seg, plan: plan, engine: engine)
+                    ? .freeComfortably : .restrictedNow
+            }
+            overlayGeneration += 1
+            overlayPayload = MapViewRepresentable.OverlayPayload(
+                freeComfortably:        freeCoords,
+                freeButRestrictionSoon: [],
+                meteredActive:          [],
+                restrictedNow:          notFreeCoords,
+                unknown:                [],
+                selectedCoords:         selectedCoords,
+                selectedState:          selectedState,
+                generation:             overlayGeneration
+            )
             return
         }
 
@@ -3795,7 +3873,15 @@ struct ContentView: View {
             // exclusive with every row above/below by construction (`goalSelectorDockVisible`
             // already excludes Drive Mode/block-select/spot-placement/any-sheet-presented).
             // Ambient-only (§0.8.7) — never rebuilt inside the escalated Cruise session.
-            if goalDockVisible {
+            if let plan = tripPlan, !driveModeActive {
+                TripPlanBanner(
+                    plan: plan,
+                    calendarCovered: TripPlanning.calendarCovers(plan, service: aspService),
+                    onEdit: { activeSheet = .tripPlanner },
+                    onExit: { exitTripPlan() }
+                )
+            }
+            if goalDockVisible, tripPlan == nil {
                 GoalSelectorView(
                     selectedGoal: selectedGoal,
                     fullPaletteMode: fullPaletteMode,
@@ -3860,7 +3946,7 @@ struct ContentView: View {
             //
             // A3 (curb-pin placement): hidden for the duration of the mode - the card is a map
             // overlay and this pill (inside the bottom safe-area inset) would sit behind/under it.
-            if parkUntilMode, let target = parkUntilTarget, !goalTilesVisible, curbPlacement == nil {
+            if parkUntilMode, let target = parkUntilTarget, !goalTilesVisible, curbPlacement == nil, tripPlan == nil {
                 if let activeGoal {
                     let content = ContentView.goalPillContent(for: activeGoal, target: target, now: lastEvaluatedAt)
                     GoalParkUntilPill(
@@ -3930,6 +4016,15 @@ struct ContentView: View {
             for: selectedGoal, from: lastEvaluatedAt, overnightMorningHour: overnightMorningHour
         )
         return ParkingGoals.windowLabel(for: selectedGoal, end: end, from: lastEvaluatedAt)
+    }
+
+    /// Plan a Trip: leaves trip mode and returns the map to the live goal/palette. `toast`
+    /// is shown when something other than the Exit button closed the plan.
+    private func exitTripPlan(toast: String? = nil) {
+        guard tripPlan != nil else { return }
+        tripPlan = nil
+        rebuildOverlays(at: .nowET)
+        if let toast { ToastService.shared.show(message: toast) }
     }
 
     /// Goals-rework §2: applies a new Overnight morning end hour and recolors live.
@@ -5270,6 +5365,9 @@ struct ContentView: View {
         pinService.setDriveModeActive(active)
 
         if active {
+            // Plan a Trip: Drive Mode is live by definition, so a future trip window must never
+            // sit beside the drive card or voice. Exit the plan first.
+            exitTripPlan(toast: "Trip plan closed. Drive Mode shows live parking.")
             // Entering Drive Mode.
             locationService.startDriveMode()
             // Option A: followPaused starts false — follow is active from the first GPS tick.

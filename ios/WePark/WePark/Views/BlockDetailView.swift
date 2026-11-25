@@ -120,6 +120,11 @@ struct BlockDetailView: View {
     /// order).
     var onReportBlock: (() -> Void)? = nil
 
+    /// Plan a Trip: non-nil only while a trip plan is active. Replaces the live safety label,
+    /// severity band and caption with the trip verdict ("Free for your whole trip" / "Not free:
+    /// ..."), labeled TRIP PLAN / not live. Declared last (memberwise-init order).
+    var tripVerdict: TripVerdict? = nil
+
     // Evaluate once at sheet-open time (stable reference time for the whole sheet).
     private let now: Date = .nowET
 
@@ -262,7 +267,8 @@ struct BlockDetailView: View {
     // MARK: - Severity band
 
     private var severityBand: some View {
-        let color = engine.currentStateColor(for: segment, at: now)
+        let color = tripVerdict.map { ($0.isFree ? CurrentState.freeComfortably : CurrentState.restrictedNow).swiftUIColor }
+            ?? engine.currentStateColor(for: segment, at: now)
         return Rectangle()
             .fill(color)
             .frame(height: 6)
@@ -311,13 +317,20 @@ struct BlockDetailView: View {
         // replaces only the TEXT below — the severity band above still reads straight off
         // `engine.currentStateColor(...)`, untouched (never a new color, §0.8.6).
         let label = engine.safetyLabel(for: segment, at: now)
-        return Text(goalGoodThroughLabel ?? label.text)
-            .font(.title.bold())
-            .foregroundStyle(.primary)
-            .fixedSize(horizontal: false, vertical: true)
-            // This is the first focusable accessibility element in the sheet
-            // per spec §3.5 and palette doc §5.1. The band above is hidden.
-            .accessibilityAddTraits(.isHeader)
+        return VStack(alignment: .leading, spacing: 4) {
+            if tripVerdict != nil {
+                Text("TRIP PLAN · not live")
+                    .font(.caption.weight(.heavy))
+                    .foregroundStyle(TripPlanStyle.accent)
+            }
+            Text(tripVerdict?.headline ?? goalGoodThroughLabel ?? label.text)
+                .font(.title.bold())
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                // This is the first focusable accessibility element in the sheet
+                // per spec §3.5 and palette doc §5.1. The band above is hidden.
+                .accessibilityAddTraits(.isHeader)
+        }
     }
 
     // MARK: - Rules list
