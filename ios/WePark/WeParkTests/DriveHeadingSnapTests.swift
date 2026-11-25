@@ -37,15 +37,17 @@ final class DriveHeadingSnapTests: XCTestCase {
     /// ≈ 90°, reverse (from) bearing ≈ 270°. Mirrors FT11DirectionTests.makeSegment.
     private func makeSegment(
         oneway: Bool? = nil,
-        onewayToward: String? = nil
+        onewayToward: String? = nil,
+        side: String = "N",
+        line: [[Double]] = [[40.0, -74.0], [40.0, -73.99]]
     ) -> Segment {
         Segment(
             id: "TEST_SEG",
             street: "TEST STREET",
             fromStreet: "FROM ST",
             to: "TO ST",
-            side: "N",
-            line: [[40.0, -74.0], [40.0, -73.99]],
+            side: side,
+            line: line,
             rules: [],
             dominantCategory: nil,
             oneway: oneway,
@@ -190,7 +192,8 @@ final class DriveHeadingSnapTests: XCTestCase {
 
     func testSnappedHeading_onewayTowardTo_returnsForwardBearing() {
         let segment = makeSegment(oneway: true, onewayToward: "to")
-        let heading = DriveHeadingSnap.snappedHeading(segment: segment, lastGoodHeading: nil)
+        let other = makeSegment(oneway: true, onewayToward: "to", side: "S")
+        let heading = DriveHeadingSnap.snappedHeading(segment: segment, siblings: [segment, other], lastGoodHeading: nil)
         XCTAssertEqual(heading, 90.0, accuracy: 1.0,
             "oneway toward 'to' should return the forward (toward_to) bearing (~90° east)")
     }
@@ -199,7 +202,8 @@ final class DriveHeadingSnapTests: XCTestCase {
 
     func testSnappedHeading_onewayTowardFrom_returnsReverseBearing() {
         let segment = makeSegment(oneway: true, onewayToward: "from")
-        let heading = DriveHeadingSnap.snappedHeading(segment: segment, lastGoodHeading: nil)
+        let other = makeSegment(oneway: true, onewayToward: "from", side: "S")
+        let heading = DriveHeadingSnap.snappedHeading(segment: segment, siblings: [segment, other], lastGoodHeading: nil)
         XCTAssertEqual(heading, 270.0, accuracy: 1.0,
             "oneway toward 'from' should return the reverse bearing (~270° west)")
     }
@@ -269,5 +273,37 @@ final class DriveHeadingSnapTests: XCTestCase {
         XCTAssertEqual(heading, forwardBearing, accuracy: 1.0,
             "lastGoodHeading of 359° should select the forward (~0°) bearing via circular distance, " +
             "not the reverse (~180°) bearing that a naive linear comparison would pick")
+    }
+
+    // MARK: - 14. Whole-street one-way rule (per-curb tags, wrong-way)
+
+    private let northLine: [[Double]] = [[40.0, -74.0], [40.001, -74.0]]
+
+    /// Bowery-style: two-way N-S street, W curb tagged southbound ("from"), E curb northbound ("to").
+    func testSnappedHeading_perCurbOneWayTags_pointsTheWayTheCarTravels() {
+        let west = makeSegment(oneway: true, onewayToward: "from", side: "W", line: northLine)
+        let east = makeSegment(oneway: true, onewayToward: "to", side: "E", line: northLine)
+        for matched in [west, east] {
+            let north = DriveHeadingSnap.snappedHeading(segment: matched, siblings: [west, east], lastGoodHeading: 10)
+            XCTAssertEqual(north, 0, accuracy: 1.0, "northbound near \(matched.side) curb must face north")
+            let south = DriveHeadingSnap.snappedHeading(segment: matched, siblings: [west, east], lastGoodHeading: 175)
+            XCTAssertEqual(south, 180, accuracy: 1.0, "southbound near \(matched.side) curb must face south")
+        }
+    }
+
+    func testSnappedHeading_trueOneWay_snapsToLegalWithin90() {
+        let a = makeSegment(oneway: true, onewayToward: "to", side: "N")
+        let b = makeSegment(oneway: true, onewayToward: "to", side: "S")
+        for last in [nil, 90.0, 20.0, 160.0] as [Double?] {
+            let h = DriveHeadingSnap.snappedHeading(segment: a, siblings: [a, b], lastGoodHeading: last)
+            XCTAssertEqual(h, 90, accuracy: 1.0, "last-good \(String(describing: last))")
+        }
+    }
+
+    func testSnappedHeading_wrongWayOnTrueOneWay_followsHeading() {
+        let a = makeSegment(oneway: true, onewayToward: "to", side: "N")
+        let b = makeSegment(oneway: true, onewayToward: "to", side: "S")
+        let h = DriveHeadingSnap.snappedHeading(segment: a, siblings: [a, b], lastGoodHeading: 270)
+        XCTAssertEqual(h, 270, accuracy: 1.0)
     }
 }

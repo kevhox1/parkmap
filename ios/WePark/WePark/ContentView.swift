@@ -5487,11 +5487,6 @@ struct ContentView: View {
                     courseAccuracy: locationService.driveCourseAccuracy
                 )
                 driveHeadingSource = nextSource
-                defer {
-                    #if DEBUG
-                    HeadingDiag.log("held=\(locationService.driveHeadingHeld) src=\(nextSource) spd=\(locationService.driveSpeed ?? -1) rawEMA=\(locationService.driveHeading ?? -1) eff=\(effectiveDriveHeading ?? -1)")
-                    #endif
-                }
                 let candidateHeading: Double?
                 switch nextSource {
                 case .course:
@@ -5500,6 +5495,7 @@ struct ContentView: View {
                     if let segment = service.matchedSegment {
                         candidateHeading = DriveHeadingSnap.snappedHeading(
                             segment: segment,
+                            siblings: service.matchedSiblings,
                             lastGoodHeading: locationService.driveHeading
                         )
                     } else {
@@ -8068,11 +8064,3 @@ nonisolated func ambientOverlayBottomPadding(
         regularsService: RegularsService(authService: previewAuthService)
     )
 }
-
-#if DEBUG
-import os
-enum HeadingDiag {
-    static let logger = Logger(subsystem: "com.wepark.app", category: "headingdiag")
-    static func log(_ m: String) { logger.notice("\(m, privacy: .public)") }
-}
-#endif

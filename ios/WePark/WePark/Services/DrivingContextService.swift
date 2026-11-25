@@ -170,6 +170,9 @@ final class DrivingContextService {
     /// input to `DriveHeadingSnap`.
     private(set) var matchedSegment: Segment?
 
+    /// All curbs of the matched block (direction-agnostic grouping), for the heading snap.
+    private(set) var matchedSiblings: [Segment] = []
+
     // MARK: - Block change detection (index.html:5905–5908)
 
     /// Block key from the most recent call. Nil on first call.
@@ -312,6 +315,7 @@ final class DrivingContextService {
         guard !segments.isEmpty else {
             currentContext = nil
             matchedSegment = nil
+            matchedSiblings = []
             return
         }
 
@@ -319,6 +323,7 @@ final class DrivingContextService {
         guard let closest = findClosestSegment(to: coordinate, in: segments) else {
             currentContext = nil
             matchedSegment = nil
+            matchedSiblings = []
             return
         }
 
@@ -334,6 +339,7 @@ final class DrivingContextService {
         let allSides = ["N", "S", "E", "W"]
         // Direction-agnostic: the two curbs of one block may list from/to reversed.
         let blockSiblings = segments.filter { DriveSideAssignment.sameBlock($0, as: closest) }
+        matchedSiblings = blockSiblings
         let sidesPresent: [(side: String, segment: Segment)] = allSides.compactMap { s in
             guard let seg = blockSiblings.first(where: { $0.side == s }) else { return nil }
             return (s, seg)
@@ -851,16 +857,6 @@ final class DrivingContextService {
             }
         }
         return closest
-    }
-
-    /// Finds the segment matching a specific block (street + from + to + side).
-    private func findSegment(street: String, from: String, to: String, side: String, in segments: [Segment]) -> Segment? {
-        segments.first {
-            $0.street == street &&
-            $0.fromStreet == from &&
-            $0.to == to &&
-            $0.side == side
-        }
     }
 
 
