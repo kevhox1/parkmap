@@ -285,6 +285,8 @@ final class TripPlanningTests: XCTestCase {
         XCTAssertFalse(TripModeGating.showsLiveASPBanner(tripActive: true))
         XCTAssertTrue(TripModeGating.showsLiveActions(tripActive: false))
         XCTAssertTrue(TripModeGating.showsLiveASPBanner(tripActive: false))
+        XCTAssertFalse(TripModeGating.showsLiveBlockContent(tripActive: true))
+        XCTAssertTrue(TripModeGating.showsLiveBlockContent(tripActive: false))
     }
 
     func testMoreMenu_reportRowHiddenWhileTripActive_restoredOnExit() {

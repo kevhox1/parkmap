@@ -272,5 +272,7 @@ nonisolated enum TripPlanning {
 /// exiting the plan restores them.
 enum TripModeGating {
     nonisolated static func showsLiveActions(tripActive: Bool) -> Bool { !tripActive }
+    /// Live-only block-sheet content: sweeper badge, temporary restrictions, live pins, chatter.
+    nonisolated static func showsLiveBlockContent(tripActive: Bool) -> Bool { !tripActive }
     nonisolated static func showsLiveASPBanner(tripActive: Bool) -> Bool { !tripActive }
 }

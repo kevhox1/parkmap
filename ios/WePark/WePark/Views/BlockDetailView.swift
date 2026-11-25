@@ -183,6 +183,9 @@ struct BlockDetailView: View {
             // 1. Severity color band — decorative, not a focusable a11y element.
             severityBand
 
+            // Plan a Trip: live-only content (sweeper badge, temporary restrictions, live pins,
+            // chatter) is hidden while a trip verdict is showing.
+            let showsLive = TripModeGating.showsLiveBlockContent(tripActive: tripVerdict != nil)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     // Header row: close button + block title
@@ -193,12 +196,12 @@ struct BlockDetailView: View {
 
                     // 3c. S13b: swept-status badge (same decision logic as ParkedCarDetailView).
                     // S13c Fix #10: shared `SweptBadgeView` (was a per-file duplicate).
-                    if AppConstants.communityEnabled, let sweptPin = liveSweeperPin {
+                    if showsLive, AppConstants.communityEnabled, let sweptPin = liveSweeperPin {
                         SweptBadgeView(pin: sweptPin, now: pinService?.nowProvider() ?? now)
                     }
 
                     // 3b. FT-15/TF2-15 (§9.2): temporary restriction banner.
-                    if let restriction = blockScopedRestriction {
+                    if showsLive, let restriction = blockScopedRestriction {
                         TemporaryRestrictionBanner(pin: restriction, now: pinService?.nowProvider() ?? now) {
                             onOpenRestriction?(restriction)
                         }
@@ -210,10 +213,12 @@ struct BlockDetailView: View {
                     }
 
                     // 4b. S13b: "LIVE ON THIS BLOCK" — ephemeral/crowd pins on this segment.
-                    liveOnThisBlockSection
+                    if showsLive {
+                        liveOnThisBlockSection
 
-                    // 4c. S13b: "BLOCK CHATTER" — segment-anchored chat thread + compose bar.
-                    blockChatterSection
+                        // 4c. S13b: "BLOCK CHATTER" — segment-anchored chat thread + compose bar.
+                        blockChatterSection
+                    }
 
                     // Plan a Trip: Park here / Report are LIVE actions; a trip plan is "not live",
                     // so both are hidden while a trip verdict is showing.
