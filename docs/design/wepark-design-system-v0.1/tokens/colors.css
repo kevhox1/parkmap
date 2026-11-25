@@ -1,0 +1,40 @@
+:root {
+  --ink: #241f45;
+  --paper: #fbf6e6;
+  --card: #ffffff;
+  --taxi: #ffd23f;
+  --park: #3ccf7a;
+  --park-text: #17803f;
+  --nopark-line: #e39a90;
+  --nopark-text: #b8322a;
+  --muted: #5a5578;
+  --hairline: #a9a7b8;
+  --plan: #6a4cff;
+  --plan-stripe: #5a3df0;
+  --detail-soon: #f2a23a;
+  --detail-metered: #5b7cfa;
+  --map-street: #e4e3ec;
+  --map-block: #f5f1e6;
+
+  --bg: var(--paper);
+  --surface: var(--card);
+  --text: var(--ink);
+  --text-muted: var(--muted);
+  --line: var(--ink);
+  --shadow: var(--ink);
+  --action: var(--taxi);
+  --on-action: var(--ink);
+}
+[data-theme="dark"] {
+  --bg: #241f45;
+  --surface: #2e2856;
+  --surface-raised: #3f3870;
+  --text: #fbf6e6;
+  --text-muted: #c3bfdc;
+  --line: #6b64a0;
+  --shadow: #100d24;
+  --park-text: #3ccf7a;
+  --nopark-text: #f5a79d;
+  --map-street: #3f3870;
+  --map-block: #2e2856;
+}

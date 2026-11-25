@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous"><link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet"><style>body{margin:0;background:#fbf6e6;font-family:'Fredoka',system-ui,sans-serif;color:#241f45}a{color:#241f45}a:hover{color:#5a5578}</style></helmet>
+<div style="max-width:1120px;margin:0 auto;padding:48px 28px 96px;display:flex;flex-direction:column;gap:56px">
+
+<header style="display:flex;flex-direction:column;gap:10px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">WEPARK DESIGN SYSTEM · V0.1</div>
+<h1 style="margin:0;font:600 44px/1.05 Fredoka,sans-serif">Stoop, straight</h1>
+<p style="margin:0;max-width:640px;font:400 17px/1.45 Fredoka,sans-serif;text-wrap:pretty">The rules, colours, type and parts every WePark screen is built from. Based on option 2a in <a href="WePark Directions.dc.html">WePark Directions</a>. Press the raised pieces on this page; they behave as they will in the app.</p>
+</header>
+
+<section data-screen-label="Rules" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px">
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">RULE 1</div><div style="font:600 22px/1.2 Fredoka,sans-serif;margin-top:6px">Facts are flat</div><p style="margin:8px 0 0;font:400 15px/1.45 Fredoka,sans-serif">Verdicts, times, addresses and sign text sit on flat surfaces in plain words.</p></div>
+<div style="padding:22px;background:#ffd23f;border:3px solid #241f45;border-radius:24px;box-shadow:0 6px 0 #241f45"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em">RULE 2</div><div style="font:600 22px/1.2 Fredoka,sans-serif;margin-top:6px">Raised means press or earned</div><p style="margin:8px 0 0;font:400 15px/1.45 Fredoka,sans-serif">A hard shadow under a piece means you can push it down, or you earned it. Nothing else is raised.</p></div>
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">RULE 3</div><div style="font:600 22px/1.2 Fredoka,sans-serif;margin-top:6px">Line style carries the answer</div><div style="display:flex;flex-direction:column;gap:10px;margin-top:14px;font:500 15px Fredoka,sans-serif"><div style="display:flex;align-items:center;gap:12px"><div style="width:90px;border-top:6px solid #3ccf7a"></div>Park</div><div style="display:flex;align-items:center;gap:12px"><div style="width:90px;border-top:6px dashed #e39a90"></div>Don't</div></div></div>
+</section>
+
+<section data-screen-label="Colour" style="display:flex;flex-direction:column;gap:18px">
+<h2 style="margin:0;font:600 28px Fredoka,sans-serif">Colour</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px">
+<div style="padding:20px;background:#fff;border:1.5px solid #241f45;border-radius:24px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578;margin-bottom:14px">LIGHT</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:14px 10px;font:500 13px/1.25 Fredoka,sans-serif">
+<div><div style="height:56px;border-radius:16px;background:#fbf6e6;border:1.5px solid #241f45"></div>Paper<div style="font-weight:400;color:#5a5578">#FBF6E6</div></div>
+<div><div style="height:56px;border-radius:16px;background:#fff;border:1.5px solid #241f45"></div>Card<div style="font-weight:400;color:#5a5578">#FFFFFF</div></div>
+<div><div style="height:56px;border-radius:16px;background:#241f45;border:1.5px solid #241f45"></div>Ink<div style="font-weight:400;color:#5a5578">#241F45</div></div>
+<div><div style="height:56px;border-radius:16px;background:#ffd23f;border:1.5px solid #241f45"></div>Taxi<div style="font-weight:400;color:#5a5578">#FFD23F</div></div>
+<div><div style="height:56px;border-radius:16px;background:#3ccf7a;border:1.5px solid #241f45"></div>Park<div style="font-weight:400;color:#5a5578">#3CCF7A</div></div>
+<div><div style="height:56px;border-radius:16px;background:#e39a90;border:1.5px solid #241f45"></div>Don't line<div style="font-weight:400;color:#5a5578">#E39A90</div></div>
+<div><div style="height:56px;border-radius:16px;background:#17803f;border:1.5px solid #241f45"></div>Park text<div style="font-weight:400;color:#5a5578">#17803F</div></div>
+<div><div style="height:56px;border-radius:16px;background:#b8322a;border:1.5px solid #241f45"></div>Don't text<div style="font-weight:400;color:#5a5578">#B8322A</div></div>
+<div><div style="height:56px;border-radius:16px;background:#5a5578;border:1.5px solid #241f45"></div>Muted text<div style="font-weight:400;color:#5a5578">#5A5578</div></div>
+<div><div style="height:56px;border-radius:16px;background:repeating-linear-gradient(135deg,#6a4cff 0 10px,#5a3df0 10px 20px);border:1.5px solid #241f45"></div>Trip plan<div style="font-weight:400;color:#5a5578">#6A4CFF</div></div>
+</div></div>
+<div style="padding:20px;background:#241f45;color:#fbf6e6;border-radius:24px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#c3bfdc;margin-bottom:14px">DARK · USED IN DRIVE MODE AND AT NIGHT</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:14px 10px;font:500 13px/1.25 Fredoka,sans-serif">
+<div><div style="height:56px;border-radius:16px;background:#241f45;border:1.5px solid #6b64a0"></div>Night<div style="font-weight:400;color:#c3bfdc">#241F45</div></div>
+<div><div style="height:56px;border-radius:16px;background:#2e2856;border:1.5px solid #6b64a0"></div>Surface<div style="font-weight:400;color:#c3bfdc">#2E2856</div></div>
+<div><div style="height:56px;border-radius:16px;background:#3f3870;border:1.5px solid #6b64a0"></div>Lifted<div style="font-weight:400;color:#c3bfdc">#3F3870</div></div>
+<div><div style="height:56px;border-radius:16px;background:#fbf6e6"></div>Text<div style="font-weight:400;color:#c3bfdc">#FBF6E6</div></div>
+<div><div style="height:56px;border-radius:16px;background:#c3bfdc"></div>Muted text<div style="font-weight:400;color:#c3bfdc">#C3BFDC</div></div>
+<div><div style="height:56px;border-radius:16px;background:#6b64a0"></div>Line<div style="font-weight:400;color:#c3bfdc">#6B64A0</div></div>
+<div><div style="height:56px;border-radius:16px;background:#100d24;border:1.5px solid #6b64a0"></div>Shadow<div style="font-weight:400;color:#c3bfdc">#100D24</div></div>
+<div><div style="height:56px;border-radius:16px;background:#ffd23f"></div>Taxi<div style="font-weight:400;color:#c3bfdc">unchanged</div></div>
+<div><div style="height:56px;border-radius:16px;background:#3ccf7a"></div>Park<div style="font-weight:400;color:#c3bfdc">unchanged</div></div>
+</div></div>
+</div>
+<p style="margin:0;max-width:720px;font:400 15px/1.45 Fredoka,sans-serif;color:#5a5578">Taxi yellow is only for things you press or earn. Green is only for "you can park". Text on yellow and green is always ink.</p>
+</section>
+
+<section data-screen-label="Type" style="display:flex;flex-direction:column;gap:18px">
+<h2 style="margin:0;font:600 28px Fredoka,sans-serif">Type</h2>
+<div style="padding:8px 22px;background:#fff;border:1.5px solid #241f45;border-radius:24px">
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0;border-bottom:1px solid #e4e3ec"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Verdict · 68 / 700<br>drive mode only</div><div style="font:700 68px/1 Fredoka,sans-serif">Park</div></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0;border-bottom:1px solid #e4e3ec"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Display · 44 / 700</div><div style="font:700 44px/1.05 Fredoka,sans-serif">Mon 9:00 AM</div></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0;border-bottom:1px solid #e4e3ec"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Title 1 · 34 / 600</div><div style="font:600 34px/1.1 Fredoka,sans-serif">7 AM tomorrow</div></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0;border-bottom:1px solid #e4e3ec"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Title 2 · 22 / 600</div><div style="font:600 22px/1.2 Fredoka,sans-serif">In front of 50 E 1st St</div></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0;border-bottom:1px solid #e4e3ec"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Headline · 18 / 600</div><div style="font:600 18px/1.25 Fredoka,sans-serif">Remind me before it changes</div></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0;border-bottom:1px solid #e4e3ec"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Body · 16 / 400</div><div style="font:400 16px/1.4 Fredoka,sans-serif">Green curbs are free from now until 7 AM tomorrow.</div></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0;border-bottom:1px solid #e4e3ec"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Callout · 14 / 500</div><div style="font:500 14px/1.35 Fredoka,sans-serif">4 days 11 h left, then street cleaning</div></div>
+<div style="display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 20px;padding:14px 0"><div style="width:150px;font:500 13px Fredoka,sans-serif;color:#5a5578">Label · 12 / 600 caps</div><div style="font:600 12px/1.2 Fredoka,sans-serif;letter-spacing:.08em">LEFT SIDE</div></div>
+</div>
+<p style="margin:0;max-width:720px;font:400 15px/1.45 Fredoka,sans-serif;color:#5a5578">One family, Fredoka. Verdicts and times never truncate: at large text sizes they wrap and the layout stacks.</p>
+</section>
+
+<section data-screen-label="Shape" style="display:flex;flex-direction:column;gap:18px">
+<h2 style="margin:0;font:600 28px Fredoka,sans-serif">Surfaces and press</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:16px;text-align:center">
+<div style="display:flex;flex-direction:column;gap:12px"><div style="height:96px;display:flex;align-items:center;justify-content:center;background:#fff;border:1.5px solid #241f45;border-radius:24px;font:600 18px Fredoka,sans-serif">Fact</div><div style="font:400 14px/1.4 Fredoka,sans-serif;color:#5a5578">Flat, 1.5px line.<br>Verdicts, rows, sheets.</div></div>
+<div style="display:flex;flex-direction:column;gap:12px"><div style="height:96px;display:flex;align-items:center;justify-content:center;background:#fbf6e6;border:2.5px solid #241f45;border-radius:24px;font:600 18px Fredoka,sans-serif">Control</div><div style="font:400 14px/1.4 Fredoka,sans-serif;color:#5a5578">Flat, 2.5px line.<br>Unchosen options, round buttons.</div></div>
+<div style="display:flex;flex-direction:column;gap:12px"><div style="height:96px;box-sizing:border-box;display:flex;align-items:center;justify-content:center;background:#ffd23f;border:3px solid #241f45;border-radius:24px;box-shadow:0 6px 0 #241f45;font:600 18px Fredoka,sans-serif;cursor:pointer;transition:transform .18s,box-shadow .18s" style-active="transform:translateY(6px);box-shadow:0 0 0 #241f45">Raised (press me)</div><div style="font:400 14px/1.4 Fredoka,sans-serif;color:#5a5578">3px line, hard shadow 3, 4 or 6px.<br>Pressing pushes it down flat.</div></div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:16px 28px;align-items:flex-end;padding:20px 22px;background:#fff;border:1.5px solid #241f45;border-radius:24px;font:500 13px Fredoka,sans-serif;color:#5a5578">
+<div style="display:flex;flex-direction:column;gap:6px;align-items:center"><div style="width:64px;height:48px;border:2.5px solid #241f45;border-radius:16px"></div>16 chip</div>
+<div style="display:flex;flex-direction:column;gap:6px;align-items:center"><div style="width:76px;height:64px;border:2.5px solid #241f45;border-radius:20px"></div>20 tile</div>
+<div style="display:flex;flex-direction:column;gap:6px;align-items:center"><div style="width:96px;height:72px;border:2.5px solid #241f45;border-radius:24px"></div>24 card</div>
+<div style="display:flex;flex-direction:column;gap:6px;align-items:center"><div style="width:110px;height:72px;border:2.5px solid #241f45;border-bottom:0;border-radius:30px 30px 0 0"></div>30 sheet top</div>
+<div style="display:flex;flex-direction:column;gap:6px;align-items:center"><div style="width:110px;height:96px;border:2.5px solid #241f45;border-left:0;border-radius:0 48px 48px 0"></div>48 side bubble</div>
+<div style="display:flex;flex-direction:column;gap:6px;align-items:center"><div style="width:140px;height:64px;border:2.5px solid #241f45;border-radius:32px"></div>Pill button</div>
+<div style="flex:1;min-width:220px;font:400 14px/1.45 Fredoka,sans-serif">Spacing steps: 4, 8, 12, 16, 20, 24, 32. Screen margin 18.<br>Touch targets: 48 minimum, 64 standard, 72 to 80 in drive mode.</div>
+</div>
+</section>
+
+<section data-screen-label="Curb lines" style="display:flex;flex-direction:column;gap:18px">
+<h2 style="margin:0;font:600 28px Fredoka,sans-serif">Curb lines</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+<div style="padding:20px 22px;background:#f5f1e6;border:1.5px solid #241f45;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">DEFAULT · TWO STATES</div><div style="display:flex;flex-direction:column;gap:14px;margin-top:16px;font:500 15px/1.3 Fredoka,sans-serif">
+<div style="display:flex;align-items:center;gap:14px"><div style="width:96px;flex:none;border-top:6px solid #3ccf7a"></div><div>Park<div style="font:400 13px Fredoka,sans-serif;color:#5a5578">Free for the whole window</div></div></div>
+<div style="display:flex;align-items:center;gap:14px"><div style="width:96px;flex:none;border-top:6px dashed #e39a90"></div><div>Don't<div style="font:400 13px Fredoka,sans-serif;color:#5a5578">Anything else, including unsure</div></div></div>
+</div></div>
+<div style="padding:20px 22px;background:#f5f1e6;border:1.5px solid #241f45;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">SHOW ALL SIGN DETAILS · FIVE STATES</div><div style="display:flex;flex-direction:column;gap:12px;margin-top:16px;font:500 15px Fredoka,sans-serif">
+<div style="display:flex;align-items:center;gap:14px"><div style="width:96px;flex:none;border-top:6px solid #3ccf7a"></div>Free</div>
+<div style="display:flex;align-items:center;gap:14px"><div style="width:96px;height:6px;flex:none;background:repeating-linear-gradient(90deg,#f2a23a 0 24px,transparent 24px 32px)"></div>Free now, changes soon</div>
+<div style="display:flex;align-items:center;gap:14px"><div style="width:96px;flex:none;border-top:6px dotted #5b7cfa"></div>Metered</div>
+<div style="display:flex;align-items:center;gap:14px"><div style="width:96px;flex:none;border-top:6px dashed #e39a90"></div>No parking or standing</div>
+<div style="display:flex;align-items:center;gap:14px"><div style="width:96px;flex:none;border-top:2px solid #a9a7b8"></div>No sign data</div>
+</div></div>
+<div style="padding:20px 22px;background:#f5f1e6;border:4px dashed #6a4cff;border-radius:24px"><div style="display:inline-flex;align-items:center;height:32px;padding:0 12px;border-radius:16px;background:repeating-linear-gradient(135deg,#6a4cff 0 10px,#5a3df0 10px 20px);color:#fff;font:600 12px Fredoka,sans-serif;letter-spacing:.08em">TRIP PLAN · NOT LIVE</div><p style="margin:14px 0 0;font:400 15px/1.45 Fredoka,sans-serif">While planning a trip the map gets a violet dashed frame and this striped tag stays on screen with the visit dates. Park here, Report and Spot Pass are hidden.</p></div>
+</div>
+</section>
+
+<section data-screen-label="Components" style="display:flex;flex-direction:column;gap:18px">
+<h2 style="margin:0;font:600 28px Fredoka,sans-serif">Parts</h2>
+
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px;display:flex;flex-direction:column;gap:16px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">BUTTONS</div>
+<div style="display:flex;flex-wrap:wrap;gap:20px;align-items:center">
+<div style="height:80px;padding:0 44px;box-sizing:border-box;display:flex;align-items:center;border-radius:40px;background:#ffd23f;border:3px solid #241f45;box-shadow:0 6px 0 #241f45;font:700 28px Fredoka,sans-serif;cursor:pointer;transition:transform .18s,box-shadow .18s" style-active="transform:translateY(6px);box-shadow:0 0 0 #241f45">Park here</div>
+<div style="height:64px;padding:0 36px;box-sizing:border-box;display:flex;align-items:center;border-radius:32px;background:#ffd23f;border:2.5px solid #241f45;box-shadow:0 4px 0 #241f45;font:600 20px Fredoka,sans-serif;cursor:pointer;transition:transform .18s,box-shadow .18s" style-active="transform:translateY(4px);box-shadow:0 0 0 #241f45">Pass your spot</div>
+<div style="height:64px;padding:0 36px;display:flex;align-items:center;border-radius:32px;background:#241f45;color:#ffd23f;font:600 22px Fredoka,sans-serif;cursor:pointer" style-active="background:#3f3870">Start driving</div>
+<div style="height:64px;padding:0 36px;display:flex;align-items:center;border-radius:32px;background:#241f45;color:#fff;font:600 22px Fredoka,sans-serif;cursor:pointer" style-active="background:#3f3870">I left</div>
+<div style="height:56px;padding:0 26px;box-sizing:border-box;display:flex;align-items:center;border-radius:28px;background:#fff;border:2.5px solid #241f45;font:600 17px Fredoka,sans-serif;cursor:pointer" style-active="background:#fbf6e6">Not now</div>
+<div style="width:72px;height:72px;box-sizing:border-box;border-radius:50%;background:#fff;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:600 14px Fredoka,sans-serif;cursor:pointer" style-active="background:#fbf6e6">Report</div>
+<div style="height:48px;display:flex;align-items:center;font:600 15px Fredoka,sans-serif;text-decoration:underline;cursor:pointer">See the 2 signs on this curb</div>
+<div style="height:64px;padding:0 36px;box-sizing:border-box;display:flex;align-items:center;border-radius:32px;background:#e4e3ec;color:#5a5578;border:2.5px solid #a9a7b8;font:600 20px Fredoka,sans-serif">Disabled</div>
+</div>
+<p style="margin:0;font:400 14px/1.45 Fredoka,sans-serif;color:#5a5578">Yellow raised: the one main action, and anything neighborly. Ink pill: start or end a state. White outline: secondary. One yellow button per screen.</p>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px">
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px;display:flex;flex-direction:column;gap:16px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">GOAL TILES · TAP TO CHOOSE</div>
+<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;text-align:center;padding-top:4px">
+<sc-for list="{{ goals }}" as="g" hint-placeholder-count="3">
+<div onClick="{{ g.pick }}" style="{{ g.style }}"><div style="font:600 15px Fredoka,sans-serif">{{ g.name }}</div><div style="font:400 13px Fredoka,sans-serif;margin-top:3px">{{ g.until }}</div></div>
+</sc-for>
+</div>
+<div><div style="font:500 13px Fredoka,sans-serif">Green curbs are free from now until</div><div style="font:600 34px/1.1 Fredoka,sans-serif">{{ goalEnd }}</div></div>
+</div>
+
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px;display:flex;flex-direction:column;gap:16px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">CHIPS, SWITCH, STICKERS</div>
+<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center">
+<div style="height:48px;padding:0 16px;display:flex;align-items:center;background:#fff;border:1.5px solid #241f45;border-radius:24px;font:500 14px Fredoka,sans-serif">Street cleaning in effect today</div>
+<div style="height:48px;padding:0 16px;box-sizing:border-box;display:flex;align-items:center;background:#241f45;color:#fff;border-radius:24px;font:600 14px Fredoka,sans-serif">1 hr before</div>
+<div style="height:48px;padding:0 16px;box-sizing:border-box;display:flex;align-items:center;border:2px solid #241f45;border-radius:24px;font:500 14px Fredoka,sans-serif">Night before</div>
+<div onClick="{{ toggle }}" style="width:64px;height:48px;display:flex;align-items:center;cursor:pointer">{{ switchEl }}</div>
+</div>
+<div style="display:flex;flex-wrap:wrap;gap:18px;align-items:center;padding-top:6px">
+<div style="height:48px;padding:0 14px;box-sizing:border-box;display:flex;align-items:center;gap:6px;background:#ffd23f;border:2.5px solid #241f45;border-radius:24px;box-shadow:0 3px 0 #241f45;font:700 15px Fredoka,sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span>12</div>
+<div style="padding:6px 12px;background:#fff;border:2.5px solid #241f45;border-radius:16px;box-shadow:0 3px 0 #241f45;transform:rotate(6deg);font:700 14px Fredoka,sans-serif"><span style="color:#b8322a">♥&#xFE0E;</span> +5 karma</div>
+<div style="padding:10px 16px;border:2.5px dashed #241f45;border-radius:16px;transform:rotate(-5deg);font:700 14px Fredoka,sans-serif;letter-spacing:.1em">SPOT PASSED</div>
+<div style="width:56px;height:56px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:3px solid #241f45;box-shadow:0 4px 0 #241f45;display:flex;align-items:center;justify-content:center"><div style="width:26px;height:16px;border-radius:6px 6px 3px 3px;background:#241f45"></div></div>
+</div>
+<p style="margin:0;font:400 14px/1.45 Fredoka,sans-serif;color:#5a5578">Info chips are flat. Karma, earned stickers and the car token are raised. Stickers tilt 6°.</p>
+</div>
+</div>
+
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px;display:flex;flex-direction:column;gap:16px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">VERDICT BLOCKS · CURB DETAIL AND MY CAR</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px">
+<div style="padding:16px 18px;background:#3ccf7a;border-radius:24px"><div style="font:500 15px Fredoka,sans-serif">Free to stay until</div><div style="font:700 36px/1.05 Fredoka,sans-serif">Mon 9:00 AM</div><div style="display:flex;height:10px;margin-top:10px;border-radius:5px;overflow:hidden;background:#241f45"><div style="flex:9;background:#fff"></div><div style="flex:1"></div></div><div style="font:500 14px Fredoka,sans-serif;margin-top:8px">4 days 11 h left, then street cleaning</div></div>
+<div style="padding:16px 18px;border:3px dashed #e39a90;border-radius:24px"><div style="font:500 15px Fredoka,sans-serif;color:#b8322a">Right now</div><div style="font:700 36px/1.05 Fredoka,sans-serif">No parking</div><div style="font:500 14px/1.35 Fredoka,sans-serif;margin-top:10px">Street cleaning until 10:30 AM.<br>Free again after that.</div></div>
+<div style="padding:16px 18px;border:2px solid #a9a7b8;border-radius:24px"><div style="font:500 15px Fredoka,sans-serif;color:#5a5578">We don't know</div><div style="font:700 36px/1.05 Fredoka,sans-serif">No sign data</div><div style="font:500 14px/1.35 Fredoka,sans-serif;margin-top:10px">Read the posted signs on this curb before you park.</div></div>
+<div style="padding:16px 18px;border:4px dashed #6a4cff;border-radius:24px"><div style="display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:14px;background:repeating-linear-gradient(135deg,#6a4cff 0 10px,#5a3df0 10px 20px);color:#fff;font:600 11px Fredoka,sans-serif;letter-spacing:.08em">TRIP PLAN · NOT LIVE</div><div style="font:700 30px/1.08 Fredoka,sans-serif;margin-top:8px">Free for your whole visit</div><div style="font:500 14px Fredoka,sans-serif;margin-top:8px">Sat 10 AM to Sun 6 PM. Rules can change.</div></div>
+</div>
+</div>
+
+<div style="padding:22px;background:#241f45;color:#fbf6e6;border-radius:24px;display:flex;flex-direction:column;gap:16px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#c3bfdc">DRIVE SIDE BUBBLES · THE BIGGER SIDE IS WHERE YOU PARK</div>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;color:#241f45">
+<div style="position:relative;height:132px;background:#2e2856;border-radius:16px;overflow:hidden"><div style="position:absolute;left:0;top:10px;width:56%;height:112px;box-sizing:border-box;padding:12px 14px;background:#3ccf7a;border-radius:0 32px 32px 0"><div style="font:600 10px Fredoka,sans-serif;letter-spacing:.08em">LEFT SIDE</div><div style="font:700 34px/1 Fredoka,sans-serif;margin-top:2px">Park</div><div style="font:600 13px/1.2 Fredoka,sans-serif;margin-top:4px">Free until<br>Mon 9 AM</div></div><div style="position:absolute;right:0;top:30px;width:38%;height:80px;box-sizing:border-box;padding:10px 10px;background:#3f3870;border:2.5px dashed #e39a90;border-right:0;border-radius:24px 0 0 24px;color:#fff;text-align:right"><div style="font:600 10px Fredoka,sans-serif;letter-spacing:.08em">RIGHT SIDE</div><div style="font:700 14px/1.1 Fredoka,sans-serif;margin-top:4px">No parking</div><div style="font:500 11px Fredoka,sans-serif;margin-top:3px">Cleaning 7 AM</div></div></div>
+<div style="position:relative;height:132px;background:#2e2856;border-radius:16px;overflow:hidden"><div style="position:absolute;left:0;top:10px;width:47%;height:112px;box-sizing:border-box;padding:12px 14px;background:#3ccf7a;border-radius:0 32px 32px 0"><div style="font:600 10px Fredoka,sans-serif;letter-spacing:.08em">LEFT SIDE</div><div style="font:700 34px/1 Fredoka,sans-serif;margin-top:2px">Park</div><div style="font:600 13px/1.2 Fredoka,sans-serif;margin-top:4px">Free until<br>Mon 9 AM</div></div><div style="position:absolute;right:0;top:10px;width:47%;height:112px;box-sizing:border-box;padding:12px 14px;background:#3ccf7a;border-radius:32px 0 0 32px;text-align:right"><div style="font:600 10px Fredoka,sans-serif;letter-spacing:.08em">RIGHT SIDE</div><div style="font:700 34px/1 Fredoka,sans-serif;margin-top:2px">Park</div><div style="font:600 13px/1.2 Fredoka,sans-serif;margin-top:4px">Free until<br>Fri 11 AM</div></div></div>
+<div style="position:relative;height:132px;background:#2e2856;border-radius:16px;overflow:hidden;color:#fff"><div style="position:absolute;left:0;top:26px;width:47%;height:80px;box-sizing:border-box;padding:10px 12px;background:#3f3870;border:2.5px dashed #e39a90;border-left:0;border-radius:0 24px 24px 0"><div style="font:600 10px Fredoka,sans-serif;letter-spacing:.08em">LEFT SIDE</div><div style="font:700 14px/1.1 Fredoka,sans-serif;margin-top:4px">No parking</div><div style="font:500 11px Fredoka,sans-serif;margin-top:3px">Metered until 10 PM</div></div><div style="position:absolute;right:0;top:26px;width:47%;height:80px;box-sizing:border-box;padding:10px 12px;background:#3f3870;border:2.5px dashed #e39a90;border-right:0;border-radius:24px 0 0 24px;text-align:right"><div style="font:600 10px Fredoka,sans-serif;letter-spacing:.08em">RIGHT SIDE</div><div style="font:700 14px/1.1 Fredoka,sans-serif;margin-top:4px">No parking</div><div style="font:500 11px Fredoka,sans-serif;margin-top:3px">No standing</div></div></div>
+</div>
+<p style="margin:0;font:400 14px/1.45 Fredoka,sans-serif;color:#c3bfdc">Shown small. In the app the park bubble is at least 210 × 228 with a 68pt verdict. Voice says the same words.</p>
+</div>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:16px">
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px;display:flex;flex-direction:column;gap:14px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">ROWS · SETTINGS, MORE, SIGN LIST</div>
+<div style="border:1.5px solid #241f45;border-radius:20px;overflow:hidden">
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #e4e3ec"><div><div style="font:600 16px Fredoka,sans-serif">Plan a trip</div><div style="font:400 13px Fredoka,sans-serif;color:#5a5578">See where you can park for a visit</div></div><div style="font:600 18px Fredoka,sans-serif">›</div></div>
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:12px;border-bottom:1px solid #e4e3ec"><div><div style="font:600 16px Fredoka,sans-serif">Show all sign details</div><div style="font:400 13px Fredoka,sans-serif;color:#5a5578">Meters, changes soon, and more</div></div><div style="width:56px;height:34px;flex:none;box-sizing:border-box;border-radius:17px;background:#e4e3ec;border:2.5px solid #241f45;display:flex;align-items:center;padding:0 3px"><div style="width:22px;height:22px;border-radius:50%;background:#fff;border:2.5px solid #241f45;box-sizing:border-box"></div></div></div>
+<div style="min-height:60px;padding:8px 16px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:12px"><div><div style="font:600 16px Fredoka,sans-serif">No parking Mon and Thu, 9 to 10:30 AM</div><div style="font:400 13px Fredoka,sans-serif;color:#5a5578">Posted sign · street cleaning</div></div></div>
+</div>
+</div>
+<div style="padding:22px;background:#e4e3ec;border:1.5px solid #241f45;border-radius:24px;display:flex;flex-direction:column;gap:14px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">MAP MARKERS</div>
+<div style="display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end;font:500 13px Fredoka,sans-serif;text-align:center">
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:22px;height:22px;box-sizing:border-box;border-radius:50%;background:#241f45;border:4px solid #fff;box-shadow:0 0 0 1.5px #241f45"></div>You</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:56px;height:56px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:3px solid #241f45;box-shadow:0 4px 0 #241f45;display:flex;align-items:center;justify-content:center"><div style="width:26px;height:16px;border-radius:6px 6px 3px 3px;background:#241f45"></div></div>Car token<br>(drag to park)</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:40px;height:40px;box-sizing:border-box;border-radius:50%;background:#ffd23f;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center"><div style="width:18px;height:11px;border-radius:4px 4px 2px 2px;background:#241f45"></div></div>Parked car<br>(flat)</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:44px;height:44px;box-sizing:border-box;border-radius:14px;background:#fff;border:2.5px solid #241f45;display:flex;align-items:center;justify-content:center;font:600 9px Fredoka,sans-serif;color:#5a5578">symbol</div>Neighbor report</div>
+<div style="display:flex;flex-direction:column;align-items:center;gap:8px"><div style="width:44px;height:44px;box-sizing:border-box;border-radius:14px;background:#ffd23f;border:2.5px solid #241f45;box-shadow:0 3px 0 #241f45;display:flex;align-items:center;justify-content:center;font:600 9px Fredoka,sans-serif">symbol</div>Leaving soon</div>
+</div>
+<p style="margin:0;font:400 14px/1.45 Fredoka,sans-serif;color:#5a5578">Reports are rounded squares, people and cars are circles. A "leaving soon" pin is raised because it is an offer you can act on. Symbols will be SF Symbols Rounded.</p>
+</div>
+</div>
+</section>
+
+<section data-screen-label="Outside the app" style="display:flex;flex-direction:column;gap:18px">
+<h2 style="margin:0;font:600 28px Fredoka,sans-serif">Outside the app</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px">
+<div style="display:flex;flex-direction:column;gap:10px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">LOCK SCREEN COUNTDOWN</div><div style="display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:96px;padding:12px 14px 12px 16px;box-sizing:border-box;background:#000;border-radius:26px;color:#fff"><div style="display:flex;align-items:center;gap:12px"><div style="width:48px;height:48px;flex:none;border-radius:50%;background:#ffd23f;display:flex;align-items:center;justify-content:center"><div style="width:22px;height:14px;border-radius:5px 5px 3px 3px;background:#241f45"></div></div><div><div style="font:700 30px/1 Fredoka,sans-serif">9:42</div><div style="font:400 13px Fredoka,sans-serif">Bodega Cat is waiting</div></div></div><div style="height:56px;padding:0 18px;display:flex;align-items:center;background:#ffd23f;color:#241f45;border-radius:28px;font:600 17px Fredoka,sans-serif;white-space:nowrap">Leaving now</div></div></div>
+<div style="display:flex;flex-direction:column;gap:10px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">DYNAMIC ISLAND</div><div style="display:flex;align-items:center;min-height:96px"><div style="display:flex;align-items:center;justify-content:space-between;width:230px;height:38px;padding:0 12px 0 8px;box-sizing:border-box;background:#000;border-radius:19px"><div style="width:24px;height:24px;border-radius:50%;background:#ffd23f;display:flex;align-items:center;justify-content:center"><div style="width:11px;height:7px;border-radius:2px;background:#241f45"></div></div><div style="font:600 15px Fredoka,sans-serif;color:#ffd23f">9:42</div></div></div></div>
+<div style="display:flex;flex-direction:column;gap:10px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">NOTIFICATION WITH ACTIONS</div><div style="padding:14px 16px;background:#fff;border:1px solid #e4e3ec;border-radius:22px"><div style="display:flex;justify-content:space-between;font:400 13px system-ui,sans-serif;color:#5a5578"><span>WePark</span><span>now</span></div><div style="font:600 15px system-ui,sans-serif;margin-top:2px">Move your car by 9:00 AM tomorrow</div><div style="font:400 15px/1.3 system-ui,sans-serif">Street cleaning on E 1st St, north side.</div><div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:12px"><div style="height:44px;padding:0 16px;display:flex;align-items:center;border-radius:22px;background:#f0eff4;font:600 14px system-ui,sans-serif">Walk there</div><div style="height:44px;padding:0 16px;display:flex;align-items:center;border-radius:22px;background:#f0eff4;font:600 14px system-ui,sans-serif">Remind me at 8 AM</div></div></div></div>
+</div>
+<p style="margin:0;max-width:720px;font:400 15px/1.45 Fredoka,sans-serif;color:#5a5578">iOS draws notifications in its own type, so there the identity is the wording: the deadline first, then the reason. The App Clip and the getwepark.com/p page use the same parts as the app and will be designed with the Spot Pass flow.</p>
+</section>
+
+<section data-screen-label="Voice" style="display:flex;flex-direction:column;gap:18px">
+<h2 style="margin:0;font:600 28px Fredoka,sans-serif">Wording</h2>
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:16px">
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">FACTS · PLAIN, WITH THE END TIME</div><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;font:500 16px/1.35 Fredoka,sans-serif"><div>Free until Mon 9:00 AM</div><div>No parking. Street cleaning at 7 AM.</div><div>From now until 7 AM tomorrow</div><div>In front of 50 E 1st St, north side</div></div></div>
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">ACTIONS · A VERB, YOUR WORDS</div><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;font:500 16px/1.35 Fredoka,sans-serif"><div>Park here</div><div>I left</div><div>Pass your spot</div><div>Walk there</div></div></div>
+<div style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">NEIGHBORS · WARM IS FINE HERE</div><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;font:500 16px/1.35 Fredoka,sans-serif"><div>Thanks, neighbor.</div><div>Bodega Cat is waiting for your spot.</div><div>You just passed a spot.</div><div>It's a courtesy, not a promise.</div></div></div>
+<div style="padding:22px;border:3px dashed #e39a90;border-radius:24px"><div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#b8322a">NOT IN FACTS</div><div style="display:flex;flex-direction:column;gap:8px;margin-top:12px;font:500 16px/1.35 Fredoka,sans-serif"><div>Yes! · Nope · You're good</div><div>Exclamation marks</div><div>"Tonight" without a clock time</div><div>Emoji</div></div></div>
+</div>
+</section>
+
+<section data-screen-label="Open decisions" style="padding:22px;background:#fff;border:1.5px solid #241f45;border-radius:24px">
+<div style="font:600 12px Fredoka,sans-serif;letter-spacing:.08em;color:#5a5578">STILL OPEN</div>
+<ul style="margin:10px 0 0;padding-left:20px;font:400 15px/1.6 Fredoka,sans-serif">
+<li>Icons: none drawn yet. Proposed: SF Symbols Rounded, Semibold. Boxes marked "symbol" are placeholders.</li>
+<li>Logo and app icon: none provided, so none shown.</li>
+<li>Map tint: Apple's map can be muted but not fully recoloured, so the cream and lavender map in the mocks is an approximation.</li>
+<li>Detail-mode colours (amber, blue) are new and untested against the real map.</li>
+</ul>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { goal: 1, on: true };
+  renderVals() {
+    const data = [
+      { name: 'A few hours', until: 'until 1:11 AM', end: '1:11 AM tonight' },
+      { name: 'Overnight', until: 'until 7 AM', end: '7 AM tomorrow' },
+      { name: 'For days', until: 'until Wed 12/2', end: 'Wed, Dec 2' },
+    ];
+    const base = { height: 76, boxSizing: 'border-box', borderRadius: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'transform .18s, box-shadow .18s, background .18s' };
+    const goals = data.map((g, i) => ({
+      ...g,
+      pick: () => this.setState({ goal: i }),
+      style: i === this.state.goal
+        ? { ...base, background: '#ffd23f', border: '2.5px solid #241f45', boxShadow: '0 4px 0 #241f45', transform: 'translateY(-4px)' }
+        : { ...base, background: '#fbf6e6', border: '2px solid #241f45', boxShadow: '0 0 0 #241f45' },
+    }));
+    const on = this.state.on;
+    const h = React.createElement;
+    const switchEl = h('div', { style: { width: 56, height: 34, boxSizing: 'border-box', borderRadius: 17, background: on ? '#3ccf7a' : '#e4e3ec', border: '2.5px solid #241f45', padding: '0 3px', display: 'flex', alignItems: 'center', transition: 'background .18s' } },
+      h('div', { style: { width: 22, height: 22, boxSizing: 'border-box', borderRadius: '50%', background: '#fff', border: '2.5px solid #241f45', transform: on ? 'translateX(23px)' : 'translateX(0)', transition: 'transform .18s' } }));
+    return { goals, goalEnd: data[this.state.goal].end, toggle: () => this.setState(s => ({ on: !s.on })), switchEl };
+  }
+}
+</script>
+</body>
+</html>

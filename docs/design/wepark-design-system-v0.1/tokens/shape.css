@@ -1,0 +1,13 @@
+:root {
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px; --space-6: 24px; --space-8: 32px;
+  --margin-screen: 18px;
+  --radius-chip: 16px; --radius-tile: 20px; --radius-card: 24px; --radius-sheet: 30px; --radius-bubble: 48px; --radius-pill: 999px;
+  --border-fact: 1.5px solid var(--line);
+  --border-control: 2.5px solid var(--line);
+  --border-raised: 3px solid var(--line);
+  --raise-sm: 0 3px 0 var(--shadow);
+  --raise-md: 0 4px 0 var(--shadow);
+  --raise-lg: 0 6px 0 var(--shadow);
+  --target-min: 48px; --target-std: 64px; --target-drive: 80px;
+  --press-ms: 180ms;
+}
