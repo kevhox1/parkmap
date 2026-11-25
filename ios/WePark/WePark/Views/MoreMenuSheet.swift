@@ -125,8 +125,10 @@ nonisolated func moreMenuVisibleRows(
     var rows: [MoreMenuRow] = []
     // Report is a live action; hidden while a (not-live) trip plan is active.
     if communityEnabled && TripModeGating.showsLiveActions(tripActive: tripActive) { rows.append(.report) }
-    if spotPassEnabled { rows.append(.spotPass) }
-    if spotPassEnabled && driverPassArmed { rows.append(.yourSpotPass) }
+    // Spot Pass is a live-parking flow; hidden while a trip plan is active.
+    let spotPassVisible = spotPassEnabled && TripModeGating.showsSpotPass(tripActive: tripActive)
+    if spotPassVisible { rows.append(.spotPass) }
+    if spotPassVisible && driverPassArmed { rows.append(.yourSpotPass) }
     if onboardingReplayAvailable { rows.append(.howWeParkWorks) }
     rows.append(.mapKey)
     rows.append(.parking101)

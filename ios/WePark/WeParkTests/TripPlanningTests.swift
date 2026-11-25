@@ -177,7 +177,11 @@ final class TripPlanningTests: XCTestCase {
 
     func testBannerLine_notLiveAndExplicitWindow() {
         let plan = TripPlan(arrival: et(2026, 11, 28, 10), departure: et(2026, 11, 29, 18))
-        XCTAssertEqual(TripPlanning.bannerLine(for: plan), "Sat 11/28 10:00 AM → Sun 11/29 6:00 PM · not live")
+        XCTAssertEqual(TripPlanning.windowLabel(for: plan), "Sat 11/28 10:00 AM → Sun 11/29 6:00 PM")
+        XCTAssertEqual(
+            TripPlanning.bannerLine(for: plan),
+            "Sat\u{00A0}11/28\u{00A0}10:00\u{00A0}AM →\u{00A0}Sun\u{00A0}11/29\u{00A0}6:00\u{00A0}PM · not live"
+        )
     }
 
     func testCaveatCopy() {
@@ -303,5 +307,57 @@ final class TripPlanningTests: XCTestCase {
         XCTAssertFalse(rows(tripActive: true).contains(.report))
         XCTAssertTrue(rows(tripActive: false).contains(.report))
         XCTAssertTrue(rows(tripActive: true).contains(.planTrip))
+    }
+
+    // MARK: - Trip-mode live gating (Spot Pass, Report pill, deep links)
+
+    func testSpotPassRows_truthTable() {
+        func rows(spotPass: Bool, armed: Bool, trip: Bool) -> [MoreMenuRow] {
+            moreMenuVisibleRows(
+                communityEnabled: true, onboardingReplayAvailable: false, hasParkedCar: false,
+                fullPaletteMode: false, spotPassEnabled: spotPass, driverPassArmed: armed,
+                planTripEnabled: true, tripActive: trip
+            )
+        }
+        for spotPass in [false, true] {
+            for armed in [false, true] {
+                for trip in [false, true] {
+                    let r = rows(spotPass: spotPass, armed: armed, trip: trip)
+                    XCTAssertEqual(r.contains(.spotPass), spotPass && !trip)
+                    XCTAssertEqual(r.contains(.yourSpotPass), spotPass && armed && !trip)
+                }
+            }
+        }
+        XCTAssertFalse(TripModeGating.showsSpotPass(tripActive: true))
+        XCTAssertTrue(TripModeGating.showsSpotPass(tripActive: false))
+    }
+
+    func testFloatingReportPill_truthTable() {
+        for chrome in [false, true] {
+            for driveDefault in [false, true] {
+                for trip in [false, true] {
+                    XCTAssertEqual(
+                        ContentView.communityMapFloatingChromeVisible(
+                            chromeVisible: chrome, driveModeDefaultEnabled: driveDefault, tripActive: trip
+                        ),
+                        chrome && !driveDefault && !trip
+                    )
+                }
+            }
+        }
+        XCTAssertFalse(TripModeGating.showsReportPill(tripActive: true))
+        XCTAssertTrue(TripModeGating.showsReportPill(tripActive: false))
+        XCTAssertEqual(TripModeGating.planClosedToast, "Trip plan closed")
+    }
+
+    func testBannerLine_timesNeverBreakMidTime() {
+        let plan = TripPlan(arrival: et(2026, 11, 24, 20, 28), departure: et(2026, 11, 25, 9))
+        let line = TripPlanning.bannerLine(for: plan)
+        XCTAssertTrue(line.contains("8:28\u{00A0}PM"))
+        XCTAssertTrue(line.contains("9:00\u{00A0}AM"))
+        XCTAssertFalse(line.contains("8:28 PM"))
+        // The only plain space before " · not live" is the one ahead of the arrow.
+        let window = TripPlanning.displayWindowLabel(for: plan)
+        XCTAssertEqual(window.filter { $0 == " " }.count, 1)
     }
 }

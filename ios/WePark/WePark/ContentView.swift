@@ -2259,6 +2259,8 @@ struct ContentView: View {
             Task { await SpotPassDriverRuntime.shared.handle(push: event) }
         }
         if event.opened, event.kind == .armed || event.kind == .departed {
+            // Live and trip states never mix: close the trip plan before the live flow shows.
+            exitTripPlan(toast: TripModeGating.planClosedToast)
             showSpotPassCover = true
         }
     }
@@ -3257,9 +3259,10 @@ struct ContentView: View {
     /// `communityMapChromeVisible`, so both halves of that claim are directly unit-testable.
     nonisolated static func communityMapFloatingChromeVisible(
         chromeVisible: Bool,
-        driveModeDefaultEnabled: Bool
+        driveModeDefaultEnabled: Bool,
+        tripActive: Bool = false
     ) -> Bool {
-        chromeVisible && !driveModeDefaultEnabled
+        chromeVisible && !driveModeDefaultEnabled && TripModeGating.showsReportPill(tripActive: tripActive)
     }
 
     /// Community 2.0 S13a (WP1, build 20): the persistent Report pill (bottom-left) + "?"
@@ -3318,7 +3321,8 @@ struct ContentView: View {
                 longPressParkConfirmActive: pendingLongPressCoord != nil,
                 curbPlacementActive: curbPlacement != nil
             ),
-            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled
+            driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
+            tripActive: tripPlan != nil
         ) {
             VStack(spacing: 0) {
                 Spacer()
@@ -3467,6 +3471,11 @@ struct ContentView: View {
     ///      degrade gracefully" semantics (OD-1) — `ReportSheet` already handles a
     ///      candidate search that comes up empty.
     private func handleReportPillTap() {
+        // Plan a Trip: reporting is a live action (the pill is also hidden in trip mode).
+        guard TripModeGating.showsReportPill(tripActive: tripPlan != nil) else {
+            ToastService.shared.show(message: "Exit your trip plan to park or report.")
+            return
+        }
         // A3 (curb-pin placement), spec A.7 + A-2: flag-on, the pill lands in placement first
         // (seed = GPS, else the map centre - the chain below) and reaches the chooser via
         // "Next". Flag-off (or a blocked entry) `curbPlacementRouting` is `.legacy` and the
@@ -7413,6 +7422,8 @@ struct ContentView: View {
         appDelegate.pendingDeepLinkCarID = nil
         // AC-W6.11 / criterion 5: only present if the notification matches the current pin.
         guard let car = parkPinService.parkedCar, car.id == carID else { return }
+        // Plan a Trip: a parked-car reminder is about the real present, so live wins.
+        exitTripPlan(toast: TripModeGating.planClosedToast)
         // viewport-polish pass-3 fix: also recenter the camera on the parked car. The Priority 1
         // branch in `.task` may not fire on cold-kill because `pendingDeepLinkCarID` is set by
         // the delegate AFTER `.task` evaluates — so the auto-center is missed and the user sees

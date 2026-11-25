@@ -157,7 +157,17 @@ nonisolated enum TripPlanning {
 
     /// Banner line: "TRIP PLAN" is the banner's own title; this is the rest.
     static func bannerLine(for plan: TripPlan) -> String {
-        "\(windowLabel(for: plan)) · not live"
+        "\(displayWindowLabel(for: plan)) · not live"
+    }
+
+    /// `windowLabel` with non-breaking spaces inside each stamp, and between the arrow and the
+    /// departure, so a narrow (AX5) line can only wrap before the arrow, never mid-time.
+    static func displayWindowLabel(for plan: TripPlan) -> String {
+        "\(nonBreaking(stamp(plan.arrival))) →\u{00A0}\(nonBreaking(stamp(plan.departure)))"
+    }
+
+    static func nonBreaking(_ text: String) -> String {
+        text.replacingOccurrences(of: " ", with: "\u{00A0}")
     }
 
     /// "Sat 11/28 10:00 AM"
@@ -275,4 +285,12 @@ enum TripModeGating {
     /// Live-only block-sheet content: sweeper badge, temporary restrictions, live pins, chatter.
     nonisolated static func showsLiveBlockContent(tripActive: Bool) -> Bool { !tripActive }
     nonisolated static func showsLiveASPBanner(tripActive: Bool) -> Bool { !tripActive }
+    /// Spot Pass (asking a neighbor for their live spot, or an armed hand-off) is a live-parking
+    /// flow, so its More rows are hidden during a trip plan.
+    nonisolated static func showsSpotPass(tripActive: Bool) -> Bool { !tripActive }
+    /// The floating Report pill (and its tap handler) is a live action.
+    nonisolated static func showsReportPill(tripActive: Bool) -> Bool { !tripActive }
+    /// Live wins: a Spot Pass seeker push the user opened, or the parked-car reminder deep link,
+    /// concerns the real present, so the trip plan is closed (with this toast) before either shows.
+    nonisolated static let planClosedToast = "Trip plan closed"
 }
