@@ -1945,10 +1945,7 @@ struct ContentView: View {
             //
             // "Not Yet" dismiss path:
             //   1. Dismiss sheet only. Drive Mode stays active. arrivalPromptFired stays true.
-            ArrivalPromptSheet(
-                arrivalCoordinate: coord,
-                nearestStreet: drivingContext?.street,
-                onParkHere: { arrivalCoord in
+            let arrivalParkHere: (CLLocationCoordinate2D) -> Void = { arrivalCoord in
                     // driveModeActive is still true at this instant (endDriveMode() below
                     // is what flips it) — dismissTargetOutsideBrowseNav resolves to nil
                     // here either way; it's immediately reassigned to `.parkUntil` below.
@@ -1982,18 +1979,35 @@ struct ContentView: View {
                     // anxiety path; the arrival-confirm path explicitly opts back into auto-fire
                     // because the user has already committed to parking.
                     activeSheet = .parkUntil
-                },
-                onNotYet: {
+                }
+            let arrivalNotYet: () -> Void = {
                     // OQ-6: Drive Mode stays active. arrivalPromptFired stays true (no re-fire).
                     // driveModeActive == true here, so this resolves to nil, not .browseNav —
                     // the sheet stays hidden throughout Drive Mode either way (spec §6).
                     activeSheet = dismissTargetOutsideBrowseNav
                 }
-            )
-            .presentationDetents([.medium])
+            Group {
+                if v2DriveActive {
+                    // Phase 3 (flag on + goal-first only): the round-2 arrival prompt.
+                    WPArrivalPromptV2(
+                        context: drivingContext,
+                        arrivalCoordinate: coord,
+                        onParkHere: arrivalParkHere,
+                        onNotYet: arrivalNotYet
+                    )
+                } else {
+                    ArrivalPromptSheet(
+                        arrivalCoordinate: coord,
+                        nearestStreet: drivingContext?.street,
+                        onParkHere: arrivalParkHere,
+                        onNotYet: arrivalNotYet
+                    )
+                }
+            }
+            .presentationDetents(v2DriveActive ? [.medium, .large] : [.medium])
             .presentationDragIndicator(.visible)
-            .presentationBackground(.regularMaterial)
-            .presentationCornerRadius(20)
+            .presentationBackground(v2DriveActive ? AnyShapeStyle(Color(wpHex: WP.Hex.darkBackground)) : AnyShapeStyle(Material.regularMaterial))
+            .presentationCornerRadius(v2DriveActive ? WP.Radius.sheet : 20)
 
         case .parkingGuide:
             // FT-12: opened from the first-launch prompt banner tap. The banner's
@@ -3142,7 +3156,11 @@ struct ContentView: View {
                 // every Drive Mode entry as a self-healing backstop — see that function's doc
                 // comment for why both together, not either alone.
                 if driveModeActive {
-                    endDriveControl
+                    if v2DriveActive {
+                        v2DriveTopChrome
+                    } else {
+                        endDriveControl
+                    }
                 } else if recenterButtonStackVisible(
                     driveModeActive: driveModeActive,
                     blockSelectModeActive: blockSelectModeActive,
@@ -3193,8 +3211,14 @@ struct ContentView: View {
             // Phase 2b (flag on only): the draggable car token, drag bubble and confirm card.
             if AppConstants.designSystemV2Enabled { v2ParkLayer }
             #if DEBUG
-            if let showcase = WPPhase2bShowcase.requested {
-                WPPhase2bShowcase(name: showcase, segments: tileLoader.segments, engine: engine)
+            // One child (a Group) so this ZStack stays under the ViewBuilder 10-child ceiling.
+            Group {
+                if let showcase = WPPhase2bShowcase.requested {
+                    WPPhase2bShowcase(name: showcase, segments: tileLoader.segments, engine: engine)
+                }
+                if let showcase = WPPhase3Showcase.requested {
+                    WPPhase3Showcase(name: showcase)
+                }
             }
             #endif
             // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.
@@ -4027,7 +4051,7 @@ struct ContentView: View {
                 recenterRow
             }
             // FT-18 row 2: Report / Park Here action row.
-            if driveModeActive {
+            if driveModeActive, !v2DriveActive {
                 driveActionRow
             }
             // FT-15/TF2-15 Stream B2: block-select floating bar (§4.2 step 5). Never
@@ -4140,12 +4164,17 @@ struct ContentView: View {
             // W8.5d: showApproachStrip wired — true when state is .approaching.
             // The strip lives INSIDE the card (OQ-1: option (b), no new .safeAreaInset layer).
             if driveModeActive {
-                DriveModeBottomCard(
-                    context: drivingContext,
-                    voiceService: drivingVoice,
-                    destinationDistance: driveModeDistanceMeters,
-                    showApproachStrip: finalApproachState == .approaching
-                )
+                if v2DriveActive {
+                    // Phase 3 (flag on + goal-first only): the round-2 drive card.
+                    v2DriveBottom
+                } else {
+                    DriveModeBottomCard(
+                        context: drivingContext,
+                        voiceService: drivingVoice,
+                        destinationDistance: driveModeDistanceMeters,
+                        showApproachStrip: finalApproachState == .approaching
+                    )
+                }
             }
             // FT-12's "New to parking?" banner used to render here too. Kevin's live-smoke
             // Ruling 2 (spec §0e, 2026-08-21) moved it OUT of this safe-area-inset stack —
@@ -4271,6 +4300,43 @@ struct ContentView: View {
                 onLocate: { recenterOnUser() }
             )
         }
+    }
+
+    // MARK: - Design system Phase 3: Drive mode (flag on + goal-first only)
+
+    /// The round-2 drive screens replace today's drive chrome only with BOTH flags on.
+    private var v2DriveActive: Bool {
+        AppConstants.designSystemV2Enabled && AppConstants.driveModeDefaultEnabled
+    }
+
+    /// Street pill, End and the destination line. Same End action as `endDriveControl`.
+    private var v2DriveTopChrome: some View {
+        let metric = Locale.current.measurementSystem == .metric
+        return WPDriveTopChromeV2(
+            street: drivingContext.map { WPDriveVerdict.streetTitle($0.street) },
+            destinationLine: driveModeDistanceMeters.map {
+                WPDriveVerdict.destinationLine(
+                    meters: $0, approaching: finalApproachState == .approaching, metric: metric
+                )
+            },
+            approaching: finalApproachState == .approaching,
+            endAccessibilityLabel: driveModeStyle == .cruise ? "End Cruise Mode" : "End Drive Mode",
+            onEnd: { endDriveMode() }
+        )
+        .frame(maxWidth: .infinity, alignment: .top)
+        .padding(.top, endDrivePillTopPadding)
+    }
+
+    /// Both sides, Report, Park here and Voice. Report and Park here run the same actions as the
+    /// legacy action row; Voice toggles the same mute state as the legacy mute button.
+    private var v2DriveBottom: some View {
+        WPDriveBottomV2(
+            context: drivingContext,
+            muted: drivingVoice.isMuted,
+            onReport: { driveReportTapped() },
+            onPark: { driveParkHereTapped() },
+            onToggleVoice: { drivingVoice.isMuted.toggle() }
+        )
     }
 
     // MARK: - Design system Phase 2b: curb sheet, search, parking (flag on only)
@@ -4884,30 +4950,7 @@ struct ContentView: View {
             // "Reporting on <street>" — reuses the name already resolved by
             // DrivingContextService for the DriveModeBottomCard (no new search).
             Button {
-                guard let loc = locationService.userLocation else { return }
-                // FT-11: Resolve the nearest segment so ReportSheet shows the direction
-                // picker. Use the same haversine candidate search as the resting path
-                // (pinDropRadiusMeters = 35m). In-drive GPS is live so this is accurate.
-                let driveSegment = findCandidateSegments(
-                    lat: loc.latitude,
-                    lng: loc.longitude,
-                    radius: pinDropRadiusMeters,
-                    max: 1
-                ).first?.segment
-                // Community 2.0 Phase 2a (build 20 S6): same "confirm the street" candidate
-                // precompute as the resting long-press path above.
-                let confirmCandidates = driveSegment.map {
-                    CandidateSegmentSearch.confirmStreetCandidates(for: $0, in: tileLoader.segments)
-                } ?? []
-                activeSheet = .reportPin(
-                    coord: loc,
-                    streetName: drivingContext?.street,
-                    segment: driveSegment,
-                    confirmCandidates: confirmCandidates,
-                    // QA STOP-AND-INSTRUMENT (PR #95): `loc` here is `locationService.userLocation`
-                    // — live current GPS at the moment of the tap, per the guard above.
-                    coordinateSource: "current GPS (in-drive)"
-                )
+                driveReportTapped()
             } label: {
                 Label("Report", systemImage: "flag.fill")
                     .font(.subheadline.weight(.semibold))
@@ -4940,25 +4983,7 @@ struct ContentView: View {
             // an ordinary sheet dismiss. `noBlockingSheetPresented` treats `.browseNav` the
             // same as `nil`, same fix already applied to `enterCruiseMode()`.
             Button {
-                guard noBlockingSheetPresented else { return }
-                guard let loc = locationService.userLocation else { return }
-                let candidates = findCandidateSegments(
-                    lat: loc.latitude,
-                    lng: loc.longitude,
-                    radius: pinDropRadiusMeters,
-                    max: 4
-                )
-                let detected = candidates.first?.segment
-                let detectedDistance = candidates.first?.distanceMeters
-                let alternatives = Array(candidates.dropFirst())
-                let intent = PinDropIntent(
-                    pinLat: loc.latitude,
-                    pinLng: loc.longitude,
-                    detectedSegment: detected,
-                    detectedSegmentDistance: detectedDistance,
-                    alternativeCandidates: alternatives
-                )
-                activeSheet = .signCheckConfirm(intent: intent)
+                driveParkHereTapped()
             } label: {
                 Label("Park here", systemImage: "mappin.and.ellipse")
                     .font(.subheadline.weight(.semibold))
@@ -4972,6 +4997,61 @@ struct ContentView: View {
             .accessibilityHint("Opens a safety checklist before dropping your parked car pin.")
         }
         .padding(.horizontal, 16)
+    }
+
+    // MARK: - Drive actions (shared by the legacy and the design-system drive chrome)
+
+    /// In-drive Report: drops a report at the user's CURRENT GPS. Body moved verbatim from
+    /// `driveActionRow` so the flag-on drive chrome calls the same logic.
+    private func driveReportTapped() {
+        guard let loc = locationService.userLocation else { return }
+        // FT-11: Resolve the nearest segment so ReportSheet shows the direction
+        // picker. Use the same haversine candidate search as the resting path
+        // (pinDropRadiusMeters = 35m). In-drive GPS is live so this is accurate.
+        let driveSegment = findCandidateSegments(
+            lat: loc.latitude,
+            lng: loc.longitude,
+            radius: pinDropRadiusMeters,
+            max: 1
+        ).first?.segment
+        // Community 2.0 Phase 2a (build 20 S6): same "confirm the street" candidate
+        // precompute as the resting long-press path above.
+        let confirmCandidates = driveSegment.map {
+            CandidateSegmentSearch.confirmStreetCandidates(for: $0, in: tileLoader.segments)
+        } ?? []
+        activeSheet = .reportPin(
+            coord: loc,
+            streetName: drivingContext?.street,
+            segment: driveSegment,
+            confirmCandidates: confirmCandidates,
+            // QA STOP-AND-INSTRUMENT (PR #95): `loc` here is `locationService.userLocation`
+            // — live current GPS at the moment of the tap, per the guard above.
+            coordinateSource: "current GPS (in-drive)"
+        )
+    }
+
+    /// In-drive "Park here": opens the sign-check pre-step. Body moved verbatim from
+    /// `driveActionRow`.
+    private func driveParkHereTapped() {
+        guard noBlockingSheetPresented else { return }
+        guard let loc = locationService.userLocation else { return }
+        let candidates = findCandidateSegments(
+            lat: loc.latitude,
+            lng: loc.longitude,
+            radius: pinDropRadiusMeters,
+            max: 4
+        )
+        let detected = candidates.first?.segment
+        let detectedDistance = candidates.first?.distanceMeters
+        let alternatives = Array(candidates.dropFirst())
+        let intent = PinDropIntent(
+            pinLat: loc.latitude,
+            pinLng: loc.longitude,
+            detectedSegment: detected,
+            detectedSegmentDistance: detectedDistance,
+            alternativeCandidates: alternatives
+        )
+        activeSheet = .signCheckConfirm(intent: intent)
     }
 
     // MARK: - FT-15 / TF2-15 Stream B2: Block-select floating bar

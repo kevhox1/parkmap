@@ -415,7 +415,8 @@ final class DrivingContextService {
             target: parkUntilTarget,
             ignoringMeteredPayment: parkUntilIgnoresMeteredPayment,
             from: date,
-            engine: engine
+            engine: engine,
+            strictParkable: AppConstants.designSystemV2Enabled
         )
         let rightChip = DrivingContextService.goalAwareChip(
             sideSegments: rightSideSegments,
@@ -423,7 +424,8 @@ final class DrivingContextService {
             target: parkUntilTarget,
             ignoringMeteredPayment: parkUntilIgnoresMeteredPayment,
             from: date,
-            engine: engine
+            engine: engine,
+            strictParkable: AppConstants.designSystemV2Enabled
         )
         let leftChipColorOverride = leftChip?.severity
         let rightChipColorOverride = rightChip?.severity
@@ -807,19 +809,24 @@ final class DrivingContextService {
         target: Date?,
         ignoringMeteredPayment: Bool,
         from: Date,
-        engine: ParkingRulesEngine
+        engine: ParkingRulesEngine,
+        strictParkable: Bool = false
     ) -> GoalAwareChip? {
         guard parkUntilMode, let target, !sideSegments.isEmpty else { return nil }
         let longEnough = sideSegments.filter { segmentLengthMeters($0) >= minimumSubjectLengthMeters }
         let freeNow = longEnough.filter { engine.safetyLabel(for: $0, at: from).severity == .free }
         let subject = !freeNow.isEmpty ? freeNow : (!longEnough.isEmpty ? longEnough : sideSegments)
         let passing = subject.filter {
-            engine.isFree(
-                segment: $0,
-                from: from,
-                until: target,
-                ignoringMeteredPayment: ignoringMeteredPayment
-            )
+            // Design system (flag on): the map's single green gate, which also refuses unreadable
+            // (no-data / UNKNOWN) signs that `isFree` alone would let through.
+            strictParkable
+                ? WPCurbVerdict.isParkable(segment: $0, engine: engine, from: from, until: target)
+                : engine.isFree(
+                    segment: $0,
+                    from: from,
+                    until: target,
+                    ignoringMeteredPayment: ignoringMeteredPayment
+                )
         }
         if passing.isEmpty {
             // Red. Only the free-now case needs a text fix; "No parking"/"Metered" already agree.

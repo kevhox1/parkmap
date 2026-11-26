@@ -213,6 +213,27 @@ final class ZoneBoundaryPolygon: MKPolygon {
     var zoneId: String = ""
 }
 
+// MARK: - Design system Phase 3: Drive Mode ink tint
+
+/// A translucent ink-violet fill over the city, drawn BELOW the curb lines (inserted first at
+/// `.aboveRoads`). MapKit cannot take the mock's purple ground (DECISIONS #10), so Drive Mode uses
+/// the dark map style plus this tint. Flag on only; never created flag off.
+final class WPDriveTintPolygon: MKPolygon {
+    /// A generous box around the tile grid (all of NYC) so the tint covers every visible tile.
+    static func make() -> WPDriveTintPolygon {
+        var coords = [
+            CLLocationCoordinate2D(latitude: 40.2, longitude: -74.5),
+            CLLocationCoordinate2D(latitude: 40.2, longitude: -73.4),
+            CLLocationCoordinate2D(latitude: 41.2, longitude: -73.4),
+            CLLocationCoordinate2D(latitude: 41.2, longitude: -74.5),
+        ]
+        return WPDriveTintPolygon(coordinates: &coords, count: coords.count)
+    }
+
+    /// Ink (#241F45) at 38%: reads purple on the dark map without hiding streets.
+    nonisolated static let alpha: CGFloat = 0.38
+}
+
 /// The "YOUR SQUARE · {ZONE}" text label (`design/screenshots/03-your-square.png`,
 /// `design/prototype.html:747`) shown near the top-left corner of the user's home zone's
 /// boundary box. `MKPointAnnotation` subclass so `mapView(_:viewFor:)` can dequeue the
@@ -1516,6 +1537,16 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
             }
             mapView.preferredConfiguration = target
+
+            // Design system Phase 3 (flag on + goal-first only): ink tint under the curb lines
+            // while driving. Added/removed here (outside `updateUIView`), never anywhere else.
+            if AppConstants.designSystemV2Enabled, AppConstants.driveModeDefaultEnabled {
+                let existing = mapView.overlays.compactMap { $0 as? WPDriveTintPolygon }
+                existing.forEach { mapView.removeOverlay($0) }
+                if active {
+                    mapView.insertOverlay(WPDriveTintPolygon.make(), at: 0, level: .aboveRoads)
+                }
+            }
         }
 
         // PR-2: Puck refresh closure — toggles showsUserLocation to force re-query of
@@ -2960,6 +2991,14 @@ struct MapViewRepresentable: UIViewRepresentable {
         // MARK: - MKMapViewDelegate: renderer
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let tint = overlay as? WPDriveTintPolygon {
+                let renderer = MKPolygonRenderer(polygon: tint)
+                renderer.fillColor = UIColor(WP.ink).withAlphaComponent(WPDriveTintPolygon.alpha)
+                renderer.strokeColor = .clear
+                renderer.lineWidth = 0
+                return renderer
+            }
+
             // Design system v0.1 (flag on only): curb lines draw as park-solid / don't-dashed
             // (or the five detail styles). Decisions are unchanged; only the drawing differs.
             if AppConstants.designSystemV2Enabled,
