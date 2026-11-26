@@ -299,7 +299,9 @@ enum WPCurbCopy {
             for dayOffset in 0...8 {
                 guard let day = cal.date(byAdding: .day, value: dayOffset, to: today) else { continue }
                 for tr in rule.timeRanges {
-                    guard let start = cal.date(byAdding: .minute, value: tr.start, to: day),
+                    // Wall-clock, not elapsed minutes: on DST days the day is 23 or 25 hours long, so
+                    // `day + N minutes` lands an hour off (or skips a day's meter entirely).
+                    guard let start = cal.date(bySettingHour: tr.start / 60, minute: tr.start % 60, second: 0, of: day),
                           start > from, start < limit else { continue }
                     if let current = best, start >= current { continue }
                     if rule.rangeActive(
