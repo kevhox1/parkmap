@@ -46,6 +46,9 @@ struct WPClipHeader: View {
             }
         }
         .frame(minHeight: WP.Target.minimum)
+        // Chrome, not content: capped like the bottom bar so "WePark", the pill and Back never break
+        // mid-word ("WeP/ark", "Bac/k") at AX sizes. The page below keeps scaling.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .accessibilityElement(children: .contain)
     }
 }

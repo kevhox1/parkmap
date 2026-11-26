@@ -31,16 +31,29 @@ struct WPPhase5bActivityShowcase: View {
     /// `-wp5bActivity real`: starts a REAL counting Live Activity (the system renders the lock screen and
     /// the Dynamic Island with `wpDynamicIsland`), so expanded-island height can be measured on a
     /// simulator instead of approximated. Only the flag-on build draws the Stoop layout.
-    private static func startRealActivity() {
+    private static func startRealActivity(_ phase: SpotPassActivityAttributes.Phase = .counting) {
         guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
         let attributes = SpotPassActivityAttributes(alias: "Bodega Cat", glyph: "bodega_cat", isClip: false)
-        let state = WPActivityState(phase: .counting, leaveAt: Date.now.addingTimeInterval(12 * 60 + 48), startedAt: Date.now, passID: UUID().uuidString.lowercased())
-        _ = try? Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: nil), pushType: nil)
+        let leaveAt = phase == .counting ? Date.now.addingTimeInterval(12 * 60 + 48) : Date.now.addingTimeInterval(-30)
+        let state = WPActivityState(phase: phase, leaveAt: leaveAt, startedAt: Date.now, passID: UUID().uuidString.lowercased())
+        // End any activity a previous launch left running, so each launch shows exactly the asked state.
+        Task {
+            for old in Activity<SpotPassActivityAttributes>.activities { await old.end(nil, dismissalPolicy: .immediate) }
+            _ = try? Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: nil), pushType: nil)
+        }
     }
 
     var body: some View {
         Color.clear.allowsHitTesting(false).onAppear {
-            if name == "real" { Self.startRealActivity(); return }
+            // `real` = counting; `real-timetogo|sent|passed|thanks|cancelled|ended` = that state.
+            if name.hasPrefix("real") {
+                let raw = name.dropFirst("real-".count)
+                let phases: [String: SpotPassActivityAttributes.Phase] = [
+                    "timetogo": .timeToGo, "sent": .sent, "passed": .passed,
+                    "thanks": .thanks, "cancelled": .cancelled, "ended": .ended]
+                Self.startRealActivity(phases[String(raw)] ?? .counting)
+                return
+            }
             guard Self.window == nil,
                   let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
             else { return }

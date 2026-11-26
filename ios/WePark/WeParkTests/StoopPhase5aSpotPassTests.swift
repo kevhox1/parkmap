@@ -114,4 +114,29 @@ final class StoopPhase5aSpotPassTests: XCTestCase {
         XCTAssertEqual(WPPassLogic.switchAction(currentlyOn: false, newValue: false), .none)
         XCTAssertEqual(WPPassLogic.switchAction(currentlyOn: true, newValue: true), .none)
     }
+
+    // MARK: A chosen time that has passed
+
+    func testResolvedChoice_passedCustomTimeBecomesNow() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertEqual(WPPassLogic.resolvedChoice(.custom(now.addingTimeInterval(-1)), now: now), .now)
+        XCTAssertEqual(WPPassLogic.resolvedChoice(.custom(now), now: now), .now)
+    }
+
+    func testResolvedChoice_futureCustomTimeAndPresetsAreUnchanged() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let future = LeaveChoice.custom(now.addingTimeInterval(60))
+        XCTAssertEqual(WPPassLogic.resolvedChoice(future, now: now), future)
+        XCTAssertEqual(WPPassLogic.resolvedChoice(.minutes(10), now: now), .minutes(10))
+        XCTAssertEqual(WPPassLogic.resolvedChoice(.now, now: now), .now)
+    }
+
+    func testStillOffered_slotThatJustPassedIsNotSelectable() {
+        let now = Date(timeIntervalSince1970: TimeInterval(1_800_000_000 - 1_800_000_000 % 900 + 890))
+        let slots = WPPassLogic.leaveSlots(from: now)
+        let first = slots[0]
+        XCTAssertEqual(WPPassLogic.stillOffered(first, in: slots), first)
+        let later = first.addingTimeInterval(1)
+        XCTAssertNil(WPPassLogic.stillOffered(first, in: WPPassLogic.leaveSlots(from: later)))
+    }
 }

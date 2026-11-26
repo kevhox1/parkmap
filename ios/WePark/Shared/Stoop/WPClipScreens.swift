@@ -98,6 +98,8 @@ struct WPClipReminderView: View {
             Text(WPClipCopy.reminderOnly)
                 .font(WP.Font.fredoka(15, .regular, relativeTo: .callout))
                 .foregroundStyle(WP.muted)
+                // Three sentences: always take the height they need (the page scrolls) so AX sizes wrap, never cut.
+                .fixedSize(horizontal: false, vertical: true)
         } bottom: {
             WPClipPrimaryButton(title: WPClipCopy.allowReminder, action: onAllow)
             WPClipTextButton(title: WPClipCopy.skip, action: onSkip)
