@@ -105,6 +105,9 @@ struct WPGoalSheetV2: View {
     /// Accessibility sizes only: the resting car token is hidden there (the sheet fills the
     /// screen), so this row is the visible way to park without dragging. nil hides it.
     var onParkMyCar: (() -> Void)? = nil
+    /// Stoop Phase 6a: the goal tile row's frame in the onboarding coach space, so the first coach
+    /// card can ring it. Not reported at accessibility sizes (the tiles become rows there).
+    var onTileRowFrame: ((CGRect) -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -137,6 +140,9 @@ struct WPGoalSheetV2: View {
                     }
                 }
                 .padding(.top, WP.Space.s3)
+                .onGeometryChange(for: CGRect.self, of: { proxy in
+                    proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+                }) { onTileRowFrame?($0) }
                 startDriving.padding(.top, WP.Space.s3)
             }
         }
