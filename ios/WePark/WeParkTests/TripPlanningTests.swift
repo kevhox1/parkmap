@@ -227,6 +227,60 @@ final class TripPlanningTests: XCTestCase {
                        .notFree(reason: "no standing the whole trip"))
     }
 
+    // MARK: - Strict green gate (Stoop on) vs legacy
+
+    private var satPlan: TripPlan { TripPlan(arrival: et(2026, 11, 28, 10), departure: et(2026, 11, 28, 14)) }
+
+    /// UNKNOWN rule (plate-only / commercial sign) on Tuesdays only; the Saturday trip never overlaps it.
+    private func unknownOutsideWindow() -> Segment {
+        tripSegment(rules: [tripRule(category: .unknown, days: [2], ranges: [(540, 1020)])])
+    }
+
+    func testStrictGate_unknownRuleOutsideWindow_isNotGreen() {
+        let segment = unknownOutsideWindow()
+        XCTAssertFalse(TripPlanning.isFree(segment: segment, plan: satPlan, engine: engine, strictSigns: true))
+        XCTAssertEqual(
+            TripPlanning.verdict(segment: segment, plan: satPlan, engine: engine, strictSigns: true),
+            .notFree(reason: UnclearSign.headline)
+        )
+        // Agrees with the live Stoop gate for the same window.
+        XCTAssertFalse(WPCurbVerdict.isParkable(
+            segment: segment, engine: engine, from: satPlan.arrival, until: satPlan.departure))
+    }
+
+    func testLegacyGate_unknownRuleOutsideWindow_matchesLegacyLiveMap() {
+        // Flag off keeps `engine.isFree`, exactly what the legacy live map and Park Until use.
+        XCTAssertTrue(TripPlanning.isFree(
+            segment: unknownOutsideWindow(), plan: satPlan, engine: engine, strictSigns: false))
+    }
+
+    func testStrictGate_unknownRuleOverlappingWindow_notGreenBothModes() {
+        let segment = tripSegment(rules: [tripRule(category: .unknown, days: [6], ranges: [(540, 1020)])])
+        XCTAssertFalse(TripPlanning.isFree(segment: segment, plan: satPlan, engine: engine, strictSigns: true))
+        XCTAssertFalse(TripPlanning.isFree(segment: segment, plan: satPlan, engine: engine, strictSigns: false))
+    }
+
+    func testStrictGate_noData_andMeterInWindow_remainNotFree() {
+        let noData = tripSegment(rules: [])
+        let meter = tripSegment(rules: [tripRule(category: .metered, days: [1, 2, 3, 4, 5], ranges: [(480, 1320)])])
+        let weekday = TripPlan(arrival: et(2026, 11, 24, 13), departure: et(2026, 11, 24, 15))
+        for strict in [true, false] {
+            XCTAssertFalse(TripPlanning.isFree(segment: noData, plan: satPlan, engine: engine, strictSigns: strict))
+            XCTAssertFalse(TripPlanning.isFree(segment: meter, plan: weekday, engine: engine, strictSigns: strict))
+        }
+        XCTAssertEqual(
+            TripPlanning.verdict(segment: noData, plan: satPlan, engine: engine, strictSigns: true),
+            .notFree(reason: NoSignData.headline)
+        )
+    }
+
+    func testStrictGate_normalFreeCurb_staysGreen_andLongerVisitOnlyRemovesGreen() {
+        let segment = tripSegment(rules: [tripRule(category: .aspTueFri, days: [2, 5], ranges: [(660, 750)])])
+        XCTAssertTrue(TripPlanning.isFree(segment: segment, plan: satPlan, engine: engine, strictSigns: true))
+        let longer = TripPlan(arrival: satPlan.arrival, departure: et(2026, 12, 1, 14))  // runs into Tuesday sweep
+        XCTAssertFalse(TripPlanning.isFree(segment: segment, plan: longer, engine: engine, strictSigns: true))
+    }
+
     func testVerdict_picksEarliestConflictingRule() {
         let segment = tripSegment(rules: [
             tripRule(category: .noParking, days: [6], ranges: [(900, 960)]),   // Sat 3-4 PM

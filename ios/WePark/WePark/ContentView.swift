@@ -2716,7 +2716,10 @@ struct ContentView: View {
             onReportBlock: blockDetailReportAction(for: segment),
             // Plan a Trip: the trip verdict replaces the live label while a plan is active.
             // Declared last to match `BlockDetailView`'s property declaration order.
-            tripVerdict: tripPlan.map { TripPlanning.verdict(segment: segment, plan: $0, engine: engine) }
+            tripVerdict: tripPlan.map { TripPlanning.verdict(
+                segment: segment, plan: $0, engine: engine,
+                strictSigns: AppConstants.designSystemV2Enabled
+            ) }
         )
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
@@ -3043,7 +3046,10 @@ struct ContentView: View {
                 guard coords.count >= 2 else { continue }
                 if segment.id == selectedSegmentID { continue }
                 if tripFreeCache.value(for: segment.id, key: tripKey, compute: {
-                    TripPlanning.isFree(segment: segment, plan: plan, engine: engine)
+                    TripPlanning.isFree(
+                        segment: segment, plan: plan, engine: engine,
+                        strictSigns: AppConstants.designSystemV2Enabled
+                    )
                 }) {
                     freeCoords.append(coords)
                 } else {
@@ -3054,7 +3060,10 @@ struct ContentView: View {
             var selectedState: CurrentState = .unknown
             if let seg = selectedSegment, seg.coordinates.count >= 2 {
                 selectedCoords = seg.coordinates
-                selectedState = TripPlanning.isFree(segment: seg, plan: plan, engine: engine)
+                selectedState = TripPlanning.isFree(
+                    segment: seg, plan: plan, engine: engine,
+                    strictSigns: AppConstants.designSystemV2Enabled
+                )
                     ? .freeComfortably : .restrictedNow
             }
             overlayGeneration += 1
@@ -4726,6 +4735,8 @@ struct ContentView: View {
     /// Places the car on the curb nearest the user (same snap, verdict and confirm card as a drag).
     /// Used by the token's VoiceOver action and the accessibility-size "Park my car" row.
     private func v2PlaceCarAtUser() -> Bool {
+        // Not live while a trip plan shows; the entry points are hidden, this is the backstop.
+        guard tripPlan == nil else { return false }
         let screen = UIScreen.main.bounds
         guard let loc = locationService.userLocation else { return false }
         v2ParkFlow.prepareIndex(segments: tileLoader.segments)

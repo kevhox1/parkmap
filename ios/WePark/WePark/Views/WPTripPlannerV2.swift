@@ -11,8 +11,9 @@
 //
 //  Live vs not-live must be unmistakable: the dashed violet frame (`wpTripFrame`), the striped tag and
 //  the card all say "plan", and the live controls are not drawn while a plan shows (the existing
-//  `TripModeGating` rules, unchanged). The verdict is the SAME green gate as every live goal
-//  (`TripPlanning.isFree` over [arrival, departure]); nothing here decides parkability.
+//  `TripModeGating` rules, unchanged). The verdict is the SAME green gate as the matching live map
+//  (Stoop on: `WPCurbVerdict.isParkable`; flag off: `engine.isFree`) over [arrival, departure],
+//  via `TripPlanning.isFree(strictSigns:)`; nothing here decides parkability.
 //
 
 import SwiftUI
