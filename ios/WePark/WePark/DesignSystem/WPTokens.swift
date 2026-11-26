@@ -174,6 +174,9 @@ enum WP {
         /// Round caps turn these near-zero dashes into dots.
         nonisolated static let meteredDash: [CGFloat] = [0.1, 11]
         nonisolated static let noDataWidth: CGFloat = 2
+        /// The curb whose sheet is open (b4-free / b4-dont): thicker fill, ink casing around it.
+        nonisolated static let selectedWidth: CGFloat = 9
+        nonisolated static let selectedCasingWidth: CGFloat = 14
     }
 
     /// Sizes of the raised/flat control family (spec "Parts").

@@ -161,6 +161,14 @@ private final class SelectedPolyline: MKPolyline {
     var currentState: CurrentState = .unknown
 }
 
+/// Design system (flag on only): the layers drawn UNDER the selected curb so it reads as an
+/// outlined, thicker line (b4-free / b4-dont mocks). `casing` is the ink outline; `backing` is a
+/// white fill drawn under a dashed (don't) line so the gaps read white, as in the mock.
+private final class SelectedUnderlayPolyline: MKPolyline {
+    enum Role { case casing, backing }
+    var role: Role = .casing
+}
+
 /// W8.5b: Drive Mode route polyline overlay.
 /// Rendered in .systemBlue above the parking-state overlays (OQ-8).
 ///
@@ -1300,7 +1308,11 @@ struct MapViewRepresentable: UIViewRepresentable {
             base.pointOfInterestFilter = .excludingAll
             // Flat: no 3D buildings hiding curb lines (round-2 mocks are top-down).
             base.elevationStyle = .flat
+            base.showsTraffic = false
             mapView.preferredConfiguration = base
+            // The shaded building footprints read as 3D blocks under the curb lines; the mocks
+            // are a flat plan. `showsBuildings` lives on MKMapView, not the configuration.
+            mapView.showsBuildings = false
         }
 
         // Register the CarPinAnnotation view class. Open item #20 (2026-09-12): now
@@ -1564,7 +1576,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         // `mapView.showsBuildings` is NOT on MKStandardMapConfiguration — it lives on MKMapView.
         // Called from ContentView's .onChange(of: driveModeActive) OUTSIDE updateUIView per #31.
         coordinatorActions.setShowsBuildings = { [weak mapView] show in
-            mapView?.showsBuildings = show
+            // Flag on: the Stoop map stays flat after Drive Mode too (buildings stay off).
+            mapView?.showsBuildings = show && !AppConstants.designSystemV2Enabled
         }
 
         // MARK: A3.6 ambient driving look (flag-on only; SEAM: self-contained block)
@@ -1865,6 +1878,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         // Current live overlays (strong refs so we can removeOverlay them later).
         private var multiPolylines: [OverlayTag: TaggedMultiPolyline] = [:]
         private var selectedPolyline: SelectedPolyline? = nil
+        /// Flag on only: casing (+ backing for dashed lines) under `selectedPolyline`.
+        private var selectedUnderlays: [SelectedUnderlayPolyline] = []
 
         // FT-15/TF2-15 Stream B2: block-select tap-select highlight overlay state.
         /// The currently-rendered highlight overlay (nil if block-select mode is inactive
@@ -2045,11 +2060,28 @@ struct MapViewRepresentable: UIViewRepresentable {
                 mapView.removeOverlay(old)
                 selectedPolyline = nil
             }
+            if !selectedUnderlays.isEmpty {
+                mapView.removeOverlays(selectedUnderlays)
+                selectedUnderlays = []
+            }
             if let coords = payload.selectedCoords, coords.count >= 2 {
                 var mutable = coords
                 let sel = SelectedPolyline(coordinates: &mutable, count: mutable.count)
                 sel.currentState = payload.selectedState
                 selectedPolyline = sel
+                if AppConstants.designSystemV2Enabled {
+                    // Underlays first so they sit beneath the colored line.
+                    var roles: [SelectedUnderlayPolyline.Role] = [.casing]
+                    let kind = CurbLineStyleV2.kind(for: payload.selectedState, detailMode: parent.curbLineDetailMode)
+                    if CurbLineStyleV2.style(for: kind).dashPattern != nil { roles.append(.backing) }
+                    for role in roles {
+                        var again = coords
+                        let under = SelectedUnderlayPolyline(coordinates: &again, count: again.count)
+                        under.role = role
+                        selectedUnderlays.append(under)
+                        mapView.addOverlay(under, level: .aboveRoads)
+                    }
+                }
                 mapView.addOverlay(sel, level: .aboveRoads)
             }
 
@@ -3025,11 +3057,21 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return renderer
             }
 
+            if AppConstants.designSystemV2Enabled, let under = overlay as? SelectedUnderlayPolyline {
+                let renderer = MKPolylineRenderer(polyline: under)
+                Self.styleSelectedUnderlay(
+                    renderer, role: under.role,
+                    scale: CurbLineStyleV2.zoomScale(latitudeDelta: mapView.region.span.latitudeDelta),
+                    dark: mapView.traitCollection.userInterfaceStyle == .dark
+                )
+                return renderer
+            }
+
             if AppConstants.designSystemV2Enabled, let sel = overlay as? SelectedPolyline {
                 let renderer = MKPolylineRenderer(polyline: sel)
                 let kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
-                CurbLineStyleV2.apply(
-                    CurbLineStyleV2.style(for: kind), to: renderer,
+                Self.styleSelectedLine(
+                    renderer, kind: kind,
                     scale: CurbLineStyleV2.zoomScale(latitudeDelta: mapView.region.span.latitudeDelta)
                 )
                 return renderer
@@ -3174,6 +3216,34 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
 
+        /// The selected curb's colored line: same color and dash as its kind, thicker, round caps
+        /// when solid (flag on only).
+        private static func styleSelectedLine(_ renderer: MKOverlayPathRenderer, kind: CurbLineKind, scale: CGFloat) {
+            let base = CurbLineStyleV2.style(for: kind)
+            let thick = CurbLineStyle(
+                colorHex: base.colorHex, width: WP.CurbLine.selectedWidth,
+                dashPattern: base.dashPattern, roundCaps: base.dashPattern == nil || base.roundCaps
+            )
+            CurbLineStyleV2.apply(thick, to: renderer, scale: scale)
+        }
+
+        /// Casing (ink, cream in dark) and backing (white) under the selected curb (flag on only).
+        private static func styleSelectedUnderlay(
+            _ renderer: MKOverlayPathRenderer, role: SelectedUnderlayPolyline.Role, scale: CGFloat, dark: Bool
+        ) {
+            switch role {
+            case .casing:
+                renderer.strokeColor = UIColor(wpHex: dark ? WP.Hex.darkText : WP.Hex.ink)
+                renderer.lineWidth = WP.CurbLine.selectedCasingWidth * scale
+            case .backing:
+                renderer.strokeColor = UIColor(wpHex: WP.Hex.card)
+                renderer.lineWidth = WP.CurbLine.selectedWidth * scale
+            }
+            renderer.lineCap = .round
+            renderer.lineJoin = .round
+            renderer.lineDashPattern = nil
+        }
+
         /// Phase 2b (flag on only): re-applies the zoom-scaled curb-line width and dash to the
         /// renderers MapKit already cached. Touches only renderer stroke properties (never the
         /// camera or the overlay set), and only when the quantized scale changed.
@@ -3185,15 +3255,23 @@ struct MapViewRepresentable: UIViewRepresentable {
             lastCurbLineScale = scale
             for overlay in mapView.overlays {
                 guard let renderer = mapView.renderer(for: overlay) as? MKOverlayPathRenderer else { continue }
-                let kind: CurbLineKind?
-                if let multi = overlay as? TaggedMultiPolyline {
-                    kind = CurbLineStyleV2.kind(for: multi.overlayTag, detailMode: parent.curbLineDetailMode)
-                } else if let sel = overlay as? SelectedPolyline {
-                    kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
-                } else {
-                    kind = nil
+                if let under = overlay as? SelectedUnderlayPolyline {
+                    Self.styleSelectedUnderlay(
+                        renderer, role: under.role, scale: scale,
+                        dark: mapView.traitCollection.userInterfaceStyle == .dark
+                    )
+                    renderer.setNeedsDisplay()
+                    continue
                 }
-                guard let kind else { continue }
+                if let sel = overlay as? SelectedPolyline {
+                    let kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
+                    Self.styleSelectedLine(renderer, kind: kind, scale: scale)
+                    renderer.setNeedsDisplay()
+                    continue
+                }
+                guard let multi = overlay as? TaggedMultiPolyline,
+                      let kind = CurbLineStyleV2.kind(for: multi.overlayTag, detailMode: parent.curbLineDetailMode)
+                else { continue }
                 CurbLineStyleV2.apply(CurbLineStyleV2.style(for: kind), to: renderer, scale: scale)
                 renderer.setNeedsDisplay()
             }
