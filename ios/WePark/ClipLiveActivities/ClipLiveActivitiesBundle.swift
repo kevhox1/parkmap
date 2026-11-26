@@ -26,12 +26,28 @@ struct ClipLiveActivitiesBundle: WidgetBundle {
 struct SpotPassClipLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: SpotPassActivityAttributes.self) { context in
-            ClipLockScreenView(attributes: context.attributes, state: context.state, isStale: context.isStale)
-                .activityBackgroundTint(SpotPassTheme.ink)
+            // Stoop (compile-time flag shared with the app): the round-2 lock screen. Flag off = shipping view.
+            if StoopFlag.designSystemV2Enabled {
+                WPActivityLockView(attributes: context.attributes, state: context.state, isStale: context.isStale) { action, label in
+                    WPClipLinkWrapper(action: action, timeToGo: WPActivityCopy.layout(phase: context.state.phase, isStale: context.isStale) == .timeToGo, label: label)
+                }
+                .activityBackgroundTint(.black)
                 .activitySystemActionForegroundColor(.white)
                 .widgetURL(ClipDeepAction.openPullingOut.url)
+            } else {
+                ClipLockScreenView(attributes: context.attributes, state: context.state, isStale: context.isStale)
+                    .activityBackgroundTint(SpotPassTheme.ink)
+                    .activitySystemActionForegroundColor(.white)
+                    .widgetURL(ClipDeepAction.openPullingOut.url)
+            }
         } dynamicIsland: { context in
-            DynamicIsland {
+            if StoopFlag.designSystemV2Enabled {
+                return wpDynamicIsland(context: context) { action, label in
+                    WPClipLinkWrapper(action: action, timeToGo: WPActivityCopy.layout(phase: context.state.phase, isStale: context.isStale) == .timeToGo, label: label)
+                }
+                .widgetURL(ClipDeepAction.openPullingOut.url)
+            }
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
                         glyph(context.attributes, size: 44)
@@ -94,6 +110,29 @@ struct SpotPassClipLiveActivity: Widget {
         case .cancelled: return ClipCopy.cancelledLine
         case .ended: return ClipCopy.activityEnded
         }
+    }
+}
+
+// MARK: - Stoop link wrapper
+
+/// Wraps a Stoop pill in the clip's deep link (App Intents are inert in clips). Same destinations as
+/// the shipping buttons: counting-down "Leaving now" opens the pulling-out screen; at / after
+/// leave time it performs on open; "5 more min" extends; "Not leaving" opens the cancel confirm.
+struct WPClipLinkWrapper: View {
+    let action: WPActivityAction
+    let timeToGo: Bool
+    let label: AnyView
+
+    private var destination: ClipDeepAction {
+        switch action {
+        case .leavingNow: return timeToGo ? .leavingNow(.liveActivity) : .openPullingOut
+        case .fiveMore: return .extend
+        case .notLeaving: return .confirmCancel
+        }
+    }
+
+    var body: some View {
+        Link(destination: destination.url) { label }
     }
 }
 
