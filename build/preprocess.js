@@ -384,7 +384,18 @@ function parseSchedule(desc, category) {
     if (DAY_PARSE_STATS.unparsedSamples.length < 20 && !DAY_PARSE_STATS.unparsedSamples.includes(desc)) DAY_PARSE_STATS.unparsedSamples.push(desc);
   }
 
-  if (result.days.length === 0) result.days = [1,2,3,4,5,6];
+  // No day parsed. Never invent a Sunday exemption (docs/qa/tiles-default-days.md):
+  //  - UNKNOWN: we do not know what the sign says -> every day, always.
+  //  - METERED / ASP_*: NYC does not require meter payment on Sundays (DOT, 2005; 311 KA-01011)
+  //    and ASP is never in effect on Sundays (311 KA-01011) -> Mon-Sat is the verified convention.
+  //  - "SCHOOL DAYS": a stated phrase (school is never in session Sunday) -> keeps Mon-Sat.
+  //  - Anything else: no verified "no days shown" convention exists -> every day (the red-safe side).
+  if (result.days.length === 0) {
+    const monSat = category !== 'UNKNOWN' &&
+      (category === 'METERED' || /^ASP_/.test(category || '') || /SCHOOL DAYS/.test(d));
+    result.days = monSat ? [1,2,3,4,5,6] : [0,1,2,3,4,5,6];
+    result.daysDefaulted = true;
+  }
 
   // Parse times
   const timeRe = /(\d{1,2}(?::\d{2})?\s*(?:AM|PM)|MIDNIGHT|NOON)[\s-]+(\d{1,2}(?::\d{2})?\s*(?:AM|PM)|MIDNIGHT|NOON)/gi;
@@ -2726,7 +2737,8 @@ async function main() {
           anytime: c.anytime,
           arrow: r.schedule.arrow,
           // Optional, additive: hard-hat temporary construction regulation.
-          ...(r.temporary && { temporary: true })
+          ...(r.temporary && { temporary: true }),
+          ...(process.env.DEBUG_DEFAULTED_DAYS && c.daysDefaulted && { _dd: true })
         })));
 
         // NO DATA zone (only obsolete superseded signs, replacement not on file). An empty rule
