@@ -21,6 +21,7 @@
 //
 
 import Foundation
+import SwiftUI
 
 // MARK: - Side verdict
 
@@ -154,6 +155,27 @@ enum WPDriveVerdict {
             side(isLeft: true, label: context.leftLabel, override: context.leftChipColorOverride),
             side(isLeft: false, label: context.rightLabel, override: context.rightChipColorOverride)
         )
+    }
+
+    // MARK: Compact (accessibility sizes)
+
+    /// The largest Dynamic Type size the drive overlay renders at. Everything above it draws at
+    /// this size: a driver at AX3 to AX5 still gets accessibility-sized, never-truncated text, but
+    /// both sides' verdicts, the street and the actions must fit one screen together (a glance
+    /// while driving cannot scroll). Short phones (SE class, under 700 pt) cap one step lower.
+    /// VoiceOver is unaffected.
+    nonisolated static func maxDriveTypeSize(screenHeight: CGFloat) -> DynamicTypeSize {
+        screenHeight < 700 ? .accessibility1 : .accessibility2
+    }
+
+    /// One line for a side at accessibility sizes. Secondary text is dropped: "Park until Mon 9:00 AM"
+    /// for a green side whose label is a "Free until ..." time, otherwise the verdict word alone.
+    nonisolated static func compactLine(for side: WPDriveSide) -> String {
+        guard side.kind == .park, let sub = side.sub else { return side.big }
+        if sub.hasPrefix("Free until ") { return "Park until " + sub.dropFirst("Free until ".count) }
+        // A green metered side keeps its caveat: the meter is not running in the window.
+        if sub.hasPrefix("No meter running") { return "Park, no meter running in your window" }
+        return side.big
     }
 
     // MARK: Primary action
