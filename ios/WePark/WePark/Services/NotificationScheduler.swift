@@ -477,6 +477,14 @@ final class NotificationScheduler {
             content.body = "\(label) starts tomorrow at \(moveByTime). Move your car by then."
         }
 
+        // Stoop (flag on only): round-2 B13 wording + the "Walk there" action. Same fire time,
+        // same presets; only the words and the action change.
+        if AppConstants.designSystemV2Enabled {
+            content.title = WPParkReminderCopy.title(moveBy: moveByTime, nightBefore: leadKind == .nightBefore)
+            content.body = WPParkReminderCopy.body(label: restriction.label, street: streetDisplay, side: sideDisplay, lead: leadKind)
+            content.categoryIdentifier = WPParkReminderCopy.categoryID
+        }
+
         // Address-anchored parking: a VERIFIED address (only) rides in the body, under a category
         // whose hidden-previews placeholder replaces the whole body when previews are off, so the
         // lock-screen default stays the block text. Approximate addresses never go in a
@@ -495,6 +503,9 @@ final class NotificationScheduler {
             "wepark_car_id": car.id.uuidString,
             "wepark_action": "show_car_detail"
         ]
+        if AppConstants.designSystemV2Enabled {
+            content.userInfo.merge(WPParkReminderCopy.userInfo(latitude: car.latitude, longitude: car.longitude)) { current, _ in current }
+        }
 
         return content
     }

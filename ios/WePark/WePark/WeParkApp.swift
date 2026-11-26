@@ -102,7 +102,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
         // Spot Pass adds a seeker category behind its own flag; both register in ONE merge so
         // neither clobbers the other (setNotificationCategories replaces the whole set). With
         // both flags off nothing is registered, exactly as before.
-        if AppConstants.addressAnchoredParkingEnabled || AppConstants.spotHandoffEnabled {
+        if AppConstants.addressAnchoredParkingEnabled || AppConstants.spotHandoffEnabled || AppConstants.designSystemV2Enabled {
             Task {
                 await NotificationCategoryRegistry.registerLaunchCategories(
                     includeDriverReminders: AppConstants.spotHandoffEnabled
@@ -166,6 +166,15 @@ final class AppDelegate: NSObject, UIApplicationDelegate, UNUserNotificationCent
             return
         }
         defer { completionHandler() }
+
+        // Stoop B13 (flag on only): "Walk there" hands off to Apple Maps walking directions.
+        if AppConstants.designSystemV2Enabled,
+           response.actionIdentifier == WPParkReminderCopy.actionWalkThere,
+           let coordinate = WPParkReminderCopy.coordinate(from: userInfo),
+           let url = WPParkReminderCopy.walkURL(latitude: coordinate.latitude, longitude: coordinate.longitude) {
+            DispatchQueue.main.async { UIApplication.shared.open(url) }
+            return
+        }
 
         if AppConstants.spotHandoffEnabled,
            response.actionIdentifier == UNNotificationDefaultActionIdentifier,

@@ -3242,6 +3242,9 @@ struct ContentView: View {
                 if let showcase = WPPhase2bShowcase.requested {
                     WPPhase2bShowcase(name: showcase, segments: tileLoader.segments, engine: engine)
                 }
+                if let showcase = WPPhase5bActivityShowcase.requested {
+                    WPPhase5bActivityShowcase(name: showcase)
+                }
                 if let showcase = WPPhase3Showcase.requested {
                     WPPhase3Showcase(name: showcase)
                 }

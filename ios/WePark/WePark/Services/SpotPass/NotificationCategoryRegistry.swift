@@ -80,9 +80,12 @@ enum NotificationCategoryRegistry {
     static func launchCategories(
         addressEnabled: Bool,
         spotPassEnabled: Bool,
-        includeDriverReminders: Bool = false
+        includeDriverReminders: Bool = false,
+        stoopParkReminders: Bool = AppConstants.designSystemV2Enabled
     ) -> [UNNotificationCategory] {
         var categories: [UNNotificationCategory] = []
+        // Stoop B13: the park reminder's "Walk there" action. Flag off: nothing added.
+        if stoopParkReminders { categories.append(WPParkReminderCopy.category()) }
         if addressEnabled { categories.append(NotificationScheduler.addressCategory()) }
         if spotPassEnabled { categories.append(spotPassSeekerCategory()) }
         // C2: the driver's `SPOT_PASS_LEAVING` reminder category (background actions). Registered at

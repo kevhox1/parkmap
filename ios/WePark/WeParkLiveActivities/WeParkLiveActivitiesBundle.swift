@@ -28,11 +28,25 @@ struct WeParkLiveActivitiesBundle: WidgetBundle {
 struct SpotPassLiveActivity: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: SpotPassActivityAttributes.self) { context in
-            SpotPassLockScreenView(attributes: context.attributes, state: context.state, isStale: context.isStale)
-                .activityBackgroundTint(SpotPassTheme.ink)
+            // Stoop (compile-time flag shared with the app): the round-2 lock screen. Flag off = shipping view.
+            if StoopFlag.designSystemV2Enabled {
+                WPActivityLockView(attributes: context.attributes, state: context.state, isStale: context.isStale) { action, label in
+                    WPIntentWrapper(action: action, passID: context.state.passID, label: label)
+                }
+                .activityBackgroundTint(.black)
                 .activitySystemActionForegroundColor(.white)
+            } else {
+                SpotPassLockScreenView(attributes: context.attributes, state: context.state, isStale: context.isStale)
+                    .activityBackgroundTint(SpotPassTheme.ink)
+                    .activitySystemActionForegroundColor(.white)
+            }
         } dynamicIsland: { context in
-            DynamicIsland {
+            if StoopFlag.designSystemV2Enabled {
+                return wpDynamicIsland(context: context) { action, label in
+                    WPIntentWrapper(action: action, passID: context.state.passID, label: label)
+                }
+            }
+            return DynamicIsland {
                 DynamicIslandExpandedRegion(.leading) {
                     HStack(spacing: 8) {
                         glyph(context.attributes, size: 44)
@@ -115,6 +129,24 @@ struct SpotPassLiveActivity: Widget {
         case .thanks: return ClipCopy.thanksHeadline
         case .cancelled: return ClipCopy.cancelledLine
         case .ended: return ClipCopy.activityEnded
+        }
+    }
+}
+
+// MARK: - Stoop intent wrapper
+
+/// Wraps a Stoop pill in the SAME App Intents the shipping buttons use (LeavingNowIntent,
+/// FiveMoreMinutesIntent, NotLeavingIntent), so "Leaving now" still sends from a locked phone.
+struct WPIntentWrapper: View {
+    let action: WPActivityAction
+    let passID: String?
+    let label: AnyView
+
+    var body: some View {
+        switch action {
+        case .leavingNow: Button(intent: LeavingNowIntent(passID: passID)) { label }.buttonStyle(.plain)
+        case .fiveMore: Button(intent: FiveMoreMinutesIntent(passID: passID)) { label }.buttonStyle(.plain)
+        case .notLeaving: Button(intent: NotLeavingIntent(passID: passID)) { label }.buttonStyle(.plain)
         }
     }
 }
