@@ -492,7 +492,9 @@ final class NotificationScheduler {
         if AppConstants.addressAnchoredParkingEnabled,
            let sentence = ParkingAddressCopy.notificationSentence(car.address) {
             content.body += " " + sentence
-            content.categoryIdentifier = Self.addressCategoryID
+            if let category = Self.categoryIdentifier(stoop: AppConstants.designSystemV2Enabled, hasVerifiedAddress: true) {
+                content.categoryIdentifier = category
+            }
         }
 
         content.sound = .default
@@ -508,6 +510,14 @@ final class NotificationScheduler {
         }
 
         return content
+    }
+
+    /// The category for a reminder whose body carries a verified address. Under Stoop the Stoop category
+    /// wins: it has the "Walk there" action AND its own hidden-previews placeholder, so the address stays
+    /// off the lock screen exactly as the address category does. Flag off: the address category.
+    nonisolated static func categoryIdentifier(stoop: Bool, hasVerifiedAddress: Bool) -> String? {
+        if stoop { return WPParkReminderCopy.categoryID }
+        return hasVerifiedAddress ? addressCategoryID : nil
     }
 
     // MARK: - Address-anchored parking category

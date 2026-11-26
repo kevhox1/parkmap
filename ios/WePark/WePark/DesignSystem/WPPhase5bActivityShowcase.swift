@@ -14,6 +14,7 @@
 //
 
 #if DEBUG
+import ActivityKit
 import SwiftUI
 
 struct WPPhase5bActivityShowcase: View {
@@ -27,8 +28,19 @@ struct WPPhase5bActivityShowcase: View {
 
     private static var window: UIWindow?
 
+    /// `-wp5bActivity real`: starts a REAL counting Live Activity (the system renders the lock screen and
+    /// the Dynamic Island with `wpDynamicIsland`), so expanded-island height can be measured on a
+    /// simulator instead of approximated. Only the flag-on build draws the Stoop layout.
+    private static func startRealActivity() {
+        guard ActivityAuthorizationInfo().areActivitiesEnabled else { return }
+        let attributes = SpotPassActivityAttributes(alias: "Bodega Cat", glyph: "bodega_cat", isClip: false)
+        let state = WPActivityState(phase: .counting, leaveAt: Date.now.addingTimeInterval(12 * 60 + 48), startedAt: Date.now, passID: UUID().uuidString.lowercased())
+        _ = try? Activity.request(attributes: attributes, content: ActivityContent(state: state, staleDate: nil), pushType: nil)
+    }
+
     var body: some View {
         Color.clear.allowsHitTesting(false).onAppear {
+            if name == "real" { Self.startRealActivity(); return }
             guard Self.window == nil,
                   let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
             else { return }

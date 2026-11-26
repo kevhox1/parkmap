@@ -31,8 +31,15 @@ nonisolated enum WPClipCopy {
 
     static let reminderHeadline = "One reminder, when it's time"
     static let reminderSub = "It has a Leaving now button, so you can answer from the lock screen."
-    static let reminderOnly = "That's the only notification you'll get."
-    static let allowReminder = "Allow one reminder"
+    /// True on every path: the plan is one reminder (`HandoffReminderPlan.makeSingle`); "5 more min" is the
+    /// driver's own request for another one (`snoozeHint`); the backend sends a visible "Thanks, neighbor!"
+    /// alert to a clip driver when the neighbor says thanks. Do not reword this back to "the only
+    /// notification": it is false for those two paths.
+    static let reminderOnly = "We'll send one reminder before you leave. If you ask for 5 more min, we'll remind you again. If your neighbor says thanks, you'll see that too."
+    /// Read by VoiceOver on the countdown's "5 more min" button.
+    static let snoozeHint = "Gives you five more minutes and reminds you again"
+    /// There is no system permission prompt here (the clip never prompts); the button just keeps the reminder.
+    static let allowReminder = "Remind me once"
     static let skip = "Skip"
 
     /// B13 driver reminder title ("Still leaving around 4:45?"). The notification and the B11.3 preview share it.
