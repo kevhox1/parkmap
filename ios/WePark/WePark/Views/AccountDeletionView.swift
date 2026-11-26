@@ -162,6 +162,81 @@ struct DeleteAccountConfirmView: View {
         "Your parked car and reminders on this device are kept. WePark keeps working, with a fresh anonymous profile."
 
     var body: some View {
+        if AppConstants.designSystemV2Enabled {
+            stoopBody
+        } else {
+            legacyBody
+        }
+    }
+
+    /// Stoop Phase 6a (B15.4): the round-2 confirmation. Same model, same buttons' behavior; the
+    /// consequence copy stays the accurate flag-off wording (what deletion really does), not the
+    /// mock's placeholder text.
+    private var stoopBody: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: WP.Space.s3) {
+                Text("Delete your account?")
+                    .font(WP.Font.fredoka(28, .bold, relativeTo: .title))
+                    .foregroundStyle(WP.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                Text("This can\u{2019}t be undone.")
+                    .font(WP.Font.fredoka(17, .regular, relativeTo: .body))
+                    .foregroundStyle(WP.text)
+                WPListCard {
+                    stoopConsequence("Your pins and chat messages stay on the map, but they no longer carry your name. They\u{2019}ll show as \u{201C}Former neighbor.\u{201D}")
+                    WPListDivider()
+                    stoopConsequence("Your profile, notification registrations, votes and evidence photos are deleted.")
+                    WPListDivider()
+                    stoopConsequence(DeleteAccountConfirmView.keptOnDeviceCopy)
+                }
+                if let message = model.errorMessage {
+                    Text(message)
+                        .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
+                        .foregroundStyle(WP.noParkText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityLabel("Error. \(message)")
+                }
+                Button {
+                    Task { await model.confirmDeletion() }
+                } label: {
+                    HStack(spacing: WP.Space.s2) {
+                        if model.isDeleting { ProgressView().tint(WP.noParkText) }
+                        Text(model.isDeleting ? "Deleting\u{2026}" : "Delete account")
+                    }
+                }
+                .buttonStyle(WPDestructiveOutlineStyle())
+                .disabled(!model.isIdle)
+                .accessibilityHint("Permanently deletes your account. This can\u{2019}t be undone.")
+                Button("Keep my account") { onFinished() }
+                    .buttonStyle(InkPillButtonStyle(labelColor: .white))
+                    .disabled(model.isDeleting)
+            }
+            .padding(.horizontal, WP.Space.screenMargin)
+            .padding(.top, WP.Space.s6)
+            .padding(.bottom, WP.Space.s4)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .background(WP.card.ignoresSafeArea())
+        .presentationDetents([.large])
+        .presentationDragIndicator(.hidden)
+        .interactiveDismissDisabled(model.isDeleting)
+        .onChange(of: model.isDeleted) { _, deleted in
+            if deleted { onFinished() }
+        }
+    }
+
+    private func stoopConsequence(_ text: String) -> some View {
+        Text(text)
+            .font(WP.Font.fredoka(15, .regular, relativeTo: .callout))
+            .foregroundStyle(WP.text)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, 18)
+            .padding(.vertical, WP.Space.s3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private var legacyBody: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 Image(systemName: "exclamationmark.triangle.fill")
@@ -253,5 +328,33 @@ struct DeleteAccountConfirmView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+// MARK: - Stoop destructive button (B15.4)
+
+/// Delete account: card fill, 2.5pt red line, red 17/700 label, 64 tall. Flat (it is not the thing
+/// you want to press, so it is not raised or taxi).
+struct WPDestructiveOutlineStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        StyleBody(configuration: configuration)
+    }
+
+    private struct StyleBody: View {
+        let configuration: ButtonStyleConfiguration
+        @Environment(\.isEnabled) private var isEnabled
+
+        var body: some View {
+            let shape = Capsule()
+            configuration.label
+                .font(WP.Font.fredoka(20, .bold, relativeTo: .title3))
+                .foregroundStyle(isEnabled ? WP.noParkText : WP.muted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, WP.Space.s6)
+                .frame(maxWidth: .infinity, minHeight: WP.Control.mediumHeight)
+                .background(shape.fill(configuration.isPressed ? WP.lifted : WP.card))
+                .overlay(shape.strokeBorder(isEnabled ? WP.noParkText : WP.hairline, lineWidth: WP.Border.control))
+                .contentShape(shape)
+        }
     }
 }

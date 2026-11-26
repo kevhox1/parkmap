@@ -159,6 +159,106 @@ struct SuggestNeighborhoodSheet: View {
     }
 
     var body: some View {
+        if AppConstants.designSystemV2Enabled {
+            stoopBody
+        } else {
+            legacyBody
+        }
+    }
+
+    // MARK: Stoop (B15.5)
+
+    /// Stoop Phase 6a: the round-2 form. Same model, validation, submit and thanks copy; only the
+    /// skin differs. Reachable only while `coverageRequestsEnabled` is on (off today).
+    private var stoopBody: some View {
+        Group {
+            if model.isSent {
+                WPScreenScaffold(
+                    closeLabel: "Done",
+                    onClose: { dismiss() },
+                    title: "Thank you!",
+                    sub: SuggestNeighborhoodModel.thanksMessage
+                ) { EmptyView() }
+                .task {
+                    try? await Task.sleep(nanoseconds: 2_200_000_000)
+                    dismiss()
+                }
+            } else {
+                WPScreenScaffold(
+                    closeLabel: "Back",
+                    onClose: { dismiss() },
+                    title: "Where should WePark go next?",
+                    sub: "We cover Manhattan today. Suggestions decide the order of what comes after.",
+                    primary: stoopPrimary
+                ) {
+                    stoopForm
+                }
+            }
+        }
+        .presentationDetents([.large])
+        .interactiveDismissDisabled(model.isSubmitting)
+        .onAppear {
+            if let authService {
+                model.attachSubmitterIfNeeded { CoverageRequestService(authService: authService) }
+            }
+        }
+    }
+
+    private var stoopPrimary: (title: String, kind: WPPrimaryKind, action: () -> Void) {
+        if model.isSubmitting {
+            return (title: "Sending\u{2026}", kind: WPPrimaryKind.navigation, action: {})
+        }
+        return (title: "Send suggestion", kind: WPPrimaryKind.navigation, action: { Task { await model.submit() } })
+    }
+
+    private var stoopForm: some View {
+        VStack(alignment: .leading, spacing: WP.Space.s2) {
+            Text("Neighborhood")
+                .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
+                .foregroundStyle(WP.text)
+            TextField("Astoria, Queens", text: $model.city)
+                .textInputAutocapitalization(.words)
+                .font(WP.Font.fredoka(17, .semibold, relativeTo: .body))
+                .foregroundStyle(WP.text)
+                .padding(.horizontal, WP.Space.s4)
+                .frame(minHeight: WP.Target.standard)
+                .background(RoundedRectangle(cornerRadius: WP.Radius.tile, style: .continuous).fill(WP.card))
+                .overlay(RoundedRectangle(cornerRadius: WP.Radius.tile, style: .continuous).strokeBorder(WP.line, lineWidth: WP.Border.fact))
+                .accessibilityLabel("Neighborhood or city")
+            if let hint = model.cityHint {
+                Text(hint)
+                    .font(WP.Font.fredoka(13, .regular, relativeTo: .caption))
+                    .foregroundStyle(WP.muted)
+            }
+            Text("Anything we should know? (optional)")
+                .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
+                .foregroundStyle(WP.text)
+                .padding(.top, WP.Space.s2)
+            TextField("Street cleaning days, tricky blocks\u{2026}", text: $model.note, axis: .vertical)
+                .lineLimit(3...6)
+                .font(WP.Font.fredoka(17, .regular, relativeTo: .body))
+                .foregroundStyle(WP.text)
+                .padding(WP.Space.s4)
+                .frame(minHeight: 120, alignment: .topLeading)
+                .background(RoundedRectangle(cornerRadius: WP.Radius.tile, style: .continuous).fill(WP.card))
+                .overlay(RoundedRectangle(cornerRadius: WP.Radius.tile, style: .continuous).strokeBorder(WP.line, lineWidth: WP.Border.fact))
+                .accessibilityLabel("Note, optional")
+            if let hint = model.noteHint {
+                Text(hint)
+                    .font(WP.Font.fredoka(13, .regular, relativeTo: .caption))
+                    .foregroundStyle(WP.muted)
+            }
+            if let message = model.errorMessage {
+                Text(message)
+                    .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
+                    .foregroundStyle(WP.noParkText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityLabel("Error. \(message)")
+            }
+        }
+    }
+
+    private var legacyBody: some View {
         NavigationStack {
             Group {
                 if model.isSent {

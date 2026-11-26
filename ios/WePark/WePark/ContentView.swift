@@ -1418,7 +1418,11 @@ struct ContentView: View {
             .fullScreenCover(isPresented: $showOnboardingStoryCover, onDismiss: {
                 handleOnboardingStoryCoverDismissed()
             }) {
-                OnboardingStoryView(onFinish: { showOnboardingStoryCover = false })
+                if AppConstants.designSystemV2Enabled {
+                    WPOnboardingStoryV2(onFinish: { showOnboardingStoryCover = false })
+                } else {
+                    OnboardingStoryView(onFinish: { showOnboardingStoryCover = false })
+                }
             }
             // Spot Pass seeker flow (C1). Never presented while the flag is off: the only trigger
             // is the More-sheet row, which does not exist flag-off.
@@ -1763,6 +1767,23 @@ struct ContentView: View {
             // W7: Global settings sheet.
             // S7 (docs/regulars-network-spec.md §3.1): regularsService threaded through for the
             // gated "Regulars" row → RegularsSettingsView. See this property's own doc comment.
+            if AppConstants.designSystemV2Enabled {
+                // Stoop B15.2/B15.3: same bindings and callbacks as the flag-off screen below.
+                WPSettingsV2(
+                    notificationsMuted: $notificationsMuted,
+                    offsets: $reminderOffsets,
+                    drivingVoice: drivingVoice,
+                    regularsService: regularsService,
+                    onUnmute: { v2SettingsUnmute() },
+                    onOffsetsChange: { handleReminderOffsetsChange() },
+                    appVersion: appVersion,
+                    buildNumber: buildNumber
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+                .presentationBackground(WP.paper)
+                .presentationCornerRadius(WP.Radius.sheet)
+            } else {
             SettingsView(
                 notificationsMuted: $notificationsMuted,
                 offsets: $reminderOffsets,
@@ -1789,6 +1810,7 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+            }
 
         case .parkUntil:
             // W7.5 pass-2: "Parking until when?" sheet — presented via standalone toolbar
@@ -1849,11 +1871,20 @@ struct ContentView: View {
             // rule and the LIVE PINS shipped-marker-treatment rule. No dismiss closure of
             // its own (same shape as `.settings` above) — the `.sheet(item:)` `onDismiss`
             // catch-all restores `.browseNav`.
-            MapKeyLegendView()
-                .presentationDetents([.medium])
-                .presentationDragIndicator(.visible)
-                .presentationBackground(.regularMaterial)
-                .presentationCornerRadius(20)
+            if AppConstants.designSystemV2Enabled {
+                // Stoop B15.6.
+                WPColorsMeanV2()
+                    .presentationDetents([.large])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(WP.paper)
+                    .presentationCornerRadius(WP.Radius.sheet)
+            } else {
+                MapKeyLegendView()
+                    .presentationDetents([.medium])
+                    .presentationDragIndicator(.visible)
+                    .presentationBackground(.regularMaterial)
+                    .presentationCornerRadius(20)
+            }
 
         case .pinDetail(let pin):
             // Community 1.0 / Tier 1: read-only community pin detail sheet.
@@ -2254,6 +2285,45 @@ struct ContentView: View {
     /// never stacks a second sheet on top of this one.
     @ViewBuilder
     private var moreMenuSheetContent: some View {
+        if AppConstants.designSystemV2Enabled {
+            v2MoreSheetContent
+        } else {
+            legacyMoreMenuSheetContent
+        }
+    }
+
+    /// Stoop B15.1: the round-2 More sheet over the same rows, the same selection handler and the
+    /// same "Show all sign details" toggle behavior as the flag-on path below.
+    private var v2MoreSheetContent: some View {
+        WPMoreSheetV2(
+            rows: moreMenuVisibleRows(
+                communityEnabled: AppConstants.communityEnabled,
+                onboardingReplayAvailable: AppConstants.onboardingExperienceEnabled(),
+                hasParkedCar: parkPinService.parkedCar != nil,
+                fullPaletteMode: false,
+                spotPassEnabled: AppConstants.spotHandoffEnabled,
+                driverPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass,
+                planTripEnabled: AppConstants.planTripEnabled,
+                tripActive: tripPlan != nil
+            ),
+            signDetailsOn: signDetailsOn,
+            onSelect: { row in handleMoreMenuSelection(row) },
+            onToggleSignDetails: {
+                // Dismiss after flipping so the user sees the result at once (same as before).
+                activeSheet = dismissTargetOutsideBrowseNav
+                signDetailsOn.toggle()
+                rebuildOverlays(at: .nowET)
+            },
+            onDone: { activeSheet = dismissTargetOutsideBrowseNav }
+        )
+        .presentationDetents([.fraction(0.8), .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(WP.card)
+        .presentationCornerRadius(WP.Radius.sheet)
+    }
+
+    @ViewBuilder
+    private var legacyMoreMenuSheetContent: some View {
         MoreMenuSheet(
             rows: moreMenuVisibleRows(
                 communityEnabled: AppConstants.communityEnabled,
@@ -2285,6 +2355,19 @@ struct ContentView: View {
         .presentationDragIndicator(.visible)
         .presentationBackground(.regularMaterial)
         .presentationCornerRadius(20)
+    }
+
+    /// The Settings "reminders back on" follow-up, identical to the flag-off `SettingsView.onUnmute`:
+    /// reschedule the current pin if it opted in, then toast.
+    private func v2SettingsUnmute() {
+        if let car = parkPinService.parkedCar, car.notifyOnRestriction {
+            NotificationScheduler.shared.schedule(
+                for: car,
+                loadedSegments: tileLoader.segments,
+                engine: engine
+            )
+        }
+        ToastService.shared.show(message: "Reminders re-enabled")
     }
 
     /// Addendum 3 A3.4: the action table for a More-sheet row. Report / map key / Park Until
@@ -3259,6 +3342,9 @@ struct ContentView: View {
                 if let showcase = WPPhase5aShowcase.requested {
                     WPPhase5aShowcase(name: showcase)
                 }
+                if let showcase = WPPhase6aShowcase.requested {
+                    WPPhase6aShowcase(name: showcase)
+                }
             }
             #endif
             // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.
@@ -3565,15 +3651,25 @@ struct ContentView: View {
         if AppConstants.driveModeDefaultEnabled && showLocationPrimingCard
             && !driveModeActive && !blockSelectModeActive && !spotPlacementActive
             && curbPlacement == nil {
-            VStack(spacing: 0) {
-                LocationPrimingCard(
+            if AppConstants.designSystemV2Enabled {
+                // Stoop B1.4: the round-2 location screen. Same gate, same two outcomes.
+                WPLocationPrimingV2(
                     onAllow: { dismissLocationPrimingCard(allowed: true) },
                     onNotNow: { dismissLocationPrimingCard(allowed: false) }
                 )
-                .padding(.top, 100)
-                Spacer()
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .transition(.opacity)
+            } else {
+                VStack(spacing: 0) {
+                    LocationPrimingCard(
+                        onAllow: { dismissLocationPrimingCard(allowed: true) },
+                        onNotNow: { dismissLocationPrimingCard(allowed: false) }
+                    )
+                    .padding(.top, 100)
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
@@ -3600,6 +3696,22 @@ struct ContentView: View {
                 curbPlacementActive: curbPlacement != nil,
                 primingCardShowing: showLocationPrimingCard
            ) {
+            if AppConstants.designSystemV2Enabled {
+                // Stoop B1.6 to B1.8. Hidden while the park flow (token drag / confirm) is up.
+                if v2ParkFlow.phase == .idle {
+                    WPCoachOverlayV2(
+                        mark: mark,
+                        goalDockFrame: onboardingGoalDockFrame,
+                        tileRowFrame: onboardingTileRowFrame,
+                        anchorScreenPoint: onboardingCurbScreenPoint,
+                        topChromeBottom: onboardingTopChromeBottom,
+                        userDotScreenPoint: mark == .goalTiles ? onboardingUserDotScreenPoint() : nil,
+                        railFrame: onboardingRailFrame,
+                        onNext: { advanceOnboardingCoach(from: mark) },
+                        onSkip: { finishOnboardingCoach() }
+                    )
+                }
+            } else {
             OnboardingCoachOverlay(
                 mark: mark,
                 goalDockFrame: onboardingGoalDockFrame,
@@ -3615,6 +3727,7 @@ struct ContentView: View {
                 onPrimaryAction: { advanceOnboardingCoach(from: mark) },
                 onSkipAll: { finishOnboardingCoach() }
             )
+            }
         }
     }
 
@@ -3865,8 +3978,8 @@ struct ContentView: View {
         // programmatic recentre). Only a real user pan/pinch does - see
         // `handleOnboardingCoachUserMapGesture`, fired from `onAmbientUserAdjusted`. Mark 3's
         // projected anchor does follow the settled camera:
-        if onboardingCoachMark == .tapABlock {
-            onboardingCurbScreenPoint = onboardingNearestCurbScreenPoint()
+        if let mark = onboardingCoachMark, mark != .goalTiles {
+            onboardingCurbScreenPoint = onboardingCoachAnchorPoint(for: mark)
         }
     }
 
@@ -4325,7 +4438,8 @@ struct ContentView: View {
                 leverOpen: $overnightLeverOpen,
                 onSelectGoal: { goal in
                     selectGoal(goal)
-                    if let mark = onboardingCoachMark, mark.dismissedByGoalTileTap {
+                    // Stoop: only mark 1 (the goal tiles) is dismissed by picking a goal.
+                    if let mark = onboardingCoachMark, mark.v2DismissedByGoalTileTap {
                         handleOnboardingCoachRealControlTap(matches: mark)
                     }
                 },
@@ -4339,7 +4453,8 @@ struct ContentView: View {
                 onMore: { activeSheet = .moreMenu },
                 onLocate: { recenterOnUser() },
                 onParkMyCar: parkPinService.parkedCar == nil && tripPlan == nil
-                    ? { if !v2PlaceCarAtUser() { presentBrowseNavSearch() } } : nil
+                    ? { if !v2PlaceCarAtUser() { presentBrowseNavSearch() } } : nil,
+                onTileRowFrame: { onboardingTileRowFrame = $0 }
             )
         }
     }
@@ -4606,6 +4721,8 @@ struct ContentView: View {
             }
         }
         .onChange(of: v2ParkFlow.phase) { _, phase in
+            // Starting the drag IS mark 3's real control (drag-to-park): the lesson is done.
+            if phase != .idle, onboardingCoachMark == .tapABlock { finishOnboardingCoach() }
             if phase == .idle {
                 selectedSegmentID = nil
                 addressCoordinator.clearPlacement()
@@ -5373,8 +5490,23 @@ struct ContentView: View {
     /// `onboardingCoachOverlay` re-render (see `onboardingCurbScreenPoint`'s own doc comment).
     private func setOnboardingCoachMark(_ mark: OnboardingCoachMark) {
         onboardingCoachMark = mark
-        if mark == .tapABlock {
-            onboardingCurbScreenPoint = onboardingNearestCurbScreenPoint()
+        onboardingCurbScreenPoint = onboardingCoachAnchorPoint(for: mark)
+    }
+
+    /// The projected anchor for the current mark. Flag off: the nearest curb, mark 3 only (as
+    /// before). Stoop: the nearest curb for mark 2 (two-state map), the resting car token for mark 3
+    /// (drag-to-park; no anchor while the token is hidden, e.g. at accessibility sizes).
+    private func onboardingCoachAnchorPoint(for mark: OnboardingCoachMark) -> CGPoint? {
+        guard AppConstants.designSystemV2Enabled else {
+            return mark == .tapABlock ? onboardingNearestCurbScreenPoint() : nil
+        }
+        switch mark {
+        case .goalTiles: return nil
+        case .colorMeaning: return onboardingNearestCurbScreenPoint()
+        case .tapABlock:
+            guard v2ShowsRestingToken else { return nil }
+            let screen = UIScreen.main.bounds
+            return CGPoint(x: screen.width / 2, y: screen.height * 0.28)
         }
     }
 
@@ -6623,7 +6755,13 @@ struct ContentView: View {
             // First-run onboarding §2.2/§2.3: tapping a real block IS mark 3's own real
             // control ("Tap any block to see why") — finishes the coach layer the same as its
             // "Done" button would, instead of advancing (there is no mark after the last one).
-            if onboardingCoachMark == .tapABlock {
+            if AppConstants.designSystemV2Enabled {
+                // Stoop: tapping a curb is mark 2's own real control. The curb sheet is opening,
+                // so move to mark 3 now (it shows once the sheet is dismissed).
+                if onboardingCoachMark == .colorMeaning, let next = onboardingCoachNextMark(after: .colorMeaning) {
+                    setOnboardingCoachMark(next)
+                }
+            } else if onboardingCoachMark == .tapABlock {
                 finishOnboardingCoach()
             }
         } else {
