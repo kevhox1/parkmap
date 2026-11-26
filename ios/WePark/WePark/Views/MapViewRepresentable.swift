@@ -917,6 +917,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// ContentView handlers outside `updateUIView` (#31 invariant).
         var screenPointForCoordinate: ((CLLocationCoordinate2D) -> CGPoint?)?
 
+        /// Phase 2b (drag the car token to a curb): the inverse of `screenPointForCoordinate`. A
+        /// WINDOW point to the ground coordinate under it (`MKMapView.convert(_:toCoordinateFrom:)`,
+        /// correct under pitch/rotation), nil when the map has no size/window yet. Pure read, no
+        /// mutation; called only from SwiftUI gesture handlers outside `updateUIView` (#31 invariant).
+        var coordinateForWindowPoint: ((CGPoint) -> CLLocationCoordinate2D?)?
+
         /// Fired (async, main) when a settled camera change was caused by the user's own
         /// pan/pinch while NOT in drive mode and the flag is on. ContentView uses it to stop
         /// auto-tightening the look - never fight a gesture the user just made.
@@ -1041,6 +1047,10 @@ struct MapViewRepresentable: UIViewRepresentable {
     /// (after `placementSeverity`) so memberwise-init argument order is preserved for every
     /// existing call site.
     var curbLineDetailMode: Bool = false
+
+    /// Phase 2b (flag on only): the flat label on the parked-car marker ("My car" plus the end
+    /// time). nil = no label. Declared last so memberwise-init argument order is preserved.
+    var carCalloutText: String? = nil
 
     // MARK: - OverlayPayload (value type carrying segment-group coordinates)
 
@@ -1581,6 +1591,13 @@ struct MapViewRepresentable: UIViewRepresentable {
             guard mapView.bounds.contains(local) else { return nil }
             return mapView.convert(coordinate, toPointTo: nil)
         }
+        coordinatorActions.coordinateForWindowPoint = { [weak mapView] windowPoint in
+            guard let mapView, mapView.window != nil,
+                  mapView.bounds.width > 0, mapView.bounds.height > 0 else { return nil }
+            let local = mapView.convert(windowPoint, from: nil)
+            guard mapView.bounds.contains(local) else { return nil }
+            return mapView.convert(local, toCoordinateFrom: mapView)
+        }
         coordinatorActions.userDotOutsideCentralHalf = { [weak mapView] coordinate in
             guard let mapView, mapView.bounds.width > 0, mapView.bounds.height > 0 else { return nil }
             let point = mapView.convert(coordinate, toPointTo: mapView)
@@ -1734,6 +1751,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         // projected onto the parked car's resolved segment at display time — see
         // syncCarPin's own doc comment.
         context.coordinator.syncCarPin(carPin, segments: segments, on: mapView)
+        context.coordinator.syncCarCallout(text: carCalloutText)
 
         // W8.5b: Sync route polyline and destination pin.
         context.coordinator.syncRoutePolyline(activeRoute, on: mapView)
@@ -2107,6 +2125,27 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// uses (spot placement, report candidate search, in-drive GPS snap), so a car more
         /// than 35m from any loaded segment (sparse tile coverage, no tiles loaded yet)
         /// degrades to raw rather than snapping across the map to an unrelated curb.
+        /// Phase 2b (flag on only): the parked-car marker view and the label text it last drew.
+        private weak var wpCarPinView: MKAnnotationView?
+        private var lastCarCalloutText: String??
+
+        /// Draws the marker + flat label into the annotation view's image. Mutates only that view.
+        private func applyCarCallout(to view: MKAnnotationView, text: String?) {
+            lastCarCalloutText = .some(text)
+            if let rendered = WPMarkerRenderer.parkedCarCallout(detail: text) {
+                view.image = rendered.image
+                view.centerOffset = rendered.centerOffset
+            }
+        }
+
+        /// Called from `updateUIView`: redraws the label when its text changed (the end time
+        /// moves). Touches only the annotation view's image, never the camera or overlays.
+        func syncCarCallout(text: String?) {
+            guard AppConstants.designSystemV2Enabled, let view = wpCarPinView else { return }
+            if let last = lastCarCalloutText, last == text { return }
+            applyCarCallout(to: view, text: text)
+        }
+
         func syncCarPin(_ car: ParkedCar?, segments: [Segment], on mapView: MKMapView) {
             let newKey = car.map { CarPinKey(id: $0.id, latitude: $0.latitude, longitude: $0.longitude) }
 
@@ -2847,6 +2886,24 @@ struct MapViewRepresentable: UIViewRepresentable {
             // Only handle CarPinAnnotation — let the map handle user location etc.
             guard annotation is CarPinAnnotation else { return nil }
 
+            // Phase 2b (flag on only): the flat 40pt taxi disc plus a flat "My car" label that
+            // always carries the end time. Flag off falls through to the original marker below.
+            if AppConstants.designSystemV2Enabled {
+                let id = "WPCarPinAnnotation"
+                let wpView = mapView.dequeueReusableAnnotationView(withIdentifier: id)
+                    ?? MKAnnotationView(annotation: annotation, reuseIdentifier: id)
+                wpView.annotation = annotation
+                applyCarCallout(to: wpView, text: parent.carCalloutText)
+                wpView.canShowCallout = false
+                wpView.displayPriority = .required
+                wpView.isAccessibilityElement = true
+                wpView.accessibilityLabel = parent.carCalloutText.map { "My parked car. \($0). Tap for parking details." }
+                    ?? "My parked car. Tap for parking details."
+                wpView.accessibilityTraits = .button
+                wpCarPinView = wpView
+                return wpView
+            }
+
             // Open item #20 (2026-09-12, Kevin, PR #106 gate: "use this little blue car
             // icon as the actual [parked] car icon… it's more fitting and it looks
             // better") — promoted from the W5 mappin.circle.fill marker to PR #106's
@@ -2909,7 +2966,10 @@ struct MapViewRepresentable: UIViewRepresentable {
                let multi = overlay as? TaggedMultiPolyline,
                let kind = CurbLineStyleV2.kind(for: multi.overlayTag, detailMode: parent.curbLineDetailMode) {
                 let renderer = MKMultiPolylineRenderer(multiPolyline: multi)
-                CurbLineStyleV2.apply(CurbLineStyleV2.style(for: kind), to: renderer)
+                CurbLineStyleV2.apply(
+                    CurbLineStyleV2.style(for: kind), to: renderer,
+                    scale: CurbLineStyleV2.zoomScale(latitudeDelta: mapView.region.span.latitudeDelta)
+                )
                 return renderer
             }
 
@@ -2968,7 +3028,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             if AppConstants.designSystemV2Enabled, let sel = overlay as? SelectedPolyline {
                 let renderer = MKPolylineRenderer(polyline: sel)
                 let kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
-                CurbLineStyleV2.apply(CurbLineStyleV2.style(for: kind), to: renderer)
+                CurbLineStyleV2.apply(
+                    CurbLineStyleV2.style(for: kind), to: renderer,
+                    scale: CurbLineStyleV2.zoomScale(latitudeDelta: mapView.region.span.latitudeDelta)
+                )
                 return renderer
             }
 
@@ -3111,11 +3174,37 @@ struct MapViewRepresentable: UIViewRepresentable {
             }
         }
 
+        /// Phase 2b (flag on only): re-applies the zoom-scaled curb-line width and dash to the
+        /// renderers MapKit already cached. Touches only renderer stroke properties (never the
+        /// camera or the overlay set), and only when the quantized scale changed.
+        private var lastCurbLineScale: CGFloat = 1
+        private func rescaleCurbLines(on mapView: MKMapView, latitudeDelta: Double) {
+            guard AppConstants.designSystemV2Enabled else { return }
+            let scale = CurbLineStyleV2.zoomScale(latitudeDelta: latitudeDelta)
+            guard scale != lastCurbLineScale else { return }
+            lastCurbLineScale = scale
+            for overlay in mapView.overlays {
+                guard let renderer = mapView.renderer(for: overlay) as? MKOverlayPathRenderer else { continue }
+                let kind: CurbLineKind?
+                if let multi = overlay as? TaggedMultiPolyline {
+                    kind = CurbLineStyleV2.kind(for: multi.overlayTag, detailMode: parent.curbLineDetailMode)
+                } else if let sel = overlay as? SelectedPolyline {
+                    kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
+                } else {
+                    kind = nil
+                }
+                guard let kind else { continue }
+                CurbLineStyleV2.apply(CurbLineStyleV2.style(for: kind), to: renderer, scale: scale)
+                renderer.setNeedsDisplay()
+            }
+        }
+
         func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
             // A2: placement session hook (settle: final resolve + nudge). nil => no-op.
             placementController?.regionDidChange()
 
             let region = mapView.region
+            rescaleCurbLines(on: mapView, latitudeDelta: region.span.latitudeDelta)
             // FT-5: Clear the interaction flag synchronously and unconditionally, before
             // the async onRegionChanged dispatch. Clears on every call — whether the change
             // was user-driven or programmatic — to prevent the flag from getting stuck `true`
@@ -3218,7 +3307,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let dx = screenPoint.x - pinCenter.x
                 let dy = screenPoint.y - pinCenter.y
                 let distancePt = sqrt(dx * dx + dy * dy)
-                if distancePt <= 30 {
+                if distancePt <= 30 || (AppConstants.designSystemV2Enabled && pinView.frame.contains(screenPoint)) {
                     // The tap is on the car pin — suppress map-tap and fire car-pin handler.
                     _ = pinView  // suppress unused-variable warning
                     // Defer SwiftUI state mutation out of the UIKit gesture callback.

@@ -521,6 +521,8 @@ struct ContentView: View {
     /// Address-anchored parking triggers + the placement card's address (flag
     /// `addressAnchoredParkingEnabled`; inert when off).
     @State private var addressCoordinator = ParkingAddressCoordinator()
+    /// Phase 2b (B6, flag on only): the drag-the-car-token-to-a-curb flow. Idle and inert flag off.
+    @State private var v2ParkFlow = WPParkFlowController()
 
     /// W5.1: User location service for the recenter button.
     @State private var locationService = LocationService()
@@ -1694,7 +1696,11 @@ struct ContentView: View {
     private func sheetContent(_ sheet: ActiveSheet) -> some View {
         switch sheet {
         case .blockDetail(let segment):
-            blockDetailSheetContent(segment)
+            if AppConstants.designSystemV2Enabled {
+                v2CurbSheetContent(segment)
+            } else {
+                blockDetailSheetContent(segment)
+            }
 
         case .parkConfirm(let intent):
             ParkConfirmView(
@@ -1715,6 +1721,9 @@ struct ContentView: View {
 
         case .parkedCarDetail(let car):
             myCarSheetContent(car)
+
+        case .notificationRationale where AppConstants.designSystemV2Enabled:
+            v2ReminderPrimingContent
 
         case .notificationRationale:
             // W6: One-time rationale sheet. interactiveDismissDisabled(true) prevents
@@ -2095,7 +2104,11 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
 
         case .browseNav:
-            browseNavigationSheetContent
+            if AppConstants.designSystemV2Enabled {
+                v2SearchSheetContent
+            } else {
+                browseNavigationSheetContent
+            }
 
         }
     }
@@ -3177,6 +3190,13 @@ struct ContentView: View {
             // Same floating-overlay pattern as the cards just above — see
             // `longPressParkConfirmOverlay`'s own doc comment.
             longPressParkConfirmOverlay
+            // Phase 2b (flag on only): the draggable car token, drag bubble and confirm card.
+            if AppConstants.designSystemV2Enabled { v2ParkLayer }
+            #if DEBUG
+            if let showcase = WPPhase2bShowcase.requested {
+                WPPhase2bShowcase(name: showcase, segments: tileLoader.segments, engine: engine)
+            }
+            #endif
             // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.
             // See `communityMapChromeOverlay`'s own doc comment.
             communityMapChromeOverlay
@@ -3915,7 +3935,7 @@ struct ContentView: View {
             // `homeZoneId: String?`) — `MapViewRepresentable` no longer has any
             // `ZoneStore`/`ZoneGeometry` dependency of its own.
             homeZone: communityHomeZoneId.flatMap { id in zoneStore.zones.first { $0.id == id } },
-            communityPins: communityPins,
+            communityPins: v2MapCommunityPins,
             onCommunityPinTapped: handleCommunityPinTapped(_:),
             segments: tileLoader.segments,  // FT-11: for directional chevron bearing computation
             // FT-15/TF2-15 Stream B2: multi-segment block-select highlight (§4.2 step 3).
@@ -3934,7 +3954,8 @@ struct ContentView: View {
             placementSeverity: curbPlacementSeverity(for:),
             // Design system v0.1: five-state curb lines while "Show all sign details" is on.
             // Inert unless `designSystemV2Enabled`. NB: declared after `placementSeverity`.
-            curbLineDetailMode: AppConstants.designSystemV2Enabled ? (fullPaletteMode || signDetailsOn) : fullPaletteMode
+            curbLineDetailMode: AppConstants.designSystemV2Enabled ? (fullPaletteMode || signDetailsOn) : fullPaletteMode,
+            carCalloutText: v2CarCalloutText
         )
     }
 
@@ -3979,7 +4000,7 @@ struct ContentView: View {
             blockSelectModeActive: blockSelectModeActive,
             spotPlacementActive: spotPlacementActive,
             curbPlacementActive: curbPlacement != nil
-        )
+        ) && v2ParkFlow.phase == .idle && !Self.v2ShowcaseActive
         let goalTilesVisible = goalTileRowVisible(
             driveModeDefaultEnabled: AppConstants.driveModeDefaultEnabled,
             activeSheetIsNil: activeSheet == nil,
@@ -4250,6 +4271,252 @@ struct ContentView: View {
                 onLocate: { recenterOnUser() }
             )
         }
+    }
+
+    // MARK: - Design system Phase 2b: curb sheet, search, parking (flag on only)
+
+    /// End of the selected goal window (nil while no goal window drives the map).
+    private var v2WindowEnd: Date? {
+        parkUntilMode && !fullPaletteMode ? parkUntilTarget : nil
+    }
+
+    /// Community pins as the map draws them. Flag on: an "open spot" pin draws only on a curb that
+    /// is green for the selected window (`WPOpenSpotGate`); every other pin passes through.
+    private var v2MapCommunityPins: [CommunityPin] {
+        guard AppConstants.designSystemV2Enabled,
+              communityPins.contains(where: { $0.pinType == .openSpot }) else { return communityPins }
+        let needed = Set(communityPins.compactMap { $0.pinType == .openSpot ? $0.segmentId : nil })
+        var byID: [String: Segment] = [:]
+        for segment in tileLoader.segments where needed.contains(segment.id) { byID[segment.id] = segment }
+        let input = v2GoalInput
+        return WPOpenSpotGate.filter(
+            communityPins, segmentsByID: byID, engine: engine, from: input.now, until: input.selectedEnd
+        )
+    }
+
+    /// "Free until Mon 9:00 AM" for the parked car's curb, from the engine. nil when the curb's
+    /// tile is not loaded (the label then just says "My car").
+    private var v2CarCalloutText: String? {
+        guard AppConstants.designSystemV2Enabled, let car = parkPinService.parkedCar,
+              let id = car.detectedSegmentID,
+              let segment = tileLoader.segments.first(where: { $0.id == id }) else { return nil }
+        let model = WPCurbSheetBuilder.make(segment: segment, engine: engine, now: lastEvaluatedAt, windowEnd: nil)
+        switch model.variant {
+        case .park, .soon: return "Free until \(model.big)"
+        case .meter: return "Metered until \(model.big)"
+        case .dont: return model.big
+        case .nodata: return NoSignData.headline
+        case .unclear: return UnclearSign.upcomingLabel
+        case .planpark, .plandont: return nil
+        }
+    }
+
+    /// "In front of 50 E 1st St" for the saved car, else its street and side.
+    private var v2ParkedCarLine: String? {
+        guard let car = parkPinService.parkedCar else { return nil }
+        if let address = car.address { return ParkingAddressCopy.line(address) }
+        guard let street = car.street else { return "Saved on the map" }
+        let name = StreetNameFormatter.displayCanonical(street)
+        guard let side = car.detectedSide else { return name }
+        return "\(name) \u{00B7} \(WPCurbCopy.sideLabel(side))"
+    }
+
+    // MARK: B4 curb sheet
+
+    @ViewBuilder
+    private func v2CurbSheetContent(_ segment: Segment) -> some View {
+        let now: Date = .nowET
+        let base = WPCurbSheetBuilder.make(
+            segment: segment, engine: engine, now: now, windowEnd: v2WindowEnd, trip: tripPlan
+        )
+        let restriction = tripPlan == nil
+            ? pinService.blockScopedRestriction(forBlockfaceKey: segment.blockfaceKey) : nil
+        let reports = WPNeighborReports(
+            restrictionLabel: restriction.map { WPNeighborVerdict.label(for: $0.pinType) },
+            restrictionIsActive: restriction.map { !$0.isUpcoming(now: now) } ?? false
+        )
+        let model = WPNeighborVerdict.apply(reports, to: base)
+        WPCurbSheetV2(
+            model: model,
+            signs: WPSignList.lines(for: segment, engine: engine, now: now),
+            reportedRestriction: restriction,
+            sweeperPin: tripPlan == nil ? ParkedCarDetailLogic.liveSweeperPin(
+                in: pinService.visiblePins, segmentId: segment.id,
+                now: pinService.nowProvider(), communityEnabled: AppConstants.communityEnabled
+            ) : nil,
+            livePins: BlockDetailLogic.liveBlockPins(
+                in: pinService.visiblePins, segmentId: segment.id, communityEnabled: AppConstants.communityEnabled
+            ),
+            now: now,
+            segmentID: segment.id,
+            segmentMidpoint: segment.midpoint,
+            zoneMessageService: zoneMessageService,
+            zoneStore: zoneStore,
+            pinService: pinService,
+            planTag: tripPlan.map { WPCurbCopy.tripRange($0) },
+            onClose: { dismissBlockDetail() },
+            onPark: { v2ParkOnCurb(segment) },
+            onReport: blockDetailReportAction(for: segment),
+            onOpenPin: { pin in activeSheet = .pinDetail(pin) }
+        )
+        // At accessibility sizes the verdict would sit below the fold at medium: open large.
+        .presentationDetents(v2UsesLargeSheetOnly ? [.large] : [.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(WP.card)
+        .presentationCornerRadius(WP.Radius.sheet)
+        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+    }
+
+    /// Curb sheet "Park here" / "Park here anyway": the EXISTING save path (`confirmPinDrop`),
+    /// reminders on by default, same ordering as the placement commit (rest sheet first so a
+    /// first-ever park's priming sheet is not overwritten).
+    private func v2ParkOnCurb(_ segment: Segment) {
+        guard let coord = segment.midpoint ?? segment.coordinates.first else { return }
+        selectedSegmentID = nil
+        activeSheet = dismissTargetOutsideBrowseNav
+        let intent = PinDropIntent(
+            pinLat: coord.latitude, pinLng: coord.longitude,
+            detectedSegment: segment, detectedSegmentDistance: nil, alternativeCandidates: []
+        )
+        confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true))
+    }
+
+    private var v2UsesLargeSheetOnly: Bool {
+        UIApplication.shared.preferredContentSizeCategory.isAccessibilityCategory
+    }
+
+    // MARK: B3 search
+
+    @ViewBuilder
+    private var v2SearchSheetContent: some View {
+        WPSearchSheetV2(
+            goalInput: v2GoalInput,
+            currentRegion: region,
+            segments: tileLoader.segments,
+            engine: engine,
+            userLocation: locationService.userLocation,
+            locationService: locationService,
+            parkedCarLine: v2ParkedCarLine,
+            onSelectGoal: { goal in selectGoal(goal) },
+            onDestinationResolved: { coordinate in recenterMap(on: coordinate) },
+            onShowParkedCar: {
+                if let car = parkPinService.parkedCar {
+                    activeSheet = driveModeDefaultRestStateSheet()
+                    recenterMap(on: CLLocationCoordinate2D(latitude: car.latitude, longitude: car.longitude))
+                }
+            },
+            onRouteReady: { route, destination in
+                driveModeStyle = .destination
+                activeRoute = route
+                driveDestinationCoordinate = destination
+                driveModeActive = true
+            },
+            onClose: { activeSheet = driveModeDefaultRestStateSheet() }
+        )
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+        .presentationBackground(WP.card)
+        .presentationCornerRadius(WP.Radius.sheet)
+        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+    }
+
+    // MARK: B6 parking
+
+    /// DEBUG QA aid only (`-wp2bShowcase`): hides the live dock and token under the demo surface.
+    private static var v2ShowcaseActive: Bool {
+        #if DEBUG
+        return WPPhase2bShowcase.isActive
+        #else
+        return false
+        #endif
+    }
+
+    private var v2ShowsRestingToken: Bool {
+        // At accessibility sizes the goal sheet fills most of the screen, so the token stays home
+        // (Park here on a tapped curb remains).
+        return !Self.v2ShowcaseActive && !UIApplication.shared.preferredContentSizeCategory.isAccessibilityCategory
+            && AppConstants.designSystemV2Enabled && AppConstants.driveModeDefaultEnabled
+            && parkPinService.parkedCar == nil && tripPlan == nil && activeSheet == nil
+            && !driveModeActive && !blockSelectModeActive && !spotPlacementActive
+            && curbPlacement == nil && !v2OutsideCoverage
+    }
+
+    private var v2ParkLayer: some View {
+        let screen = UIScreen.main.bounds
+        return WPParkLayerV2(
+            flow: v2ParkFlow,
+            showsRestingToken: v2ShowsRestingToken,
+            coordinateForPoint: { point in coordinatorActions.coordinateForWindowPoint?(point) },
+            pointForCoordinate: { coordinate in coordinatorActions.screenPointForCoordinate?(coordinate) },
+            metersPerPoint: { max(0.05, region.span.latitudeDelta * 111_320 / Double(UIScreen.main.bounds.height)) },
+            resolveContext: { (engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan, segments: tileLoader.segments) },
+            address: addressCoordinator.placementAddress.map(ParkingAddressCopy.line),
+            onConfirm: { confirmV2Park() },
+            placeAtUser: {
+                guard let loc = locationService.userLocation else { return false }
+                v2ParkFlow.prepareIndex(segments: tileLoader.segments)
+                let point = coordinatorActions.screenPointForCoordinate?(loc)
+                    ?? CGPoint(x: screen.width / 2, y: screen.height * 0.28)
+                return v2ParkFlow.placeAt(
+                    coordinate: loc, point: point,
+                    metersPerPoint: max(0.05, region.span.latitudeDelta * 111_320 / Double(screen.height)),
+                    engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan
+                )
+            },
+            restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28)
+        )
+        .task(id: tileLoader.segments.count) {
+            // Build the snap index ahead of the first drag (a quick drag must not beat it).
+            if v2ShowsRestingToken { v2ParkFlow.prepareIndex(segments: tileLoader.segments) }
+        }
+        .onChange(of: v2ParkFlow.snap?.segment.id) { _, id in
+            selectedSegmentID = id
+            if AppConstants.addressAnchoredParkingEnabled {
+                addressCoordinator.placementSnapChanged(v2ParkFlow.snap.map { ParkingAddressRequest(snap: $0) })
+            }
+        }
+        .onChange(of: v2ParkFlow.phase) { _, phase in
+            if phase == .idle {
+                selectedSegmentID = nil
+                addressCoordinator.clearPlacement()
+            }
+        }
+    }
+
+    /// Confirm card "Park here" / "Park here anyway": the existing `confirmPinDrop` (park, save,
+    /// reminder scheduling are not forked). Reminders default ON, as on every other park path.
+    private func confirmV2Park() {
+        guard let snap = v2ParkFlow.snap else { return }
+        let address = AppConstants.addressAnchoredParkingEnabled ? addressCoordinator.placementAddress : nil
+        let intent = PinDropIntent(
+            pinLat: snap.snappedCoordinate.latitude, pinLng: snap.snappedCoordinate.longitude,
+            detectedSegment: snap.segment, detectedSegmentDistance: snap.distanceMeters,
+            alternativeCandidates: []
+        )
+        v2ParkFlow.reset()
+        selectedSegmentID = nil
+        addressCoordinator.clearPlacement()
+        confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true), address: address)
+    }
+
+    @ViewBuilder
+    private var v2ReminderPrimingContent: some View {
+        WPReminderPrimingSheet(
+            parkedLine: v2CarCalloutText.map { "Parked. \($0)." } ?? "Parked.",
+            offsets: reminderOffsets,
+            onDismiss: { activeSheet = dismissTargetOutsideBrowseNav },
+            onPermissionGranted: {
+                if AppConstants.communityEnabled { pushRegistrationService.requestRegistrationIfEnabled() }
+                guard let car = parkPinService.parkedCar else { return }
+                Task { @MainActor in
+                    NotificationScheduler.shared.schedule(for: car, loadedSegments: tileLoader.segments, engine: engine)
+                }
+            }
+        )
+        .presentationDetents([.medium])
+        .interactiveDismissDisabled(true)
+        .presentationBackground(WP.card)
+        .presentationCornerRadius(WP.Radius.sheet)
     }
 
     /// DM-2: maps `parkAndForgetGuardState` (`ParkAndForgetViewportResolution?`) to the
