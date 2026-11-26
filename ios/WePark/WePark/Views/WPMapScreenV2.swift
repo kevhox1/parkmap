@@ -102,6 +102,9 @@ struct WPGoalSheetV2: View {
     let onSearch: () -> Void
     let onMore: () -> Void
     let onLocate: () -> Void
+    /// Accessibility sizes only: the resting car token is hidden there (the sheet fills the
+    /// screen), so this row is the visible way to park without dragging. nil hides it.
+    var onParkMyCar: (() -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -196,6 +199,14 @@ struct WPGoalSheetV2: View {
                         }
                         .buttonStyle(WPGoalTileStyle(isSelected: goal == input.selectedGoal))
                         .accessibilityAddTraits(goal == input.selectedGoal ? .isSelected : [])
+                    }
+                    if let onParkMyCar {
+                        Button(action: onParkMyCar) {
+                            Text("Park my car at my location")
+                                .frame(maxWidth: .infinity, minHeight: WP.Control.goalTileHeight)
+                        }
+                        .buttonStyle(.wpSecondary)
+                        .accessibilityHint("Places your car on the nearest curb and shows its verdict")
                     }
                     // Search / More / Locate stay reachable, after the goals the sheet is about.
                     toolbar

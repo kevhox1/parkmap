@@ -78,13 +78,19 @@ struct WPCurbSheetModel: Equatable {
     var signCount: Int
     /// The restriction that ends the free stretch, when the engine found one (for the park flow).
     var nextChange: Date?
+    /// False when `big` is a plain statement, not a clock time ("Meter on this curb"). Every
+    /// surface that writes "until \(big)" must go through `freeLine` (or check this) instead.
+    var bigIsTime: Bool = true
 
     /// True when the free stretch has no end inside the 7 day look-ahead ("7+ days").
     nonisolated var isOpenEnded: Bool { variant == .park && big == WPCurbCopy.openEndedBig }
 
     /// "Free until Mon 9:00 AM" / "Free for 7+ days". One wording for every surface (drag bubble,
     /// car callout): "until 7+ days" is not a time.
-    nonisolated var freeLine: String { isOpenEnded ? "Free for \(big)" : "Free until \(big)" }
+    nonisolated var freeLine: String {
+        if !bigIsTime { return "\(big). Check the meter." }
+        return isOpenEnded ? "Free for \(big)" : "Free until \(big)"
+    }
 
     nonisolated var ctaTitle: String { variant.offersPrimaryPark ? "Park here" : "Park here anyway" }
     nonisolated var offersPrimaryPark: Bool { variant.offersPrimaryPark }
@@ -114,11 +120,12 @@ enum WPCurbSheetBuilder {
 
         func model(
             _ variant: WPCurbVariant, over: String, big: String, sub: String? = nil,
-            fraction: Double? = nil, nextChange: Date? = nil
+            fraction: Double? = nil, nextChange: Date? = nil, bigIsTime: Bool = true
         ) -> WPCurbSheetModel {
             WPCurbSheetModel(
                 variant: variant, title: title, cross: cross, over: over, big: big, sub: sub,
-                fractionLeft: fraction, signCount: signCount, nextChange: nextChange
+                fractionLeft: fraction, signCount: signCount, nextChange: nextChange,
+                bigIsTime: bigIsTime
             )
         }
 
@@ -229,7 +236,10 @@ enum WPCurbSheetBuilder {
             // Legal now but not green: a restriction is soon, a restriction lands inside the
             // selected window, or (no window) the curb has a meter at all.
             let legalButNotGreen: Bool = {
-                if state == .freeButRestrictionSoon { return true }
+                // With a selected window the map's own gate decides (a restriction that starts at
+                // or after the window end is still green); without one, a restriction inside 6 h
+                // is "soon".
+                if windowEnd == nil, state == .freeButRestrictionSoon { return true }
                 if let windowEnd {
                     return !WPCurbVerdict.isParkable(segment: segment, engine: engine, from: now, until: windowEnd)
                 }
@@ -239,7 +249,8 @@ enum WPCurbSheetBuilder {
                 guard let restrictionAt else {
                     return model(
                         .soon, over: "Free now", big: "Meter on this curb",
-                        sub: "Check the signs for the meter hours before you park."
+                        sub: "Check the signs for the meter hours before you park.",
+                        bigIsTime: false
                     )
                 }
                 var sub = "\(WPCurbCopy.duration(until: restrictionAt, from: now)) left, then \(name)."
@@ -274,24 +285,31 @@ enum WPCurbCopy {
     /// The "big" text of a park verdict with no restriction inside the look-ahead.
     nonisolated static let openEndedBig = "7+ days"
 
-    /// First moment after `from` when a metered rule is in force (engine `currentState` is
-    /// `.meteredActive`), over the 7 day look-ahead: 15 minute steps, refined to the minute.
+    /// First moment after `from` (inside the 7 day look-ahead) when a metered rule comes into
+    /// force. Found from the rules' own start boundaries (every meter range start on each of the
+    /// next 9 Eastern calendar days), so a window of any length is found, never stepped over.
+    /// A boundary counts only when the rule is actually in force at that instant (right day).
     nonisolated static func nextMeterStart(segment: Segment, engine: ParkingRulesEngine, from: Date) -> Date? {
-        let step: TimeInterval = 900
         let limit = from.addingTimeInterval(WPCurbSheetBuilder.lookAheadHours * 3600)
-        var t = from
-        while t < limit {
-            t = t.addingTimeInterval(step)
-            if engine.currentState(for: segment, at: t) == .meteredActive {
-                var lo = t.addingTimeInterval(-step)
-                while lo < t {
-                    lo = lo.addingTimeInterval(60)
-                    if engine.currentState(for: segment, at: lo) == .meteredActive { return lo }
+        let cal = Calendar.easternTime
+        let today = cal.startOfDay(for: from)
+        let meterRules = segment.rules.filter { $0.category == .metered && !$0.timeRanges.isEmpty }
+        var best: Date?
+        for rule in meterRules {
+            for dayOffset in 0...8 {
+                guard let day = cal.date(byAdding: .day, value: dayOffset, to: today) else { continue }
+                for tr in rule.timeRanges {
+                    guard let start = cal.date(byAdding: .minute, value: tr.start, to: day),
+                          start > from, start < limit else { continue }
+                    if let current = best, start >= current { continue }
+                    if rule.rangeActive(
+                        tr, dayOfWeek: start.dayOfWeekET, minuteOfDay: start.minuteOfDayET,
+                        emptyDaysMeansEveryDay: true
+                    ) { best = start }
                 }
-                return t
             }
         }
-        return nil
+        return best
     }
 
     /// "E 1st St · North side".
@@ -520,6 +538,17 @@ enum WPNeighborVerdict {
         ))
     }
 
+    /// The parked-car callout verdict. The saved car is judged live and on its own: there is no
+    /// search window (that window belongs to the spot being searched, not the parked car), so
+    /// "Free until X" always names the FIRST restriction on the curb, meter included.
+    nonisolated static func carCallout(
+        segment: Segment, engine: ParkingRulesEngine, now: Date, reports: WPNeighborReports
+    ) -> String? {
+        calloutText(for: resolve(
+            segment: segment, engine: engine, now: now, windowEnd: nil, trip: nil, reports: reports
+        ))
+    }
+
     /// The parked-car callout line for a resolved verdict (nil for plan variants).
     nonisolated static func calloutText(for model: WPCurbSheetModel) -> String? {
         switch model.variant {
@@ -554,6 +583,8 @@ enum WPNeighborVerdict {
         switch model.variant {
         case .meter:
             signLine = "By the signs this curb is metered until \(model.big)."
+        case .soon where !model.bigIsTime:
+            signLine = "By the signs this curb is free now, but it has a meter. Check the meter hours."
         case .park where model.isOpenEnded:
             signLine = "By the signs this curb is free for the next 7 days."
         default:
@@ -730,6 +761,11 @@ struct WPDragBubble: Equatable {
         case .park, .planpark:
             return WPDragBubble(
                 tone: .park, headline: "Park", detail: model.freeLine, hint: "Let go to place your car"
+            )
+        case .soon where !model.bigIsTime:
+            return WPDragBubble(
+                tone: .soon, headline: model.big, detail: "Check the meter hours",
+                hint: "Let go to place your car"
             )
         case .soon:
             return WPDragBubble(

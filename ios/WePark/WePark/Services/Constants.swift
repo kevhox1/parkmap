@@ -89,6 +89,10 @@ enum AppConstants {
     /// Guards `firstPinDropped` → rationale sheet presentation in ContentView.
     static let notificationRationaleShownKey = "wepark_notification_rationale_shown"
 
+    /// UserDefaults key (flag on only): set to true after the first successful park. The resting
+    /// car token's "Drag to a curb to park" hint shows until then, and never again.
+    static let parkDragHintSeenKey = "wepark_v2_park_drag_hint_seen"
+
     /// UserDefaults key: W7 integration point — mute toggle.
     /// W6 stubs this as always absent (= false). W7 fills it in via the settings sheet.
     /// Do NOT read or write this key from W6 code; reserved for W7.

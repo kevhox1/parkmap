@@ -174,6 +174,8 @@ struct WPParkLayerV2: View {
     @Bindable var flow: WPParkFlowController
     /// Show the idle token (no parked car, no sheet, no trip plan).
     let showsRestingToken: Bool
+    /// "Drag to a curb to park" next to the idle token. Off after the first successful park.
+    let showsDragHint: Bool
     /// Window point -> ground coordinate (map projection seam).
     let coordinateForPoint: (CGPoint) -> CLLocationCoordinate2D?
     /// Ground coordinate -> window point (map projection seam), to land the token on the curb.
@@ -205,7 +207,7 @@ struct WPParkLayerV2: View {
                 if visible {
                     originRing(origin: origin)
                     token(origin: origin)
-                    if flow.phase == .idle { hint(origin: origin) }
+                    if flow.phase == .idle, showsDragHint { hint(origin: origin) }
                     if flow.phase == .dragging || flow.phase == .placed { bubble(origin: origin, width: proxy.size.width) }
                 }
                 VStack {
@@ -443,7 +445,9 @@ struct WPParkConfirmCard: View {
                         .font(WP.Font.fredoka(19, .semibold, relativeTo: .title3))
                         .foregroundStyle(WP.text)
                         .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, WP.Space.s4)
+                        .padding(.vertical, WP.Space.s2)
                         .frame(maxWidth: .infinity, minHeight: WP.Control.commitmentHeight)
                         .background(Capsule().fill(WP.card))
                         .overlay(Capsule().strokeBorder(WP.line, lineWidth: WP.Border.control))

@@ -649,6 +649,8 @@ struct ContentView: View {
     @State private var forDaysResolution: ParkAndForgetViewportResolution? = nil
     /// Design system Phase 2a: "Show all sign details" (five curb styles + legend). Persisted.
     @AppStorage("wepark.signDetailsOn") private var signDetailsOn: Bool = false
+    /// Flag on: the resting car token's "Drag to a curb to park" hint, until the first park.
+    @AppStorage(AppConstants.parkDragHintSeenKey) private var parkDragHintSeen: Bool = false
     /// Phase 2a: the Overnight lever's hour chips are open.
     @State private var overnightLeverOpen: Bool = false
     /// Phase 2a: live network path for the offline banner (started only while the flag is on).
@@ -3027,8 +3029,11 @@ struct ContentView: View {
                     selectedCoords = coords
                     // Color selected block by its Park Until result.
                     selectedState = AppConstants.designSystemV2Enabled
-                        ? (WPCurbVerdict.isParkable(segment: seg, engine: engine, from: now, until: target)
-                            ? .freeComfortably : .restrictedNow)
+                        ? v2HighlightState(
+                            for: seg, now: now,
+                            base: WPCurbVerdict.isParkable(segment: seg, engine: engine, from: now, until: target)
+                                ? .freeComfortably : .restrictedNow
+                        )
                         : (engine.isFree(
                             segment: seg, from: now, until: target,
                             ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
@@ -3086,7 +3091,10 @@ struct ContentView: View {
             if coords.count >= 2 {
                 selectedCoords = coords
                 selectedState = AppConstants.designSystemV2Enabled
-                    ? WPCurbVerdict.currentState(segment: seg, engine: engine, at: now)
+                    ? v2HighlightState(
+                        for: seg, now: now,
+                        base: WPCurbVerdict.currentState(segment: seg, engine: engine, at: now)
+                    )
                     : engine.currentState(for: seg, at: now)
             }
         }
@@ -4297,7 +4305,9 @@ struct ContentView: View {
                 },
                 onSearch: { presentBrowseNavSearch() },
                 onMore: { activeSheet = .moreMenu },
-                onLocate: { recenterOnUser() }
+                onLocate: { recenterOnUser() },
+                onParkMyCar: parkPinService.parkedCar == nil && tripPlan == nil
+                    ? { if !v2PlaceCarAtUser() { presentBrowseNavSearch() } } : nil
             )
         }
     }
@@ -4367,11 +4377,18 @@ struct ContentView: View {
               let id = car.detectedSegmentID,
               let segment = tileLoader.segments.first(where: { $0.id == id }) else { return nil }
         let now = lastEvaluatedAt
-        let model = WPNeighborVerdict.resolve(
-            segment: segment, engine: engine, now: now, windowEnd: v2WindowEnd, trip: nil,
+        return WPNeighborVerdict.carCallout(
+            segment: segment, engine: engine, now: now,
             reports: v2NeighborReports(for: segment, now: now, ignoringTrip: true)
         )
-        return WPNeighborVerdict.calloutText(for: model)
+    }
+
+    /// The selected-curb highlight is never greener than the curb sheet: an active neighbor report
+    /// (filming / construction) turns the sheet to "don't", so the highlight draws as don't too.
+    private func v2HighlightState(for segment: Segment, now: Date, base: CurrentState) -> CurrentState {
+        guard v2NeighborReports(for: segment, now: now).restrictionIsActive,
+              v2NeighborReports(for: segment, now: now).restrictionLabel != nil else { return base }
+        return .restrictedNow
     }
 
     /// Neighbor reports (active filming / construction) on a curb, reduced for the shared verdict.
@@ -4509,11 +4526,28 @@ struct ContentView: View {
             && curbPlacement == nil && !v2OutsideCoverage
     }
 
+    /// Places the car on the curb nearest the user (same snap, verdict and confirm card as a drag).
+    /// Used by the token's VoiceOver action and the accessibility-size "Park my car" row.
+    private func v2PlaceCarAtUser() -> Bool {
+        let screen = UIScreen.main.bounds
+        guard let loc = locationService.userLocation else { return false }
+        v2ParkFlow.prepareIndex(segments: tileLoader.segments)
+        let point = coordinatorActions.screenPointForCoordinate?(loc)
+            ?? CGPoint(x: screen.width / 2, y: screen.height * 0.28)
+        return v2ParkFlow.placeAt(
+            coordinate: loc, point: point,
+            metersPerPoint: max(0.05, region.span.latitudeDelta * 111_320 / Double(screen.height)),
+            engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan,
+            reports: { v2NeighborReports(for: $0, now: .nowET) }
+        )
+    }
+
     private var v2ParkLayer: some View {
         let screen = UIScreen.main.bounds
         return WPParkLayerV2(
             flow: v2ParkFlow,
             showsRestingToken: v2ShowsRestingToken,
+            showsDragHint: !parkDragHintSeen,
             coordinateForPoint: { point in coordinatorActions.coordinateForWindowPoint?(point) },
             pointForCoordinate: { coordinate in coordinatorActions.screenPointForCoordinate?(coordinate) },
             metersPerPoint: { max(0.05, region.span.latitudeDelta * 111_320 / Double(UIScreen.main.bounds.height)) },
@@ -4523,23 +4557,15 @@ struct ContentView: View {
             },
             address: addressCoordinator.placementAddress.map(ParkingAddressCopy.line),
             onConfirm: { confirmV2Park() },
-            placeAtUser: {
-                guard let loc = locationService.userLocation else { return false }
-                v2ParkFlow.prepareIndex(segments: tileLoader.segments)
-                let point = coordinatorActions.screenPointForCoordinate?(loc)
-                    ?? CGPoint(x: screen.width / 2, y: screen.height * 0.28)
-                return v2ParkFlow.placeAt(
-                    coordinate: loc, point: point,
-                    metersPerPoint: max(0.05, region.span.latitudeDelta * 111_320 / Double(screen.height)),
-                    engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan,
-                    reports: { v2NeighborReports(for: $0, now: .nowET) }
-                )
-            },
+            placeAtUser: { v2PlaceCarAtUser() },
             restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28)
         )
         .task(id: tileLoader.segments.count) {
             // Build the snap index ahead of the first drag (a quick drag must not beat it).
-            if v2ShowsRestingToken { v2ParkFlow.prepareIndex(segments: tileLoader.segments) }
+            // Also at accessibility sizes (token hidden): the "Park my car" row needs the index too.
+            if v2ShowsRestingToken || UIApplication.shared.preferredContentSizeCategory.isAccessibilityCategory {
+                v2ParkFlow.prepareIndex(segments: tileLoader.segments)
+            }
         }
         .onChange(of: v2ParkFlow.snap?.segment.id) { _, id in
             selectedSegmentID = id
@@ -7873,6 +7899,8 @@ struct ContentView: View {
     /// expression complexity in `ContentView.body` (same PR-1 extraction pattern).
     private func handlePinDropped(_ newCar: ParkedCar) {
         let oldID = previousCarID
+        // Flag on: the first successful park retires the token's drag hint for good.
+        if AppConstants.designSystemV2Enabled { parkDragHintSeen = true }
         Task { @MainActor in
             // W6: Cancel old + schedule new notifications.
             NotificationScheduler.shared.cancelAllThenSchedule(

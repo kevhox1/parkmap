@@ -33,6 +33,16 @@ struct WPResolvedPlace: Equatable {
     }
 }
 
+/// What the destination card's free-curb count depends on. Internal (not private) so a unit test
+/// can pin that it keys on the actual loaded-tile SET (an equal-sized swap of tiles must retrigger).
+struct WPSearchCountKey: Hashable {
+    let lat: Double, lng: Double, goal: String, segments: Int, loadedTiles: Set<String>, end: Date
+    init(place: WPResolvedPlace, goal: ParkingGoal, segments: Int, loadedTiles: Set<String>, end: Date) {
+        lat = place.coordinate.latitude; lng = place.coordinate.longitude
+        self.goal = goal.rawValue; self.segments = segments; self.loadedTiles = loadedTiles; self.end = end
+    }
+}
+
 // MARK: - Sheet
 
 struct WPSearchSheetV2: View {
@@ -279,7 +289,7 @@ struct WPSearchSheetV2: View {
                 .padding(.top, WP.Space.s2)
                 .padding(.bottom, WP.Space.s4)
         }
-        .task(id: CountKey(place: place, goal: goalInput.selectedGoal, segments: segments.count, loadedTiles: tileCoverage?.loadedTiles.count ?? -1, end: goalInput.selectedEnd)) {
+        .task(id: WPSearchCountKey(place: place, goal: goalInput.selectedGoal, segments: segments.count, loadedTiles: tileCoverage?.loadedTiles ?? [], end: goalInput.selectedEnd)) {
             recomputeCount(place)
         }
     }
@@ -424,14 +434,6 @@ struct WPSearchSheetV2: View {
     }
 
     // MARK: Logic
-
-    private struct CountKey: Hashable {
-        let lat: Double, lng: Double, goal: String, segments: Int, loadedTiles: Int, end: Date
-        init(place: WPResolvedPlace, goal: ParkingGoal, segments: Int, loadedTiles: Int, end: Date) {
-            lat = place.coordinate.latitude; lng = place.coordinate.longitude
-            self.goal = goal.rawValue; self.segments = segments; self.loadedTiles = loadedTiles; self.end = end
-        }
-    }
 
     private func recomputeCount(_ place: WPResolvedPlace) {
         guard AppConstants.isInManhattanCoverage(place.coordinate) else { count = nil; return }
