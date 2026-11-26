@@ -11,6 +11,19 @@
      Deliberately NO app-argument: the pass URL carries the secret token in its fragment.
 <meta name="apple-itunes-app" content="app-id=6777589379, app-clip-bundle-id=com.kevinhoxha.wepark.Clip"> -->
 <title>Spot Pass - WePark</title>
+<script>
+/* Stoop preview switch. OFF unless ?stoop=1 is in the query string (read here, before the URL is scrubbed).
+   ?stoop=0 turns it off again. The flag is tab-scoped (sessionStorage, never transmitted) so a reload keeps the look. */
+(function () {
+  try {
+    var v = new URLSearchParams(location.search).get('stoop'), k = 'wp_stoop';
+    if (v === '1') sessionStorage.setItem(k, '1'); else if (v === '0') sessionStorage.removeItem(k);
+    if (sessionStorage.getItem(k) !== '1') return;
+    document.documentElement.className += ' stoop';
+    document.querySelector('meta[name="color-scheme"]').setAttribute('content', 'light dark');
+  } catch (e) {}
+})();
+</script>
 <style>
   :root { --ink:#0E0F24; --ink2:#1B1E4B; --indigo:#6366F1; --lav:#A5A8FF; --text:#F2F3FF; --mute:#B9BCE0; --line:rgba(165,168,255,.35); }
   * { box-sizing: border-box; }
@@ -52,6 +65,60 @@
   @keyframes fall { 0% { opacity:1; transform:translate(0,0) rotate(0); } 100% { opacity:0; transform:translate(var(--x),240px) rotate(540deg); } }
   .spark { display:none; font-size:2rem; color:var(--lav); }
   @media (prefers-reduced-motion: reduce) { .disc { animation:none; } .confetti { display:none; } .spark { display:block; } }
+  .st-only { display:none; }
+
+  /* ===== Stoop preview (round 2 B17). Everything below is scoped to html.stoop, so default rendering is untouched. ===== */
+  html.stoop { --bg:#fbf6e6; --surface:#fff; --ink:#241f45; --tx:#241f45; --mu:#5a5578; --ln:#241f45; --hair:#a9a7b8; --taxi:#ffd23f; --park:#3ccf7a; --sh:#241f45; --link:#241f45;
+    --rnd:ui-rounded,"SF Pro Rounded","Arial Rounded MT Bold","Nunito",system-ui,-apple-system,sans-serif; }
+  @media (prefers-color-scheme: dark) {
+    html.stoop { --bg:#241f45; --surface:#2e2856; --tx:#fbf6e6; --mu:#c3bfdc; --ln:#6b64a0; --hair:#6b64a0; --sh:#100d24; --link:#fbf6e6; }
+  }
+  html.stoop body { background:var(--bg); color:var(--tx); font:500 clamp(17px,4.6vw,20px)/1.45 var(--rnd); }
+  html.stoop main { text-align:left; }
+  html.stoop .st-only { display:block; }
+  html.stoop .brand { font:700 1.15rem var(--rnd); color:var(--tx); margin:4px 0 14px; }
+  html.stoop h1 { font:700 clamp(30px,8.4vw,38px)/1.12 var(--rnd); color:var(--tx); margin:10px 0 10px; }
+  html.stoop p { color:var(--tx); }
+  html.stoop .small, html.stoop .card p { color:var(--mu); }
+  html.stoop .disc { display:none; }
+  html.stoop .who { display:flex; align-items:center; gap:12px; margin:4px 0 6px; }
+  html.stoop .who[hidden] { display:none; }
+  html.stoop .wg { flex:none; width:56px; height:56px; border-radius:50%; border:2px solid var(--ln); background:var(--surface); display:grid; place-items:center; font-size:28px; line-height:1; }
+  html.stoop .who b { display:block; font:700 1.1rem var(--rnd); }
+  html.stoop .who small { display:block; color:var(--mu); font-size:.9rem; }
+  html.stoop .chips { gap:12px; margin:16px 0 14px; }
+  html.stoop .chip { min-height:60px; border:2px solid var(--ln); background:var(--surface); color:var(--tx); border-radius:20px; font:700 1rem var(--rnd); overflow-wrap:anywhere; }
+  html.stoop .chip[aria-pressed="true"] { background:var(--taxi); border-color:var(--ln); color:#241f45; box-shadow:0 4px 0 var(--sh); }
+  html.stoop .picker-h { color:var(--mu); font-weight:500; }
+  html.stoop .btn { border-radius:28px; font-family:var(--rnd); min-height:68px; }
+  html.stoop .btn.primary { background:var(--taxi); color:#241f45; border:2px solid var(--ln); box-shadow:0 6px 0 var(--sh); font-size:1.25rem; font-weight:700; margin:14px 0 18px; }
+  html.stoop .btn.primary:active { transform:translateY(3px); box-shadow:0 3px 0 var(--sh); }
+  html.stoop .btn.outline { background:var(--surface); color:var(--tx); border:2px solid var(--ln); font-weight:700; }
+  html.stoop .btn:disabled, html.stoop .chip:disabled, html.stoop .link:disabled { opacity:.55; }
+  html.stoop .link { color:var(--link); font:700 1rem var(--rnd); }
+  html.stoop #notnow, html.stoop #cancel { display:block; margin:0 auto; }
+  html.stoop button:focus-visible, html.stoop a:focus-visible { outline:3px solid #6a4cff; outline-offset:3px; }
+  html.stoop .status { color:var(--tx); font-weight:700; }
+  html.stoop .card { background:var(--surface); border:2px solid var(--ln); border-radius:24px; padding:18px; }
+  html.stoop .card p { font-size:1rem; }
+  html.stoop .card a.btn { background:var(--ink); color:#fbf6e6; border-color:var(--ink); min-height:60px; }
+  @media (prefers-color-scheme: dark) { html.stoop .card a.btn { background:var(--taxi); color:#241f45; border-color:var(--taxi); } }
+  html.stoop #foot { margin-top:8px; }
+  html.stoop #report { display:block; margin:6px auto 0; font-weight:600; color:var(--mu); }
+  html.stoop #s-armed > p:not(.status):not(.small) { background:var(--surface); border:2px solid var(--ln); border-radius:24px; padding:14px 16px; color:var(--tx); }
+  html.stoop #when { display:none; }
+  html.stoop #when-sr { color:var(--tx); font-size:1rem; margin:0 0 14px; }
+  html.stoop .cd { background:var(--surface); border:2px solid var(--hair); border-radius:24px; padding:14px 18px; margin:0 0 14px; }
+  html.stoop .cd[hidden] { display:none; }
+  html.stoop .cd span { display:block; font-weight:700; font-size:.95rem; }
+  html.stoop .cd b { display:block; font:700 clamp(44px,14vw,60px)/1.05 var(--rnd); font-variant-numeric:tabular-nums; letter-spacing:.5px; }
+  html.stoop .sentat { background:var(--park); color:#241f45; border-radius:24px; padding:14px 18px; margin:0 0 16px; }
+  html.stoop .sentat span { display:block; font-weight:700; }
+  html.stoop .sentat b { display:block; font:700 clamp(36px,11vw,48px)/1.1 var(--rnd); }
+  html.stoop .stamp { display:inline-block; transform:rotate(-4deg); border:3px dashed var(--tx); border-radius:18px; padding:8px 16px; margin:4px 0 16px; font:700 1rem var(--rnd); letter-spacing:2px; text-transform:uppercase; }
+  html.stoop .disc.gray { display:grid; width:64px; height:64px; margin:6px 0; background:transparent; border:3px dashed var(--hair); font-size:28px; color:var(--mu); }
+  html.stoop .spark { color:var(--tx); }
+  html.stoop .banner { background:#6a4cff; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -63,6 +130,7 @@
   <!-- peek result: waiting + leaving-time chips -->
   <section id="s-open" hidden aria-labelledby="h-open">
     <div class="disc" id="glyph" aria-hidden="true"></div>
+    <div class="who st-only" id="who" hidden><span class="wg" id="glyph-s" aria-hidden="true"></span><span><b id="who-n"></b><small>A neighbor nearby</small></span></div>
     <h1 id="h-open">Someone is waiting for your spot</h1>
     <p>Leaving soon? Let them know. They won't see who you are or where you are. That's all they'll know.</p>
     <div class="chips" id="chips" role="group" aria-label="When are you leaving?">
@@ -86,6 +154,7 @@
     <div class="big" id="when" aria-hidden="true"></div>
     <p id="when-sr" class="small"></p>
     <p>We can't remind you from a web page, so keep this tab handy. When you pull out, tap the button.</p>
+    <div class="cd st-only" id="cdbox" aria-hidden="true"><span>Leaving in</span><b id="cd">0:00</b></div>
     <button class="btn primary" id="leave" type="button">I'm leaving now</button>
     <button class="btn outline" id="extend" type="button">5 more min</button>
     <button class="link" id="cancel" type="button">Not leaving</button>
@@ -100,6 +169,8 @@
     <div class="disc" id="glyph3" aria-hidden="true"></div>
     <h1 id="h-sent">You just made someone's day</h1>
     <p id="sent-sub">Thanks, neighbor! They've been told you're pulling out.</p>
+    <div class="sentat st-only"><span>Sent at</span><b id="sentat"></b></div>
+    <div class="stamp st-only" aria-hidden="true">Spot passed</div>
     <p class="small">Drive carefully.</p>
   </section>
 
@@ -127,7 +198,7 @@
 
   <div id="foot" hidden>
     <div class="card">
-      <p><strong>Get the free WePark app</strong> for a lock-screen countdown, a heads-up when a spot opens near you, and neighbor karma. This web page can't do those, and it can't give you credit for helping.</p>
+      <p id="getp"><strong>Get the free WePark app</strong> for a lock-screen countdown, a heads-up when a spot opens near you, and neighbor karma. This web page can't do those, and it can't give you credit for helping.</p>
       <!-- TestFlight public link (external group) until App Store launch; then https://apps.apple.com/app/id6777589379 -->
       <a class="btn outline" href="https://testflight.apple.com/join/QhVnaG4C" rel="noopener noreferrer">Get WePark</a>
     </div>
@@ -164,6 +235,7 @@
   // Read token from the fragment, then scrub the visible URL.
   var qs = new URLSearchParams(location.search);
   var hashTok = (/^#t=([A-Za-z0-9_-]{22})$/.exec(location.hash) || [])[1] || null;
+  var STOOP = document.documentElement.className.indexOf('stoop') >= 0;   // set by the head script (?stoop=1 preview switch)
   var FAKE = qs.get('fake') === '1' && !hashTok;      // fake mode is impossible when a real token is present
   var FAKE_STATE = FAKE ? (qs.get('state') || 'open') : '';
   var FAKE_NAME = FAKE ? qs.get('name') : null;
@@ -210,7 +282,10 @@
   function disabled() { msg('\u2026', "Spot Pass isn't live yet", "We're still getting it ready. Check back soon, and thanks for stopping by."); }
   function glyphChar() { return GLYPHS[S.glyph] || '\u{1F4CD}'; }
   function who() { return S.name || S.alias || 'Your neighbor'; }
-  function setGlyphs() { ['glyph', 'glyph2', 'glyph3'].forEach(function (i) { $(i).textContent = glyphChar(); }); }
+  function setGlyphs() {
+    ['glyph', 'glyph2', 'glyph3', 'glyph-s'].forEach(function (i) { $(i).textContent = glyphChar(); });
+    if (STOOP) { $('who-n').textContent = who(); $('who').hidden = !(S.name || S.alias); }
+  }
   function busy(on) { ['go', 'leave', 'extend', 'cancel', 'notnow'].forEach(function (i) { $(i).disabled = on; }); }
   function handleCommon(r) {
     if (r.status === 503) { disabled(); return true; }
@@ -230,23 +305,25 @@
   function updateWhen() {
     var m = Math.round((Date.parse(S.leaveAt) - Date.now()) / 60000), t = fmtTime(S.leaveAt);
     $('when').textContent = t;
+    if (STOOP) { var sec = Math.max(0, Math.round((Date.parse(S.leaveAt) - Date.now()) / 1000)); $('cd').textContent = Math.floor(sec / 60) + ':' + ('0' + (sec % 60)).slice(-2); }
     $('when-sr').textContent = who() + ' knows you are leaving around ' + t + (m > 1 ? ' (in about ' + m + ' min).' : '.');
   }
   function renderArmed(note) {
     setGlyphs(); updateWhen();
-    clearInterval(tick); tick = setInterval(updateWhen, 20000);
+    clearInterval(tick); tick = setInterval(updateWhen, STOOP ? 1000 : 20000);
     show('s-armed', true);
     $('st-armed').textContent = note || '';
     var nw = !!S.now;
     $('h-armed').textContent = nw ? 'Time to go?' : "You're on. Keep this page open.";
-    $('when').hidden = nw; $('when-sr').hidden = nw; $('extend').hidden = nw;
+    $('when').hidden = nw; $('when-sr').hidden = nw; $('cdbox').hidden = nw; $('extend').hidden = nw;
     $('leave').textContent = "I'm leaving now";
   }
   function renderSent() {
     clearInterval(tick); wipe(); S.sent = true; save(); setGlyphs();
     $('sent-sub').textContent = 'Thanks, neighbor! ' + who() + ' has been told you are pulling out.';
-    var c = $('confetti'), cols = ['#6366F1', '#A5A8FF', '#FFFFFF', '#7DD3FC'];
+    var c = $('confetti'), cols = STOOP ? ['#FFD23F', '#3CCF7A', '#6A4CFF', '#E39A90'] : ['#6366F1', '#A5A8FF', '#FFFFFF', '#7DD3FC'];
     c.textContent = '';
+    if (STOOP) $('sentat').textContent = fmtTime(new Date().toISOString());
     for (var i = 0; i < 24; i++) {
       var p = document.createElement('i');
       p.style.background = cols[i % 4]; p.style.setProperty('--x', ((i * 37) % 260 - 130) + 'px'); p.style.animationDelay = (i % 6) * 0.04 + 's';
@@ -394,6 +471,12 @@
     }, function () { $('st-report').textContent = RETRY; });
   });
 
+  if (STOOP) {
+    // Stoop wording: no "~", no karma on the web (design system DECISIONS).
+    var W = { '10':'About 10 min', '30':'About 30 min', '60':'About 1 hour' };
+    Array.prototype.forEach.call(document.querySelectorAll('#chips .chip[data-min]'), function (c) { var w = W[c.getAttribute('data-min')]; if (w) c.textContent = w; });
+    $('getp').innerHTML = '<strong>Park in NYC yourself?</strong> WePark shows every curb you can park on, and for how long.';
+  }
   if (FAKE) $('fakebar').hidden = false;
   if (FAKE && FAKE_STATE === 'armed') { S.alias = 'Bodega Cat'; S.glyph = 'bodega_cat'; S.id = '00000000-0000-4000-8000-000000000000'; S.secret = 'FAKEFAKEFAKEFAKEFAKEFA'; R.id = S.id; R.secret = S.secret; S.leaveAt = new Date(Date.now() + 600000).toISOString(); fakeLeave = S.leaveAt; renderArmed(); }
   else if (FAKE && FAKE_STATE === 'sent') { S.alias = 'Bodega Cat'; S.glyph = 'bodega_cat'; renderSent(); }

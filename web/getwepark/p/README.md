@@ -39,6 +39,27 @@ Fake mode needs `?fake=1` AND no `#t=` token in the URL (a real token always dis
 
 Also check: report flow, reduced motion (static sparkles, no confetti), browser text at 200%, VoiceOver reads the status line.
 
+## Stoop preview (`?stoop=1`)
+
+Round-2 "Stoop" restyle (cream paper, ink violet, taxi-yellow actions, rounded type, light + dark via `prefers-color-scheme`).
+**Off by default.** It only turns on with `?stoop=1` in the query string (read once at load, before the URL is scrubbed, so
+it works with `#t=` and `?fake=1`). `?stoop=0` turns it off again. The flag is kept in tab-scoped `sessionStorage` key
+`wp_stoop` (never transmitted) so a reload on a real pass keeps the look. Without the switch nothing changes: all Stoop CSS
+is scoped to `html.stoop` and all Stoop JS is gated on a flag. Same API calls, payloads, token handling and privacy rules.
+
+Stoop-only differences: chips read "About 10 min / About 30 min / About 1 hour", a "Leaving in m:ss" countdown, "Sent at"
+card and "Spot passed" stamp, and the Get card drops the karma wording (no karma on web). System rounded font stack
+(Fredoka is not loaded: the CSP has no `font-src`, and the page stays one light file).
+
+| URL | Shows |
+|---|---|
+| `...?fake=1&stoop=1` | full click-through in Stoop |
+| `...?fake=1&stoop=1&name=Maya` | first-name headline |
+| `...?fake=1&stoop=1&state=armed` / `&state=sent` | armed / sent |
+| `...?fake=1&stoop=1&state=unavailable` / `disabled` / `error` | end and error screens |
+
+Real pass preview: `https://getwepark.com/p?stoop=1#t=<token>`. Screenshots: `docs/qa/assets/stoop-web-p/`.
+
 ## Real-endpoint checks (safe while `HANDOFF_ENABLED=false`)
 
 Open `https://getwepark.com/p#t=AAAAAAAAAAAAAAAAAAAAAA` (any 22-char token). Peek returns 503 -> "Spot Pass isn't live yet",
