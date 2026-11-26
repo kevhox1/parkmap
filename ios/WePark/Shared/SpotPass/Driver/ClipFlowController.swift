@@ -113,6 +113,8 @@ final class ClipFlowController {
     @ObservationIgnored private var handledTokenURLs: Set<URL> = []
     @ObservationIgnored private var peekTask: Task<Void, Never>?
     @ObservationIgnored private var departMayHaveReachedServer = false
+    /// Stoop B11.3 "Skip": no reminder is scheduled for this pass.
+    @ObservationIgnored private var reminderSkipped = false
     @ObservationIgnored private(set) var installPolicy = ClipInstallPromptPolicy()
 
     init(dependencies: ClipDependencies) {
@@ -234,6 +236,14 @@ final class ClipFlowController {
         deps.feedback.selection()
     }
 
+    /// Stoop B11.3: true when the clip should show its "one reminder" step before arming. It NEVER prompts
+    /// (spec 5.1): the reminder is available only if the App Clip card's ephemeral-notification toggle
+    /// (`NSAppClipRequestEphemeralUserNotification`) is already on; otherwise the step is skipped.
+    func shouldOfferReminder() async -> Bool { await deps.reminders.availability() == .on }
+
+    /// Stoop B11.3: the driver's choice on that step. "Skip" arms without scheduling the reminder.
+    func chooseReminder(_ wanted: Bool) { reminderSkipped = !wanted }
+
     func notLeavingSoon() {
         guard phase == .choosing else { return }
         phase = .dismissed
@@ -335,8 +345,9 @@ final class ClipFlowController {
     }
 
     private func scheduleReminders(for pass: HandoffActivePass) async {
-        guard reminderAvailability == .on else { return }
-        let plan = HandoffReminderPlan.make(
+        guard reminderAvailability == .on, !reminderSkipped else { return }
+        let plan = HandoffReminderPlan.plan(
+            stoop: StoopFlag.designSystemV2Enabled,
             passID: pass.id, name: pass.name, leaveAt: pass.leaveAt, expiresAt: pass.expiresAt, now: deps.now()
         )
         await deps.reminders.schedule(plan, passID: pass.id)

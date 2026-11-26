@@ -54,6 +54,37 @@ nonisolated enum HandoffReminderPlan {
         return candidates.filter { $0.fireDate > now.addingTimeInterval(1) && $0.fireDate < expiresAt }
     }
 
+    /// Stoop (DECISIONS #7): the clip schedules exactly ONE reminder, matching the copy "That's the only
+    /// notification you'll get." It fires `singleLead` before `leave_at` ("Still leaving around 4:45?",
+    /// round-2 B13). A pass that leaves in under two minutes fires as soon as it can; "Now" (leave_at at
+    /// or before now) schedules nothing, because that pass opens straight on the Time-to-go screen.
+    static let singleLead: TimeInterval = 2 * 60
+
+    static func makeSingle(
+        passID: UUID, name: String, leaveAt: Date, expiresAt: Date, now: Date, timeZone: TimeZone = .current,
+        locale: Locale = .current
+    ) -> [PlannedReminder] {
+        let fireDate = max(leaveAt.addingTimeInterval(-singleLead), now.addingTimeInterval(2))
+        guard fireDate < leaveAt, fireDate < expiresAt else { return [] }
+        let around = WPClipClock.bare(leaveAt, timeZone: timeZone, locale: locale)
+        return [
+            PlannedReminder(
+                identifier: leaveIdentifier(passID: passID), fireDate: fireDate,
+                title: WPClipCopy.reminderTitle(around: around), body: ClipCopy.reminderBody(name: name),
+                hiddenPreviewBody: ClipCopy.reminderHiddenBody
+            )
+        ]
+    }
+
+    /// The plan the flow controller schedules: one reminder under Stoop, the shipping two otherwise.
+    static func plan(
+        stoop: Bool, passID: UUID, name: String, leaveAt: Date, expiresAt: Date, now: Date
+    ) -> [PlannedReminder] {
+        stoop
+            ? makeSingle(passID: passID, name: name, leaveAt: leaveAt, expiresAt: expiresAt, now: now)
+            : make(passID: passID, name: name, leaveAt: leaveAt, expiresAt: expiresAt, now: now)
+    }
+
     /// Notification response action -> clip action. The default tap (body) opens the pulling-out screen.
     static func deepAction(forActionIdentifier identifier: String) -> ClipDeepAction? {
         switch identifier {
