@@ -6,9 +6,9 @@ This document is the operating manual for any future Claude session working on W
 
 The redesign workstream is called **"Stoop"**: flag `designSystemV2Enabled`, font Fredoka. Decisions are in `docs/design/wepark-design-system-v0.1/DECISIONS.md`.
 
-**Merged:** #194 (2a map), #199 (2b curb/search/park), #200 (2b fixes), #201 (Phase 3 drive), #202 (polish 1), #203 (drive AX5), #204 (meter DST), #205 (Phase 4 My Car), #206 (My Car/drive follow-ups), #207 (5a Spot Pass in-app), #208 (5b App Clip, one reminder), #209 (5b Live Activity/island/notifications).
+**Merged:** #194 (2a map), #199 (2b curb/search/park), #200 (2b fixes), #201 (Phase 3 drive), #202 (polish 1), #203 (drive AX5), #204 (meter DST), #205 (Phase 4 My Car), #206 (My Car/drive follow-ups), #207 (5a Spot Pass in-app), #208 (5b App Clip, one reminder), #209 (5b Live Activity/island/notifications), #210 (polish 2), #211 (5b follow-ups), #212 (6a onboarding + More/Settings).
 
-**Stoop-on builds (since #208/#209):** the flag is the compile-time `StoopFlag.designSystemV2Enabled` at `ios/WePark/Shared/Stoop/StoopFlag.swift:19`, compiled into all 4 targets. To turn Stoop on, flip that line, not Constants.swift; `AppConstants.designSystemV2Enabled` forwards to it. The other 7 tester flags are still in Constants.swift.
+**Stoop-on builds (since #208/#209):** the flag is the compile-time `StoopFlag.designSystemV2Enabled` at `ios/WePark/Shared/Stoop/StoopFlag.swift:19`, compiled into all 4 targets. To turn Stoop on, flip that line, not Constants.swift; `AppConstants.designSystemV2Enabled` forwards to it. The other 7 tester flags are still in Constants.swift. Since #212, Stoop onboarding also needs `onboardingStoryEnabled = true` in Constants.swift, along with `driveModeDefaultEnabled`. Flip both in a Stoop-on build.
 
 **Open/in flight (2026-11-26):**
 - #210 polish 2: being merged with main after the WPButtons move, then QA.
