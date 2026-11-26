@@ -32,8 +32,19 @@ enum WPCurbVerdict {
 
     /// Non-goal fallback state (no window): the engine's current state, except that unreadable
     /// signs are `.unknown` (the synthetic NO DATA rule would otherwise read as "restricted").
+    ///
+    /// A curb with a meter is never green here either: free-now with a meter on the signs is the
+    /// amber "changes soon" state, matching the curb sheet's `.soon` for the same curb.
     nonisolated static func currentState(segment: Segment, engine: ParkingRulesEngine, at now: Date) -> CurrentState {
-        hasUnreadableSigns(segment) ? .unknown : engine.currentState(for: segment, at: now)
+        if hasUnreadableSigns(segment) { return .unknown }
+        let state = engine.currentState(for: segment, at: now)
+        if state == .freeComfortably, hasMeterRule(segment) { return .freeButRestrictionSoon }
+        return state
+    }
+
+    /// True when any posted rule on the curb is a meter.
+    nonisolated static func hasMeterRule(_ segment: Segment) -> Bool {
+        segment.rules.contains { $0.category == .metered }
     }
 
     /// Base-map green: readable signs AND nothing restricts a private car anywhere in

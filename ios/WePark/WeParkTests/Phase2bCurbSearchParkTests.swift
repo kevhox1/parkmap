@@ -87,6 +87,27 @@ final class Phase2bCurbSearchParkTests: XCTestCase {
         )
     }
 
+    /// A synthetic tile grid (same geometry as tiles/index.json) with every tile existing in a
+    /// 40 x 40 block around Midtown; `loaded` picks which of them are loaded.
+    private func coverage(loaded: (Int, Int) -> Bool) -> WPTileCoverage {
+        let latMin = 40.70, lngMin = -74.02, rowSize = 0.00227, colSize = 0.00226
+        var existing = Set<String>(), loadedKeys = Set<String>()
+        let baseRow = Int(((40.7600 - latMin) / rowSize).rounded(.down)) - 20
+        let baseCol = Int(((-73.9776 - lngMin) / colSize).rounded(.down)) - 20
+        for r in baseRow..<(baseRow + 40) {
+            for c in baseCol..<(baseCol + 40) {
+                existing.insert("\(r)_\(c)")
+                if loaded(r, c) { loadedKeys.insert("\(r)_\(c)") }
+            }
+        }
+        return WPTileCoverage(
+            gridRows: 80, gridCols: 50, latMin: latMin, lngMin: lngMin, rowSize: rowSize, colSize: colSize,
+            existingTiles: existing, loadedTiles: loadedKeys
+        )
+    }
+
+    private var allLoaded: WPTileCoverage { coverage { _, _ in true } }
+
     // MARK: Free-curb count == isParkable
 
     func testCount_matchesIsParkable_forTheSelectedWindow() {
@@ -107,12 +128,12 @@ final class Phase2bCurbSearchParkTests: XCTestCase {
                 WPFreeCurbCounter.distance(from: destination, to: $0) <= WPFreeCurbCounter.radiusMeters
                     && WPCurbVerdict.isParkable(segment: $0, engine: engine, from: now, until: end)
             }.count
-            let result = WPFreeCurbCounter.count(near: destination, segments: segments, engine: engine, from: now, until: end)
+            let result = WPFreeCurbCounter.count(near: destination, segments: segments, coverage: allLoaded, engine: engine, from: now, until: end)
             XCTAssertEqual(result?.count, expected, "goal \(goal)")
         }
         let overnight = ParkingGoals.target(for: .freeOvernight, from: now)
         XCTAssertEqual(
-            WPFreeCurbCounter.count(near: destination, segments: segments, engine: engine, from: now, until: overnight)?.count,
+            WPFreeCurbCounter.count(near: destination, segments: segments, coverage: allLoaded, engine: engine, from: now, until: overnight)?.count,
             4
         )
     }
@@ -121,8 +142,52 @@ final class Phase2bCurbSearchParkTests: XCTestCase {
         let destination = CLLocationCoordinate2D(latitude: 40.7600, longitude: -73.9776)
         let farAway = [makeSegment(clearRules, id: "FAR", lat: 40.8000, lng: -73.9500)]
         let end = ParkingGoals.target(for: .freeOvernight, from: now)
-        XCTAssertNil(WPFreeCurbCounter.count(near: destination, segments: farAway, engine: engine, from: now, until: end))
-        XCTAssertNil(WPFreeCurbCounter.count(near: destination, segments: [], engine: engine, from: now, until: end))
+        XCTAssertNil(WPFreeCurbCounter.count(near: destination, segments: farAway, coverage: nil, engine: engine, from: now, until: end))
+        XCTAssertNil(WPFreeCurbCounter.count(near: destination, segments: [], coverage: coverage { _, _ in false }, engine: engine, from: now, until: end))
+    }
+
+    /// One of the tiles under the 160 m radius is not loaded: the count must be hidden, never a low
+    /// number or "No free curbs" (a false statement).
+    func testCount_isHidden_whenAnyTileUnderTheCountingRadiusIsMissing() {
+        let destination = CLLocationCoordinate2D(latitude: 40.7600, longitude: -73.9776)
+        let segments = [makeSegment(clearRules, id: "NEAR"), makeSegment(restrictedRules, id: "R0")]
+        let end = ParkingGoals.target(for: .freeOvernight, from: now)
+        let destRow = Int(((40.7600 - 40.70) / 0.00227).rounded(.down))
+        let destCol = Int(((-73.9776 + 74.02) / 0.00226).rounded(.down))
+        // The destination's own tile loaded, but its north neighbor (inside 160 m) is not.
+        let partial = coverage { r, c in !(r == destRow + 1 && c == destCol) }
+        XCTAssertNil(WPFreeCurbCounter.count(near: destination, segments: segments, coverage: partial, engine: engine, from: now, until: end))
+        // Same segments, everything loaded: shown.
+        XCTAssertEqual(
+            WPFreeCurbCounter.count(near: destination, segments: segments, coverage: allLoaded, engine: engine, from: now, until: end)?.count, 1
+        )
+        // Only a far-away tile missing (outside the radius): still shown.
+        let farMissing = coverage { r, _ in r < destRow + 15 }
+        XCTAssertNotNil(WPFreeCurbCounter.count(near: destination, segments: segments, coverage: farMissing, engine: engine, from: now, until: end))
+    }
+
+    func testCount_hasNoTilesAtAll_isHidden() {
+        let destination = CLLocationCoordinate2D(latitude: 40.7600, longitude: -73.9776)
+        let end = ParkingGoals.target(for: .freeOvernight, from: now)
+        let empty = WPTileCoverage(
+            gridRows: 80, gridCols: 50, latMin: 40.70, lngMin: -74.02, rowSize: 0.00227, colSize: 0.00226,
+            existingTiles: [], loadedTiles: []
+        )
+        XCTAssertNil(WPFreeCurbCounter.count(near: destination, segments: [], coverage: empty, engine: engine, from: now, until: end))
+    }
+
+    /// Radius is covered but the wider "nearest" probe is not: "No free curbs" stands, the
+    /// "nearest is" line is dropped (a nearer curb could sit in an unloaded tile).
+    func testCount_zero_dropsNearestLine_whenProbeAreaNotFullyLoaded() {
+        let destination = CLLocationCoordinate2D(latitude: 40.7600, longitude: -73.9776)
+        let segments = [makeSegment(restrictedRules, id: "R0"), makeSegment(clearRules, id: "NEAR", lat: 40.7627)]
+        let end = ParkingGoals.target(for: .freeOvernight, from: now)
+        let destRow = Int(((40.7600 - 40.70) / 0.00227).rounded(.down))
+        // Rows 3+ tiles north (> 160 m) are missing; rows within +-1 are loaded.
+        let cov = coverage { r, _ in r <= destRow + 1 }
+        let result = WPFreeCurbCounter.count(near: destination, segments: segments, coverage: cov, engine: engine, from: now, until: end)
+        XCTAssertEqual(result?.count, 0)
+        XCTAssertNil(result?.nearestMeters)
     }
 
     func testCount_zero_reportsNearestRealDistance_notAnEstimate() {
@@ -133,7 +198,7 @@ final class Phase2bCurbSearchParkTests: XCTestCase {
             makeSegment(clearRules, id: "NEAR", lat: 40.7627),
         ]
         let end = ParkingGoals.target(for: .freeOvernight, from: now)
-        let result = WPFreeCurbCounter.count(near: destination, segments: segments, engine: engine, from: now, until: end)
+        let result = WPFreeCurbCounter.count(near: destination, segments: segments, coverage: allLoaded, engine: engine, from: now, until: end)
         XCTAssertEqual(result?.count, 0)
         XCTAssertNotNil(result?.nearestMeters)
         XCTAssertEqual(WPFreeCurbCounter.headline(WPFreeCurbCount(count: 0, nearestMeters: 300)), "No free curbs within 2 blocks")
@@ -316,5 +381,88 @@ final class Phase2bCurbSearchParkTests: XCTestCase {
 
     func testReminderLead_usesTheUsersRealOffsets() {
         XCTAssertEqual(WPParkCopy.reminderLead(.default), "We'll remind you 1 hour before.")
+    }
+
+    // MARK: QA follow-ups (PR #199)
+
+    func testOpenEnded_isWorded_FreeFor_notFreeUntil() {
+        // A sign that never applies in the next 7 days (no days): an open-ended free stretch.
+        let m = model([ruleJSON(.noParking, days: [], ranges: [(480, 540)])])
+        XCTAssertEqual(m.variant, .park)
+        XCTAssertTrue(m.isOpenEnded)
+        XCTAssertEqual(m.big, "7+ days")
+        XCTAssertEqual(m.freeLine, "Free for 7+ days")
+        XCTAssertEqual(WPDragBubble.make(from: m, windowName: nil).detail, "Free for 7+ days")
+        XCTAssertEqual(WPNeighborVerdict.calloutText(for: m), "Free for 7+ days")
+        // A real end time keeps "until".
+        let timed = model([ruleJSON(.noParking, days: [4], ranges: [(480, 540)])], at: et(2026, 11, 26, 7, 0).addingTimeInterval(-3600 * 10))
+        XCTAssertFalse(timed.isOpenEnded)
+        XCTAssertTrue(timed.freeLine.hasPrefix("Free until "))
+        XCTAssertFalse(timed.freeLine.contains("7+"))
+    }
+
+    func testThreeSurfaces_agree_onAnActiveFilmingReport() {
+        let segment = makeSegment(clearRules)
+        let end = ParkingGoals.target(for: .freeOvernight, from: now)
+        let reports = WPNeighborReports(restrictionLabel: "Blocked for filming", restrictionIsActive: true)
+        let resolved = WPNeighborVerdict.resolve(
+            segment: segment, engine: engine, now: now, windowEnd: end, trip: nil, reports: reports
+        )
+        XCTAssertEqual(resolved.variant, .dont)
+        XCTAssertEqual(WPDragBubble.make(from: resolved, windowName: nil).tone, .dont)
+        XCTAssertEqual(WPNeighborVerdict.calloutText(for: resolved), "Blocked for filming")
+        // Without a report all three read park.
+        let quiet = WPNeighborVerdict.resolve(
+            segment: segment, engine: engine, now: now, windowEnd: end, trip: nil, reports: WPNeighborReports()
+        )
+        XCTAssertEqual(quiet.variant, .park)
+        XCTAssertEqual(WPDragBubble.make(from: quiet, windowName: nil).tone, .park)
+        // Plan a Trip ignores live reports.
+        let plan = TripPlan(arrival: now.addingTimeInterval(86_400), departure: now.addingTimeInterval(2 * 86_400))
+        XCTAssertTrue(WPNeighborVerdict.reports(for: pin(type: "filming", segmentId: "P2B"), now: now, trip: plan).restrictionLabel == nil)
+    }
+
+    func testMeteredCurb_offMeterHours_isNeverGreen_withOrWithoutAWindow() {
+        // Meter 8 AM-7 PM every day; now is 10:11 PM, so the meter is off but starts at 8 AM.
+        let rules = [ruleJSON(.metered, days: [0, 1, 2, 3, 4, 5, 6], ranges: [(480, 1140)])]
+        let segment = makeSegment(rules)
+        XCTAssertEqual(engine.currentState(for: segment, at: now), .freeComfortably, "fixture: meter off now")
+        // No goal window: never park. Amber, truthful about the meter.
+        let noWindow = model(rules)
+        XCTAssertNotEqual(noWindow.variant, .park)
+        XCTAssertEqual(noWindow.variant, .soon)
+        XCTAssertTrue(noWindow.sub?.contains("the meter") ?? false)
+        XCTAssertEqual(WPCurbVerdict.currentState(segment: segment, engine: engine, at: now), .freeButRestrictionSoon)
+        // Window that runs into the meter (8 AM next day or later): not parkable, so never park.
+        let long = et(2026, 11, 26, 10)
+        let m = model(rules, window: long)
+        XCTAssertFalse(WPCurbVerdict.isParkable(segment: segment, engine: engine, from: now, until: long))
+        XCTAssertEqual(m.variant, .soon)
+        // Overnight window that ends before the meter starts: same as the map (green).
+        let overnight = et(2026, 11, 26, 7)
+        XCTAssertTrue(WPCurbVerdict.isParkable(segment: segment, engine: engine, from: now, until: overnight))
+        XCTAssertEqual(model(rules, window: overnight).variant, .park)
+    }
+
+    func testSheetPark_alwaysImpliesMapGreen_forEveryWindow() {
+        // Property: whenever a window is set, `.park` requires `isParkable` (the map's green gate).
+        let fixtures = [
+            clearRules, meteredRules, restrictedRules, unclearRules, noDataRules,
+            [ruleJSON(.metered, days: [0, 1, 2, 3, 4, 5, 6], ranges: [(480, 1140)])],
+            [ruleJSON(.metered, days: [1, 2, 3, 4, 5], ranges: [(480, 1140)]), ruleJSON(.noParking, days: [1], ranges: [(480, 540)])],
+        ]
+        for rules in fixtures {
+            let segment = makeSegment(rules)
+            for hour in stride(from: 0, to: 24 * 7, by: 7) {
+                let date = now.addingTimeInterval(Double(hour) * 3600)
+                for hours in [2.0, 9.0, 30.0, 96.0] {
+                    let end = date.addingTimeInterval(hours * 3600)
+                    let m = WPCurbSheetBuilder.make(segment: segment, engine: engine, now: date, windowEnd: end)
+                    if m.variant == .park {
+                        XCTAssertTrue(WPCurbVerdict.isParkable(segment: segment, engine: engine, from: date, until: end), "+\(hour)h window \(hours)h")
+                    }
+                }
+            }
+        }
     }
 }

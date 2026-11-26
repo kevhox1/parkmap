@@ -39,6 +39,8 @@ struct WPSearchSheetV2: View {
     let goalInput: WPGoalSheetInput
     let currentRegion: MKCoordinateRegion
     let segments: [Segment]
+    /// Which tiles are loaded: the free-curb count shows only when the whole counting radius is.
+    let tileCoverage: WPTileCoverage?
     let engine: ParkingRulesEngine
     let userLocation: CLLocationCoordinate2D?
     let locationService: LocationService
@@ -277,7 +279,7 @@ struct WPSearchSheetV2: View {
                 .padding(.top, WP.Space.s2)
                 .padding(.bottom, WP.Space.s4)
         }
-        .task(id: CountKey(place: place, goal: goalInput.selectedGoal, segments: segments.count, end: goalInput.selectedEnd)) {
+        .task(id: CountKey(place: place, goal: goalInput.selectedGoal, segments: segments.count, loadedTiles: tileCoverage?.loadedTiles.count ?? -1, end: goalInput.selectedEnd)) {
             recomputeCount(place)
         }
     }
@@ -424,17 +426,17 @@ struct WPSearchSheetV2: View {
     // MARK: Logic
 
     private struct CountKey: Hashable {
-        let lat: Double, lng: Double, goal: String, segments: Int, end: Date
-        init(place: WPResolvedPlace, goal: ParkingGoal, segments: Int, end: Date) {
+        let lat: Double, lng: Double, goal: String, segments: Int, loadedTiles: Int, end: Date
+        init(place: WPResolvedPlace, goal: ParkingGoal, segments: Int, loadedTiles: Int, end: Date) {
             lat = place.coordinate.latitude; lng = place.coordinate.longitude
-            self.goal = goal.rawValue; self.segments = segments; self.end = end
+            self.goal = goal.rawValue; self.segments = segments; self.loadedTiles = loadedTiles; self.end = end
         }
     }
 
     private func recomputeCount(_ place: WPResolvedPlace) {
         guard AppConstants.isInManhattanCoverage(place.coordinate) else { count = nil; return }
         count = WPFreeCurbCounter.count(
-            near: place.coordinate, segments: segments, engine: engine,
+            near: place.coordinate, segments: segments, coverage: tileCoverage, engine: engine,
             from: goalInput.now, until: goalInput.selectedEnd
         )
     }

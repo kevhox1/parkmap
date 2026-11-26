@@ -82,7 +82,8 @@ final class WPParkFlowController {
         engine: ParkingRulesEngine,
         now: Date,
         windowEnd: Date?,
-        trip: TripPlan?
+        trip: TripPlan?,
+        reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() }
     ) {
         tokenPoint = point
         guard let coordinate, let index else {
@@ -100,8 +101,9 @@ final class WPParkFlowController {
             snap = result
             if result.segment.id != lastSegmentID {
                 lastSegmentID = result.segment.id
-                let built = WPCurbSheetBuilder.make(
-                    segment: result.segment, engine: engine, now: now, windowEnd: windowEnd, trip: trip
+                let built = WPNeighborVerdict.resolve(
+                    segment: result.segment, engine: engine, now: now, windowEnd: windowEnd, trip: trip,
+                    reports: reports(result.segment)
                 )
                 model = built
                 if built.offersPrimaryPark {
@@ -121,12 +123,13 @@ final class WPParkFlowController {
     @discardableResult
     func placeAt(
         coordinate: CLLocationCoordinate2D, point: CGPoint,
-        metersPerPoint: Double, engine: ParkingRulesEngine, now: Date, windowEnd: Date?, trip: TripPlan?
+        metersPerPoint: Double, engine: ParkingRulesEngine, now: Date, windowEnd: Date?, trip: TripPlan?,
+        reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() }
     ) -> Bool {
         beginDrag(from: point)
         update(
             point: point, coordinate: coordinate, metersPerPoint: metersPerPoint,
-            engine: engine, now: now, windowEnd: windowEnd, trip: trip
+            engine: engine, now: now, windowEnd: windowEnd, trip: trip, reports: reports
         )
         return endDrag(landingPoint: point)
     }
@@ -177,7 +180,7 @@ struct WPParkLayerV2: View {
     let pointForCoordinate: (CLLocationCoordinate2D) -> CGPoint?
     /// Meters per screen point right now (for the snap hysteresis).
     let metersPerPoint: () -> Double
-    let resolveContext: () -> (engine: ParkingRulesEngine, now: Date, windowEnd: Date?, trip: TripPlan?, segments: [Segment])
+    let resolveContext: () -> (engine: ParkingRulesEngine, now: Date, windowEnd: Date?, trip: TripPlan?, segments: [Segment], reports: (Segment) -> WPNeighborReports)
     let address: String?
     let onConfirm: () -> Void
     /// VoiceOver action: place the car at the user's location. Returns false when it could not.
@@ -252,7 +255,8 @@ struct WPParkLayerV2: View {
                 let point = CGPoint(x: value.location.x + grabOffset.width, y: value.location.y + grabOffset.height)
                 flow.update(
                     point: point, coordinate: coordinateForPoint(point), metersPerPoint: metersPerPoint(),
-                    engine: ctx.engine, now: ctx.now, windowEnd: ctx.windowEnd, trip: ctx.trip
+                    engine: ctx.engine, now: ctx.now, windowEnd: ctx.windowEnd, trip: ctx.trip,
+                    reports: ctx.reports
                 )
             }
             .onEnded { value in
