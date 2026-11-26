@@ -181,16 +181,34 @@ nonisolated enum TripPlanning {
     // MARK: Evaluation
 
     /// The one free rule for the whole trip window. Same call every live goal makes.
-    static func isFree(segment: Segment, plan: TripPlan, engine: ParkingRulesEngine) -> Bool {
-        engine.isFree(
+    ///
+    /// `strictSigns` (Stoop on): the trip map uses the same green gate as the live Stoop map,
+    /// `WPCurbVerdict.isParkable`, so a curb with ANY unreadable sign (no data, or an UNKNOWN
+    /// rule even when it does not overlap the window) is never green. Flag off keeps the
+    /// legacy gate (`engine.isFree` only), matching the legacy live map. Strict only ever
+    /// removes green, so a longer visit can still only remove green.
+    static func isFree(
+        segment: Segment, plan: TripPlan, engine: ParkingRulesEngine, strictSigns: Bool = false
+    ) -> Bool {
+        if strictSigns {
+            return WPCurbVerdict.isParkable(
+                segment: segment, engine: engine, from: plan.arrival, until: plan.departure
+            )
+        }
+        return engine.isFree(
             segment: segment, from: plan.arrival, until: plan.departure, ignoringMeteredPayment: false
         )
     }
 
     /// Verdict for one curb. Agrees with `isFree` by construction (free iff `isFree`), and names
     /// the EARLIEST single rule that breaks the trip when it is not.
-    static func verdict(segment: Segment, plan: TripPlan, engine: ParkingRulesEngine) -> TripVerdict {
-        if isFree(segment: segment, plan: plan, engine: engine) { return .free }
+    static func verdict(
+        segment: Segment, plan: TripPlan, engine: ParkingRulesEngine, strictSigns: Bool = false
+    ) -> TripVerdict {
+        if isFree(segment: segment, plan: plan, engine: engine, strictSigns: strictSigns) { return .free }
+        if strictSigns, WPCurbVerdict.hasUnreadableSigns(segment) {
+            return .notFree(reason: segment.hasNoSignData ? NoSignData.headline : UnclearSign.headline)
+        }
 
         var earliest: (start: Date, text: String)?
         for rule in segment.rules {
