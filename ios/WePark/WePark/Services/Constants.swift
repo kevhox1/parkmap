@@ -382,7 +382,7 @@ enum AppConstants {
     /// UI reads it; only the DEBUG gallery does. The screens adopt it in a follow-up PR.
     ///
     /// Guard test: `DesignSystemV01Tests.testFlag_defaultsFalse`.
-    static let designSystemV2Enabled = false
+    static let designSystemV2Enabled = StoopFlag.designSystemV2Enabled
 
     /// UserDefaults key: set to true once the placement mode's first-use hint pill ("Drag the map
     /// to place the pin") has been shown on this install. `BackgroundNoteGate` convention (see
