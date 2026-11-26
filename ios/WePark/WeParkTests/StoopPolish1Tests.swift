@@ -256,7 +256,13 @@ final class StoopPolish1Tests: XCTestCase {
             [(everyDay, [(300, 320), (700, 705)])],
             [([2], [(480, 490)]), ([5], [(720, 730)])],
         ]
-        let froms = [now, sp1Date(2026, 11, 26, 8, 5), sp1Date(2026, 11, 28, 23, 59)]
+        // The last four straddle DST: the eve of spring-forward (Mar 14 2027, Mar 8 2026) and of
+        // fall-back (Nov 1 2026), plus the early morning of the change itself.
+        let froms = [
+            now, sp1Date(2026, 11, 26, 8, 5), sp1Date(2026, 11, 28, 23, 59),
+            sp1Date(2027, 3, 13, 22, 0), sp1Date(2026, 3, 7, 22, 0),
+            sp1Date(2026, 10, 31, 22, 0), sp1Date(2026, 11, 1, 0, 30),
+        ]
         for (i, set) in ruleSets.enumerated() {
             let rules = set.map { sp1Rule(.metered, days: $0.days, ranges: $0.ranges) }
             let segment = sp1Segment(rules)
@@ -270,5 +276,31 @@ final class StoopPolish1Tests: XCTestCase {
                 XCTAssertEqual(actual, expected, "rule set \(i), from \(from)")
             }
         }
+    }
+
+    // MARK: nextMeterStart on DST days
+
+    func testNextMeterStart_springForwardEve_isEightAMWallClock() {
+        // Sat 3/13/2027 10 PM ET; clocks jump forward overnight. An 8 AM meter on Sunday starts at
+        // 8:00 AM EDT (elapsed-minutes arithmetic gave 9:00 AM).
+        let segment = sp1Segment([sp1Rule(.metered, days: everyDay, ranges: [(480, 540)])])
+        let start = WPCurbCopy.nextMeterStart(segment: segment, engine: engine, from: sp1Date(2027, 3, 13, 22, 0))
+        XCTAssertEqual(start, sp1Date(2027, 3, 14, 8, 0))
+        XCTAssertEqual(start?.minuteOfDayET, 480)
+    }
+
+    func testNextMeterStart_fallBackEve_findsTheNextDaysMeter() {
+        // Sat 10/31/2026 10 PM ET; clocks fall back overnight (25 hour day). The Sunday 8 AM meter
+        // must be found (the elapsed-minutes version landed at 7 AM and was dropped as not in force).
+        let segment = sp1Segment([sp1Rule(.metered, days: everyDay, ranges: [(480, 540)])])
+        let start = WPCurbCopy.nextMeterStart(segment: segment, engine: engine, from: sp1Date(2026, 10, 31, 22, 0))
+        XCTAssertEqual(start, sp1Date(2026, 11, 1, 8, 0))
+    }
+
+    func testNextMeterStart_sundayOnlyMeter_acrossFallBack() {
+        // Meter only on Sunday 7:00-9:00: found at 7:00 AM EST on 11/1, not skipped.
+        let segment = sp1Segment([sp1Rule(.metered, days: [0], ranges: [(420, 540)])])
+        let start = WPCurbCopy.nextMeterStart(segment: segment, engine: engine, from: sp1Date(2026, 10, 31, 22, 0))
+        XCTAssertEqual(start, sp1Date(2026, 11, 1, 7, 0))
     }
 }
