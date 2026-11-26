@@ -51,27 +51,31 @@ struct WPMapToolbar: View {
             .accessibilityHint("Opens search")
 
             HStack(spacing: WP.Space.s2) {
-                WPToolbarCircle(systemImage: "ellipsis", label: "More", action: onMore)
-                WPToolbarCircle(systemImage: "location.fill", label: "Locate me", action: onLocate)
+                WPToolbarCircle(title: "More", accessibilityLabel: "More", action: onMore)
+                WPToolbarCircle(title: "Locate", accessibilityLabel: "Locate me", action: onLocate)
             }
         }
     }
 }
 
-/// 48pt white circle, 1.5 line (More, Locate).
+/// 48pt white circle, 1.5 line, with a text label (More, Locate), as in the mock. The words are
+/// 12/700 and never truncate: at accessibility sizes the circle grows into a capsule.
 struct WPToolbarCircle: View {
-    let systemImage: String
-    let label: String
+    let title: String
+    let accessibilityLabel: String
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .semibold, design: .rounded))
-                .frame(width: WP.Target.minimum, height: WP.Target.minimum)
+            Text(title)
+                .font(WP.Font.fredoka(12, .bold, relativeTo: .caption))
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 6)
+                .frame(minWidth: WP.Target.minimum, minHeight: WP.Target.minimum)
         }
         .buttonStyle(WPToolbarCircleStyle())
-        .accessibilityLabel(label)
+        .accessibilityLabel(accessibilityLabel)
     }
 }
 
@@ -89,9 +93,9 @@ struct WPToolbarCircleStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .foregroundStyle(WP.text)
-            .background(Circle().fill(configuration.isPressed ? WP.lifted : WP.card))
-            .overlay(Circle().strokeBorder(WP.line, lineWidth: WP.Border.fact))
-            .contentShape(Circle())
+            .background(Capsule().fill(configuration.isPressed ? WP.lifted : WP.card))
+            .overlay(Capsule().strokeBorder(WP.line, lineWidth: WP.Border.fact))
+            .contentShape(Capsule())
     }
 }
 

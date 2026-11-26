@@ -105,11 +105,30 @@ enum CurbLineStyleV2 {
 
     /// Applies `style` to a polyline renderer (solid, dashed, or dotted).
     @MainActor
-    static func apply(_ style: CurbLineStyle, to renderer: MKOverlayPathRenderer) {
+    static func apply(_ style: CurbLineStyle, to renderer: MKOverlayPathRenderer, scale: CGFloat = 1) {
         renderer.strokeColor = UIColor(wpHex: style.colorHex)
-        renderer.lineWidth = style.width
+        renderer.lineWidth = style.width * scale
         renderer.lineCap = style.roundCaps ? .round : .butt
         renderer.lineJoin = .round
-        renderer.lineDashPattern = style.dashPattern?.map { NSNumber(value: Double($0)) }
+        renderer.lineDashPattern = style.dashPattern?.map { NSNumber(value: Double($0 * scale)) }
+    }
+
+    // MARK: Zoom scaling (Phase 2b, Phase 2a QA gap: "curb dashes read heavy at close zoom")
+
+    /// The spec widths (6pt line, [10, 8] dash) are drawn at a typical street-level zoom, about
+    /// a quarter-mile tall (`typicalLatitudeDelta`). Closer than that a 6pt line covers a large
+    /// part of the sidewalk, so line width and dash scale down with the visible span, never below
+    /// `minimumScale`, never above 1. Quantized so a pinch does not redraw every frame.
+    nonisolated static let typicalLatitudeDelta: Double = 0.0035
+    nonisolated static let closestLatitudeDelta: Double = 0.0007
+    nonisolated static let minimumScale: CGFloat = 0.5
+
+    nonisolated static func zoomScale(latitudeDelta: Double) -> CGFloat {
+        guard latitudeDelta.isFinite, latitudeDelta > 0 else { return 1 }
+        if latitudeDelta >= typicalLatitudeDelta { return 1 }
+        if latitudeDelta <= closestLatitudeDelta { return minimumScale }
+        let t = (latitudeDelta - closestLatitudeDelta) / (typicalLatitudeDelta - closestLatitudeDelta)
+        let raw = minimumScale + CGFloat(t) * (1 - minimumScale)
+        return (raw * 10).rounded() / 10
     }
 }

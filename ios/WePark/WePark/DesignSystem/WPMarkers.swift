@@ -111,4 +111,41 @@ enum WPMarkerRenderer {
         renderer.scale = scale
         return renderer.uiImage
     }
+
+    /// Phase 2b: the parked-car marker plus its flat label, as an image and the center offset
+    /// that puts the marker disc (not the label) on the coordinate.
+    static func parkedCarCallout(detail: String?) -> (image: UIImage, centerOffset: CGPoint)? {
+        guard let image = image(WPParkedCarCallout(detail: detail)) else { return nil }
+        return (image, CGPoint(x: 0, y: -(image.size.height / 2 - WP.Marker.parkedCar / 2)))
+    }
+}
+
+// MARK: - Parked car with its flat label (Phase 2b, B6.7)
+
+/// The parked-car marker (40pt, flat) under a flat label that always carries the end time
+/// ("My car" / "Free until Mon 9 AM"). Fixed (non-adaptive) fills: it sits on the map.
+struct WPParkedCarCallout: View {
+    /// Second line of the label: the engine's end time (nil when unknown).
+    let detail: String?
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: WP.Radius.chip, style: .continuous)
+        VStack(spacing: 4) {
+            VStack(spacing: 0) {
+                Text("My car")
+                    .font(WP.Font.fredoka(13, .bold, relativeTo: .caption))
+                if let detail {
+                    Text(detail)
+                        .font(WP.Font.fredoka(12, .medium, relativeTo: .caption))
+                }
+            }
+            .foregroundStyle(WP.ink)
+            .padding(.horizontal, WP.Space.s3)
+            .padding(.vertical, 6)
+            .background(shape.fill(Color.white))
+            .overlay(shape.strokeBorder(WP.ink, lineWidth: WP.Border.fact))
+            WPParkedCarMarker()
+        }
+        .fixedSize()
+    }
 }

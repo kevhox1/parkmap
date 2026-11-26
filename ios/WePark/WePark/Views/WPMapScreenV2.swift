@@ -178,7 +178,7 @@ struct WPGoalSheetV2: View {
     // MARK: AX layout (b2-ax5): tiles become full-width rows, Start driving pinned.
 
     private var accessibilityBody: some View {
-        let cap = UIScreen.main.bounds.height * 0.62
+        let cap = UIScreen.main.bounds.height * 0.78
         return WPSheetShell {
             ScrollView {
                 VStack(alignment: .leading, spacing: WP.Space.s3) {
@@ -202,6 +202,9 @@ struct WPGoalSheetV2: View {
                 }
             }
             .scrollBounceBehavior(.basedOnSize)
+            // The headline caps at AX1 so the three goal rows are on screen at AX5 (b2-ax5):
+            // the text still wraps in full, nothing truncates, and the rows scroll if needed.
+            .dynamicTypeSize(...DynamicTypeSize.accessibility1)
             .frame(maxHeight: cap)
             startDriving.padding(.top, WP.Space.s3)
         }
