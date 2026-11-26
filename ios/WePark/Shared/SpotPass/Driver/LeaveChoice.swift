@@ -53,10 +53,11 @@ nonisolated enum LeaveChoice: Equatable, Sendable {
             return now
         case .minutes(let minutes):
             let target = now.addingTimeInterval(Double(max(0, minutes)) * 60)
-            return min(Self.roundToFiveMinutes(target), ceiling)
+            return min(max(Self.roundToFiveMinutes(target), now), ceiling)
         case .custom(let picked):
             let low = max(picked, now)
-            return min(Self.roundToFiveMinutes(low), ceiling)
+            // Rounding to the NEAREST 5 min can land up to 2.5 min before `now`: never send a past time.
+            return min(max(Self.roundToFiveMinutes(low), now), ceiling)
         }
     }
 
