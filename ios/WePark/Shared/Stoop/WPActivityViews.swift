@@ -56,13 +56,16 @@ struct WPActivityPill: View {
     var style: Style = .taxi
     var height: CGFloat = 56
     var fillsWidth = false
+    /// The island's three-across row needs a smaller face and tighter padding than the lock screen.
+    var fontSize: CGFloat = 18
+    var horizontalPadding: CGFloat = 16
 
     var body: some View {
         Text(title)
-            .font(WP.Font.fredoka(18, .bold, relativeTo: .headline))
+            .font(WP.Font.fredoka(fontSize, .bold, relativeTo: .headline))
             .lineLimit(1).minimumScaleFactor(0.7)
             .foregroundStyle(style == .taxi ? WP.ink : Color.white)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, horizontalPadding)
             .frame(maxWidth: fillsWidth ? .infinity : nil, minHeight: height)
             .background(Capsule().fill(style == .taxi ? WP.taxi : Color(wpHex: WP.Hex.darkSurface)))
             .contentShape(Capsule())
@@ -146,19 +149,20 @@ struct WPActivityLockView<Wrapper: View>: View {
     }
 
     private var timeToGo: some View {
+        // Header over ONE row of three (130 pt total): the old 52 + 56 + 56 stack was 190 pt and the
+        // lock screen clipped both the title and the second row at its 160 pt limit.
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
-                WPActivityToken()
+                WPActivityToken(size: 44)
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(WPActivityCopy.stillLeaving).font(WP.Font.fredoka(26, .bold, relativeTo: .title2))
-                    Text(WPActivityCopy.isWaiting(name: name)).font(WP.Font.fredoka(14, .regular, relativeTo: .footnote))
+                    Text(WPActivityCopy.stillLeaving).font(WP.Font.fredoka(24, .bold, relativeTo: .title2)).lineLimit(1).minimumScaleFactor(0.7)
+                    Text(WPActivityCopy.isWaiting(name: name)).font(WP.Font.fredoka(14, .regular, relativeTo: .footnote)).lineLimit(1).minimumScaleFactor(0.7)
                 }
             }
-            pill(.leavingNow, WPActivityCopy.leavingNow, style: .taxi, fills: true)
-            let layout = isAX ? AnyLayout(VStackLayout(spacing: 8)) : AnyLayout(HStackLayout(spacing: 8))
-            layout {
-                pill(.fiveMore, WPActivityCopy.fiveMore, style: .dark, fills: true)
-                pill(.notLeaving, WPActivityCopy.notLeaving, style: .dark, fills: true)
+            HStack(spacing: 6) {
+                wrap(.leavingNow, AnyView(WPActivityPill(title: WPActivityCopy.leavingNow, height: 48, fillsWidth: true, fontSize: 15, horizontalPadding: 6)))
+                wrap(.fiveMore, AnyView(WPActivityPill(title: WPActivityCopy.fiveMore, style: .dark, height: 48, fillsWidth: true, fontSize: 15, horizontalPadding: 6)))
+                wrap(.notLeaving, AnyView(WPActivityPill(title: WPActivityCopy.notLeaving, style: .dark, height: 48, fillsWidth: true, fontSize: 15, horizontalPadding: 6)))
             }
         }
     }
@@ -204,7 +208,8 @@ func wpDynamicIsland<Wrapper: View>(
         DynamicIslandExpandedRegion(.center) {
             VStack(alignment: .leading, spacing: 0) {
                 Text(wpIslandTitle(layout, name: name)).font(WP.Font.fredoka(17, .bold, relativeTo: .headline)).lineLimit(1)
-                Text(wpIslandSub(layout, state: state, name: name)).font(WP.Font.fredoka(13, .regular, relativeTo: .footnote)).lineLimit(1)
+                // Two lines: "<name> stopped waiting. Nothing to do." was cut to "Nothing t..." at one line.
+                Text(wpIslandSub(layout, state: state, name: name)).font(WP.Font.fredoka(13, .regular, relativeTo: .footnote)).lineLimit(2)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -220,12 +225,12 @@ func wpDynamicIsland<Wrapper: View>(
                     wrap(.notLeaving, AnyView(WPActivityQuietLink()))
                 }
             } else if layout == .timeToGo {
-                VStack(spacing: 6) {
-                    wrap(.leavingNow, AnyView(WPActivityPill(title: WPActivityCopy.leavingNow, height: 52, fillsWidth: true)))
-                    HStack(spacing: 6) {
-                        wrap(.fiveMore, AnyView(WPActivityPill(title: WPActivityCopy.fiveMore, style: .dark, height: 44, fillsWidth: true)))
-                        wrap(.notLeaving, AnyView(WPActivityPill(title: WPActivityCopy.notLeaving, style: .dark, height: 44, fillsWidth: true)))
-                    }
+                // One row of three (one 48 pt row, not a 52 + 44 stack): the expanded island's bottom
+                // region has roughly 60 pt before the OS clips it. Leaving now stays the taxi primary.
+                HStack(spacing: 6) {
+                    wrap(.leavingNow, AnyView(WPActivityPill(title: WPActivityCopy.leavingNow, height: 48, fillsWidth: true, fontSize: 15, horizontalPadding: 6)))
+                    wrap(.fiveMore, AnyView(WPActivityPill(title: WPActivityCopy.fiveMore, style: .dark, height: 48, fillsWidth: true, fontSize: 15, horizontalPadding: 6)))
+                    wrap(.notLeaving, AnyView(WPActivityPill(title: WPActivityCopy.notLeaving, style: .dark, height: 48, fillsWidth: true, fontSize: 15, horizontalPadding: 6)))
                 }
             }
         }

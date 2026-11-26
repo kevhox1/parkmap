@@ -129,6 +129,13 @@ nonisolated enum WPPassLogic {
         return choice
     }
 
+    /// A chosen custom time that has passed is no longer a time in the future: sending it is clamped to
+    /// now, so the screen must say "Now" instead of "around 4:15". Presets and future times are unchanged.
+    static func resolvedChoice(_ choice: LeaveChoice, now: Date) -> LeaveChoice {
+        if case .custom(let picked) = choice, picked <= now { return .now }
+        return choice
+    }
+
     // MARK: Auto heads-up switch
 
     /// What the driver's auto heads-up switch shows for each offer state. `isOn` is "the driver

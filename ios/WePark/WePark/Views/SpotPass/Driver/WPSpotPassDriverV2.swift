@@ -17,6 +17,7 @@
 //  line intact ("They won't see who you are"); controls >= 48 pt; wraps through AX5.
 //
 
+import Combine
 import SwiftUI
 import UserNotifications
 
@@ -92,6 +93,11 @@ struct WPDriverChoosingV2: View {
                 .buttonStyle(.wpTextLink)
                 .frame(maxWidth: .infinity)
         }
+        // A picked time that has come and gone becomes "Now" (what a send would actually do).
+        .onReceive(Timer.publish(every: 5, on: .main, in: .common).autoconnect()) { now in
+            let resolved = WPPassLogic.resolvedChoice(choice, now: now)
+            if resolved != choice { onSelect(resolved) }
+        }
         .sheet(isPresented: $showPicker) {
             WPLeaveTimeSheetV2(
                 selected: { if case .custom(let d) = choice { return d }; return nil }(),
@@ -128,7 +134,7 @@ struct WPDriverChoosingV2: View {
 }
 
 /// B10.2: a sheet of quarter-hour times, up to 4 hours from now. The slots are recomputed every
-/// minute and whenever the sheet appears, so a time that has already passed is never offered (and a
+/// 5 seconds and whenever the sheet appears, so a time that has already passed is never offered (and a
 /// chosen slot that goes stale stops being "chosen", so the button never sends a clamped time).
 struct WPLeaveTimeSheetV2: View {
     let selected: Date?
@@ -138,7 +144,7 @@ struct WPLeaveTimeSheetV2: View {
     @State private var choice: Date?
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
+        TimelineView(.periodic(from: .now, by: 5)) { context in
             content(slots: WPPassLogic.leaveSlots(from: context.date))
         }
         .background(WP.paper.ignoresSafeArea())
@@ -182,7 +188,10 @@ struct WPLeaveTimeSheetV2: View {
             }
             .scrollBounceBehavior(.basedOnSize)
             Button(chosen.map { WPPassCopy.useTime(ClipCopy.clockTime($0)) } ?? "Pick a time") {
-                if let chosen { onUse(chosen) }
+                // Re-check at tap time: a slot can pass between two ticks.
+                if let chosen, WPPassLogic.stillOffered(chosen, in: WPPassLogic.leaveSlots(from: Date())) != nil {
+                    onUse(chosen)
+                }
             }
             .buttonStyle(.wpInkPill)
             .disabled(chosen == nil)
