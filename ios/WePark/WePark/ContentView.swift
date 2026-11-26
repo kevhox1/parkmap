@@ -2139,18 +2139,32 @@ struct ContentView: View {
             moreMenuSheetContent
 
         case .tripPlanner:
-            TripPlannerSheet(
-                initialPlan: tripPlan,
-                calendarCovers: { TripPlanning.calendarCovers($0, service: aspService) },
-                onConfirm: { plan in
-                    activeSheet = dismissTargetOutsideBrowseNav
-                    tripPlan = plan
-                    rebuildOverlays(at: .nowET)
-                },
-                onCancel: { activeSheet = dismissTargetOutsideBrowseNav }
-            )
-            .presentationDetents([.large])
-            .presentationDragIndicator(.visible)
+            if AppConstants.designSystemV2Enabled {
+                WPTripPlannerV2(
+                    initialPlan: tripPlan,
+                    onConfirm: { plan in
+                        activeSheet = dismissTargetOutsideBrowseNav
+                        tripPlan = plan
+                        rebuildOverlays(at: .nowET)
+                    },
+                    onCancel: { activeSheet = dismissTargetOutsideBrowseNav }
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            } else {
+                TripPlannerSheet(
+                    initialPlan: tripPlan,
+                    calendarCovers: { TripPlanning.calendarCovers($0, service: aspService) },
+                    onConfirm: { plan in
+                        activeSheet = dismissTargetOutsideBrowseNav
+                        tripPlan = plan
+                        rebuildOverlays(at: .nowET)
+                    },
+                    onCancel: { activeSheet = dismissTargetOutsideBrowseNav }
+                )
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+            }
 
         case .browseNav:
             if AppConstants.designSystemV2Enabled {
@@ -3248,6 +3262,9 @@ struct ContentView: View {
                                         proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
                                     }) { onboardingTopChromeBottom = $0 }
                             }
+                        } else if let plan = tripPlan, AppConstants.designSystemV2Enabled, !driveModeActive {
+                            // Stoop trip map: the persistent "TRIP PLAN · NOT LIVE" tag (live chrome is hidden).
+                            WPTripTopTag(plan: plan, now: lastEvaluatedAt)
                         }
                     }
                     .safeAreaInset(edge: .bottom) { bottomSafeAreaContent }
@@ -3345,6 +3362,12 @@ struct ContentView: View {
                 if let showcase = WPPhase6aShowcase.requested {
                     WPPhase6aShowcase(name: showcase)
                 }
+                if let showcase = WPPhase6bShowcase.requested {
+                    WPPhase6bShowcase(name: showcase)
+                }
+                if WPPhase6bTripHook.requested != nil {
+                    WPPhase6bTripHook(tripPlan: $tripPlan) { activeSheet = nil; rebuildOverlays(at: .nowET) }
+                }
             }
             #endif
             // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.
@@ -3376,6 +3399,8 @@ struct ContentView: View {
         // `anchorPreference`/`overlayPreferenceValue` (a flagged, documented deviation from the
         // design doc's literal text).
         .coordinateSpace(name: onboardingCoachCoordinateSpaceName)
+        // Stoop trip plan: the dashed violet frame around the whole map (nothing is drawn otherwise).
+        .wpTripFrame(isActive: WPTripChrome.showsPlanFrame(tripActive: tripPlan != nil && !driveModeActive, stoop: AppConstants.designSystemV2Enabled))
     }
 
     /// The blue "Tap the curb where the spot is / Cancel" pill — visible while placement
@@ -4219,12 +4244,25 @@ struct ContentView: View {
             // already excludes Drive Mode/block-select/spot-placement/any-sheet-presented).
             // Ambient-only (§0.8.7) — never rebuilt inside the escalated Cruise session.
             if let plan = tripPlan, !driveModeActive {
-                TripPlanBanner(
-                    plan: plan,
-                    calendarCovered: TripPlanning.calendarCovers(plan, service: aspService),
-                    onEdit: { activeSheet = .tripPlanner },
-                    onExit: { exitTripPlan() }
-                )
+                if AppConstants.designSystemV2Enabled {
+                    WPTripMapCard(
+                        plan: plan,
+                        now: lastEvaluatedAt,
+                        arrivalCovered: aspService.calendarCovers(plan.arrival),
+                        departureCovered: aspService.calendarCovers(plan.departure),
+                        onChangeDates: { activeSheet = .tripPlanner },
+                        onBackToLive: { exitTripPlan() }
+                    )
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                } else {
+                    TripPlanBanner(
+                        plan: plan,
+                        calendarCovered: TripPlanning.calendarCovers(plan, service: aspService),
+                        onEdit: { activeSheet = .tripPlanner },
+                        onExit: { exitTripPlan() }
+                    )
+                }
             }
             if goalDockVisible, tripPlan == nil, AppConstants.designSystemV2Enabled {
                 v2DockContent

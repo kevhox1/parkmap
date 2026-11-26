@@ -57,11 +57,20 @@ enum ParkingGuideSection: String, CaseIterable, Identifiable {
 
     /// VoiceOver label for the quick-jump chip (spec §11: "Jump to Sign School").
     var jumpAccessibilityLabel: String { "Jump to \(title)" }
+
+    /// The sections drawn. Stoop leaves out the five-color legend: it describes the legacy orange
+    /// and amber map colors, which the Stoop map does not draw (it is red or green only, so a legend
+    /// with five colors would teach colors the driver never sees). Flag off: all four, unchanged.
+    nonisolated static func visible(stoop: Bool) -> [ParkingGuideSection] {
+        stoop ? allCases.filter { $0 != .colorLegend } : allCases
+    }
 }
 
 // MARK: - ParkingGuideView
 
 struct ParkingGuideView: View {
+
+    private var stoop: Bool { AppConstants.designSystemV2Enabled }
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -72,27 +81,44 @@ struct ParkingGuideView: View {
                     quickJumpChipRow(proxy: proxy)
                         .padding(.bottom, 24)
 
-                    ForEach(ParkingGuideSection.allCases) { section in
+                    ForEach(ParkingGuideSection.visible(stoop: stoop)) { section in
                         guideSection(section)
                             .id(section.anchorID)
                     }
+                    if stoop {
+                        Text("The sign on the street always wins.")
+                            .font(WP.Font.fredoka(18, .semibold, relativeTo: .body))
+                            .foregroundStyle(WP.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, WP.Space.s2)
+                    }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, stoop ? WP.Space.screenMargin : 16)
                 .padding(.bottom, 32)
             }
+            .background { if stoop { WP.paper.ignoresSafeArea() } }
         }
         .navigationTitle("Parking 101")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(stoop ? .inline : .large)
     }
 
     // MARK: - Subtitle
 
     private var subtitleRow: some View {
-        Text("Free parking in NYC is doable. Here's how.")
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .padding(.top, 8)
-            .padding(.bottom, 16)
+        Group {
+            if stoop {
+                Text("Free parking in NYC is doable. Here's how.")
+                    .font(WP.Font.fredoka(17, .regular, relativeTo: .body))
+                    .foregroundStyle(WP.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Free parking in NYC is doable. Here's how.")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(.top, 8)
+        .padding(.bottom, 16)
     }
 
     // MARK: - Quick-jump chip row
@@ -100,18 +126,30 @@ struct ParkingGuideView: View {
     private func quickJumpChipRow(proxy: ScrollViewProxy) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                ForEach(ParkingGuideSection.allCases) { section in
+                ForEach(ParkingGuideSection.visible(stoop: stoop)) { section in
                     Button {
                         withAnimation {
                             proxy.scrollTo(section.anchorID, anchor: .top)
                         }
                     } label: {
-                        Label(section.title, systemImage: section.symbol)
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 8)
-                            .background(.thinMaterial, in: Capsule())
+                        if stoop {
+                            // Big target (48 pt), words not icons, a 1.5 line like the other round-2 chips.
+                            Text(section.title)
+                                .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
+                                .foregroundStyle(WP.text)
+                                .padding(.horizontal, WP.Space.s4)
+                                .frame(minHeight: WP.Target.minimum)
+                                .background(Capsule().fill(WP.card))
+                                .overlay(Capsule().strokeBorder(WP.line, lineWidth: WP.Border.fact))
+                                .contentShape(Capsule())
+                        } else {
+                            Label(section.title, systemImage: section.symbol)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 8)
+                                .background(.thinMaterial, in: Capsule())
+                        }
                     }
                     .accessibilityLabel(section.jumpAccessibilityLabel)
                 }
@@ -124,16 +162,25 @@ struct ParkingGuideView: View {
     @ViewBuilder
     private func guideSection(_ section: ParkingGuideSection) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label(section.title, systemImage: section.symbol)
-                .font(.headline)
-                .foregroundStyle(.primary)
-                .padding(.bottom, 2)
+            if stoop {
+                Text(section.title)
+                    .font(WP.Font.fredoka(24, .bold, relativeTo: .title2))
+                    .foregroundStyle(WP.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
+                    .padding(.bottom, 2)
+            } else {
+                Label(section.title, systemImage: section.symbol)
+                    .font(.headline)
+                    .foregroundStyle(.primary)
+                    .padding(.bottom, 2)
+            }
 
             switch section {
-            case .pitch:          PitchSectionView()
+            case .pitch:          PitchSectionView().wpGuideCard()
             case .signSchool:     SignSchoolSectionView()
             case .colorLegend:    ColorLegendSectionView()
-            case .rookieMistakes: RookieMistakesSectionView()
+            case .rookieMistakes: RookieMistakesSectionView().wpGuideCard()
             }
         }
         .padding(.bottom, 28)

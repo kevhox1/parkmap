@@ -16,33 +16,20 @@ struct PitchSectionView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Free parking in NYC is a routine, not a gamble.")
-                .font(.subheadline)
-                .fontWeight(.semibold)
+            GuideText("Free parking in NYC is a routine, not a gamble.", .heading)
                 .foregroundStyle(.primary)
 
-            Text("Alternate-side parking (ASP) means moving your car off one side of the street about twice a week, around a posted window — and it's suspended roughly 40 days a year on holidays and emergencies. That's the whole trick. WePark's color-coded map and reminders do the remembering for you, so you just need to learn the rhythm once.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText("Alternate-side parking (ASP) means moving your car off one side of the street about twice a week, around a posted window — and it's suspended roughly 40 days a year on holidays and emergencies. That's the whole trick. WePark's color-coded map and reminders do the remembering for you, so you just need to learn the rhythm once.", .body)
 
-            Text("The money math")
-                .font(.subheadline)
-                .fontWeight(.semibold)
+            GuideText("The money math", .heading)
                 .foregroundStyle(.primary)
                 .padding(.top, 4)
 
-            Text(moneyMathBody)
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText(moneyMathBody, .body)
 
-            Text(annualSavingsBody)
-                .font(.subheadline)
-                .fontWeight(.semibold)
-                .foregroundStyle(.primary)
+            GuideText(annualSavingsBody, .strong)
 
-            Text("Figures vary by neighborhood, season, and provider — these are market-data estimates, not official city pricing. Source: SpotAngels and SpotHero NYC monthly-parking listings, pulled 2026-07-09.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            GuideText("Figures vary by neighborhood, season, and provider — these are market-data estimates, not official city pricing. Source: SpotAngels and SpotHero NYC monthly-parking listings, pulled 2026-07-09.", .caption)
         }
     }
 
