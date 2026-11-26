@@ -6,7 +6,7 @@ This document is the operating manual for any future Claude session working on W
 
 The redesign workstream is called **"Stoop"**: flag `designSystemV2Enabled`, font Fredoka. Decisions are in `docs/design/wepark-design-system-v0.1/DECISIONS.md`.
 
-**Merged:** #194 (2a map), #199 (2b curb/search/park), #200 (2b fixes), #201 (Phase 3 drive), #202 (polish 1), #203 (drive AX5), #204 (meter DST), #205 (Phase 4 My Car), #206 (My Car/drive follow-ups), #207 (5a Spot Pass in-app), #208 (5b App Clip, one reminder), #209 (5b Live Activity/island/notifications), #210 (polish 2), #211 (5b follow-ups), #212 (6a onboarding + More/Settings).
+**Merged:** #194 (2a map), #199 (2b curb/search/park), #200 (2b fixes), #201 (Phase 3 drive), #202 (polish 1), #203 (drive AX5), #204 (meter DST), #205 (Phase 4 My Car), #206 (My Car/drive follow-ups), #207 (5a Spot Pass in-app), #208 (5b App Clip, one reminder), #209 (5b Live Activity/island/notifications), #210 (polish 2), #211 (5b follow-ups), #212 (6a onboarding + More/Settings), #213, #214, #215 (6b trip/101/errors), #217, #218.
 
 **Stoop-on builds (since #208/#209):** the flag is the compile-time `StoopFlag.designSystemV2Enabled` at `ios/WePark/Shared/Stoop/StoopFlag.swift:19`, compiled into all 4 targets. To turn Stoop on, flip that line, not Constants.swift; `AppConstants.designSystemV2Enabled` forwards to it. The other 7 tester flags are still in Constants.swift. Since #212, Stoop onboarding also needs `onboardingStoryEnabled = true` in Constants.swift, along with `driveModeDefaultEnabled`. Flip both in a Stoop-on build.
 
@@ -15,11 +15,11 @@ The redesign workstream is called **"Stoop"**: flag `designSystemV2Enabled`, fon
 - `fix/stoop-phase5b-followups`: clip copy truth, Walk there category, island height.
 - `feat/stoop-phase6a-onboarding-settings`.
 
-**Build 34**
-- This is the FIRST Stoop-ON build: the 7 tester flags plus `designSystemV2Enabled`, Spot Pass shortcuts and intent discovery.
-- Archive: `~/Library/Developer/Xcode/Archives/2026-11-26/WePark-34-stoop.xcarchive`, created 1:51 AM, made from 582cb13d.
-- The CLI upload still fails with "Failed to Use Accounts". Kevin uploads it via Organizer.
-- It goes to **internal testers only**. Do not add it to the external group. External testers stay on 33 until Stoop is complete.
+**Build 35 (supersedes 34)**
+- This is the first full-Stoop build: the StoopFlag plus 7 tester flags, `onboardingStoryEnabled`, and the Spot Pass shortcuts/intent discovery.
+- Archive: `~/Library/Developer/Xcode/Archives/2026-11-26/WePark-35-stoop.xcarchive`, created 7:49 AM, made from 3051bf04.
+- Kevin uploads it via Organizer. It goes to **internal testers only**; external stays on 33.
+- Build 34 (1:51 AM) was never uploaded. Skip it.
 
 **In flight:** one ios-engineer is doing, in order:
 1. `fix/stoop-drive-ax5`: QA #201 AX5 overflow plus the mislabeled screenshot.
