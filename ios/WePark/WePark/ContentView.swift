@@ -3248,6 +3248,9 @@ struct ContentView: View {
                 if let showcase = WPPhase4Showcase.requested {
                     WPPhase4Showcase(name: showcase)
                 }
+                if let showcase = WPPhase5aShowcase.requested {
+                    WPPhase5aShowcase(name: showcase)
+                }
             }
             #endif
             // Community 2.0 S13a (WP1): the persistent Report pill + "?" map-key button.

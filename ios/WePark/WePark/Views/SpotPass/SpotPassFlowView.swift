@@ -82,8 +82,84 @@ struct SpotPassFlowView: View {
 
     // MARK: - Phase to screen
 
+    /// Stoop Phase 5a: the round-2 look (B9) while `designSystemV2Enabled`. Same phases, same actions;
+    /// only the drawing differs, so flag-off is exactly the old screens.
+    private var usesStoop: Bool { AppConstants.designSystemV2Enabled }
+
     @ViewBuilder
     private var content: some View {
+        if usesStoop { stoopContent } else { legacyContent }
+    }
+
+    @ViewBuilder
+    private var stoopContent: some View {
+        switch store.phase {
+        case .idle:
+            if explainerSeen {
+                WPSeekerMessageV2(title: SpotPassCopy.creating, showsSpinner: true, onClose: close)
+            } else {
+                WPSeekerIntroV2(
+                    firstName: firstName,
+                    showFirstName: $showFirstName,
+                    onCreate: {
+                        let preferences = SpotPassPreferences()
+                        preferences.showFirstName = showFirstName
+                        preferences.hasSeenExplainer = true
+                        explainerSeen = true
+                        Task { await requestCreate() }
+                    },
+                    onClose: close
+                )
+            }
+
+        case .creating:
+            WPSeekerMessageV2(title: SpotPassCopy.creating, showsSpinner: true, onClose: close)
+
+        case .createFailed(let failure):
+            WPSeekerMessageV2(
+                title: failure == .offline ? SpotPassCopy.offline : SpotPassCopy.createFailed,
+                primary: (title: SpotPassCopy.tryAgain, action: { Task { await requestCreate() } }),
+                secondary: (title: SpotPassCopy.done, action: close),
+                onClose: close
+            )
+
+        case .open, .armed:
+            if let session = store.session {
+                SpotPassBadgeView(store: store, session: session, onDone: close)
+            } else {
+                WPSeekerMessageV2(title: SpotPassCopy.creating, showsSpinner: true, onClose: close)
+            }
+
+        case .departed:
+            if let session = store.session {
+                WPSeekerDepartedV2(
+                    glyphSymbol: SpotPassGlyph.symbolName(for: session.glyph),
+                    tintIndex: SpotPassGlyph.tintIndex(for: session.id),
+                    isSubmitting: store.isSubmittingOutcome,
+                    submitFailed: store.outcomeSubmitFailed,
+                    onGotIt: { Task { await store.confirmOutcome(.gotSpot) } },
+                    onDidntWorkOut: { Task { await store.confirmOutcome(.noLuck) } }
+                )
+            } else {
+                WPSeekerMessageV2(title: SpotPassCopy.creating, showsSpinner: true, onClose: close)
+            }
+
+        case .settled(let outcome, let karmaDelta):
+            WPSeekerSettledV2(
+                gotSpot: outcome == .gotSpot,
+                karmaReceipt: karmaDelta.flatMap { $0 > 0 ? (outcome == .gotSpot
+                    ? SpotPassCopy.karmaReceipt($0) : SpotPassCopy.noLuckKarmaReceipt($0)) : nil },
+                onKeepLooking: makeNewPass,
+                onDone: finish
+            )
+
+        case .ended(let reason):
+            WPSeekerEndedV2(isPaused: reason == .suspended, onMakeNew: makeNewPass, onDone: finish)
+        }
+    }
+
+    @ViewBuilder
+    private var legacyContent: some View {
         switch store.phase {
         case .idle:
             if explainerSeen {

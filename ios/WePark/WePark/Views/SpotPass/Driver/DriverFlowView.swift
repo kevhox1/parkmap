@@ -107,18 +107,22 @@ struct DriverFlowView: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// Stoop Phase 5a: the round-2 cream look (B10) while `designSystemV2Enabled`. Same phases and
+    /// actions; flag-off keeps the dark indigo screens exactly.
+    private var usesStoop: Bool { AppConstants.designSystemV2Enabled }
+
     var body: some View {
         GeometryReader { proxy in
             ZStack {
-                DriverBackdrop()
+                if usesStoop { WP.paper.ignoresSafeArea() } else { DriverBackdrop() }
                 content
                     .transition(.opacity)
             }
             .environment(\.driverIsShortScreen, proxy.size.height < SpotPassTheme.shortScreenHeight)
             .environment(\.driverScreenHeight, proxy.size.height)
         }
-        .preferredColorScheme(.dark)
-        .tint(SpotPassTheme.indigo)
+        .preferredColorScheme(usesStoop ? nil : .dark)
+        .tint(usesStoop ? WP.ink : SpotPassTheme.indigo)
         .animation(.easeInOut(duration: 0.25), value: controller.phase)
         .onChange(of: controller.phase) { _, phase in
             if phase == .dismissed { onClose() }
@@ -139,6 +143,29 @@ struct DriverFlowView: View {
     }
 
     @ViewBuilder private var content: some View {
+        if usesStoop { stoopContent } else { legacyContent }
+    }
+
+    @ViewBuilder private var stoopContent: some View {
+        switch controller.phase {
+        case .choosing, .arming:
+            WPDriverChoosingStoop(controller: controller, onClose: onClose)
+        case .armed:
+            WPDriverArmedStoop(controller: controller, onClose: onClose)
+        case .pullingOut, .sending, .sent:
+            WPDriverPullingOutStoop(controller: controller)
+        case .celebration:
+            WPDriverCelebrationStoop(controller: controller, onDone: onClose)
+        case .landing, .dismissed, .unavailable, .offline, .busy, .disabled, .openApp, .cancelled, .ended:
+            let message = DriverMessageContent.content(for: controller.phase)
+            WPDriverMessageV2(
+                title: message.title, body_: message.body, retry: message.retry,
+                onRetry: { controller.retry() }, onDone: onClose
+            )
+        }
+    }
+
+    @ViewBuilder private var legacyContent: some View {
         switch controller.phase {
         case .choosing, .arming:
             DriverChoosingView(controller: controller, onClose: onClose)
@@ -160,11 +187,11 @@ struct DriverFlowView: View {
     @ViewBuilder private var toastView: some View {
         if let toast = controller.toast {
             Text(toast)
-                .font(.subheadline.weight(.semibold))
+                .font(usesStoop ? WP.Font.fredoka(15, .semibold, relativeTo: .callout) : Font.subheadline.weight(.semibold))
                 .foregroundStyle(.white)
                 .padding(.horizontal, 16)
                 .frame(minHeight: 44)
-                .background(.thinMaterial, in: Capsule())
+                .background(usesStoop ? AnyShapeStyle(WP.ink) : AnyShapeStyle(.thinMaterial), in: Capsule())
                 // Below the pinned header row (44 pt + status bar) so it never covers Report / Close.
                 .padding(.top, 64)
                 .transition(.opacity)
