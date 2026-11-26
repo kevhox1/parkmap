@@ -188,6 +188,9 @@ struct SuggestNeighborhoodSheet: View {
                     closeLabel: "Back",
                     onClose: { dismiss() },
                     title: "Where should WePark go next?",
+                    // TODO: the coverage area has no name in code (`AppConstants.manhattanCoverageBounds`
+                    // is bounds only), so "Manhattan" is still a literal here. Source it from a named
+                    // coverage definition when coverage grows past Manhattan.
                     sub: "We cover Manhattan today. Suggestions decide the order of what comes after.",
                     primary: stoopPrimary
                 ) {

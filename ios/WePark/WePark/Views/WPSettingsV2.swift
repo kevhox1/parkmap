@@ -199,6 +199,7 @@ struct WPSettingsV2: View {
     let buildNumber: String
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(SupabaseAuthService.self) private var authService: SupabaseAuthService?
     @State private var path: [WPSettingsRoute] = []
     @State private var notificationStatus: UNAuthorizationStatus?
@@ -214,6 +215,13 @@ struct WPSettingsV2: View {
         }
         .background(WP.paper.ignoresSafeArea())
         .task { await refreshNotificationStatus() }
+        // The user can change the permission in iOS Settings and come back: re-read on every return
+        // to the foreground so the row never shows a stale status.
+        .onChange(of: scenePhase) { _, phase in
+            if WPSettingsLogic.shouldRefreshNotificationStatus(scenePhase: phase) {
+                Task { await refreshNotificationStatus() }
+            }
+        }
         .onChange(of: offsets) { _, newOffsets in
             ReminderOffsets.save(newOffsets, to: .standard)
             onOffsetsChange()
@@ -448,14 +456,17 @@ struct WPReminderSettingsV2: View {
                     WPListCard {
                         WPListToggleRow(title: "Also the night before", isOn: $offsets.remindNightBefore)
                             .disabled(notificationsMuted)
-                        WPListDivider()
-                        // The scheduler fires the night-before reminder at a fixed hour, so this is
-                        // a fact, not a control.
-                        WPValueRow(
-                            title: "Night-before time",
-                            value: WPSettingsLogic.nightBeforeTimeLabel(hour: AppConstants.nightBeforeHourET),
-                            showsChevron: false
-                        )
+                        if WPSettingsLogic.showsNightBeforeTime(nightBeforeOn: offsets.remindNightBefore) {
+                            WPListDivider()
+                            // The scheduler fires the night-before reminder at a fixed hour, so this is
+                            // a fact, not a control. Hidden while "Also the night before" is off: a
+                            // time for a reminder that will not fire would read as a promise.
+                            WPValueRow(
+                                title: "Night-before time",
+                                value: WPSettingsLogic.nightBeforeTimeLabel(hour: AppConstants.nightBeforeHourET),
+                                showsChevron: false
+                            )
+                        }
                     }
                     .opacity(notificationsMuted ? 0.5 : 1)
                     Text("Used each time you park. You can still switch reminders off for one parked car in My Car.")

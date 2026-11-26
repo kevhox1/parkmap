@@ -14,6 +14,7 @@
 //
 
 import Foundation
+import SwiftUI
 import UserNotifications
 
 // MARK: - Story deck copy (B1.1 to B1.3)
@@ -33,8 +34,8 @@ extension OnboardingStoryCard {
 
     nonisolated var v2Sub: String {
         switch self {
-        case .problem: return "WePark reads the parking signs on every curb, so you don\u{2019}t have to."
-        case .ask: return "Tap any curb to see how long you can stay and which sign says so."
+        case .problem: return "WePark reads NYC\u{2019}s posted parking signs, curb by curb, so you don\u{2019}t have to."
+        case .ask: return "Tap a curb to see how long you can stay and the sign behind it."
         case .payoff: return "The map turns green only where you can stay that long."
         }
     }
@@ -98,9 +99,12 @@ extension OnboardingCoachMark {
     nonisolated var v2Progress: String { "\(rawValue + 1) of \(OnboardingCoachMark.allCases.count)" }
 
     /// Round-2 headline. Mark 1 teaches the goal window, mark 2 the two-state map, mark 3
-    /// drag-to-park. At accessibility sizes the resting car token is hidden (the goal sheet fills
-    /// the screen) and the goal tiles collapse to one card, so marks 1 and 3 name what is there.
-    nonisolated func v2Title(accessibilityLayout: Bool) -> String {
+    /// drag-to-park. Mark 3's words follow what is actually on screen: the resting car token is
+    /// drawn only when `ContentView.v2ShowsRestingToken` says so (it is hidden at accessibility
+    /// sizes, outside coverage, with a parked car or trip plan, and while any sheet or mode is up).
+    /// Whenever the token is not drawn the copy falls back to "Tap a green curb, then Park here",
+    /// which is always available. Mark 1's accessibility wording is about the collapsed goal card.
+    nonisolated func v2Title(accessibilityLayout: Bool, tokenVisible: Bool = true) -> String {
         switch self {
         case .goalTiles:
             return accessibilityLayout ? "Tap the goal card to pick how long you\u{2019}re staying"
@@ -108,21 +112,27 @@ extension OnboardingCoachMark {
         case .colorMeaning:
             return "Solid green: park. Dashed coral: don\u{2019}t."
         case .tapABlock:
-            return accessibilityLayout ? "Tap a green curb, then Park here" : "Drag the car to park"
+            return tokenCopyApplies(accessibilityLayout: accessibilityLayout, tokenVisible: tokenVisible)
+                ? "Drag the car to park" : "Tap a green curb, then Park here"
         }
     }
 
-    nonisolated func v2Message(accessibilityLayout: Bool) -> String {
+    nonisolated func v2Message(accessibilityLayout: Bool, tokenVisible: Bool = true) -> String {
         switch self {
         case .goalTiles:
             return "Overnight means from now until the morning."
         case .colorMeaning:
             return "Tap any curb for its end time and its signs."
         case .tapABlock:
-            return accessibilityLayout
-                ? "WePark saves where you parked and can remind you before it changes."
-                : "Hold the car and drag it to a green curb."
+            return tokenCopyApplies(accessibilityLayout: accessibilityLayout, tokenVisible: tokenVisible)
+                ? "Hold the car and drag it to a green curb."
+                : "WePark saves where you parked and can remind you before it changes."
         }
+    }
+
+    /// Mark 3 may talk about dragging the car only when the car is on screen.
+    private nonisolated func tokenCopyApplies(accessibilityLayout: Bool, tokenVisible: Bool) -> Bool {
+        tokenVisible && !accessibilityLayout
     }
 
     nonisolated var v2NextLabel: String {
@@ -141,6 +151,15 @@ extension OnboardingCoachMark {
 // MARK: - Settings
 
 enum WPSettingsLogic {
+
+    /// Settings re-reads the iOS notification permission each time the app returns to the
+    /// foreground (the user may have changed it in iOS Settings), and only then.
+    nonisolated static func shouldRefreshNotificationStatus(scenePhase: ScenePhase) -> Bool {
+        scenePhase == .active
+    }
+
+    /// The fixed "Night-before time" fact row is shown only while the night-before reminder is on.
+    nonisolated static func showsNightBeforeTime(nightBeforeOn: Bool) -> Bool { nightBeforeOn }
 
     // MARK: Reminder option set (DECISIONS #8: the same set as My Car)
 
@@ -338,4 +357,59 @@ enum WPAboutSources {
          "https://www.nyc.gov/html/dot/html/motorist/parking-regulations.shtml"),
     ]
     nonisolated static let note = "WePark is a community helper, not the city. Always confirm with the posted street signs and the official NYC sources below. The signs are the final word."
+}
+
+// MARK: - Coach mark 2 anchor
+
+/// Where mark 2's ring may land. The ring points at a curb, so it must sit on the open map: never
+/// over the top chrome (pill), the search / More / Locate row that floats above the goal sheet, the
+/// sheet itself, or the resting car token. All values are WINDOW coordinates.
+enum WPCoachAnchorLogic {
+
+    /// Space the ring (64pt) needs clear of a control on every side.
+    nonisolated static let clearance: CGFloat = 40
+    /// The search row is 48pt tall and floats just above the sheet (`WPCoachOverlayV2.bottomLimit`).
+    nonisolated static let toolbarRowHeight: CGFloat = 54
+
+    nonisolated static func isClear(
+        point: CGPoint,
+        topChromeBottom: CGFloat,
+        goalDockTop: CGFloat,
+        screen: CGSize,
+        tokenCenter: CGPoint?
+    ) -> Bool {
+        guard point.x >= clearance, point.x <= screen.width - clearance else { return false }
+        guard point.y >= topChromeBottom + clearance else { return false }
+        // Unmeasured sheet (zero): assume it covers the bottom 40% so the ring never lands low.
+        let dockTop = goalDockTop > 0 ? goalDockTop : screen.height * 0.6
+        guard point.y <= dockTop - toolbarRowHeight - clearance else { return false }
+        if let tokenCenter, hypot(point.x - tokenCenter.x, point.y - tokenCenter.y) < 90 { return false }
+        // The card hangs off the ring (36pt gap): below it needs `cardHeight` clear of the search
+        // row, above it needs `minimumCardHeight` under the Skip link. If neither fits the ring
+        // would drag the card over a control, so there is no ring at all.
+        let top = topChromeBottom + skipLinkAllowance
+        let fitsBelow = point.y + cardGap + cardHeight <= dockTop - toolbarRowHeight - 14
+        let fitsAbove = point.y - cardGap - top >= minimumCardHeight
+        return fitsBelow || fitsAbove
+    }
+
+    nonisolated static let cardGap: CGFloat = 36
+    nonisolated static let cardHeight: CGFloat = 176
+    nonisolated static let minimumCardHeight: CGFloat = 160
+    nonisolated static let skipLinkAllowance: CGFloat = 60
+
+    /// First candidate (already ordered nearest-first) that is clear; nil when none is, in which
+    /// case the card shows with no ring rather than pointing at a control.
+    nonisolated static func firstClear(
+        among points: [CGPoint],
+        topChromeBottom: CGFloat,
+        goalDockTop: CGFloat,
+        screen: CGSize,
+        tokenCenter: CGPoint?
+    ) -> CGPoint? {
+        points.first {
+            isClear(point: $0, topChromeBottom: topChromeBottom, goalDockTop: goalDockTop,
+                    screen: screen, tokenCenter: tokenCenter)
+        }
+    }
 }
