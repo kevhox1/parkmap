@@ -108,4 +108,22 @@ final class StoopPhase5bActivityTests: XCTestCase {
         // The shipping default follows the flag, which is false.
         XCTAssertTrue(NotificationCategoryRegistry.launchCategories(addressEnabled: false, spotPassEnabled: false).isEmpty)
     }
+
+    // MARK: Category precedence (address-anchored parking on)
+
+    @MainActor
+    func testCategory_stoopWinsOverAddressCategory_soWalkThereSurvives() {
+        let stoop = NotificationScheduler.categoryIdentifier(stoop: true, hasVerifiedAddress: true)
+        XCTAssertEqual(stoop, WPParkReminderCopy.categoryID)
+        XCTAssertEqual(WPParkReminderCopy.category().actions.map(\.identifier), [WPParkReminderCopy.actionWalkThere])
+        // The Stoop category hides the body (and so the address) when previews are off.
+        XCTAssertFalse(WPParkReminderCopy.category().hiddenPreviewsBodyPlaceholder.isEmpty)
+        XCTAssertEqual(NotificationScheduler.categoryIdentifier(stoop: true, hasVerifiedAddress: false), WPParkReminderCopy.categoryID)
+    }
+
+    @MainActor
+    func testCategory_flagOffUnchanged() {
+        XCTAssertEqual(NotificationScheduler.categoryIdentifier(stoop: false, hasVerifiedAddress: true), NotificationScheduler.addressCategoryID)
+        XCTAssertNil(NotificationScheduler.categoryIdentifier(stoop: false, hasVerifiedAddress: false))
+    }
 }

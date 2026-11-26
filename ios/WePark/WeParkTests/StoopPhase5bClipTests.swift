@@ -110,8 +110,33 @@ final class StoopPhase5bClipTests: XCTestCase {
         XCTAssertEqual(WPClipCopy.chipTitle(.minutes(10)), "About 10 min")
         XCTAssertEqual(WPClipCopy.chipTitle(.minutes(60)), "About 1 hour")
         XCTAssertEqual(WPClipCopy.tell(name: "Bodega Cat"), "Tell Bodega Cat")
-        XCTAssertEqual(WPClipCopy.reminderOnly, "That's the only notification you'll get.")
+        XCTAssertEqual(WPClipCopy.allowReminder, "Remind me once")
         XCTAssertEqual(WPClipCopy.reminderTitle(around: "4:45"), "Still leaving around 4:45?")
         XCTAssertFalse(WPClipCopy.thanksTitle.contains("!"))
+    }
+
+    // MARK: Reminder copy matches the reminder plan
+
+    func testReminderCopy_isTrueForEveryPath() {
+        let copy = WPClipCopy.reminderOnly
+        XCTAssertTrue(copy.contains("one reminder"))
+        XCTAssertTrue(copy.contains("5 more min"), "the snooze reminder must be disclosed")
+        XCTAssertTrue(copy.contains("says thanks"), "the backend thanks alert must be disclosed")
+        XCTAssertFalse(copy.lowercased().contains("only notification"))
+        XCTAssertTrue(WPClipCopy.snoozeHint.contains("reminds you again"))
+    }
+
+    func testReminderPlan_isOneReminder_andSnoozeReplacesIt() {
+        let id = UUID()
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let leave = now.addingTimeInterval(20 * 60)
+        let first = HandoffReminderPlan.plan(stoop: true, passID: id, name: "Bodega Cat", leaveAt: leave, expiresAt: leave.addingTimeInterval(15 * 60), now: now)
+        XCTAssertEqual(first.count, 1, "copy says one reminder")
+        // "5 more min": the controller reschedules for leave + 5 min. Same identifier, so it replaces the
+        // pending one; a snooze after the first fired is the one extra reminder the copy discloses.
+        let later = leave.addingTimeInterval(5 * 60)
+        let snoozed = HandoffReminderPlan.plan(stoop: true, passID: id, name: "Bodega Cat", leaveAt: later, expiresAt: later.addingTimeInterval(15 * 60), now: now)
+        XCTAssertEqual(snoozed.count, 1)
+        XCTAssertEqual(snoozed.first?.identifier, first.first?.identifier)
     }
 }

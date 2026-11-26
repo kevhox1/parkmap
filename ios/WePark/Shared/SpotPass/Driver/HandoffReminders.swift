@@ -54,8 +54,9 @@ nonisolated enum HandoffReminderPlan {
         return candidates.filter { $0.fireDate > now.addingTimeInterval(1) && $0.fireDate < expiresAt }
     }
 
-    /// Stoop (DECISIONS #7): the clip schedules exactly ONE reminder, matching the copy "That's the only
-    /// notification you'll get." It fires `singleLead` before `leave_at` ("Still leaving around 4:45?",
+    /// Stoop (DECISIONS #7): the clip schedules exactly ONE reminder, matching the copy "We'll send one
+    /// reminder before you leave" (`WPClipCopy.reminderOnly`, which also discloses the "5 more min" snooze
+    /// and the backend thanks alert). It fires `singleLead` before `leave_at` ("Still leaving around 4:45?",
     /// round-2 B13). A pass that leaves in under two minutes fires as soon as it can; "Now" (leave_at at
     /// or before now) schedules nothing, because that pass opens straight on the Time-to-go screen.
     static let singleLead: TimeInterval = 2 * 60

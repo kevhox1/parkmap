@@ -78,7 +78,7 @@ struct WPClipReminderView: View {
         WPClipPage(onBack: onBack) {
             WPClipHeadline(text: WPClipCopy.reminderHeadline)
             WPClipSubline(text: WPClipCopy.reminderSub)
-            // A preview of the single notification the clip will send.
+            // A preview of the reminder the clip will send.
             VStack(alignment: .leading, spacing: 2) {
                 Text(WPClipCopy.appName)
                     .font(WP.Font.fredoka(14, .medium, relativeTo: .caption))
@@ -324,7 +324,7 @@ struct WPClipCountdownView: View {
     private var buttons: some View {
         let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: WP.Space.s3)) : AnyLayout(HStackLayout(spacing: WP.Space.s3))
         return layout {
-            WPClipOutlineButton(title: WPClipCopy.fiveMore, isDisabled: !canExtend || mode == .sending, hint: "Gives you five more minutes", action: onFiveMore)
+            WPClipOutlineButton(title: WPClipCopy.fiveMore, isDisabled: !canExtend || mode == .sending, hint: WPClipCopy.snoozeHint, action: onFiveMore)
             WPClipOutlineButton(
                 title: WPClipCopy.notLeavingShort, isDisabled: mode == .sending,
                 hint: "Cancels your pass. \(name) will not be told.", action: onNotLeaving

@@ -213,7 +213,9 @@ func wpDynamicIsland<Wrapper: View>(
         }
         DynamicIslandExpandedRegion(.bottom) {
             if counting {
-                VStack(spacing: 0) {
+                // Side by side, not stacked: measured on a simulator, the expanded island (84-160 pt tall
+                // per the HIG) clipped a 52 pt pill + 44 pt link stack and dropped "Not leaving".
+                HStack(spacing: 4) {
                     wrap(.leavingNow, AnyView(WPActivityPill(title: WPActivityCopy.leavingNow, height: 52, fillsWidth: true)))
                     wrap(.notLeaving, AnyView(WPActivityQuietLink()))
                 }
