@@ -38,7 +38,62 @@ struct SpotPassBadgeView: View {
     @State private var appeared = false
     @State private var notificationsDenied = false
 
+    /// Stoop Phase 5a: with `designSystemV2Enabled` the badge draws the round-2 look (B9.3/B9.4).
+    /// The lifecycle below (screen brightness, polling hooks, notification status) is shared, so
+    /// behavior is identical in both looks.
     var body: some View {
+        Group {
+            if AppConstants.designSystemV2Enabled { stoopBody } else { legacyBody }
+        }
+        .onAppear {
+            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.85)) {
+                appeared = true
+            }
+            syncScreen()
+        }
+        .onChange(of: store.phase) { _, _ in syncScreen() }
+        .onChange(of: scenePhase) { _, newPhase in
+            syncScreen()
+            if newPhase == .active { Task { await refreshNotificationStatus() } }
+        }
+        .onDisappear { controller.end() }
+        .task { await refreshNotificationStatus() }
+    }
+
+    private var stoopBody: some View {
+        GeometryReader { proxy in
+            let short = proxy.size.height < SpotPassTheme.shortScreenHeight
+            let landscape = verticalSizeClass == .compact
+            WPSeekerBadgeV2(
+                model: WPBadgeModel(
+                    token: session.token,
+                    shownName: session.shownName,
+                    glyphSymbol: SpotPassGlyph.symbolName(for: session.glyph),
+                    tintIndex: SpotPassGlyph.tintIndex(for: session.id),
+                    karmaLabel: store.karmaBucketLabel,
+                    isArmed: isArmed,
+                    createdAt: session.createdAt,
+                    expiresAt: session.expiresAt,
+                    armedLine: { armedLine(at: $0) }
+                ),
+                night: night,
+                showsBrightness: store.phase == .open,
+                notificationsDenied: notificationsDenied,
+                showsNightTip: store.phase == .open && Self.isNightHour(Date()),
+                pinsStop: Self.pinsStopButton(short: short, landscape: landscape, dynamicTypeSize: dynamicTypeSize),
+                shareURL: voiceOverEnabled ? SpotPassQR.url(token: session.token) : nil,
+                onDone: onDone,
+                onToggleNight: {
+                    night.toggle()
+                    SpotPassPreferences().nightMode = night
+                    syncScreen(nightChanged: true)
+                },
+                onStop: { Task { await store.stopWaiting() } }
+            )
+        }
+    }
+
+    private var legacyBody: some View {
         GeometryReader { proxy in
             let short = proxy.size.height < SpotPassTheme.shortScreenHeight
             let landscape = verticalSizeClass == .compact
@@ -78,19 +133,6 @@ struct SpotPassBadgeView: View {
             }
         }
         .spotPassBackdrop()
-        .onAppear {
-            withAnimation(reduceMotion ? .easeOut(duration: 0.2) : .spring(response: 0.45, dampingFraction: 0.85)) {
-                appeared = true
-            }
-            syncScreen()
-        }
-        .onChange(of: store.phase) { _, _ in syncScreen() }
-        .onChange(of: scenePhase) { _, newPhase in
-            syncScreen()
-            if newPhase == .active { Task { await refreshNotificationStatus() } }
-        }
-        .onDisappear { controller.end() }
-        .task { await refreshNotificationStatus() }
     }
 
     /// F5: pin "Stop waiting" to the bottom only when the card and the button both fit. At
