@@ -63,3 +63,8 @@ Rule: Kevin reviews first. Nothing below gets fixed until he says "live smoke co
 - FOLLOW-UP (HIGH, live fake-spot): `isFree` treats UNKNOWN-category rules as free (about 238 UNKNOWN-only segments, about 2,650 mixed). Audit of UNKNOWN sign texts in progress, then an engine change: UNKNOWN = restriction.
 - FOLLOW-UP (perf, likely part of the "laggy zoom" complaint): a main-thread stall in `rebuildOverlays` → `ASPSuspensionService.isSuspended` → `Date.toETDateString`, which builds a new DateFormatter per call (51 of 92 samples). Causes 15–60 s of black on cold start in a Debug sim.
 - Minor: the "Remind me" toggle still shows on no-data curbs but can never fire.
+- MERGED #195 (UNKNOWN audit), #196 (UNKNOWN = restriction, "Unclear sign: check the posted sign"), #197 (ET DateFormatter cache: overlay rebuild 0.49→0.13 s), #198 (UNKNOWN with no stated day = 7 days; Sunday fake spots, 352–364 A-Few-Hours curbs green→red on Sunday).
+- Build 32 = main e3ca6056 + the build-31 flag-on set (design system V2 still off). Includes #190, #192, #193, #195–#198 and the new icon.
+- FOLLOW-UP: on a fresh launch (sim), curb lines don't draw until the first camera change/pan. They appear immediately after a pan. On a device, location-follow probably triggers this. Check on build 32.
+- FOLLOW-UP: Debug-sim cold launch is still 26–38 s to the first map (was 35–47 s). Measure the Release build on a device before doing more.
+- Open caveat: the ParkNYC meterless pilot is treated as off on Sundays (41 segments), with no source found.
