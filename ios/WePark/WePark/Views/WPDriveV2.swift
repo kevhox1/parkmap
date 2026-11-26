@@ -43,6 +43,7 @@ struct WPDrivePillStyle: ButtonStyle {
             .font(WP.Font.fredoka(fontSize, .semibold, relativeTo: .title3))
             .multilineTextAlignment(.center)
             .foregroundStyle(WPDrivePalette.ink)
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, WP.Space.s5)
             .padding(.vertical, WP.Space.s2)
             .frame(maxWidth: .infinity, minHeight: minHeight)
@@ -217,10 +218,8 @@ struct WPDriveActionsV2: View {
     var body: some View {
         if dynamicTypeSize.isAccessibilitySize {
             VStack(spacing: WP.Space.s3) {
-                HStack(spacing: WP.Space.s3) {
-                    reportButton(pill: true)
-                    voiceButton(pill: true)
-                }
+                reportButton(pill: true)
+                voiceButton(pill: true)
                 parkButton
             }
         } else {
@@ -324,7 +323,10 @@ struct WPDriveTopChromeV2: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: WP.Space.s2) {
-            HStack(alignment: .top, spacing: WP.Space.s3) {
+            let layout = dynamicTypeSize.isAccessibilitySize
+                ? AnyLayout(VStackLayout(alignment: .leading, spacing: WP.Space.s3))
+                : AnyLayout(HStackLayout(alignment: .top, spacing: WP.Space.s3))
+            layout {
                 if let street {
                     Text(street)
                         .font(WP.Font.fredoka(22, .semibold, relativeTo: .title3))
@@ -332,14 +334,14 @@ struct WPDriveTopChromeV2: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, WP.Space.s5)
                         .padding(.vertical, WP.Space.s2)
-                        .frame(minHeight: 56)
+                        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil, minHeight: 56, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(WPDrivePalette.white))
                         .accessibilityLabel("Street: \(street)")
                 }
-                Spacer(minLength: 0)
+                if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
                 Button("End", action: onEnd)
                     .buttonStyle(WPDrivePillStyle(minHeight: WP.Control.inkPillHeight, fontSize: 22))
-                    .fixedSize(horizontal: true, vertical: false)
+                    .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: false)
                     .accessibilityLabel(endAccessibilityLabel)
             }
             if let destinationLine {

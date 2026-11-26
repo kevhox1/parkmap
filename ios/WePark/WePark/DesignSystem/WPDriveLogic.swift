@@ -12,7 +12,8 @@
 //    - Never show a spot that isn't a spot. A side is `park` only when the goal-aware verdict
 //      says it passes the SAME green gate the map uses (`WPCurbVerdict.isParkable`, wired in
 //      `DrivingContextService.goalAwareChip` while the flag is on) AND the label is a free label.
-//      Unclear, no-data, unknown and metered sides are NEVER `park`.
+//      Unclear, no-data and unknown sides are NEVER `park`. A meter follows the map's gate too:
+//      running in the window = not free; outside the window = free, exactly as the map draws it.
 //    - Left and right are always spelled out in words, never an icon alone (A3).
 //    - Unsure is drawn as don't: the only non-park, non-restriction looks are `nodata`
 //      ("No sign data" / "Unclear sign"), `meter`, and the transient `checking`.
@@ -101,8 +102,13 @@ enum WPDriveVerdict {
         if label.severity == .unknown || text.isEmpty || text == emptyLabel {
             return make(.nodata, "No sign data", "Read the posted signs")
         }
-        // A meter is never a spot, even when the window misses the meter hours.
+        // Meters follow the map exactly: a meter running in the window is not free (the goal
+        // verdict is `.restricted` or absent), a meter whose hours fall outside the window is
+        // legally free and the map draws it green, so the card says park too.
         if label.severity == .metered {
+            if override == .free {
+                return make(.park, "Park", "No meter running in your window")
+            }
             return make(.meter, "Metered", "Pay the meter. Check the signs.")
         }
         if label.severity == .restricted {

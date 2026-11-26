@@ -4,7 +4,7 @@
 //
 //  Design system Phase 3 (Drive mode, B5). Pins Kevin's accuracy rules:
 //    - a side is `park` only when the goal-aware verdict (the map's single green gate) says so
-//      AND the label is a free label; unclear / no-data / unknown / metered are never `park`
+//      AND the label is a free label; unclear / no-data / unknown are never `park`; a meter follows the map gate exactly
 //    - left and right are spelled out in words
 //    - the drive chip agrees with `WPCurbVerdict.isParkable` (the map's gate), including for
 //      unreadable (UNKNOWN / no-data) signs that `isFree` alone would let through
@@ -83,7 +83,6 @@ final class Phase3DriveTests: XCTestCase {
         let unreadable = [
             label(NoSignData.headline, .restricted), label(UnclearSign.headline, .restricted),
             label(UnclearSign.upcomingLabel, .free), label("\u{2014}", .unknown), label("", .unknown),
-            label("Metered", .metered), label("Metered (paid until 7pm)", .metered),
         ]
         for l in unreadable {
             for override in [SafetyLabel.Severity.free, .restricted, nil] {
@@ -93,7 +92,36 @@ final class Phase3DriveTests: XCTestCase {
             }
         }
         XCTAssertEqual(WPDriveVerdict.side(isLeft: true, label: label(NoSignData.headline, .restricted), override: .free).kind, .nodata)
-        XCTAssertEqual(WPDriveVerdict.side(isLeft: true, label: label("Metered", .metered), override: .free).kind, .meter)
+    }
+
+    /// A meter running inside the window is not park; a meter whose hours fall outside the window is
+    /// legally free and the map draws it green, so the card reads park too. The card is derived from
+    /// the SAME goal verdict, so it can never disagree with `WPCurbVerdict.isParkable`.
+    func testMeter_cardAgreesWithMapGate_insideAndOutsideTheWindow() {
+        let meterRules = [ruleJSON(.metered, days: [0, 1, 2, 3, 4, 5, 6], ranges: [(480, 1140)])] // 8 AM to 7 PM
+        let segment = driveSegment(meterRules)
+        let cases: [(hours: Double, expectPark: Bool)] = [
+            (8.0, true),    // 10:11 PM to 6:11 AM: meter off the whole window
+            (14.0, false),  // runs into 8 AM: meter in the window
+            (30.0, false),
+        ]
+        for (hours, expectPark) in cases {
+            let target = now.addingTimeInterval(hours * 3600)
+            let mapGreen = WPCurbVerdict.isParkable(segment: segment, engine: engine, from: now, until: target)
+            XCTAssertEqual(mapGreen, expectPark, "fixture sanity \(hours)h")
+            let chip = DrivingContextService.goalAwareChip(
+                sideSegments: [segment], parkUntilMode: true, target: target,
+                ignoringMeteredPayment: false, from: now, engine: engine, strictParkable: true
+            )
+            let side = WPDriveVerdict.side(
+                isLeft: true, label: chip?.labelOverride ?? label("Metered", .metered), override: chip?.severity
+            )
+            XCTAssertEqual(side.kind == .park, mapGreen, "drive card must equal the map's verdict at \(hours)h")
+        }
+        // A metered label with a free goal verdict is park (the map's green); without one it is not.
+        XCTAssertEqual(WPDriveVerdict.side(isLeft: true, label: label("Metered", .metered), override: .free).kind, .park)
+        XCTAssertEqual(WPDriveVerdict.side(isLeft: true, label: label("Metered", .metered), override: .restricted).kind, .meter)
+        XCTAssertEqual(WPDriveVerdict.side(isLeft: true, label: label("Metered", .metered), override: nil).kind, .meter)
     }
 
     func testSide_everyCombination_parkRequiresFreeLabelAndFreeGoalVerdict() {
@@ -106,9 +134,9 @@ final class Phase3DriveTests: XCTestCase {
                 for override in overrides {
                     let s = WPDriveVerdict.side(isLeft: true, label: label(text, sev), override: override)
                     if s.kind == .park {
-                        XCTAssertTrue(sev == .free || sev == .comingSoon, "\(sev) \(text)")
+                        XCTAssertTrue(sev == .free || sev == .comingSoon || sev == .metered, "\(sev) \(text)")
                         XCTAssertEqual(override, .free, "\(sev) \(text)")
-                        XCTAssertTrue(text.hasPrefix("Free until") || text.hasPrefix("Free"), text)
+                        if sev != .metered { XCTAssertTrue(text.hasPrefix("Free"), text) }
                     }
                 }
             }
