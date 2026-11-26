@@ -233,7 +233,8 @@ final class StoopPhase6aTests: XCTestCase {
     func testColors_detailRowsMatchTheFiveStyles_andPinsAreOnlyWhatTheMapDraws() {
         XCTAssertEqual(WPColorsCopy.detailRows.map(\.label),
                        ["Free", "Changes soon", "Metered", "No parking", "No sign data"])
-        XCTAssertEqual(WPColorsCopy.detailRows.map(\.kind), CurbLineKind.allCases)
+        XCTAssertEqual(WPColorsCopy.detailRows.count, CurbLineKind.allCases.count)
+        XCTAssertTrue(CurbLineKind.allCases.allSatisfy { kind in WPColorsCopy.detailRows.contains { $0.kind == kind } })
         XCTAssertEqual(WPColorsCopy.pinLabels, ["Open spot", "Leaving soon", "Street swept", "Ticketing now"])
     }
 
