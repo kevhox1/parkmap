@@ -69,6 +69,10 @@ private struct WPPhase5aShowcaseContent: View {
         switch name {
         case "intro", "intro-name":
             WPSeekerIntroV2(firstName: name == "intro-name" ? "Sam" : nil, showFirstName: $showFirstName, onCreate: {}, onClose: {})
+        case "legacy-intro":
+            // The UNCHANGED flag-off Spot Pass explainer (the legacy leaf `SpotPassFlowView` draws
+            // while `designSystemV2Enabled` is false). Proof that flag-off Spot Pass is untouched.
+            SpotPassExplainerView(firstName: nil, showFirstName: $showFirstName, onCreate: {}, onClose: {})
         case "failed":
             WPSeekerMessageV2(
                 title: SpotPassCopy.offline,
@@ -92,13 +96,13 @@ private struct WPPhase5aShowcaseContent: View {
         case "choose", "choose-custom":
             WPDriverChoosingV2(
                 name: "Bodega Cat", glyphSymbol: glyph, tintIndex: 0,
-                choice: name == "choose-custom" ? .custom(Date().addingTimeInterval(45 * 60)) : choice,
+                choice: name == "choose-custom" ? .custom(slots().dropFirst(2).first ?? Date()) : choice,
                 isArming: false, armFailureMessage: nil, willAskForNotifications: true,
                 ctaTitle: ClipCopy.cta(choice: choice, name: "Bodega Cat"),
                 onSelect: { choice = $0 }, onArm: {}, onNotLeaving: {}, onReport: {}, onClose: {}
             )
         case "pick":
-            WPLeaveTimeSheetV2(slots: slots(), selected: slots().dropFirst(2).first, onUse: { _ in })
+            WPLeaveTimeSheetV2(selected: slots().dropFirst(2).first, onUse: { _ in })
         case "driver-armed", "driver-armed-auto":
             WPDriverArmedV2(
                 name: "Bodega Cat",

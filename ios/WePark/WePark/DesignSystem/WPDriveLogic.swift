@@ -173,8 +173,10 @@ enum WPDriveVerdict {
     nonisolated static func compactLine(for side: WPDriveSide) -> String {
         guard side.kind == .park, let sub = side.sub else { return side.big }
         if sub.hasPrefix("Free until ") { return "Park until " + sub.dropFirst("Free until ".count) }
-        // A green metered side keeps its caveat: the meter is not running in the window.
-        if sub.hasPrefix("No meter running") { return "Park \u{00B7} no meter" }
+        // A green metered side keeps its caveat. "meter not running" (not "no meter") so it never
+        // reads as "this street has no meter": the meter exists, it just is not running in the
+        // driver's window (green is only drawn when the goal window clears the meter hours).
+        if sub.hasPrefix("No meter running") { return "Park \u{00B7} meter not running" }
         return side.big
     }
 

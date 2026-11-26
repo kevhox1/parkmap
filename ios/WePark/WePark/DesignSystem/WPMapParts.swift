@@ -156,23 +156,31 @@ struct WPEndTimeHeadline: View {
 /// "Change": flat, 2.5 line, 48 tall, 15/600. "Done": ink fill, white label.
 struct WPLeverButtonStyle: ButtonStyle {
     let isDone: Bool
+    @Environment(\.colorScheme) private var scheme
 
     func makeBody(configuration: Configuration) -> some View {
         let shape = Capsule()
+        // "Done" in dark: the same lifted + line pill as `InkPillButtonStyle` (ink would vanish).
+        let palette = InkPillButtonStyle.Palette.resolve(dark: scheme == .dark)
         configuration.label
             .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
-            .foregroundStyle(isDone ? Color.white : WP.text)
+            .foregroundStyle(isDone ? (palette.label.map { Color(wpHex: $0) } ?? Color.white) : WP.text)
             .padding(.horizontal, isDone ? WP.Space.s4 : WP.Space.s3)
             .frame(minHeight: WP.Target.minimum)
             .frame(minWidth: WP.Target.minimum)
             .background(
                 shape.fill(
                     isDone
-                        ? (configuration.isPressed ? Color(wpHex: WP.Hex.darkLifted) : Color(wpHex: WP.Hex.ink))
+                        ? Color(wpHex: configuration.isPressed ? palette.pressedFill : palette.fill)
                         : (configuration.isPressed ? WP.lifted : Color.clear)
                 )
             )
-            .overlay(shape.strokeBorder(isDone ? Color.clear : WP.line, lineWidth: WP.Border.control))
+            .overlay(
+                shape.strokeBorder(
+                    isDone ? (palette.outline.map { Color(wpHex: $0) } ?? Color.clear) : WP.line,
+                    lineWidth: WP.Border.control
+                )
+            )
             .contentShape(shape)
     }
 }

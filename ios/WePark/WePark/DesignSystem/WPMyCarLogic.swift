@@ -168,8 +168,9 @@ enum WPMyCarLogic {
 
     /// The "Leaving soon?" card (Tell neighbors / Spot Pass) shows whenever the leave flow offers a
     /// sheet, for EVERY verdict. `.dont` included: a driver who must move now is exactly the person
-    /// leaving a spot (the V2 sheet always showed it).
-    nonisolated static func showsLeavingSoonCard(leaveOpensSheet: Bool, variant: WPCurbVariant) -> Bool {
+    /// leaving a spot (the V2 sheet always showed it). Deliberately takes no verdict: the card is
+    /// not a function of the verdict.
+    nonisolated static func showsLeavingSoonCard(leaveOpensSheet: Bool) -> Bool {
         leaveOpensSheet
     }
 
@@ -222,10 +223,14 @@ enum WPMyCarLogic {
         case on
         case mutedInApp
         case deniedInSystem
+        /// The system permission has not been read yet. Promises nothing until the real status
+        /// arrives (a frame or two), so a denied phone never flashes "You'll get N reminders".
+        case unknown
 
-        /// `status` nil means "not read yet": assume on, then correct once the real status arrives.
+        /// `status` nil means "not read yet": do NOT assume on.
         nonisolated static func resolve(muted: Bool, status: UNAuthorizationStatus?) -> NotificationAvailability {
             if muted { return .mutedInApp }
+            guard let status else { return .unknown }
             if status == .denied { return .deniedInSystem }
             return .on
         }
@@ -236,6 +241,7 @@ enum WPMyCarLogic {
             case .on: return nil
             case .mutedInApp: return "Notifications are muted in WePark, so no reminders will be sent."
             case .deniedInSystem: return "Notifications are off for WePark in Settings, so no reminders will be sent."
+            case .unknown: return "Checking whether notifications are on."
             }
         }
     }
@@ -304,6 +310,7 @@ enum WPMyCarLogic {
         remindMe: Bool, previews: [ReminderPreview], now: Date, availability: NotificationAvailability = .on
     ) -> String {
         guard remindMe else { return "Off" }
+        if availability == .unknown { return "Checking notifications" }
         if availability != .on { return "Notifications are off" }
         return nextReminderLine(previews: previews, now: now) ?? "No reminder time left before it changes"
     }

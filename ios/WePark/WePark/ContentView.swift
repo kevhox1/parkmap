@@ -2006,7 +2006,9 @@ struct ContentView: View {
                     )
                 }
             }
-            .presentationDetents(v2DriveActive ? [.medium, .large] : [.medium])
+            .presentationDetents(v2DriveActive
+                ? WPArrivalPromptV2.detents(accessibilitySize: UIApplication.shared.preferredContentSizeCategory.isAccessibilityCategory)
+                : [.medium])
             .presentationDragIndicator(.visible)
             .presentationBackground(v2DriveActive ? AnyShapeStyle(Color(wpHex: WP.Hex.darkBackground)) : AnyShapeStyle(Material.regularMaterial))
             .presentationCornerRadius(v2DriveActive ? WP.Radius.sheet : 20)

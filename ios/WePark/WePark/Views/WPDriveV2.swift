@@ -442,42 +442,64 @@ struct WPArrivalPromptV2: View {
         }
     }
 
+    /// The arrival sheet's detents. At accessibility sizes it opens full height: the decision (both
+    /// sides' verdicts, Park here, Keep looking) has to be visible with no scrolling, and at AX the
+    /// half-height sheet cannot hold it even with the compact rows and the capped type (PR #206 QA
+    /// finding #1). Standard sizes keep the half-height sheet with the option to pull it up.
+    static func detents(accessibilitySize: Bool) -> Set<PresentationDetent> {
+        accessibilitySize ? [.large] : [.medium, .large]
+    }
+
     var body: some View {
         let sides = WPDriveVerdict.sides(for: context)
         let primary = WPDriveVerdict.primary(left: sides.left, right: sides.right)
         let offered = [sides.left, sides.right].filter { $0.kind.isParkable }
         let others = [sides.left, sides.right].filter { !$0.kind.isParkable && $0.kind != .checking }
+        let compact = dynamicTypeSize.isAccessibilitySize
         // The two decision buttons are pinned below the scrolling content so they are always fully
         // visible, even at AX5 on a short phone (PR #203 QA finding #1). Only the text scrolls.
         VStack(spacing: 0) {
         ScrollView {
-            VStack(alignment: .leading, spacing: WP.Space.s4) {
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("You've arrived.")
-                    Text("Park here?")
+            VStack(alignment: .leading, spacing: compact ? WP.Space.s2 : WP.Space.s4) {
+                // One heading line at accessibility sizes (two stacked 34 pt lines cost a whole row
+                // of a short phone); the two-line heading at standard sizes.
+                Group {
+                    if compact {
+                        Text("You've arrived. Park here?")
+                            .font(WP.Font.fredoka(26, .bold, relativeTo: .title))
+                    } else {
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("You've arrived.")
+                            Text("Park here?")
+                        }
+                        .font(WP.Font.fredoka(34, .bold, relativeTo: .largeTitle))
+                    }
                 }
-                .font(WP.Font.fredoka(34, .bold, relativeTo: .largeTitle))
                 .foregroundStyle(WPDrivePalette.text)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
 
-                ForEach(offered, id: \.isLeft) { side in
-                    if dynamicTypeSize.isAccessibilitySize {
+                if compact {
+                    // The drive card's one-row-per-side layout, in street order (left over right):
+                    // both verdicts are always visible together, never a plain line cut by a button.
+                    ForEach([sides.left, sides.right].filter { $0.kind != .checking }, id: \.isLeft) { side in
                         WPDriveSideRowAX(side: side)
-                    } else {
+                    }
+                } else {
+                    ForEach(offered, id: \.isLeft) { side in
                         WPDriveSideCard(side: side)
                     }
-                }
-                ForEach(others, id: \.isLeft) { side in
-                    Text(side.plainLine)
-                        .font(WP.Font.fredoka(17, .medium, relativeTo: .body))
-                        .foregroundStyle(WPDrivePalette.text)
-                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(others, id: \.isLeft) { side in
+                        Text(side.plainLine)
+                            .font(WP.Font.fredoka(17, .medium, relativeTo: .body))
+                            .foregroundStyle(WPDrivePalette.text)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
             }
             .padding(.horizontal, WP.Space.s5)
-            .padding(.top, WP.Space.s5)
+            .padding(.top, compact ? WP.Space.s4 : WP.Space.s5)
             .padding(.bottom, WP.Space.s3)
         }
         .scrollBounceBehavior(.basedOnSize)

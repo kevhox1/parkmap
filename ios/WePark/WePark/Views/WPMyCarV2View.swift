@@ -66,6 +66,11 @@ struct WPMyCarV2View: View {
     @State private var notificationStatus: UNAuthorizationStatus?
 
     @Environment(\.dynamicTypeSize) private var typeSize
+    @Environment(\.scenePhase) private var scenePhase
+
+    private func refreshNotificationStatus() async {
+        notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
 
     private static let positionFractionSearchRadiusMeters: Double = 35.0
 
@@ -235,8 +240,11 @@ struct WPMyCarV2View: View {
         // Accessibility sizes stay accessibility-sized but stop at AX3: past that the verdict block
         // alone fills a short phone. Everything is reachable by scrolling; nothing truncates.
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
-        .task {
-            notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        .task { await refreshNotificationStatus() }
+        // Returning from Settings (where the driver may have flipped notifications) re-reads the
+        // permission, so the reminder copy never keeps saying the old thing.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await refreshNotificationStatus() } }
         }
         .onChange(of: remindMe) { _, newValue in
             parkPinService.updateNotifyOnRestriction(newValue)
@@ -387,7 +395,7 @@ struct WPMyCarV2View: View {
     // MARK: 4. Leaving soon
 
     private var showsLeavingSoonCard: Bool {
-        WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: leaveOpensSheet, variant: verdict.variant)
+        WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: leaveOpensSheet)
     }
 
     private var leavingSoonCard: some View {
