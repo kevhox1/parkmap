@@ -817,8 +817,10 @@ final class DrivingContextService {
         let freeNow = longEnough.filter { engine.safetyLabel(for: $0, at: from).severity == .free }
         let subject = !freeNow.isEmpty ? freeNow : (!longEnough.isEmpty ? longEnough : sideSegments)
         let passing = subject.filter {
-            // Design system (flag on): the map's single green gate, which also refuses unreadable
-            // (no-data / UNKNOWN) signs that `isFree` alone would let through.
+            // Design system (`designSystemV2Enabled` on): the map's single green gate, which also
+            // refuses unreadable (no-data / UNKNOWN) signs that `isFree` alone would let through.
+            // This applies to the legacy drive card too when `driveModeDefaultEnabled` is off
+            // (intentional: it then matches what the map draws green). Flag off: unchanged.
             strictParkable
                 ? WPCurbVerdict.isParkable(segment: $0, engine: engine, from: from, until: target)
                 : engine.isFree(

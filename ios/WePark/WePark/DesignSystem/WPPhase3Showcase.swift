@@ -17,10 +17,31 @@
 import CoreLocation
 import SwiftUI
 
+/// Mounted by `ContentView`. Presents the demo surface in its own window above everything (the
+/// live search sheet and Report pill would otherwise sit on top of the demo bottom card).
 struct WPPhase3Showcase: View {
     let name: String
-
+    static var requested: String? { WPPhase3ShowcaseContent.requested }
     static var isActive: Bool { requested != nil }
+
+    private static var window: UIWindow?
+
+    var body: some View {
+        Color.clear.allowsHitTesting(false).onAppear {
+            guard Self.window == nil,
+                  let scene = UIApplication.shared.connectedScenes.compactMap({ $0 as? UIWindowScene }).first
+            else { return }
+            let window = UIWindow(windowScene: scene)
+            window.windowLevel = .alert + 1
+            window.rootViewController = UIHostingController(rootView: WPPhase3ShowcaseContent(name: name))
+            window.makeKeyAndVisible()
+            Self.window = window
+        }
+    }
+}
+
+struct WPPhase3ShowcaseContent: View {
+    let name: String
 
     static var requested: String? {
         let args = ProcessInfo.processInfo.arguments
@@ -127,7 +148,8 @@ struct WPPhase3Showcase: View {
             destinationLine: destinationLine, approaching: name == "near",
             endAccessibilityLabel: "End Drive Mode", onEnd: {}
         )
-        .padding(.top, 8)
+        // Same clearance as the live app (`paddingForBannerState`): below the status bar / island.
+        .padding(.top, paddingForBannerState(.aspInEffect))
     }
 
     /// The tinted-map stand-in: ink ground, road, and the two curb lines drawn in the verdict style.

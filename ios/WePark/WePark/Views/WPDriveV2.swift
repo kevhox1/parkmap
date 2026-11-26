@@ -137,6 +137,57 @@ struct WPDriveSideCard: View {
     }
 }
 
+// MARK: - Compact accessibility row
+
+/// One side at accessibility sizes: a single row, "LEFT SIDE" over the verdict line
+/// ("Park until Mon 9:00 AM", "No parking"). Secondary text is dropped; the verdict itself wraps by
+/// words and is never truncated or scaled away, so both sides always fit on screen together.
+struct WPDriveSideRowAX: View {
+    let side: WPDriveSide
+
+    private var kind: WPDriveKind { side.kind }
+    private var fill: Color { kind == .park ? WP.park : WPDrivePalette.surface }
+    private var textColor: Color { kind == .park ? WPDrivePalette.ink : WPDrivePalette.text }
+    private var nameColor: Color { kind == .dont ? WPDrivePalette.noParkText : textColor }
+
+    private var outlineColor: Color? {
+        switch kind {
+        case .park: return nil
+        case .soon: return WP.detailSoon
+        case .dont: return WP.noParkLine
+        case .meter: return WP.detailMetered
+        case .nodata, .checking: return WP.hairline
+        }
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: WP.Radius.card, style: .continuous)
+        VStack(alignment: .leading, spacing: 2) {
+            Text(side.name.uppercased())
+                .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
+                .kerning(1.2)
+                .foregroundStyle(nameColor)
+            Text(WPDriveVerdict.compactLine(for: side))
+                .font(WP.Font.fredoka(28, .bold, relativeTo: .title))
+                .foregroundStyle(textColor)
+                .lineLimit(nil)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .multilineTextAlignment(.leading)
+        .padding(.horizontal, WP.Space.s4)
+        .padding(.vertical, WP.Space.s2)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(shape.fill(fill))
+        .overlay {
+            if let outlineColor {
+                shape.strokeBorder(outlineColor, style: StrokeStyle(lineWidth: 3, dash: kind == .dont || kind == .soon ? [10, 8] : []))
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(side.spoken)
+    }
+}
+
 // MARK: - Weighted two-column layout
 
 /// Two columns whose widths follow weights (the green side is the wider card, mock B5.2 to B5.4).
@@ -185,9 +236,9 @@ struct WPDriveSidesV2: View {
 
     var body: some View {
         if dynamicTypeSize.isAccessibilitySize {
-            VStack(spacing: WP.Space.s3) {
-                WPDriveSideCard(side: left)
-                WPDriveSideCard(side: right)
+            VStack(spacing: WP.Space.s2) {
+                WPDriveSideRowAX(side: left)
+                WPDriveSideRowAX(side: right)
             }
         } else {
             WPDriveColumns(
@@ -217,10 +268,12 @@ struct WPDriveActionsV2: View {
 
     var body: some View {
         if dynamicTypeSize.isAccessibilitySize {
-            VStack(spacing: WP.Space.s3) {
-                reportButton(pill: true)
-                voiceButton(pill: true)
+            VStack(spacing: WP.Space.s2) {
                 parkButton
+                HStack(spacing: WP.Space.s2) {
+                    reportButton(pill: true)
+                    voiceButton(pill: true)
+                }
             }
         } else {
             HStack(alignment: .center, spacing: WP.Space.s3) {
@@ -275,7 +328,8 @@ private struct WPFitScroll<Content: View>: View {
     @State private var contentHeight: CGFloat = 0
 
     var body: some View {
-        ScrollView(.vertical, showsIndicators: false) {
+        // Indicators stay visible: if the content ever overflows, the driver can see there is more.
+        ScrollView(.vertical, showsIndicators: true) {
             content()
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { contentHeight = $0 }
         }
@@ -296,7 +350,7 @@ struct WPDriveBottomV2: View {
         let sides = WPDriveVerdict.sides(for: context)
         // Only the verdicts scroll (AX sizes on a short phone); the actions stay pinned in view.
         VStack(spacing: WP.Space.s3) {
-            WPFitScroll(maxHeight: UIScreen.main.bounds.height * 0.46) {
+            WPFitScroll(maxHeight: UIScreen.main.bounds.height * 0.55) {
                 WPDriveSidesV2(left: sides.left, right: sides.right)
             }
             WPDriveActionsV2(
@@ -306,7 +360,8 @@ struct WPDriveBottomV2: View {
         }
         .padding(.horizontal, WP.Space.s4)
         .padding(.top, WP.Space.s2)
-        .padding(.bottom, WP.Space.s2)
+        .padding(.bottom, WP.Space.s3)
+        .dynamicTypeSize(...WPDriveVerdict.maxDriveTypeSize(screenHeight: UIScreen.main.bounds.height))
     }
 }
 
@@ -323,9 +378,9 @@ struct WPDriveTopChromeV2: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: WP.Space.s2) {
-            let layout = dynamicTypeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: WP.Space.s3))
-                : AnyLayout(HStackLayout(alignment: .top, spacing: WP.Space.s3))
+            // One row at every size (street wraps by words, End stays a large pill): at accessibility
+            // sizes a stacked street + End row would cost the verdicts a whole row of screen.
+            let layout = HStackLayout(alignment: .top, spacing: WP.Space.s3)
             layout {
                 if let street {
                     Text(street)
@@ -334,14 +389,14 @@ struct WPDriveTopChromeV2: View {
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.horizontal, WP.Space.s5)
                         .padding(.vertical, WP.Space.s2)
-                        .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil, minHeight: 56, alignment: .leading)
+                        .frame(minHeight: 56, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(WPDrivePalette.white))
                         .accessibilityLabel("Street: \(street)")
                 }
-                if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                Spacer(minLength: 0)
                 Button("End", action: onEnd)
                     .buttonStyle(WPDrivePillStyle(minHeight: WP.Control.inkPillHeight, fontSize: 22))
-                    .fixedSize(horizontal: !dynamicTypeSize.isAccessibilitySize, vertical: false)
+                    .fixedSize(horizontal: true, vertical: false)
                     .accessibilityLabel(endAccessibilityLabel)
             }
             if let destinationLine {
@@ -361,6 +416,7 @@ struct WPDriveTopChromeV2: View {
             }
         }
         .padding(.horizontal, WP.Space.s4)
+        .dynamicTypeSize(...WPDriveVerdict.maxDriveTypeSize(screenHeight: UIScreen.main.bounds.height))
     }
 }
 
@@ -373,6 +429,7 @@ struct WPArrivalPromptV2: View {
     let arrivalCoordinate: CLLocationCoordinate2D
     let onParkHere: (CLLocationCoordinate2D) -> Void
     let onNotYet: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     @ViewBuilder
     private func parkButton(_ primary: WPDriveVerdict.Primary) -> some View {
@@ -402,7 +459,13 @@ struct WPArrivalPromptV2: View {
                 .accessibilityElement(children: .combine)
                 .accessibilityAddTraits(.isHeader)
 
-                ForEach(offered, id: \.isLeft) { WPDriveSideCard(side: $0) }
+                ForEach(offered, id: \.isLeft) { side in
+                    if dynamicTypeSize.isAccessibilitySize {
+                        WPDriveSideRowAX(side: side)
+                    } else {
+                        WPDriveSideCard(side: side)
+                    }
+                }
                 ForEach(others, id: \.isLeft) { side in
                     Text(side.plainLine)
                         .font(WP.Font.fredoka(17, .medium, relativeTo: .body))
@@ -418,6 +481,7 @@ struct WPArrivalPromptV2: View {
             .padding(WP.Space.s5)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .dynamicTypeSize(...WPDriveVerdict.maxDriveTypeSize(screenHeight: UIScreen.main.bounds.height))
         .background(Color(wpHex: WP.Hex.darkBackground))
     }
 }

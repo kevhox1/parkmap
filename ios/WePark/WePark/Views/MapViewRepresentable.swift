@@ -227,16 +227,26 @@ final class ZoneBoundaryPolygon: MKPolygon {
 /// `.aboveRoads`). MapKit cannot take the mock's purple ground (DECISIONS #10), so Drive Mode uses
 /// the dark map style plus this tint. Flag on only; never created flag off.
 final class WPDriveTintPolygon: MKPolygon {
-    /// A generous box around the tile grid (all of NYC) so the tint covers every visible tile.
+    /// The whole world, so the tint covers wherever the driver is. A closed ring at the Web Mercator
+    /// limits (+/- 85 degrees latitude) with a longitude step under 180 degrees per edge, so the
+    /// renderer never has to pick the short way around the globe.
     static func make() -> WPDriveTintPolygon {
-        var coords = [
-            CLLocationCoordinate2D(latitude: 40.2, longitude: -74.5),
-            CLLocationCoordinate2D(latitude: 40.2, longitude: -73.4),
-            CLLocationCoordinate2D(latitude: 41.2, longitude: -73.4),
-            CLLocationCoordinate2D(latitude: 41.2, longitude: -74.5),
-        ]
+        var coords = worldRing
         return WPDriveTintPolygon(coordinates: &coords, count: coords.count)
     }
+
+    nonisolated static let worldRing: [CLLocationCoordinate2D] = [
+        CLLocationCoordinate2D(latitude: -85, longitude: -179.9),
+        CLLocationCoordinate2D(latitude: -85, longitude: -90),
+        CLLocationCoordinate2D(latitude: -85, longitude: 0),
+        CLLocationCoordinate2D(latitude: -85, longitude: 90),
+        CLLocationCoordinate2D(latitude: -85, longitude: 179.9),
+        CLLocationCoordinate2D(latitude: 85, longitude: 179.9),
+        CLLocationCoordinate2D(latitude: 85, longitude: 90),
+        CLLocationCoordinate2D(latitude: 85, longitude: 0),
+        CLLocationCoordinate2D(latitude: 85, longitude: -90),
+        CLLocationCoordinate2D(latitude: 85, longitude: -179.9),
+    ]
 
     /// Ink (#241F45) at 38%: reads purple on the dark map without hiding streets.
     nonisolated static let alpha: CGFloat = 0.38
