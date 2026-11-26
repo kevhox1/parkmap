@@ -2188,6 +2188,24 @@ struct ContentView: View {
             .presentationDragIndicator(.visible)
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
+        case .stoop:
+            // Stoop Phase 4 (B7): both `designSystemV2Enabled` and `myCarSheetV2Enabled` on.
+            WPMyCarV2View(
+                parkedCar: car,
+                engine: engine,
+                loadedSegments: tileLoader.segments,
+                parkPinService: parkPinService,
+                aspService: aspService,
+                pinService: pinService,
+                onDismiss: { activeSheet = dismissTargetOutsideBrowseNav },
+                onClearPin: { performClearParkedCar(car) },
+                onOpenSpotPass: myCarSpotPassAction,
+                spotPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass
+            )
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+            .presentationBackground(WP.paper)
+            .presentationCornerRadius(WP.Radius.sheet)
         }
     }
 
@@ -3226,6 +3244,9 @@ struct ContentView: View {
                 }
                 if let showcase = WPPhase3Showcase.requested {
                     WPPhase3Showcase(name: showcase)
+                }
+                if let showcase = WPPhase4Showcase.requested {
+                    WPPhase4Showcase(name: showcase)
                 }
             }
             #endif
