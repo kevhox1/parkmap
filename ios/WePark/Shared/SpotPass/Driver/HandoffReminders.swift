@@ -149,34 +149,6 @@ final class UNHandoffReminderScheduler: HandoffReminderScheduling {
         HandoffReminderAvailability(status: await center.notificationSettings().authorizationStatus)
     }
 
-    func schedule(_ reminders: [PlannedReminder], passID: UUID) async
-    func cancelAll(passID: UUID)
-}
-}
-
-@MainActor
-final class UNHandoffReminderScheduler: HandoffReminderScheduling {
-
-    /// `target-content-id` must match a registered experience (the advanced experience prefix).
-    nonisolated static let targetContentID = "https://\(SpotPassShared.universalLinkHost)\(SpotPassShared.landingPath)"
-
-    private let center: UNUserNotificationCenter
-
-    init(center: UNUserNotificationCenter = .current()) { self.center = center }
-
-    func availability() async -> HandoffReminderAvailability {
-        HandoffReminderAvailability(status: await center.notificationSettings().authorizationStatus)
-    }
-
-    func canAskForPermission() async -> Bool {
-        await center.notificationSettings().authorizationStatus == .notDetermined
-    }
-
-    func requestPermission() async -> HandoffReminderAvailability {
-        _ = try? await center.requestAuthorization(options: [.alert, .sound])
-        return await availability()
-    }
-
     func schedule(_ reminders: [PlannedReminder], passID: UUID) async {
         center.setNotificationCategories([HandoffReminderPlan.category()])
         cancelAll(passID: passID)
