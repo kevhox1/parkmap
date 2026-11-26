@@ -93,6 +93,9 @@ final class ParkingRulesEngine {
                 return SafetyLabel(text: "No parking (truck loading)", severity: .restricted)
             case .special:
                 return SafetyLabel(text: "Restricted", severity: .restricted)
+            case .unknown:
+                // An UNKNOWN sign is the reason: never claim a specific restriction.
+                return SafetyLabel(text: UnclearSign.headline, severity: .restricted)
             case let cat where cat?.isASP == true:
                 // "No parking (ASP Mon/Thu)" — matches JS line 5472-5473
                 let label = cat?.label ?? restriction.label ?? "ASP"
@@ -131,7 +134,8 @@ final class ParkingRulesEngine {
                 let timeLabel = nextRestrictionTimeLabel(hours: restriction.hours, now: now)
                 return SafetyLabel(text: "Free until \(timeLabel)", severity: .free)
             }
-            if restriction.category == .noParking || restriction.category == .truckLoading {
+            if restriction.category == .noParking || restriction.category == .truckLoading
+                || restriction.category == .unknown {
                 let timeLabel = nextRestrictionTimeLabel(hours: restriction.hours, now: now)
                 return SafetyLabel(text: "Free until \(timeLabel)", severity: .free)
             }
@@ -173,9 +177,31 @@ final class ParkingRulesEngine {
         var soonestLabel: String? = "No restrictions"
         var soonestCategory: Category? = nil
         var soonestRule: ParkingRule? = nil
+        // An UNKNOWN rule active now only wins when no specific restriction is also active
+        // (the loop returns early for those), so copy names the real restriction when there is one.
+        var activeUnknownRule: ParkingRule? = nil
 
-        for rule in rules {
+        for rawRule in rules {
+            let rule = rawRule.category == .unknown ? rawRule.unknownDaysNormalized() : rawRule
             let cat = rule.category
+
+            // UNKNOWN: a restriction during its stated days/times; all the time when it states none.
+            if cat == .unknown {
+                if isUnknownRuleActive(rule, dayOfWeek: dayOfWeek, minuteOfDay: minuteOfDay) {
+                    if activeUnknownRule == nil { activeUnknownRule = rule }
+                } else {
+                    let h = computeHoursUntilActive(
+                        rule: rule.withEveryDayIfUnspecified(), currentDay: dayOfWeek, currentMinutes: minuteOfDay
+                    )
+                    if h < soonestHours {
+                        soonestHours = h
+                        soonestLabel = UnclearSign.upcomingLabel
+                        soonestCategory = cat
+                        soonestRule = rule
+                    }
+                }
+                continue
+            }
 
             // NO_STANDING and SPECIAL: if active right now, return immediately.
             // Port of JS lines 5332-5336.
@@ -228,7 +254,22 @@ final class ParkingRulesEngine {
             if cat == .metered { continue }
         }
 
+        if let unclear = activeUnknownRule {
+            return NextRestriction(hours: 0, label: UnclearSign.headline, category: .unknown, rule: unclear)
+        }
+
         return NextRestriction(hours: soonestHours, label: soonestLabel, category: soonestCategory, rule: soonestRule)
+    }
+
+    /// True when an UNKNOWN rule restricts at (`dayOfWeek`, `minuteOfDay`): during its stated days
+    /// and times, and all the time when it states neither. Same semantics as `isFree`.
+    func isUnknownRuleActive(_ rule: ParkingRule, dayOfWeek: Int, minuteOfDay: Int) -> Bool {
+        if rule.anytime { return true }
+        if rule.days.isEmpty && rule.timeRanges.isEmpty { return true }
+        if rule.timeRanges.isEmpty { return rule.days.contains(dayOfWeek) }
+        return rule.timeRanges.contains {
+            rule.rangeActive($0, dayOfWeek: dayOfWeek, minuteOfDay: minuteOfDay, emptyDaysMeansEveryDay: true)
+        }
     }
 
     /// Human-readable metered status.
@@ -699,7 +740,8 @@ final class ParkingRulesEngine {
             return max(0, comps.day ?? 0)
         }()
 
-        for rule in rules {
+        for rawRule in rules {
+            let rule = rawRule.category == .unknown ? rawRule.unknownDaysNormalized() : rawRule
             let cat = rule.category
 
             // Fast path: anytime restriction → always conflicts.
@@ -753,13 +795,19 @@ final class ParkingRulesEngine {
                         }
                     }
 
-                } else if cat == .noParking || cat == .truckLoading || cat == .noStanding || cat == .special {
+                } else if cat == .noParking || cat == .truckLoading || cat == .noStanding || cat == .special
+                            || cat == .unknown {
                     // Must be a matching day.
                     if !rule.days.isEmpty && !rule.days.contains(dayOfWeek) { continue }
 
                     // No time ranges: rule is active all day on matching days.
                     if rule.timeRanges.isEmpty {
                         if dayOffset < 0 { continue }
+                        // UNKNOWN that states no days and no times applies all the time.
+                        if cat == .unknown && rule.days.isEmpty {
+                            if windowEnd > windowStart { return false }
+                            continue
+                        }
                         if !rule.days.isEmpty {
                             // The rule is active all day on this day — overlap exists.
                             if windowEnd > windowStart { return false }
@@ -799,7 +847,7 @@ final class ParkingRulesEngine {
                         }
                     }
                 }
-                // .free, .unknown: never a restriction.
+                // .free: never a restriction. (.unknown is handled above: it restricts.)
             }
         }
 

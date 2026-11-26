@@ -244,6 +244,8 @@ nonisolated enum TripPlanning {
     }
 
     private static func reasonText(rule: ParkingRule, span: (start: Date, end: Date), plan: TripPlan) -> String {
+        // An UNKNOWN sign: we do not know what it restricts, so claim nothing specific.
+        if rule.category == .unknown { return UnclearSign.headline }
         let name: String
         switch rule.category {
         case .aspMonThu, .aspTueFri, .aspOvernightMWF, .aspOvernightTTHS, .aspDaily:
