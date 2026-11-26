@@ -17,10 +17,17 @@ import Foundation
 nonisolated enum MyCarSheetVariant: Equatable {
     case legacy
     case v2
+    /// Stoop Phase 4 (B7): the round-2 My Car screen. Needs BOTH `designSystemV2Enabled` and
+    /// `myCarSheetV2Enabled`; with only the second on, today's `.v2` sheet is unchanged.
+    case stoop
 
-    /// Which My Car sheet the app shows. `v2Enabled` defaults to the real flag; tests pass both.
-    static func resolve(v2Enabled: Bool = AppConstants.myCarSheetV2Enabled) -> MyCarSheetVariant {
-        v2Enabled ? .v2 : .legacy
+    /// Which My Car sheet the app shows. The flags default to the real ones; tests pass them.
+    static func resolve(
+        v2Enabled: Bool = AppConstants.myCarSheetV2Enabled,
+        designSystemEnabled: Bool = AppConstants.designSystemV2Enabled
+    ) -> MyCarSheetVariant {
+        guard v2Enabled else { return .legacy }
+        return designSystemEnabled ? .stoop : .v2
     }
 }
 
