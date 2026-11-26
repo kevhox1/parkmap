@@ -23,6 +23,7 @@
 //
 
 import Foundation
+import UserNotifications
 
 // MARK: - Verdict
 
@@ -163,13 +164,29 @@ enum WPMyCarLogic {
         return days == 1 ? "Parked 1 day ago" : "Parked \(days) days ago"
     }
 
+    // MARK: Leaving soon
+
+    /// The "Leaving soon?" card (Tell neighbors / Spot Pass) shows whenever the leave flow offers a
+    /// sheet, for EVERY verdict. `.dont` included: a driver who must move now is exactly the person
+    /// leaving a spot (the V2 sheet always showed it).
+    nonisolated static func showsLeavingSoonCard(leaveOpensSheet: Bool, variant: WPCurbVariant) -> Bool {
+        leaveOpensSheet
+    }
+
     // MARK: Street cleaning suspension
 
     /// A suspended-street-cleaning note, only when it truly applies to this curb: the segment has a
     /// street-cleaning rule that would have run on the suspended day. Nil otherwise.
+    ///
+    /// Kevin's rule (never a contradictory parking statement): the affirmative "You don't have to
+    /// move the car" is said only when the verdict backs it, that is when the car is legal with
+    /// nothing else to move for (`.park`) or just a meter (`.meter`). With any other verdict
+    /// ("Move your car now", "Move by", unclear, no data) the note is neutral and makes no claim
+    /// about moving.
     nonisolated static func suspensionNote(
-        segment: Segment?, state: SuspensionBannerState, now: Date
+        segment: Segment?, state: SuspensionBannerState, now: Date, variant: WPCurbVariant
     ) -> String? {
+        let backsNoMove = variant == .park || variant == .meter
         guard let segment else { return nil }
         let asp = segment.rules.filter { $0.category.isASP }
         guard !asp.isEmpty else { return nil }
@@ -184,15 +201,44 @@ enum WPMyCarLogic {
             return nil
         case .todaySuspended(let reason):
             guard runs(on: now.dayOfWeekET) else { return nil }
-            return "Street cleaning is suspended today for \(reason). You don't have to move the car."
+            return backsNoMove
+                ? "Street cleaning is suspended today for \(reason). You don't have to move the car."
+                : "Street cleaning is suspended today for \(reason)."
         case .tomorrowSuspended(let reason):
             let weekday = (now.dayOfWeekET + 1) % 7
             guard runs(on: weekday) else { return nil }
-            return "Street cleaning is suspended tomorrow for \(reason). You don't have to move the car \(days[weekday])."
+            return backsNoMove
+                ? "Street cleaning is suspended tomorrow for \(reason). You don't have to move the car \(days[weekday])."
+                : "Street cleaning is suspended tomorrow for \(reason)."
         }
     }
 
     // MARK: Reminders
+
+    /// Whether a scheduled reminder can actually reach the driver. The scheduler silently returns
+    /// when the in-app mute is on (`AppConstants.notificationsMutedKey`) and iOS drops anything when
+    /// permission is denied, so the screen must not promise reminders in those cases.
+    enum NotificationAvailability: Equatable {
+        case on
+        case mutedInApp
+        case deniedInSystem
+
+        /// `status` nil means "not read yet": assume on, then correct once the real status arrives.
+        nonisolated static func resolve(muted: Bool, status: UNAuthorizationStatus?) -> NotificationAvailability {
+            if muted { return .mutedInApp }
+            if status == .denied { return .deniedInSystem }
+            return .on
+        }
+
+        /// The honest line for the off cases; nil when notifications are on.
+        nonisolated var offLine: String? {
+            switch self {
+            case .on: return nil
+            case .mutedInApp: return "Notifications are muted in WePark, so no reminders will be sent."
+            case .deniedInSystem: return "Notifications are off for WePark in Settings, so no reminders will be sent."
+            }
+        }
+    }
 
     enum ReminderKind: Equatable {
         case minutes15, minutes30, hour1, hours2, nightBefore
@@ -236,7 +282,10 @@ enum WPMyCarLogic {
 
     /// "You'll get 2 reminders: Sun 8:00 PM and Mon 8:00 AM." / "You'll get 1 reminder: ...".
     /// Honest when nothing is left: no reminder is promised that cannot fire.
-    nonisolated static func reminderSummary(previews: [ReminderPreview], now: Date) -> String {
+    nonisolated static func reminderSummary(
+        previews: [ReminderPreview], now: Date, availability: NotificationAvailability = .on
+    ) -> String {
+        if let off = availability.offLine { return off }
         guard !previews.isEmpty else {
             return "No reminder is left before this changes. Pick a different time or leave it off."
         }
@@ -251,8 +300,11 @@ enum WPMyCarLogic {
     }
 
     /// The row's second line: the next reminder time, or "Off".
-    nonisolated static func reminderRowSub(remindMe: Bool, previews: [ReminderPreview], now: Date) -> String {
+    nonisolated static func reminderRowSub(
+        remindMe: Bool, previews: [ReminderPreview], now: Date, availability: NotificationAvailability = .on
+    ) -> String {
         guard remindMe else { return "Off" }
+        if availability != .on { return "Notifications are off" }
         return nextReminderLine(previews: previews, now: now) ?? "No reminder time left before it changes"
     }
 

@@ -21,6 +21,7 @@
 //
 
 import SwiftUI
+import UserNotifications
 
 struct WPMyCarV2View: View {
 
@@ -61,6 +62,8 @@ struct WPMyCarV2View: View {
     @State private var leavingSoonJustPosted = false
     @State private var leavingSoonError: String?
     @State private var pendingIdentityAction: (() -> Void)?
+    /// System notification permission, read async on appear; nil until read.
+    @State private var notificationStatus: UNAuthorizationStatus?
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -151,7 +154,16 @@ struct WPMyCarV2View: View {
     }
 
     private var suspensionNote: String? {
-        WPMyCarLogic.suspensionNote(segment: segment, state: aspService.suspensionState(at: now), now: now)
+        WPMyCarLogic.suspensionNote(segment: segment, state: aspService.suspensionState(at: now), now: now,
+            variant: verdict.variant
+        )
+    }
+
+    private var notificationAvailability: WPMyCarLogic.NotificationAvailability {
+        WPMyCarLogic.NotificationAvailability.resolve(
+            muted: UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey),
+            status: notificationStatus
+        )
     }
 
     private var previews: [WPMyCarLogic.ReminderPreview] {
@@ -217,9 +229,15 @@ struct WPMyCarV2View: View {
             bottomBar
         }
         .background(WP.paper.ignoresSafeArea())
+        // Kevin's design call is pending on this AX3 cap (PR #205 QA finding #2 in
+        // docs/qa/pr205-stoop-phase4-mycar-qa.md: AX4/AX5 users get smaller text here). Left as is
+        // until decided.
         // Accessibility sizes stay accessibility-sized but stop at AX3: past that the verdict block
         // alone fills a short phone. Everything is reachable by scrolling; nothing truncates.
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+        .task {
+            notificationStatus = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        }
         .onChange(of: remindMe) { _, newValue in
             parkPinService.updateNotifyOnRestriction(newValue)
             if newValue {
@@ -322,7 +340,9 @@ struct WPMyCarV2View: View {
                     Text("Remind me before it changes")
                         .font(WP.Font.fredoka(18, .semibold, relativeTo: .body))
                         .foregroundStyle(WP.text)
-                    Text(WPMyCarLogic.reminderRowSub(remindMe: remindMe, previews: previews, now: now))
+                    Text(WPMyCarLogic.reminderRowSub(
+                        remindMe: remindMe, previews: previews, now: now, availability: notificationAvailability
+                    ))
                         .font(WP.Font.fredoka(14, .regular, relativeTo: .callout))
                         .foregroundStyle(WP.muted)
                 }
@@ -367,7 +387,7 @@ struct WPMyCarV2View: View {
     // MARK: 4. Leaving soon
 
     private var showsLeavingSoonCard: Bool {
-        leaveOpensSheet && verdict.variant != .dont
+        WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: leaveOpensSheet, variant: verdict.variant)
     }
 
     private var leavingSoonCard: some View {
@@ -453,7 +473,9 @@ struct WPMyCarV2View: View {
                 }
                 nightBeforeRow
                 if remindMe {
-                    Text(WPMyCarLogic.reminderSummary(previews: previews, now: now))
+                    Text(WPMyCarLogic.reminderSummary(
+                        previews: previews, now: now, availability: notificationAvailability
+                    ))
                         .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
                         .foregroundStyle(WP.text)
                         .fixedSize(horizontal: false, vertical: true)

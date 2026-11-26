@@ -263,16 +263,70 @@ final class StoopPhase4MyCarTests: XCTestCase {
     func testSuspensionNote_onlyWhenItAppliesToThisCurb() {
         let wed = p4Date(2026, 11, 25, 10, 0)
         let tomorrow = SuspensionBannerState.tomorrowSuspended(reason: "Thanksgiving")
-        let note = WPMyCarLogic.suspensionNote(segment: p4Segment([sweepMonThu]), state: tomorrow, now: wed)
+        let note = WPMyCarLogic.suspensionNote(segment: p4Segment([sweepMonThu]), state: tomorrow, now: wed, variant: .park)
         XCTAssertEqual(note, "Street cleaning is suspended tomorrow for Thanksgiving. You don't have to move the car Thursday.")
         // Street cleaning Tue/Fri does not run Thursday: no claim.
         XCTAssertNil(WPMyCarLogic.suspensionNote(
-            segment: p4Segment([p4Rule(.aspTueFri, days: [2, 5], ranges: [(540, 630)])]), state: tomorrow, now: wed))
+            segment: p4Segment([p4Rule(.aspTueFri, days: [2, 5], ranges: [(540, 630)])]), state: tomorrow, now: wed, variant: .park))
         // No street cleaning on this curb at all: no claim.
         XCTAssertNil(WPMyCarLogic.suspensionNote(
-            segment: p4Segment([p4Rule(.metered, days: everyDay, ranges: [(480, 1140)])]), state: tomorrow, now: wed))
-        XCTAssertNil(WPMyCarLogic.suspensionNote(segment: nil, state: tomorrow, now: wed))
-        XCTAssertNil(WPMyCarLogic.suspensionNote(segment: p4Segment([sweepMonThu]), state: .aspInEffect, now: wed))
+            segment: p4Segment([p4Rule(.metered, days: everyDay, ranges: [(480, 1140)])]), state: tomorrow, now: wed, variant: .park))
+        XCTAssertNil(WPMyCarLogic.suspensionNote(segment: nil, state: tomorrow, now: wed, variant: .park))
+        XCTAssertNil(WPMyCarLogic.suspensionNote(segment: p4Segment([sweepMonThu]), state: .aspInEffect, now: wed, variant: .park))
+    }
+
+    /// Kevin's rule: the note may only say "You don't have to move the car" when the verdict backs it.
+    func testSuspensionNote_neverContradictsTheVerdict() {
+        let wed = p4Date(2026, 11, 25, 10, 0)
+        let thu = p4Date(2026, 11, 26, 10, 0)
+        let seg = p4Segment([sweepMonThu])
+        let today = SuspensionBannerState.todaySuspended(reason: "Thanksgiving")
+        let tomorrow = SuspensionBannerState.tomorrowSuspended(reason: "Thanksgiving")
+        for variant in [WPCurbVariant.dont, .soon, .nodata, .unclear] {
+            let t = WPMyCarLogic.suspensionNote(segment: seg, state: today, now: thu, variant: variant)
+            XCTAssertEqual(t, "Street cleaning is suspended today for Thanksgiving.", "\(variant)")
+            let n = WPMyCarLogic.suspensionNote(segment: seg, state: tomorrow, now: wed, variant: variant)
+            XCTAssertEqual(n, "Street cleaning is suspended tomorrow for Thanksgiving.", "\(variant)")
+            XCTAssertFalse((t ?? "").contains("have to move"))
+            XCTAssertFalse((n ?? "").contains("have to move"))
+        }
+        for variant in [WPCurbVariant.park, .meter] {
+            XCTAssertEqual(
+                WPMyCarLogic.suspensionNote(segment: seg, state: today, now: thu, variant: variant),
+                "Street cleaning is suspended today for Thanksgiving. You don't have to move the car.")
+        }
+    }
+
+    // MARK: Leaving soon / notifications
+
+    func testLeavingSoonCard_showsForEveryVerdictIncludingDont() {
+        for variant in [WPCurbVariant.park, .soon, .meter, .dont, .nodata, .unclear] {
+            XCTAssertTrue(WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: true, variant: variant), "\(variant)")
+            XCTAssertFalse(WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: false, variant: variant), "\(variant)")
+        }
+    }
+
+    func testNotificationAvailability_resolve() {
+        typealias A = WPMyCarLogic.NotificationAvailability
+        XCTAssertEqual(A.resolve(muted: false, status: nil), .on)
+        XCTAssertEqual(A.resolve(muted: false, status: .authorized), .on)
+        XCTAssertEqual(A.resolve(muted: false, status: .denied), .deniedInSystem)
+        XCTAssertEqual(A.resolve(muted: true, status: .authorized), .mutedInApp)
+        XCTAssertEqual(A.resolve(muted: true, status: .denied), .mutedInApp)
+    }
+
+    func testReminderCopy_neverPromisesWhenNotificationsAreOff() {
+        let now = p4Date(2026, 11, 25, 10, 0)
+        let previews = WPMyCarLogic.reminderPreviews(
+            offsets: .default, restrictionStart: now.addingTimeInterval(86_400 * 2), now: now)
+        for availability in [WPMyCarLogic.NotificationAvailability.mutedInApp, .deniedInSystem] {
+            let summary = WPMyCarLogic.reminderSummary(previews: previews, now: now, availability: availability)
+            XCTAssertFalse(summary.contains("You'll get"))
+            XCTAssertTrue(summary.contains("no reminders will be sent"))
+            XCTAssertEqual(
+                WPMyCarLogic.reminderRowSub(remindMe: true, previews: previews, now: now, availability: availability),
+                "Notifications are off")
+        }
     }
 
     // MARK: Wording helpers
