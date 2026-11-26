@@ -69,6 +69,19 @@ struct WPActivityPill: View {
     }
 }
 
+/// The quiet secondary "Not leaving": plain text, much smaller than the taxi pill, 44 pt tall target.
+struct WPActivityQuietLink: View {
+    var title = WPActivityCopy.notLeaving
+    var body: some View {
+        Text(title)
+            .font(WP.Font.fredoka(14, .semibold, relativeTo: .footnote))
+            .foregroundStyle(Color.white.opacity(0.75))
+            .padding(.horizontal, 12)
+            .frame(minWidth: 96, minHeight: 44)
+            .contentShape(Rectangle())
+    }
+}
+
 private func wpTimer(until leaveAt: Date, size: CGFloat, color: Color) -> some View {
     Text(timerInterval: Date.now...max(leaveAt, Date.now.addingTimeInterval(1)), countsDown: true)
         .font(WP.Font.fredoka(size, .bold, relativeTo: .title))
@@ -114,17 +127,21 @@ struct WPActivityLockView<Wrapper: View>: View {
 
     private var counting: some View {
         let layout = isAX ? AnyLayout(VStackLayout(alignment: .leading, spacing: 10)) : AnyLayout(HStackLayout(spacing: 12))
-        return layout {
-            HStack(spacing: 12) {
-                WPActivityToken()
-                VStack(alignment: .leading, spacing: 0) {
-                    if let leaveAt = state.leaveAt { wpTimer(until: leaveAt, size: 30, color: .white) }
-                    Text(WPActivityCopy.isWaiting(name: name))
-                        .font(WP.Font.fredoka(14, .regular, relativeTo: .footnote)).lineLimit(1).minimumScaleFactor(0.7)
+        return VStack(alignment: .trailing, spacing: 0) {
+            layout {
+                HStack(spacing: 12) {
+                    WPActivityToken()
+                    VStack(alignment: .leading, spacing: 0) {
+                        if let leaveAt = state.leaveAt { wpTimer(until: leaveAt, size: 30, color: .white) }
+                        Text(WPActivityCopy.isWaiting(name: name))
+                            .font(WP.Font.fredoka(14, .regular, relativeTo: .footnote)).lineLimit(1).minimumScaleFactor(0.7)
+                    }
                 }
+                if !isAX { Spacer(minLength: 4) }
+                pill(.leavingNow, WPActivityCopy.leavingNow, style: .taxi, fills: isAX)
             }
-            if !isAX { Spacer(minLength: 4) }
-            pill(.leavingNow, WPActivityCopy.leavingNow, style: .taxi, fills: isAX)
+            // A driver who changes their mind can still cancel from the lock screen (shipping behavior).
+            wrap(.notLeaving, AnyView(WPActivityQuietLink()))
         }
     }
 
@@ -196,7 +213,10 @@ func wpDynamicIsland<Wrapper: View>(
         }
         DynamicIslandExpandedRegion(.bottom) {
             if counting {
-                wrap(.leavingNow, AnyView(WPActivityPill(title: WPActivityCopy.leavingNow, height: 52, fillsWidth: true)))
+                VStack(spacing: 0) {
+                    wrap(.leavingNow, AnyView(WPActivityPill(title: WPActivityCopy.leavingNow, height: 52, fillsWidth: true)))
+                    wrap(.notLeaving, AnyView(WPActivityQuietLink()))
+                }
             } else if layout == .timeToGo {
                 VStack(spacing: 6) {
                     wrap(.leavingNow, AnyView(WPActivityPill(title: WPActivityCopy.leavingNow, height: 52, fillsWidth: true)))
