@@ -234,6 +234,12 @@ final class ClipFlowController {
         deps.feedback.selection()
     }
 
+    /// Stoop B11.3: true when the clip should show its "Allow one reminder" step before arming.
+    func shouldAskForReminder() async -> Bool { await deps.reminders.canAskForPermission() }
+
+    /// Stoop B11.3: "Allow one reminder". The result is re-read by `arm()`, so nothing else to track.
+    func allowOneReminder() async { _ = await deps.reminders.requestPermission() }
+
     func notLeavingSoon() {
         guard phase == .choosing else { return }
         phase = .dismissed
@@ -336,7 +342,8 @@ final class ClipFlowController {
 
     private func scheduleReminders(for pass: HandoffActivePass) async {
         guard reminderAvailability == .on else { return }
-        let plan = HandoffReminderPlan.make(
+        let plan = HandoffReminderPlan.plan(
+            stoop: StoopFlag.designSystemV2Enabled,
             passID: pass.id, name: pass.name, leaveAt: pass.leaveAt, expiresAt: pass.expiresAt, now: deps.now()
         )
         await deps.reminders.schedule(plan, passID: pass.id)

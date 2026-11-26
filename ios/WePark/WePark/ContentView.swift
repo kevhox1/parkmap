@@ -3239,6 +3239,9 @@ struct ContentView: View {
             #if DEBUG
             // One child (a Group) so this ZStack stays under the ViewBuilder 10-child ceiling.
             Group {
+                if let showcase = WPPhase5bClipShowcase.requested {
+                    WPPhase5bClipShowcase(name: showcase)
+                }
                 if let showcase = WPPhase2bShowcase.requested {
                     WPPhase2bShowcase(name: showcase, segments: tileLoader.segments, engine: engine)
                 }

@@ -15,7 +15,17 @@ struct ClipRootView: View {
 
     @State private var installOverlay = false
 
+    /// Stoop (flag, compile-time, shared with the app): the round-2 clip screens. With the flag off
+    /// this is exactly the shipping dark clip below.
     var body: some View {
+        if StoopFlag.designSystemV2Enabled {
+            ClipRootViewV2(controller: controller, block: block)
+        } else {
+            legacyBody
+        }
+    }
+
+    private var legacyBody: some View {
         GeometryReader { geometry in
             ZStack {
                 ClipBackdrop()
