@@ -449,6 +449,7 @@ struct WeParkApp: App {
                 // Design system v0.1: with `designSystemV2Enabled` false (shipping) this is exactly
                 // `.dark`; with it true the scheme is left to the window (light browse, dark Drive Mode).
                 .preferredColorScheme(DesignSystemAppearance.preferredColorScheme())
+                .background(WindowAppearanceApplier())
         }
     }
 }

@@ -152,6 +152,8 @@ struct WPSpotPassedStamp: View {
             .tracking(1.6)
             .foregroundStyle(WP.text)
             .multilineTextAlignment(.center)
+            // Critical text never truncates: take the height it needs and wrap instead.
+            .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, WP.Space.s4)
             .padding(.vertical, 10)
             .overlay(
@@ -213,6 +215,9 @@ struct WPKarmaSticker: View {
                 Text(Self.text(for: amount))
                     .font(WP.Font.fredoka(16, .bold, relativeTo: .callout))
                     .foregroundStyle(WP.ink)
+                    // One line, always ("+5 karma" must not wrap).
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: true)
             }
             .padding(.horizontal, WP.Space.s3)
             .padding(.vertical, 6)

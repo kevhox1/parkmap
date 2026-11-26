@@ -24,7 +24,9 @@
 //
 //  Mapping of the existing 5 classifier states (`OverlayTag` / `CurrentState`):
 //      freeComfortably        -> park    (both modes)
-//      freeButRestrictionSoon -> soon    (detail)  /  park  (default: it is free right now)
+//      freeButRestrictionSoon -> soon    (detail)  /  dont  (default: a restriction starts inside the
+//                                window, and green must mean free for the WHOLE selected window;
+//                                Phase 2a accuracy fix, was `park` "free right now")
 //      meteredActive          -> metered (detail)  /  dont  (default: a running meter is not free)
 //      restrictedNow          -> dont    (both modes)
 //      unknown                -> noData  (detail)  /  dont  (default: unsure is drawn as don't)
@@ -74,7 +76,7 @@ enum CurbLineStyleV2 {
         case .freeComfortably:
             return .park
         case .freeButRestrictionSoon:
-            return detailMode ? .soon : .park
+            return detailMode ? .soon : .dont
         case .meteredActive:
             return detailMode ? .metered : .dont
         case .restrictedNow:
@@ -86,13 +88,15 @@ enum CurbLineStyleV2 {
 
     /// Nil for tags that are not parking-state curb lines (route, block-select, selected block):
     /// those keep their existing renderers.
+    // NB: the calls below are qualified `CurrentState.x`; bare `.x` also type-checks against
+    // `OverlayTag` and silently recursed forever (found by the Phase 2a live smoke).
     nonisolated static func kind(for tag: OverlayTag, detailMode: Bool) -> CurbLineKind? {
         switch tag {
-        case .freeComfortably: return kind(for: .freeComfortably, detailMode: detailMode)
-        case .freeButRestrictionSoon: return kind(for: .freeButRestrictionSoon, detailMode: detailMode)
-        case .meteredActive: return kind(for: .meteredActive, detailMode: detailMode)
-        case .restrictedNow: return kind(for: .restrictedNow, detailMode: detailMode)
-        case .unknown: return kind(for: .unknown, detailMode: detailMode)
+        case .freeComfortably: return kind(for: CurrentState.freeComfortably, detailMode: detailMode)
+        case .freeButRestrictionSoon: return kind(for: CurrentState.freeButRestrictionSoon, detailMode: detailMode)
+        case .meteredActive: return kind(for: CurrentState.meteredActive, detailMode: detailMode)
+        case .restrictedNow: return kind(for: CurrentState.restrictedNow, detailMode: detailMode)
+        case .unknown: return kind(for: CurrentState.unknown, detailMode: detailMode)
         case .selectedBlock, .routePolyline, .blockSelectHighlight: return nil
         }
     }

@@ -642,6 +642,18 @@ struct ContentView: View {
     /// banner. `nil` for every other goal, and for Park & Forget whenever the top rung clears
     /// cleanly in the current viewport.
     @State private var parkAndForgetGuardState: ParkAndForgetViewportResolution? = nil
+    /// Design system Phase 2a: the ladder's resolution for "For days", computed on every rebuild
+    /// while the flag is on so the tile can show the real end date even when not selected.
+    @State private var forDaysResolution: ParkAndForgetViewportResolution? = nil
+    /// Design system Phase 2a: "Show all sign details" (five curb styles + legend). Persisted.
+    @AppStorage("wepark.signDetailsOn") private var signDetailsOn: Bool = false
+    /// Phase 2a: the Overnight lever's hour chips are open.
+    @State private var overnightLeverOpen: Bool = false
+    /// Phase 2a: live network path for the offline banner (started only while the flag is on).
+    @State private var networkStatus = NetworkStatus()
+    /// Phase 2a: the user tapped "Show Manhattan" on the outside-coverage card.
+    @State private var outsideCoverageDismissed: Bool = false
+    @State private var showSuggestNeighborhoodV2: Bool = false
 
     // MARK: - W8.5c-polish PR-1: Distance-to-destination state
 
@@ -2198,18 +2210,25 @@ struct ContentView: View {
                 communityEnabled: AppConstants.communityEnabled,
                 onboardingReplayAvailable: AppConstants.onboardingExperienceEnabled(),
                 hasParkedCar: parkPinService.parkedCar != nil,
-                fullPaletteMode: fullPaletteMode,
+                fullPaletteMode: AppConstants.designSystemV2Enabled ? false : fullPaletteMode,
                 spotPassEnabled: AppConstants.spotHandoffEnabled,
                 driverPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass,
                 planTripEnabled: AppConstants.planTripEnabled,
                 tripActive: tripPlan != nil
             ),
-            fullPaletteMode: fullPaletteMode,
+            fullPaletteMode: AppConstants.designSystemV2Enabled ? signDetailsOn : fullPaletteMode,
             onSelect: { row in handleMoreMenuSelection(row) },
             onToggleFullPalette: {
                 // Addendum 3 A3.4: dismiss after flipping so the user sees the result at once.
                 activeSheet = dismissTargetOutsideBrowseNav
-                toggleFullPaletteMode()
+                if AppConstants.designSystemV2Enabled {
+                    // Phase 2a: "Show all sign details" keeps the goal window and only changes
+                    // how the non-green curbs are drawn (five styles + legend card).
+                    signDetailsOn.toggle()
+                    rebuildOverlays(at: .nowET)
+                } else {
+                    toggleFullPaletteMode()
+                }
             },
             onDone: { activeSheet = dismissTargetOutsideBrowseNav }
         )
@@ -2809,13 +2828,21 @@ struct ContentView: View {
                     for: selectedGoal, from: now, overnightMorningHour: overnightMorningHour
                 )
                 parkAndForgetGuardState = nil
+                if AppConstants.designSystemV2Enabled {
+                    // The "For days" tile always shows the real end date the ladder picks.
+                    forDaysResolution = resolveParkAndForgetViewport(
+                        segments: tileLoader.segments, from: now, engine: engine, strictGreen: true
+                    )
+                }
             case .parkAndForget:
                 let resolution = resolveParkAndForgetViewport(
                     segments: tileLoader.segments,
                     from: now,
-                    engine: engine
+                    engine: engine,
+                    strictGreen: AppConstants.designSystemV2Enabled
                 )
                 parkAndForgetGuardState = resolution
+                forDaysResolution = resolution
                 switch resolution {
                 case .resolved(let offsetDays, _):
                     parkUntilTarget = now.startOfDayET(offsetDays: offsetDays)
@@ -2830,6 +2857,13 @@ struct ContentView: View {
                 }
             }
             parkUntilMode = true
+        }
+
+        // Phase 2a (flag on): outside Manhattan no curb lines are drawn at all.
+        if AppConstants.designSystemV2Enabled, v2OutsideCoverage {
+            overlayGeneration += 1
+            overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
+            return
         }
 
         // Zoom-threshold gating: if zoomed out, clear all overlays. Runs AFTER the DM-2
@@ -2906,6 +2940,12 @@ struct ContentView: View {
 
             var freeCoords:    [[CLLocationCoordinate2D]] = []
             var notFreeCoords: [[CLLocationCoordinate2D]] = []
+            // Design system Phase 2a (flag on only): detail mode splits the non-green curbs into
+            // the four richer styles. Base mode stays two-state. See `WPCurbVerdict`.
+            var soonCoords:    [[CLLocationCoordinate2D]] = []
+            var meteredCoords: [[CLLocationCoordinate2D]] = []
+            var noDataCoords:  [[CLLocationCoordinate2D]] = []
+            let v2Detail = AppConstants.designSystemV2Enabled && signDetailsOn
             // perf/map-lag: reuse the previous rebuild's answer for every segment whose
             // inputs (now, target, metered flag) are identical - see OverlayClassificationCache.
             let parkUntilKey = OverlayClassificationKey(
@@ -2920,6 +2960,25 @@ struct ContentView: View {
                 let coords = segment.coordinates
                 guard coords.count >= 2 else { continue }
                 if segment.id == selectedSegmentID { continue }
+                if AppConstants.designSystemV2Enabled {
+                    // Never show a spot that isn't a spot: unreadable signs are never green.
+                    if v2Detail {
+                        switch WPCurbVerdict.detailTag(segment: segment, engine: engine, from: now, until: target) {
+                        case .freeComfortably: freeCoords.append(coords)
+                        case .freeButRestrictionSoon: soonCoords.append(coords)
+                        case .meteredActive: meteredCoords.append(coords)
+                        case .unknown: noDataCoords.append(coords)
+                        case .restrictedNow: notFreeCoords.append(coords)
+                        }
+                    } else if parkUntilFreeCache.value(for: segment.id, key: parkUntilKey, compute: {
+                        WPCurbVerdict.isParkable(segment: segment, engine: engine, from: now, until: target)
+                    }) {
+                        freeCoords.append(coords)
+                    } else {
+                        notFreeCoords.append(coords)
+                    }
+                    continue
+                }
                 if parkUntilFreeCache.value(for: segment.id, key: parkUntilKey, compute: {
                     engine.isFree(
                         segment: segment, from: now, until: target,
@@ -2940,20 +2999,23 @@ struct ContentView: View {
                 if coords.count >= 2 {
                     selectedCoords = coords
                     // Color selected block by its Park Until result.
-                    selectedState = engine.isFree(
-                        segment: seg, from: now, until: target,
-                        ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
-                    ) ? .freeComfortably : .restrictedNow
+                    selectedState = AppConstants.designSystemV2Enabled
+                        ? (WPCurbVerdict.isParkable(segment: seg, engine: engine, from: now, until: target)
+                            ? .freeComfortably : .restrictedNow)
+                        : (engine.isFree(
+                            segment: seg, from: now, until: target,
+                            ignoringMeteredPayment: parkUntilIgnoresMeteredPayment
+                        ) ? .freeComfortably : .restrictedNow)
                 }
             }
 
             overlayGeneration += 1
             overlayPayload = MapViewRepresentable.OverlayPayload(
                 freeComfortably:        freeCoords,
-                freeButRestrictionSoon: [],
-                meteredActive:          [],
+                freeButRestrictionSoon: soonCoords,
+                meteredActive:          meteredCoords,
                 restrictedNow:          notFreeCoords,
-                unknown:                [],
+                unknown:                noDataCoords,
                 selectedCoords:         selectedCoords,
                 selectedState:          selectedState,
                 generation:             overlayGeneration
@@ -2976,7 +3038,9 @@ struct ContentView: View {
             // by the selectedBlock overlay at lineWidth:6 instead.
             if segment.id == selectedSegmentID { continue }
             let state = currentStateCache.value(for: segment.id, key: currentStateKey, compute: {
-                engine.currentState(for: segment, at: now)
+                AppConstants.designSystemV2Enabled
+                    ? WPCurbVerdict.currentState(segment: segment, engine: engine, at: now)
+                    : engine.currentState(for: segment, at: now)
             })
             switch state {
             case .freeComfortably:        freeComfortably.append(coords)
@@ -2994,7 +3058,9 @@ struct ContentView: View {
             let coords = seg.coordinates
             if coords.count >= 2 {
                 selectedCoords = coords
-                selectedState = engine.currentState(for: seg, at: now)
+                selectedState = AppConstants.designSystemV2Enabled
+                    ? WPCurbVerdict.currentState(segment: seg, engine: engine, at: now)
+                    : engine.currentState(for: seg, at: now)
             }
         }
 
@@ -3033,10 +3099,17 @@ struct ContentView: View {
                         // (flag-off: `curbPlacement` is never non-nil, so this is unchanged).
                         if curbPlacement?.hidesASPBanner != true,
                            TripModeGating.showsLiveASPBanner(tripActive: tripPlan != nil) {
-                            ASPBanner(state: bannerState)
-                                .onGeometryChange(for: CGFloat.self, of: { proxy in
-                                    proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
-                                }) { onboardingTopChromeBottom = $0 }
+                            if AppConstants.designSystemV2Enabled, !driveModeActive {
+                                v2TopChrome
+                                    .onGeometryChange(for: CGFloat.self, of: { proxy in
+                                        proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
+                                    }) { onboardingTopChromeBottom = $0 }
+                            } else {
+                                ASPBanner(state: bannerState)
+                                    .onGeometryChange(for: CGFloat.self, of: { proxy in
+                                        proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
+                                    }) { onboardingTopChromeBottom = $0 }
+                            }
                         }
                     }
                     .safeAreaInset(edge: .bottom) { bottomSafeAreaContent }
@@ -3061,7 +3134,8 @@ struct ContentView: View {
                     driveModeActive: driveModeActive,
                     blockSelectModeActive: blockSelectModeActive,
                     curbPlacementActive: curbPlacement != nil
-                ) {
+                ), !(AppConstants.designSystemV2Enabled && AppConstants.driveModeDefaultEnabled) {
+                    // Phase 2a: with the flag on, the toolbar above the goal sheet replaces this rail.
                     recenterButtonStack
                         .onGeometryChange(for: CGRect.self, of: { proxy in
                             proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
@@ -3604,7 +3678,10 @@ struct ContentView: View {
     @ViewBuilder
     private var mapLayerStack: some View {
         mapZStack
-            .task { await performLaunchSetup() }
+            .task {
+                if AppConstants.designSystemV2Enabled { networkStatus.start() }
+                await performLaunchSetup()
+            }
             .onAppear { handleOnAppear() }
             .onChange(of: scenePhase) { _, newPhase in handleScenePhaseChange(newPhase) }
             .onChange(of: notificationsMuted) { _, newValue in handleNotificationsMutedChange(newValue) }
@@ -3617,6 +3694,9 @@ struct ContentView: View {
     private var mapLayerWithEvents: some View {
         mapLayerStack
             .onChange(of: tileLoader.segments.count) { _, _ in handleSegmentsChanged() }
+            .onChange(of: v2OutsideCoverage) { _, _ in
+                if AppConstants.designSystemV2Enabled { rebuildOverlays(at: .nowET) }
+            }
             .onChange(of: selectedSegmentID) { _, _ in handleSelectionChanged() }
             .onChange(of: locationService.locationUpdateCount) { _, _ in handleLocationUpdate() }
             .onChange(of: driveModeDistanceMeters) { _, distance in handleFinalApproachUpdate(distance) }
@@ -3854,7 +3934,7 @@ struct ContentView: View {
             placementSeverity: curbPlacementSeverity(for:),
             // Design system v0.1: five-state curb lines while "Show all sign details" is on.
             // Inert unless `designSystemV2Enabled`. NB: declared after `placementSeverity`.
-            curbLineDetailMode: fullPaletteMode
+            curbLineDetailMode: AppConstants.designSystemV2Enabled ? (fullPaletteMode || signDetailsOn) : fullPaletteMode
         )
     }
 
@@ -3948,7 +4028,12 @@ struct ContentView: View {
                     onExit: { exitTripPlan() }
                 )
             }
-            if goalDockVisible, tripPlan == nil {
+            if goalDockVisible, tripPlan == nil, AppConstants.designSystemV2Enabled {
+                v2DockContent
+                    .onGeometryChange(for: CGRect.self, of: { proxy in
+                        proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+                    }) { onboardingGoalDockFrame = $0 }
+            } else if goalDockVisible, tripPlan == nil {
                 GoalSelectorView(
                     selectedGoal: selectedGoal,
                     fullPaletteMode: fullPaletteMode,
@@ -4046,6 +4131,124 @@ struct ContentView: View {
             // see `parkingGuideBannerOverlay`'s doc comment for why (it's a separate
             // `.sheet` presentation layer problem, not a `bottomSafeAreaContent` layout
             // problem) and where it lives now.
+        }
+    }
+
+    // MARK: - Design system Phase 2a: flag-on map chrome
+
+    /// Location permission is off (denied or restricted). Not-yet-asked is NOT off: the priming
+    /// card owns that moment.
+    private var v2LocationOff: Bool {
+        let status = locationService.authorizationStatus
+        return status == .denied || status == .restricted
+    }
+
+    /// The user is outside the Manhattan tile grid (existing coverage check) and has not asked to
+    /// look at Manhattan instead.
+    private var v2OutsideCoverage: Bool {
+        guard AppConstants.designSystemV2Enabled, !outsideCoverageDismissed, !v2LocationOff,
+              let loc = locationService.userLocation else { return false }
+        return !AppConstants.isInManhattanCoverage(loc)
+    }
+
+    /// No tile has produced a segment yet, and the camera is close enough that curbs should be
+    /// drawing: show the loading pill and draw no lines.
+    private var v2Loading: Bool {
+        tileLoader.segments.isEmpty
+            && region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold
+            && !v2OutsideCoverage
+    }
+
+    private var v2Pill: WPTopPill {
+        if v2Loading { return .loading }
+        if v2LocationOff { return .info("Showing Manhattan") }
+        return wpStreetCleaningPill(state: bannerState, now: lastEvaluatedAt)
+    }
+
+    @ViewBuilder
+    private var v2TopChrome: some View {
+        WPTopChromeV2(
+            pill: v2OutsideCoverage ? .none : v2Pill,
+            offlineAsOf: networkStatus.isOffline ? networkStatus.lastOnlineLabel : nil,
+            showLegend: signDetailsOn && !v2OutsideCoverage,
+            onHideDetails: {
+                signDetailsOn = false
+                rebuildOverlays(at: .nowET)
+            }
+        )
+    }
+
+    private var v2GoalInput: WPGoalSheetInput {
+        let now = lastEvaluatedAt
+        let daysEnd: Date
+        switch forDaysResolution {
+        case .resolved(let offsetDays, _):
+            daysEnd = now.startOfDayET(offsetDays: offsetDays)
+        case .empty:
+            daysEnd = now.startOfDayET(offsetDays: ParkingGoals.parkAndForgetLadderOffsetDays.last ?? 2)
+        case nil:
+            daysEnd = ParkingGoals.target(for: .parkAndForget, from: now)
+        }
+        var note: String?
+        if case .todaySuspended(let reason) = bannerState {
+            note = "\(reason) rules. Meters and all other signs still apply."
+        }
+        return WPGoalSheetInput(
+            selectedGoal: selectedGoal,
+            now: now,
+            fewHoursEnd: ParkingGoals.target(for: .freeFewHours, from: now, overnightMorningHour: overnightMorningHour),
+            overnightEnd: ParkingGoals.target(for: .freeOvernight, from: now, overnightMorningHour: overnightMorningHour),
+            forDaysEnd: daysEnd,
+            detailMode: signDetailsOn,
+            loading: v2Loading,
+            guardKind: emptyMapGuardKind,
+            note: note,
+            morningHour: overnightMorningHour
+        )
+    }
+
+    @ViewBuilder
+    private var v2DockContent: some View {
+        if v2LocationOff {
+            WPLocationOffSheet(
+                onOpenSettings: { openLocationSettingsForCruiseEntry() },
+                onSearch: { presentBrowseNavSearch() }
+            )
+        } else if v2OutsideCoverage {
+            WPOutsideCoverageSheet(
+                onShowManhattan: {
+                    outsideCoverageDismissed = true
+                    recenterMap(on: CLLocationCoordinate2D(
+                        latitude: AppConstants.manhattanCenter.latitude,
+                        longitude: AppConstants.manhattanCenter.longitude
+                    ))
+                },
+                onSuggestNeighborhood: AppConstants.coverageSuggestionVisible()
+                    ? { showSuggestNeighborhoodV2 = true } : nil
+            )
+            .sheet(isPresented: $showSuggestNeighborhoodV2) {
+                SuggestNeighborhoodSheet(viewedLatitude: nil, viewedLongitude: nil)
+            }
+        } else {
+            WPGoalSheetV2(
+                input: v2GoalInput,
+                leverOpen: $overnightLeverOpen,
+                onSelectGoal: { goal in
+                    selectGoal(goal)
+                    if let mark = onboardingCoachMark, mark.dismissedByGoalTileTap {
+                        handleOnboardingCoachRealControlTap(matches: mark)
+                    }
+                },
+                onSelectHour: { setOvernightMorningHour($0) },
+                onStartDriving: {
+                    onboardingCoachMark = nil
+                    SpotPassDriverRuntime.shared.startDriving()
+                    enterCruiseMode()
+                },
+                onSearch: { presentBrowseNavSearch() },
+                onMore: { activeSheet = .moreMenu },
+                onLocate: { recenterOnUser() }
+            )
         }
     }
 
@@ -5179,7 +5382,8 @@ struct ContentView: View {
         let span = AmbientDrivingLook.span(for: step, cruiseSpan: MapViewRepresentable.driveModeCameraSpan)
         coordinatorActions.setAmbientDrivingLook?(
             center,
-            MapViewRepresentable.driveModePitch,
+            // Design system flag on: top-down (round-2 mocks). Flag off: today's tilted look.
+            AppConstants.designSystemV2Enabled ? 0 : MapViewRepresentable.driveModePitch,
             AmbientDrivingLook.heading,
             MapViewRepresentable.altitudeForSpan(span),
             animated
@@ -8114,7 +8318,8 @@ nonisolated func resolveParkAndForgetViewport(
     from: Date,
     engine: ParkingRulesEngine,
     ladderOffsetDays: [Int] = ParkingGoals.parkAndForgetLadderOffsetDays,
-    bannerDensityThreshold: Double = ParkAndForgetViewportResolution.defaultBannerDensityThreshold
+    bannerDensityThreshold: Double = ParkAndForgetViewportResolution.defaultBannerDensityThreshold,
+    strictGreen: Bool = false
 ) -> ParkAndForgetViewportResolution {
     // Match COUNT at every rung (not just "did anyone clear it") — the input the density
     // check below needs. `ladderOffsetDays` is ordered widest-first, so `counts[0]` is the
@@ -8123,9 +8328,13 @@ nonisolated func resolveParkAndForgetViewport(
         let until = from.startOfDayET(offsetDays: offsetDays)
         return segments.reduce(0) { total, segment in
             guard segment.coordinates.count >= 2 else { return total }
-            let clears = engine.isFree(
-                segment: segment, from: from, until: until, ignoringMeteredPayment: false
-            )
+            // `strictGreen` (design system Phase 2a, flag on): unreadable signs never count,
+            // matching what the map draws green.
+            let clears = strictGreen
+                ? WPCurbVerdict.isParkable(segment: segment, engine: engine, from: from, until: until)
+                : engine.isFree(
+                    segment: segment, from: from, until: until, ignoringMeteredPayment: false
+                )
             return clears ? total + 1 : total
         }
     }
