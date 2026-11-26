@@ -116,6 +116,10 @@ struct WPScreenScaffold<Content: View>: View {
             .padding(.horizontal, WP.Space.screenMargin)
             .padding(.top, WP.Space.s2)
             .padding(.bottom, WP.Space.s2)
+            // The pinned bar stops at the drive overlay's cap (AX1 on short phones, AX2 otherwise):
+            // at AX5 it would take about 45% of an SE and push the content (the privacy promise,
+            // the steps) below the fold. Still accessibility-sized, never truncated.
+            .dynamicTypeSize(...WPDriveVerdict.maxDriveTypeSize(screenHeight: UIScreen.main.bounds.height))
             .background(WP.paper)
         }
     }
@@ -178,6 +182,9 @@ struct WPChoiceChip: View {
     var isSelected: Bool = false
     /// 64 for a row of options, 56 for a lone "Pick a time" style chip.
     var height: CGFloat = 64
+    /// A time ("4:15 AM") must never break mid-token: one line, shrinking a little before it would
+    /// ever wrap. Words ("About 30 min") keep the default wrap.
+    var singleLine: Bool = false
     let action: () -> Void
 
     var body: some View {
@@ -185,6 +192,8 @@ struct WPChoiceChip: View {
             Text(title)
                 .font(WP.Font.fredoka(18, .semibold, relativeTo: .body))
                 .multilineTextAlignment(.center)
+                .lineLimit(singleLine ? 1 : nil)
+                .minimumScaleFactor(singleLine ? 0.6 : 1)
                 .padding(.horizontal, WP.Space.s3)
                 .padding(.vertical, WP.Space.s2)
                 .frame(maxWidth: .infinity, minHeight: height)

@@ -62,16 +62,19 @@ struct WPCoachCard: View {
 
 /// Next: ink pill, 48 tall, label 17/600 white (taxi is reserved for the one raised thing).
 struct WPCoachNextStyle: ButtonStyle {
+    @Environment(\.colorScheme) private var scheme
+
     func makeBody(configuration: Configuration) -> some View {
         let shape = Capsule()
+        // Dark: the same lifted + line pill as `InkPillButtonStyle` (ink would vanish into the card).
+        let palette = InkPillButtonStyle.Palette.resolve(dark: scheme == .dark)
         configuration.label
             .font(WP.Font.fredoka(17, .semibold, relativeTo: .body))
-            .foregroundStyle(Color.white)
+            .foregroundStyle(palette.label.map { Color(wpHex: $0) } ?? Color.white)
             .padding(.horizontal, WP.Space.s6)
             .frame(minWidth: WP.Target.minimum, minHeight: WP.Target.minimum)
-            .background(
-                shape.fill(configuration.isPressed ? Color(wpHex: WP.Hex.darkLifted) : Color(wpHex: WP.Hex.ink))
-            )
+            .background(shape.fill(Color(wpHex: configuration.isPressed ? palette.pressedFill : palette.fill)))
+            .overlay(shape.strokeBorder(palette.outline.map { Color(wpHex: $0) } ?? Color.clear, lineWidth: WP.Border.control))
             .contentShape(shape)
     }
 }

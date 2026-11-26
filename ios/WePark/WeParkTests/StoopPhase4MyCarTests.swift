@@ -299,16 +299,19 @@ final class StoopPhase4MyCarTests: XCTestCase {
 
     // MARK: Leaving soon / notifications
 
-    func testLeavingSoonCard_showsForEveryVerdictIncludingDont() {
-        for variant in [WPCurbVariant.park, .soon, .meter, .dont, .nodata, .unclear] {
-            XCTAssertTrue(WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: true, variant: variant), "\(variant)")
-            XCTAssertFalse(WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: false, variant: variant), "\(variant)")
-        }
+    func testLeavingSoonCard_followsTheLeaveSheetOnly_notTheVerdict() {
+        // The card is a function of "does the leave flow offer a sheet" alone, so `.dont` ("move
+        // your car now") keeps it. The function takes no verdict, so no verdict can hide it.
+        XCTAssertTrue(WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: true))
+        XCTAssertFalse(WPMyCarLogic.showsLeavingSoonCard(leaveOpensSheet: false))
     }
 
     func testNotificationAvailability_resolve() {
         typealias A = WPMyCarLogic.NotificationAvailability
-        XCTAssertEqual(A.resolve(muted: false, status: nil), .on)
+        // Not read yet promises nothing (no "You'll get ..." flash on a denied phone).
+        XCTAssertEqual(A.resolve(muted: false, status: nil), .unknown)
+        XCTAssertEqual(A.resolve(muted: true, status: nil), .mutedInApp)
+        XCTAssertEqual(A.resolve(muted: false, status: .notDetermined), .on)
         XCTAssertEqual(A.resolve(muted: false, status: .authorized), .on)
         XCTAssertEqual(A.resolve(muted: false, status: .denied), .deniedInSystem)
         XCTAssertEqual(A.resolve(muted: true, status: .authorized), .mutedInApp)
@@ -327,6 +330,17 @@ final class StoopPhase4MyCarTests: XCTestCase {
                 WPMyCarLogic.reminderRowSub(remindMe: true, previews: previews, now: now, availability: availability),
                 "Notifications are off")
         }
+    }
+
+    func testReminderCopy_neverPromisesWhileNotificationStatusIsUnknown() {
+        let now = p4Date(2026, 11, 25, 10, 0)
+        let previews = WPMyCarLogic.reminderPreviews(
+            offsets: .default, restrictionStart: now.addingTimeInterval(86_400 * 2), now: now)
+        let summary = WPMyCarLogic.reminderSummary(previews: previews, now: now, availability: .unknown)
+        XCTAssertFalse(summary.contains("You'll get"))
+        XCTAssertEqual(
+            WPMyCarLogic.reminderRowSub(remindMe: true, previews: previews, now: now, availability: .unknown),
+            "Checking notifications")
     }
 
     // MARK: Wording helpers

@@ -153,6 +153,11 @@ private struct WPFlatPiece<S: InsettableShape, Content: View>: View {
 }
 
 /// Ink pill: ink fill, taxi (or white) label 22/600, height 64. Pressed: fill -> #3F3870.
+///
+/// Dark mode: the ground (and the card) is ink-violet, so an ink fill would vanish into it and
+/// leave floating text. In dark the pill is the lifted surface with a line and a cream label (the
+/// same treatment `WPMyCarPrimaryStyle` and the selected hour chip already use). `labelColor`
+/// applies to light mode only.
 struct InkPillButtonStyle: ButtonStyle {
     var labelColor: Color = WP.taxi
 
@@ -160,24 +165,47 @@ struct InkPillButtonStyle: ButtonStyle {
         StyleBody(configuration: configuration, labelColor: labelColor)
     }
 
+    /// The pill's colors for a scheme. Pure so a test can pin the dark-mode contrast rule.
+    nonisolated struct Palette: Equatable {
+        let fill: UInt32
+        let pressedFill: UInt32
+        let disabledFill: UInt32
+        /// Outline of the enabled pill (dark only: the fill alone is too close to the ground).
+        let outline: UInt32?
+        /// nil: use the caller's `labelColor` (light mode).
+        let label: UInt32?
+
+        nonisolated static func resolve(dark: Bool) -> Palette {
+            dark
+                ? Palette(fill: WP.Hex.darkLifted, pressedFill: WP.Hex.darkSurface, disabledFill: WP.Hex.darkSurface,
+                          outline: WP.Hex.darkLine, label: WP.Hex.darkText)
+                : Palette(fill: WP.Hex.ink, pressedFill: WP.Hex.darkLifted, disabledFill: WP.Hex.divider,
+                          outline: nil, label: nil)
+        }
+    }
+
     private struct StyleBody: View {
         let configuration: ButtonStyleConfiguration
         let labelColor: Color
         @Environment(\.isEnabled) private var isEnabled
+        @Environment(\.colorScheme) private var scheme
 
         var body: some View {
+            let dark = scheme == .dark
+            let palette = Palette.resolve(dark: dark)
+            let label = palette.label.map { Color(wpHex: $0) } ?? labelColor
             WPFlatPiece(
                 shape: Capsule(),
-                fill: isEnabled ? Color(wpHex: WP.Hex.ink) : Color(wpHex: WP.Hex.divider),
-                pressedFill: Color(wpHex: WP.Hex.darkLifted),
-                border: isEnabled ? 0 : WP.Border.control,
-                borderColor: WP.hairline,
+                fill: Color(wpHex: isEnabled ? palette.fill : palette.disabledFill),
+                pressedFill: Color(wpHex: palette.pressedFill),
+                border: (isEnabled && palette.outline == nil) ? 0 : WP.Border.control,
+                borderColor: isEnabled ? Color(wpHex: palette.outline ?? WP.Hex.hairline) : (dark ? WP.line : WP.hairline),
                 isPressed: configuration.isPressed && isEnabled
             ) {
                 configuration.label
                     .font(WP.Font.fredoka(22, .semibold, relativeTo: .title2))
                     .multilineTextAlignment(.center)
-                    .foregroundStyle(isEnabled ? labelColor : Color(wpHex: WP.Hex.muted))
+                    .foregroundStyle(isEnabled ? label : (dark ? WP.muted : Color(wpHex: WP.Hex.muted)))
                     .padding(.horizontal, WP.Space.s6)
                     .padding(.vertical, WP.Space.s2)
                     .frame(maxWidth: .infinity, minHeight: WP.Control.inkPillHeight)

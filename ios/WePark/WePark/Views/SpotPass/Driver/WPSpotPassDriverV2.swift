@@ -39,7 +39,6 @@ struct WPDriverChoosingV2: View {
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var showPicker = false
-    @State private var slotsNow = Date()
 
     private var pickedClock: String? {
         if case .custom(let date) = choice { return ClipCopy.clockTime(date) }
@@ -95,14 +94,14 @@ struct WPDriverChoosingV2: View {
         }
         .sheet(isPresented: $showPicker) {
             WPLeaveTimeSheetV2(
-                slots: WPPassLogic.leaveSlots(from: slotsNow),
                 selected: { if case .custom(let d) = choice { return d }; return nil }(),
                 onUse: { date in
                     onSelect(.custom(date))
                     showPicker = false
                 }
             )
-            .presentationDetents([.medium, .large])
+            // Full height at accessibility sizes: one time per row needs the room.
+            .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.medium, .large])
             .presentationCornerRadius(WP.Radius.sheet)
         }
     }
@@ -122,16 +121,16 @@ struct WPDriverChoosingV2: View {
             isSelected: choice.isCustom,
             height: 56
         ) {
-            slotsNow = Date()
             showPicker = true
         }
         .accessibilityLabel(pickedClock.map { "Leaving around \($0)" } ?? "Pick a time")
     }
 }
 
-/// B10.2: a sheet of quarter-hour times, up to 4 hours from now.
+/// B10.2: a sheet of quarter-hour times, up to 4 hours from now. The slots are recomputed every
+/// minute and whenever the sheet appears, so a time that has already passed is never offered (and a
+/// chosen slot that goes stale stops being "chosen", so the button never sends a clamped time).
 struct WPLeaveTimeSheetV2: View {
-    let slots: [Date]
     let selected: Date?
     let onUse: (Date) -> Void
 
@@ -139,11 +138,23 @@ struct WPLeaveTimeSheetV2: View {
     @State private var choice: Date?
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            content(slots: WPPassLogic.leaveSlots(from: context.date))
+        }
+        .background(WP.paper.ignoresSafeArea())
+        // Past AX3 the title and the pinned button alone would fill a short phone.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+        .onAppear { choice = selected }
+    }
+
+    private func content(slots: [Date]) -> some View {
+        // One time per row at accessibility sizes: a time never shares a line with another.
         let columns = Array(
             repeating: GridItem(.flexible(), spacing: WP.Space.s2),
-            count: typeSize.isAccessibilitySize ? 2 : 4
+            count: typeSize.isAccessibilitySize ? 1 : 4
         )
-        VStack(spacing: 0) {
+        let chosen = WPPassLogic.stillOffered(choice, in: slots)
+        return VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: WP.Space.s2) {
                     Text(WPPassCopy.pickTitle)
@@ -156,7 +167,10 @@ struct WPLeaveTimeSheetV2: View {
                         .fixedSize(horizontal: false, vertical: true)
                     LazyVGrid(columns: columns, spacing: WP.Space.s1) {
                         ForEach(slots, id: \.self) { slot in
-                            WPChoiceChip(title: ClipCopy.clockTime(slot), isSelected: choice == slot, height: 56) {
+                            WPChoiceChip(
+                                title: ClipCopy.clockTime(slot), isSelected: chosen == slot,
+                                height: 56, singleLine: true
+                            ) {
                                 choice = slot
                             }
                         }
@@ -167,16 +181,14 @@ struct WPLeaveTimeSheetV2: View {
                 .padding(.top, WP.Space.s5)
             }
             .scrollBounceBehavior(.basedOnSize)
-            Button(choice.map { WPPassCopy.useTime(ClipCopy.clockTime($0)) } ?? "Pick a time") {
-                if let choice { onUse(choice) }
+            Button(chosen.map { WPPassCopy.useTime(ClipCopy.clockTime($0)) } ?? "Pick a time") {
+                if let chosen { onUse(chosen) }
             }
             .buttonStyle(.wpInkPill)
-            .disabled(choice == nil)
+            .disabled(chosen == nil)
             .padding(.horizontal, WP.Space.screenMargin)
             .padding(.vertical, WP.Space.s2)
         }
-        .background(WP.paper.ignoresSafeArea())
-        .onAppear { choice = selected }
     }
 }
 
@@ -263,31 +275,37 @@ struct WPDriverPullingOutV2: View {
     let onNotLeaving: () -> Void
 
     var body: some View {
+        // The title and the countdown box tick together, so the title always matches the box
+        // ("Leaving soon" over "Leaving in 4:07", "Leaving now" once the time has come).
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            screen(now: context.date)
+        }
+    }
+
+    private func screen(now: Date) -> some View {
         WPScreenScaffold(
             closeLabel: "Back",
             onClose: onBack,
-            title: isSent ? ClipCopy.sentLine(name: name) : WPPassCopy.leavingNow,
+            title: isSent ? ClipCopy.sentLine(name: name) : WPPassCopy.pullTitle(leaveAt: leaveAt, now: now),
             primary: isSent ? nil : wpPassPrimary(isSending ? "Telling \(name)..." : ClipCopy.pullingOut, .commitment, onLeavingNow),
             secondary: isSent ? nil : wpPassSecondary(WPPassCopy.notLeaving, onNotLeaving)
         ) {
             if !isSent {
-                TimelineView(.periodic(from: .now, by: 1)) { context in
-                    WPPassBox {
-                        if let leaveAt, leaveAt > context.date.addingTimeInterval(1) {
-                            Text("Leaving in")
-                                .font(WP.Font.fredoka(15, .medium, relativeTo: .callout))
-                            Text(timerInterval: context.date...leaveAt, countsDown: true)
-                                .font(WP.Font.fredoka(44, .bold, relativeTo: .largeTitle))
-                                .monospacedDigit()
-                        } else {
-                            Text(ClipCopy.timeToGo)
-                                .font(WP.Font.fredoka(32, .bold, relativeTo: .largeTitle))
-                        }
+                WPPassBox {
+                    if let leaveAt, leaveAt > now.addingTimeInterval(1) {
+                        Text("Leaving in")
+                            .font(WP.Font.fredoka(15, .medium, relativeTo: .callout))
+                        Text(timerInterval: now...leaveAt, countsDown: true)
+                            .font(WP.Font.fredoka(44, .bold, relativeTo: .largeTitle))
+                            .monospacedDigit()
+                    } else {
+                        Text(ClipCopy.timeToGo)
+                            .font(WP.Font.fredoka(32, .bold, relativeTo: .largeTitle))
                     }
-                    .foregroundStyle(WP.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityElement(children: .combine)
                 }
+                .foregroundStyle(WP.text)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityElement(children: .combine)
                 Button(ClipCopy.fiveMore, action: onFiveMore)
                     .buttonStyle(.wpSecondary)
                     .disabled(!canExtend || isSending)

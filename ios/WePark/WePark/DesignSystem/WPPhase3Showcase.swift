@@ -116,13 +116,18 @@ struct WPPhase3ShowcaseContent: View {
             if name == "arrive" {
                 VStack(spacing: 0) {
                     topChrome
-                    Spacer()
+                    Spacer(minLength: 0)
+                }
+                .overlay(alignment: .bottom) {
                     WPArrivalPromptV2(
                         context: context,
                         arrivalCoordinate: CLLocationCoordinate2D(latitude: 40.72, longitude: -73.99),
                         onParkHere: { _ in }, onNotYet: {}
                     )
-                    .frame(height: UIScreen.main.bounds.height * 0.56)
+                    // Stand-in for the sheet's detent: half height normally, full height at AX
+                    // (`WPArrivalPromptV2.detents`).
+                    .frame(height: UIScreen.main.bounds.height
+                        * (WPArrivalPromptV2.detents(accessibilitySize: UIApplication.shared.preferredContentSizeCategory.isAccessibilityCategory) == [.large] ? 0.9 : 0.56))
                     .clipShape(UnevenRoundedRectangle(
                         topLeadingRadius: WP.Radius.sheet, bottomLeadingRadius: 0,
                         bottomTrailingRadius: 0, topTrailingRadius: WP.Radius.sheet, style: .continuous))

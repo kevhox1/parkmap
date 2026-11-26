@@ -106,6 +106,8 @@ struct WPSeekerIntroV2: View {
     let onCreate: () -> Void
     let onClose: () -> Void
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     private var toggleEnabled: Bool { firstName != nil }
 
     private var helper: String {
@@ -118,10 +120,43 @@ struct WPSeekerIntroV2: View {
             onClose: onClose,
             over: WPPassCopy.seekerOver,
             title: WPPassCopy.seekerTitle,
-            sub: WPPassCopy.seekerSub,
+            sub: typeSize.isAccessibilitySize ? nil : WPPassCopy.seekerSub,
             primary: wpPassPrimary(WPPassCopy.makePass, .commitment, onCreate),
             secondary: wpPassSecondary(WPPassCopy.notNow, onClose)
         ) {
+            // At accessibility sizes the privacy promise comes FIRST (before the subtitle and the
+            // steps): on a short phone they push it below the fold, and "Make a pass" must not be
+            // tappable unseen.
+            if typeSize.isAccessibilitySize {
+                privacyNote
+                Text(WPPassCopy.seekerSub)
+                    .font(WP.Font.fredoka(17, .regular, relativeTo: .body))
+                    .foregroundStyle(WP.text)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            stepsCard
+            if !typeSize.isAccessibilitySize { privacyNote }
+            // Existing behavior, restyled: the opt-in first name (OFF by default; disabled with a
+            // helper line while no first name is on file).
+            WPListCard {
+                WPListToggleRow(title: SpotPassCopy.showFirstName, subtitle: helper, isOn: $showFirstName)
+                    .disabled(!toggleEnabled)
+            }
+            Text(SpotPassCopy.explainerPosture)
+                .font(WP.Font.fredoka(15, .regular, relativeTo: .callout))
+                .foregroundStyle(WP.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        // Same cap as the drive screens and the pinned bar (AX1 on short phones, AX2 otherwise):
+        // at AX5 the title alone fills an SE and the privacy promise never reaches the screen.
+        .dynamicTypeSize(...WPDriveVerdict.maxDriveTypeSize(screenHeight: UIScreen.main.bounds.height))
+    }
+
+    private var privacyNote: some View {
+        WPPassNote(title: WPPassCopy.privacyTitle, body_: WPPassCopy.privacyBody)
+    }
+
+    private var stepsCard: some View {
             WPListCard {
                 ForEach(Array(WPPassCopy.seekerSteps.enumerated()), id: \.offset) { index, step in
                     if index > 0 { WPListDivider() }
@@ -145,18 +180,6 @@ struct WPSeekerIntroV2: View {
                     .accessibilityLabel("Step \(index + 1). \(step)")
                 }
             }
-            WPPassNote(title: WPPassCopy.privacyTitle, body_: WPPassCopy.privacyBody)
-            // Existing behavior, restyled: the opt-in first name (OFF by default; disabled with a
-            // helper line while no first name is on file).
-            WPListCard {
-                WPListToggleRow(title: SpotPassCopy.showFirstName, subtitle: helper, isOn: $showFirstName)
-                    .disabled(!toggleEnabled)
-            }
-            Text(SpotPassCopy.explainerPosture)
-                .font(WP.Font.fredoka(15, .regular, relativeTo: .callout))
-                .foregroundStyle(WP.muted)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 }
 
@@ -213,9 +236,9 @@ struct WPSeekerDepartedV2: View {
         ) {
             // The headline fact. Ink-outlined, not green: this card says the neighbor is leaving,
             // never that the curb is legal.
+            // "Leaving now" is the headline; the subtitle below carries the "Your neighbor is
+            // pulling out now." sentence once (no "Your neighbor is" lead-in above it).
             VStack(alignment: .leading, spacing: 4) {
-                Text(WPPassCopy.departedOver)
-                    .font(WP.Font.fredoka(17, .semibold, relativeTo: .body))
                 Text(WPPassCopy.departedBig)
                     .font(WP.Font.fredoka(44, .bold, relativeTo: .largeTitle))
                     .fixedSize(horizontal: false, vertical: true)

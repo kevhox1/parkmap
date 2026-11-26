@@ -45,7 +45,6 @@ nonisolated enum WPPassCopy {
     static let armedNote = "We'll tell you the moment they pull out."
     static let armedNoteBody = "Stay close to the spot. Keep notifications on."
     static let departedTitle = "Go to the spot"
-    static let departedOver = "Your neighbor is"
     static let departedBig = "Leaving now"
     static let departedNote = "Check the signs before you park"
     static let departedNoteBody = "A passed spot still follows the curb rules."
@@ -64,6 +63,15 @@ nonisolated enum WPPassCopy {
     /// B10.3 / B10.4 armed.
     static let armedDriverTitle = "You're on, neighbor."
     static let leavingNow = "Leaving now"
+    static let leavingSoon = "Leaving soon"
+
+    /// Title of the pre-tap pull-out screen. It must match what the box under it says: while the
+    /// countdown still has time on it, "Leaving soon"; once the time has come (or the driver
+    /// chose "Now"), "Leaving now".
+    static func pullTitle(leaveAt: Date?, now: Date) -> String {
+        if let leaveAt, leaveAt > now.addingTimeInterval(1) { return leavingSoon }
+        return leavingNow
+    }
     static let autoRowTitle = "Send it when I drive off"
     static let notLeavingAfterAll = "Not leaving after all"
 
@@ -112,6 +120,13 @@ nonisolated enum WPPassLogic {
             t += step
         }
         return out
+    }
+
+    /// `choice` only while it is still one of the offered `slots`. A slot the clock has passed (the
+    /// sheet sat open) is no longer chosen, so "Use 4:15 AM" can never send a clamped, different time.
+    static func stillOffered(_ choice: Date?, in slots: [Date]) -> Date? {
+        guard let choice, slots.contains(choice) else { return nil }
+        return choice
     }
 
     // MARK: Auto heads-up switch
