@@ -113,6 +113,8 @@ final class ClipFlowController {
     @ObservationIgnored private var handledTokenURLs: Set<URL> = []
     @ObservationIgnored private var peekTask: Task<Void, Never>?
     @ObservationIgnored private var departMayHaveReachedServer = false
+    /// Stoop B11.3 "Skip": no reminder is scheduled for this pass.
+    @ObservationIgnored private var reminderSkipped = false
     @ObservationIgnored private(set) var installPolicy = ClipInstallPromptPolicy()
 
     init(dependencies: ClipDependencies) {
@@ -234,11 +236,13 @@ final class ClipFlowController {
         deps.feedback.selection()
     }
 
-    /// Stoop B11.3: true when the clip should show its "Allow one reminder" step before arming.
-    func shouldAskForReminder() async -> Bool { await deps.reminders.canAskForPermission() }
+    /// Stoop B11.3: true when the clip should show its "one reminder" step before arming. It NEVER prompts
+    /// (spec 5.1): the reminder is available only if the App Clip card's ephemeral-notification toggle
+    /// (`NSAppClipRequestEphemeralUserNotification`) is already on; otherwise the step is skipped.
+    func shouldOfferReminder() async -> Bool { await deps.reminders.availability() == .on }
 
-    /// Stoop B11.3: "Allow one reminder". The result is re-read by `arm()`, so nothing else to track.
-    func allowOneReminder() async { _ = await deps.reminders.requestPermission() }
+    /// Stoop B11.3: the driver's choice on that step. "Skip" arms without scheduling the reminder.
+    func chooseReminder(_ wanted: Bool) { reminderSkipped = !wanted }
 
     func notLeavingSoon() {
         guard phase == .choosing else { return }
@@ -341,7 +345,7 @@ final class ClipFlowController {
     }
 
     private func scheduleReminders(for pass: HandoffActivePass) async {
-        guard reminderAvailability == .on else { return }
+        guard reminderAvailability == .on, !reminderSkipped else { return }
         let plan = HandoffReminderPlan.plan(
             stoop: StoopFlag.designSystemV2Enabled,
             passID: pass.id, name: pass.name, leaveAt: pass.leaveAt, expiresAt: pass.expiresAt, now: deps.now()

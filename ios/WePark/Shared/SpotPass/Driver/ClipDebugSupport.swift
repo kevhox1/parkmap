@@ -208,7 +208,5 @@ final class DebugAuthorizingReminderScheduler: HandoffReminderScheduling {
 
     func schedule(_ reminders: [PlannedReminder], passID: UUID) async { await inner.schedule(reminders, passID: passID) }
     func cancelAll(passID: UUID) { inner.cancelAll(passID: passID) }
-    func canAskForPermission() async -> Bool { await inner.canAskForPermission() }
-    func requestPermission() async -> HandoffReminderAvailability { await inner.requestPermission() }
 }
 #endif

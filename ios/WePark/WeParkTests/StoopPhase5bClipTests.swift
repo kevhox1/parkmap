@@ -97,17 +97,6 @@ final class StoopPhase5bClipTests: XCTestCase {
         XCTAssertEqual(WPClipClock.bare(date, timeZone: p5bNY, locale: Locale(identifier: "de_DE")), "16:45")
     }
 
-    // MARK: Permission seam
-
-    @MainActor
-    func testReminderSeam_defaultsToNotAskingAndReportsAvailability() async {
-        let scheduler = P5bPlainScheduler()
-        let canAsk = await scheduler.canAskForPermission()
-        XCTAssertFalse(canAsk)
-        let after = await scheduler.requestPermission()
-        XCTAssertEqual(after, .on)
-    }
-
     // MARK: Copy
 
     func testCopy_privacyPromiseCoversWhoAndWhere() {
@@ -125,11 +114,4 @@ final class StoopPhase5bClipTests: XCTestCase {
         XCTAssertEqual(WPClipCopy.reminderTitle(around: "4:45"), "Still leaving around 4:45?")
         XCTAssertFalse(WPClipCopy.thanksTitle.contains("!"))
     }
-}
-
-@MainActor
-private final class P5bPlainScheduler: HandoffReminderScheduling {
-    func availability() async -> HandoffReminderAvailability { .on }
-    func schedule(_ reminders: [PlannedReminder], passID: UUID) async {}
-    func cancelAll(passID: UUID) {}
 }

@@ -147,8 +147,8 @@ private struct WPClipChoosingFlow: View {
                 WPClipReminderView(
                     name: controller.preview?.name,
                     around: WPClipClock.bare(controller.choice.leaveAt(from: controller.now)),
-                    onAllow: { arm(askingFirst: true) },
-                    onSkip: { arm(askingFirst: false) },
+                    onAllow: { arm(wantsReminder: true) },
+                    onSkip: { arm(wantsReminder: false) },
                     onBack: { step = .time }
                 )
             }
@@ -166,22 +166,23 @@ private struct WPClipChoosingFlow: View {
         }
     }
 
-    /// "Now" skips the reminder step (a "Now" pass schedules no reminder); otherwise ask once, only
-    /// when the system has not been asked yet.
+    /// "Now" skips the reminder step (a "Now" pass schedules no reminder); otherwise the step is shown only
+    /// when reminders are already available (ephemeral grant). It never triggers a system prompt.
     private func tell() {
         Task {
-            if !controller.choice.isNow, await controller.shouldAskForReminder() {
+            if !controller.choice.isNow, await controller.shouldOfferReminder() {
                 step = .reminder
             } else {
+                controller.chooseReminder(true)   // not offered: the default plan applies
                 await controller.arm()
             }
         }
     }
 
-    private func arm(askingFirst: Bool) {
+    private func arm(wantsReminder: Bool) {
         step = .time   // an arm failure lands back on the time screen with its message
         Task {
-            if askingFirst { await controller.allowOneReminder() }
+            controller.chooseReminder(wantsReminder)
             await controller.arm()
         }
     }

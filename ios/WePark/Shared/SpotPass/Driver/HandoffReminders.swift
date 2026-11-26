@@ -133,16 +133,25 @@ protocol HandoffReminderScheduling: AnyObject {
     func availability() async -> HandoffReminderAvailability
     func schedule(_ reminders: [PlannedReminder], passID: UUID) async
     func cancelAll(passID: UUID)
-    /// Stoop B11.3: true while the system has not been asked yet (so the clip may show its "Allow one
-    /// reminder" step). Default false: schedulers that cannot ask never show the step.
-    func canAskForPermission() async -> Bool
-    /// Asks the system (ephemeral in the clip). Returns the resulting availability.
-    func requestPermission() async -> HandoffReminderAvailability
 }
 
-extension HandoffReminderScheduling {
-    func canAskForPermission() async -> Bool { false }
-    func requestPermission() async -> HandoffReminderAvailability { await availability() }
+@MainActor
+final class UNHandoffReminderScheduler: HandoffReminderScheduling {
+
+    /// `target-content-id` must match a registered experience (the advanced experience prefix).
+    nonisolated static let targetContentID = "https://\(SpotPassShared.universalLinkHost)\(SpotPassShared.landingPath)"
+
+    private let center: UNUserNotificationCenter
+
+    init(center: UNUserNotificationCenter = .current()) { self.center = center }
+
+    func availability() async -> HandoffReminderAvailability {
+        HandoffReminderAvailability(status: await center.notificationSettings().authorizationStatus)
+    }
+
+    func schedule(_ reminders: [PlannedReminder], passID: UUID) async
+    func cancelAll(passID: UUID)
+}
 }
 
 @MainActor
