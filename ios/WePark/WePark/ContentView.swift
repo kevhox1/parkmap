@@ -3707,6 +3707,7 @@ struct ContentView: View {
                         topChromeBottom: onboardingTopChromeBottom,
                         userDotScreenPoint: mark == .goalTiles ? onboardingUserDotScreenPoint() : nil,
                         railFrame: onboardingRailFrame,
+                        tokenVisible: v2ShowsRestingToken,
                         onNext: { advanceOnboardingCoach(from: mark) },
                         onSkip: { finishOnboardingCoach() }
                     )
@@ -4663,6 +4664,17 @@ struct ContentView: View {
         #endif
     }
 
+    /// Whether the resting car token ("Drag to a curb to park") is drawn. VISIBILITY RULES (all must
+    /// hold; verified live on a Manhattan fix, 2026-11-26, light and dark, with and without
+    /// onboarding): Stoop flag on AND `driveModeDefaultEnabled` (the goal-sheet world; with it off
+    /// the legacy dock is up and there is no token), not an accessibility Dynamic Type size (the
+    /// goal sheet fills the screen; the "Park my car" row replaces it), no parked car (My Car owns
+    /// that state), no trip plan, no sheet open, not in Drive Mode / block select / spot placement /
+    /// curb-pin placement, and NOT outside the Manhattan tile grid (`v2OutsideCoverage`: a fix
+    /// outside `AppConstants.manhattanCoverageBounds` shows the "WePark covers Manhattan today" card
+    /// instead, because nothing outside coverage may look parkable). No fix, a denied permission
+    /// and unloaded tiles do NOT hide it. Anything that reads "is the token on screen" (coach mark 3's
+    /// copy and ring) must call this, never re-derive the conditions.
     private var v2ShowsRestingToken: Bool {
         // At accessibility sizes the goal sheet fills most of the screen, so the token stays home
         // (Park here on a tapped curb remains).
@@ -5502,7 +5514,7 @@ struct ContentView: View {
         }
         switch mark {
         case .goalTiles: return nil
-        case .colorMeaning: return onboardingNearestCurbScreenPoint()
+        case .colorMeaning: return onboardingVisibleCurbScreenPoint()
         case .tapABlock:
             guard v2ShowsRestingToken else { return nil }
             let screen = UIScreen.main.bounds
@@ -5565,6 +5577,26 @@ struct ContentView: View {
     private func onboardingUserDotScreenPoint() -> CGPoint? {
         guard let userLocation = locationService.userLocation else { return nil }
         return coordinatorActions.screenPointForCoordinate?(userLocation)
+    }
+
+    /// Stoop mark 2: the nearest curb whose projection is on the open map (not under the top
+    /// chrome, the search row, the goal sheet or the car token), else nil (card, no ring).
+    private func onboardingVisibleCurbScreenPoint() -> CGPoint? {
+        guard let userLocation = locationService.userLocation else { return nil }
+        let segments = tileLoader.segments
+        guard !segments.isEmpty else { return nil }
+        let index = CurbSnapIndex(segments: segments)
+        let screen = UIScreen.main.bounds
+        let points = index.nearbyBlockfaces(userLocation, radius: 200).compactMap {
+            coordinatorActions.screenPointForCoordinate?($0.snappedCoordinate)
+        }
+        return WPCoachAnchorLogic.firstClear(
+            among: points,
+            topChromeBottom: onboardingTopChromeBottom,
+            goalDockTop: onboardingGoalDockFrame.minY,
+            screen: screen.size,
+            tokenCenter: v2ShowsRestingToken ? CGPoint(x: screen.width / 2, y: screen.height * 0.28) : nil
+        )
     }
 
     /// Mark 3's anchor (§2.2, QA #6): the nearest curb to the user's last fix, via

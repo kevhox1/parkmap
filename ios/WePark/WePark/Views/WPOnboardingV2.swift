@@ -249,6 +249,9 @@ struct WPCoachOverlayV2: View {
     var topChromeBottom: CGFloat = 0
     var userDotScreenPoint: CGPoint? = nil
     var railFrame: CGRect = .zero
+    /// True when the resting car token is actually drawn (`ContentView.v2ShowsRestingToken`).
+    /// Mark 3's words and the room left for the token follow this, not only the type size.
+    var tokenVisible: Bool = true
     let onNext: () -> Void
     let onSkip: () -> Void
 
@@ -323,7 +326,7 @@ struct WPCoachOverlayV2: View {
         let dockTop = bottomLimit(above: goalDockFrame, safe: safe)
         // The resting car token (and its "Drag to a curb to park" hint) sits at 28% of the screen
         // height. Cards that do not point at it stay below it; the token is hidden at AX sizes.
-        let belowToken = accessibilityLayout ? top : max(top, UIScreen.main.bounds.height * 0.28 + 26 - origin.y)
+        let belowToken = (accessibilityLayout || !tokenVisible) ? top : max(top, UIScreen.main.bounds.height * 0.28 + 26 - origin.y)
         switch mark {
         case .goalTiles:
             if accessibilityLayout {
@@ -403,8 +406,8 @@ struct WPCoachOverlayV2: View {
         let content = WPCoachCard(
             step: mark.rawValue + 1,
             total: OnboardingCoachMark.allCases.count,
-            title: mark.v2Title(accessibilityLayout: accessibilityLayout),
-            message: mark.v2Message(accessibilityLayout: accessibilityLayout),
+            title: mark.v2Title(accessibilityLayout: accessibilityLayout, tokenVisible: tokenVisible),
+            message: mark.v2Message(accessibilityLayout: accessibilityLayout, tokenVisible: tokenVisible),
             nextTitle: mark.v2NextLabel,
             onSkip: onSkip,
             onNext: onNext
