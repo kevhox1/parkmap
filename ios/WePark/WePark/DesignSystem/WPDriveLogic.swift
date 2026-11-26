@@ -174,7 +174,7 @@ enum WPDriveVerdict {
         guard side.kind == .park, let sub = side.sub else { return side.big }
         if sub.hasPrefix("Free until ") { return "Park until " + sub.dropFirst("Free until ".count) }
         // A green metered side keeps its caveat: the meter is not running in the window.
-        if sub.hasPrefix("No meter running") { return "Park, no meter running in your window" }
+        if sub.hasPrefix("No meter running") { return "Park \u{00B7} no meter" }
         return side.big
     }
 

@@ -49,7 +49,7 @@ final class DriveAXLayoutTests: XCTestCase {
 
     func testCompactLine_greenWithoutTime_isJustPark() {
         let s = side(.park, "Park", "No meter running in your window")
-        XCTAssertEqual(WPDriveVerdict.compactLine(for: s), "Park, no meter running in your window")
+        XCTAssertEqual(WPDriveVerdict.compactLine(for: s), "Park \u{00B7} no meter")
         XCTAssertEqual(WPDriveVerdict.compactLine(for: side(.park, "Park", nil)), "Park")
     }
 

@@ -447,6 +447,9 @@ struct WPArrivalPromptV2: View {
         let primary = WPDriveVerdict.primary(left: sides.left, right: sides.right)
         let offered = [sides.left, sides.right].filter { $0.kind.isParkable }
         let others = [sides.left, sides.right].filter { !$0.kind.isParkable && $0.kind != .checking }
+        // The two decision buttons are pinned below the scrolling content so they are always fully
+        // visible, even at AX5 on a short phone (PR #203 QA finding #1). Only the text scrolls.
+        VStack(spacing: 0) {
         ScrollView {
             VStack(alignment: .leading, spacing: WP.Space.s4) {
                 VStack(alignment: .leading, spacing: 0) {
@@ -472,15 +475,22 @@ struct WPArrivalPromptV2: View {
                         .foregroundStyle(WPDrivePalette.text)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-
-                parkButton(primary)
-                Button("Keep looking", action: onNotYet)
-                    .buttonStyle(WPDrivePillStyle(minHeight: WP.Target.drive, fontSize: 22))
-                    .accessibilityHint("Closes this prompt. Drive Mode stays on.")
             }
-            .padding(WP.Space.s5)
+            .padding(.horizontal, WP.Space.s5)
+            .padding(.top, WP.Space.s5)
+            .padding(.bottom, WP.Space.s3)
         }
         .scrollBounceBehavior(.basedOnSize)
+
+        VStack(spacing: WP.Space.s3) {
+            parkButton(primary)
+            Button("Keep looking", action: onNotYet)
+                .buttonStyle(WPDrivePillStyle(minHeight: WP.Target.drive, fontSize: 22))
+                .accessibilityHint("Closes this prompt. Drive Mode stays on.")
+        }
+        .padding(.horizontal, WP.Space.s5)
+        .padding(.bottom, WP.Space.s5)
+        }
         .dynamicTypeSize(...WPDriveVerdict.maxDriveTypeSize(screenHeight: UIScreen.main.bounds.height))
         .background(Color(wpHex: WP.Hex.darkBackground))
     }
