@@ -104,6 +104,11 @@ final class TileLoader {
     /// ContentView observes this via @Observable — updates trigger a re-render.
     private(set) var segments: [Segment] = []
 
+    /// Design system Phase 2b follow-up: the tile keys whose segments are in `segments` right now
+    /// (the last flatten). Lets a feature that counts curbs around a point ask "are ALL the tiles
+    /// covering that area loaded?" instead of guessing from nearby segments.
+    private(set) var loadedTileKeys: Set<String> = []
+
     // MARK: Private state
     /// Bumped whenever `cache` contents change (insert/evict). With `lastRebuiltKeys` it lets
     /// `rebuildSegments` skip re-publishing an identical `segments` array (perf/map-lag).
@@ -460,5 +465,17 @@ final class TileLoader {
             }
         }
         segments = flat
+        loadedTileKeys = Set(keys.filter { cache[$0] != nil })
+    }
+
+    /// Snapshot of what is loaded, in the shape `WPFreeCurbCounter` needs. nil before the tile
+    /// index has parsed (nothing can be claimed about coverage then).
+    var tileCoverage: WPTileCoverage? {
+        guard let idx = tileIndex else { return nil }
+        return WPTileCoverage(
+            gridRows: idx.gridSize.rows, gridCols: idx.gridSize.cols,
+            latMin: idx.latMin, lngMin: idx.lngMin, rowSize: idx.rowSize, colSize: idx.colSize,
+            existingTiles: tileSet, loadedTiles: loadedTileKeys
+        )
     }
 }

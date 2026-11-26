@@ -4300,15 +4300,20 @@ struct ContentView: View {
         guard AppConstants.designSystemV2Enabled, let car = parkPinService.parkedCar,
               let id = car.detectedSegmentID,
               let segment = tileLoader.segments.first(where: { $0.id == id }) else { return nil }
-        let model = WPCurbSheetBuilder.make(segment: segment, engine: engine, now: lastEvaluatedAt, windowEnd: nil)
-        switch model.variant {
-        case .park, .soon: return "Free until \(model.big)"
-        case .meter: return "Metered until \(model.big)"
-        case .dont: return model.big
-        case .nodata: return NoSignData.headline
-        case .unclear: return UnclearSign.upcomingLabel
-        case .planpark, .plandont: return nil
-        }
+        let now = lastEvaluatedAt
+        let model = WPNeighborVerdict.resolve(
+            segment: segment, engine: engine, now: now, windowEnd: v2WindowEnd, trip: nil,
+            reports: v2NeighborReports(for: segment, now: now, ignoringTrip: true)
+        )
+        return WPNeighborVerdict.calloutText(for: model)
+    }
+
+    /// Neighbor reports (active filming / construction) on a curb, reduced for the shared verdict.
+    /// Plan a Trip ignores live reports (unless `ignoringTrip`: the parked-car callout is always live).
+    private func v2NeighborReports(for segment: Segment, now: Date, ignoringTrip: Bool = false) -> WPNeighborReports {
+        let trip = ignoringTrip ? nil : tripPlan
+        let restriction = trip == nil ? pinService.blockScopedRestriction(forBlockfaceKey: segment.blockfaceKey) : nil
+        return WPNeighborVerdict.reports(for: restriction, now: now, trip: trip)
     }
 
     /// "In front of 50 E 1st St" for the saved car, else its street and side.
@@ -4326,16 +4331,12 @@ struct ContentView: View {
     @ViewBuilder
     private func v2CurbSheetContent(_ segment: Segment) -> some View {
         let now: Date = .nowET
-        let base = WPCurbSheetBuilder.make(
-            segment: segment, engine: engine, now: now, windowEnd: v2WindowEnd, trip: tripPlan
-        )
         let restriction = tripPlan == nil
             ? pinService.blockScopedRestriction(forBlockfaceKey: segment.blockfaceKey) : nil
-        let reports = WPNeighborReports(
-            restrictionLabel: restriction.map { WPNeighborVerdict.label(for: $0.pinType) },
-            restrictionIsActive: restriction.map { !$0.isUpcoming(now: now) } ?? false
+        let model = WPNeighborVerdict.resolve(
+            segment: segment, engine: engine, now: now, windowEnd: v2WindowEnd, trip: tripPlan,
+            reports: v2NeighborReports(for: segment, now: now)
         )
-        let model = WPNeighborVerdict.apply(reports, to: base)
         WPCurbSheetV2(
             model: model,
             signs: WPSignList.lines(for: segment, engine: engine, now: now),
@@ -4393,6 +4394,7 @@ struct ContentView: View {
             goalInput: v2GoalInput,
             currentRegion: region,
             segments: tileLoader.segments,
+            tileCoverage: tileLoader.tileCoverage,
             engine: engine,
             userLocation: locationService.userLocation,
             locationService: locationService,
@@ -4449,7 +4451,10 @@ struct ContentView: View {
             coordinateForPoint: { point in coordinatorActions.coordinateForWindowPoint?(point) },
             pointForCoordinate: { coordinate in coordinatorActions.screenPointForCoordinate?(coordinate) },
             metersPerPoint: { max(0.05, region.span.latitudeDelta * 111_320 / Double(UIScreen.main.bounds.height)) },
-            resolveContext: { (engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan, segments: tileLoader.segments) },
+            resolveContext: {
+                (engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan,
+                 segments: tileLoader.segments, reports: { v2NeighborReports(for: $0, now: .nowET) })
+            },
             address: addressCoordinator.placementAddress.map(ParkingAddressCopy.line),
             onConfirm: { confirmV2Park() },
             placeAtUser: {
@@ -4460,7 +4465,8 @@ struct ContentView: View {
                 return v2ParkFlow.placeAt(
                     coordinate: loc, point: point,
                     metersPerPoint: max(0.05, region.span.latitudeDelta * 111_320 / Double(screen.height)),
-                    engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan
+                    engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan,
+                    reports: { v2NeighborReports(for: $0, now: .nowET) }
                 )
             },
             restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28)

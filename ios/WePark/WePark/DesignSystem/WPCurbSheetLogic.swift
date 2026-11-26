@@ -22,6 +22,7 @@
 
 import CoreLocation
 import Foundation
+import MapKit
 
 // MARK: - Variant
 
@@ -77,6 +78,13 @@ struct WPCurbSheetModel: Equatable {
     var signCount: Int
     /// The restriction that ends the free stretch, when the engine found one (for the park flow).
     var nextChange: Date?
+
+    /// True when the free stretch has no end inside the 7 day look-ahead ("7+ days").
+    nonisolated var isOpenEnded: Bool { variant == .park && big == WPCurbCopy.openEndedBig }
+
+    /// "Free until Mon 9:00 AM" / "Free for 7+ days". One wording for every surface (drag bubble,
+    /// car callout): "until 7+ days" is not a time.
+    nonisolated var freeLine: String { isOpenEnded ? "Free for \(big)" : "Free until \(big)" }
 
     nonisolated var ctaTitle: String { variant.offersPrimaryPark ? "Park here" : "Park here anyway" }
     nonisolated var offersPrimaryPark: Bool { variant.offersPrimaryPark }
@@ -204,15 +212,36 @@ enum WPCurbSheetBuilder {
             )
 
         case .freeButRestrictionSoon, .freeComfortably:
-            let restrictionAt = next.hours < lookAheadHours
+            let otherAt = next.hours < lookAheadHours
                 ? now.addingTimeInterval(next.hours * 3600) : nil
-            let name = WPCurbCopy.restrictionName(next.category)
-            // Free now, but a restriction lands inside the selected window: legal now, not green.
-            let insideWindow: Bool = {
-                guard let windowEnd else { return false }
-                return !WPCurbVerdict.isParkable(segment: segment, engine: engine, from: now, until: windowEnd)
+            // The engine's `nextRestriction` skips meters ("not a move-your-car restriction"), so a
+            // meter that starts later is found separately. A curb with a meter is never green
+            // unless the whole selected window is meter-free (the map's strict `isParkable`).
+            let hasMeter = WPCurbVerdict.hasMeterRule(segment)
+            let meterAt = hasMeter ? WPCurbCopy.nextMeterStart(segment: segment, engine: engine, from: now) : nil
+            let restrictionAt = [otherAt, meterAt].compactMap { $0 }.min()
+            let meterIsFirst: Bool = {
+                guard let meterAt else { return false }
+                guard let otherAt else { return true }
+                return meterAt < otherAt
             }()
-            if state == .freeButRestrictionSoon || insideWindow, let restrictionAt {
+            let name = meterIsFirst ? "the meter" : WPCurbCopy.restrictionName(next.category)
+            // Legal now but not green: a restriction is soon, a restriction lands inside the
+            // selected window, or (no window) the curb has a meter at all.
+            let legalButNotGreen: Bool = {
+                if state == .freeButRestrictionSoon { return true }
+                if let windowEnd {
+                    return !WPCurbVerdict.isParkable(segment: segment, engine: engine, from: now, until: windowEnd)
+                }
+                return hasMeter
+            }()
+            if legalButNotGreen {
+                guard let restrictionAt else {
+                    return model(
+                        .soon, over: "Free now", big: "Meter on this curb",
+                        sub: "Check the signs for the meter hours before you park."
+                    )
+                }
                 var sub = "\(WPCurbCopy.duration(until: restrictionAt, from: now)) left, then \(name)."
                 if let windowEnd, restrictionAt < windowEnd {
                     sub += " That is before your window ends at \(WPGoalCopy.clock(windowEnd))."
@@ -226,11 +255,12 @@ enum WPCurbSheetBuilder {
                 return model(
                     .park, over: "Free to stay until", big: WPCurbCopy.when(restrictionAt, now: now),
                     sub: "\(WPCurbCopy.duration(until: restrictionAt, from: now)) left, then \(name).",
-                    fraction: min(1, max(0, next.hours / lookAheadHours)), nextChange: restrictionAt
+                    fraction: min(1, max(0, restrictionAt.timeIntervalSince(now) / 3600 / lookAheadHours)),
+                    nextChange: restrictionAt
                 )
             }
             return model(
-                .park, over: "Free to stay for", big: "7+ days",
+                .park, over: "Free to stay for", big: WPCurbCopy.openEndedBig,
                 sub: "No restriction on the signs for the next 7 days.", fraction: 1
             )
         }
@@ -240,6 +270,29 @@ enum WPCurbSheetBuilder {
 // MARK: - Copy
 
 enum WPCurbCopy {
+
+    /// The "big" text of a park verdict with no restriction inside the look-ahead.
+    nonisolated static let openEndedBig = "7+ days"
+
+    /// First moment after `from` when a metered rule is in force (engine `currentState` is
+    /// `.meteredActive`), over the 7 day look-ahead: 15 minute steps, refined to the minute.
+    nonisolated static func nextMeterStart(segment: Segment, engine: ParkingRulesEngine, from: Date) -> Date? {
+        let step: TimeInterval = 900
+        let limit = from.addingTimeInterval(WPCurbSheetBuilder.lookAheadHours * 3600)
+        var t = from
+        while t < limit {
+            t = t.addingTimeInterval(step)
+            if engine.currentState(for: segment, at: t) == .meteredActive {
+                var lo = t.addingTimeInterval(-step)
+                while lo < t {
+                    lo = lo.addingTimeInterval(60)
+                    if engine.currentState(for: segment, at: lo) == .meteredActive { return lo }
+                }
+                return t
+            }
+        }
+        return nil
+    }
 
     /// "E 1st St · North side".
     nonisolated static func title(for segment: Segment) -> String {
@@ -441,6 +494,44 @@ struct WPNeighborReports: Equatable {
 
 enum WPNeighborVerdict {
 
+    /// Reduces the active block-scoped neighbor report (filming / construction) on a curb to what
+    /// changes a verdict. Plan a Trip never uses live reports.
+    nonisolated static func reports(for restriction: CommunityPin?, now: Date, trip: TripPlan?) -> WPNeighborReports {
+        guard trip == nil, let restriction else { return WPNeighborReports() }
+        return WPNeighborReports(
+            restrictionLabel: label(for: restriction.pinType),
+            restrictionIsActive: !restriction.isUpcoming(now: now)
+        )
+    }
+
+    /// THE verdict for one curb: sign verdict (`WPCurbSheetBuilder`) then neighbor reports
+    /// (`apply`). The curb sheet, the drag bubble and the parked-car callout all call this, so a
+    /// curb with an active filming report reads "don't" on every surface.
+    nonisolated static func resolve(
+        segment: Segment,
+        engine: ParkingRulesEngine,
+        now: Date,
+        windowEnd: Date?,
+        trip: TripPlan?,
+        reports: WPNeighborReports
+    ) -> WPCurbSheetModel {
+        apply(reports, to: WPCurbSheetBuilder.make(
+            segment: segment, engine: engine, now: now, windowEnd: windowEnd, trip: trip
+        ))
+    }
+
+    /// The parked-car callout line for a resolved verdict (nil for plan variants).
+    nonisolated static func calloutText(for model: WPCurbSheetModel) -> String? {
+        switch model.variant {
+        case .park, .soon: return model.freeLine
+        case .meter: return "Metered until \(model.big)"
+        case .dont: return model.big
+        case .nodata: return NoSignData.headline
+        case .unclear: return UnclearSign.upcomingLabel
+        case .planpark, .plandont: return nil
+        }
+    }
+
     /// "Blocked for filming" / "Construction on this curb".
     nonisolated static func label(for type: PinType) -> String {
         type == .construction ? "Construction on this curb" : "Blocked for filming"
@@ -463,7 +554,7 @@ enum WPNeighborVerdict {
         switch model.variant {
         case .meter:
             signLine = "By the signs this curb is metered until \(model.big)."
-        case .park where model.big == "7+ days":
+        case .park where model.isOpenEnded:
             signLine = "By the signs this curb is free for the next 7 days."
         default:
             signLine = "By the signs this curb is free until \(model.big)."
@@ -507,25 +598,60 @@ struct WPFreeCurbCount: Equatable {
     let nearestMeters: Double?
 }
 
+/// Which tiles exist and which are loaded, so a count over an area can tell "no free curbs here"
+/// from "the tiles for this area have not loaded yet".
+struct WPTileCoverage: Equatable {
+    let gridRows: Int
+    let gridCols: Int
+    let latMin: Double
+    let lngMin: Double
+    let rowSize: Double
+    let colSize: Double
+    /// "row_col" keys of every tile that exists (the tile set is sparse).
+    let existingTiles: Set<String>
+    /// "row_col" keys currently loaded into the segment list.
+    let loadedTiles: Set<String>
+
+    /// True only when at least one tile covers the circle of `radiusMeters` around `center` and
+    /// EVERY tile that exists under that circle's bounding box is loaded. An area with no tiles at
+    /// all is not "covered": there is nothing to count.
+    nonisolated func covers(_ center: CLLocationCoordinate2D, radiusMeters: Double) -> Bool {
+        let dLat = radiusMeters / 111_320
+        let dLng = radiusMeters / (111_320 * max(0.2, cos(center.latitude * .pi / 180)))
+        let region = MKCoordinateRegion(
+            center: center, span: MKCoordinateSpan(latitudeDelta: dLat * 2, longitudeDelta: dLng * 2)
+        )
+        let needed = TileLoader.tileKeys(
+            forRegion: region, gridRows: gridRows, gridCols: gridCols, latMin: latMin, lngMin: lngMin,
+            rowSize: rowSize, colSize: colSize, tileSet: existingTiles, buffer: 0
+        )
+        guard !needed.isEmpty else { return false }
+        return needed.allSatisfy { loadedTiles.contains($0) }
+    }
+}
+
 enum WPFreeCurbCounter {
 
     /// "Within 2 blocks": two short (north-south) Manhattan blocks, about 80 m each.
     nonisolated static let radiusMeters: Double = 160
 
-    /// A loaded segment must exist within this distance of the destination, or the tiles for that
-    /// place are not loaded and the count is hidden (never estimated).
+    /// The "nearest free curb" line looks this far. It is only shown when the tiles for the whole
+    /// distance are loaded (a nearer curb in an unloaded tile would make it wrong).
     nonisolated static let coverageProbeMeters: Double = 400
 
     /// Counts curbs within `radiusMeters` of `destination` that are green (`isParkable`) for
-    /// `[from, until]`. Returns nil when the loaded segments do not cover the destination.
+    /// `[from, until]`. Returns nil (count hidden, never estimated) unless every tile covering the
+    /// counting radius is loaded: a partly loaded area could otherwise read "No free curbs".
     nonisolated static func count(
         near destination: CLLocationCoordinate2D,
         segments: [Segment],
+        coverage: WPTileCoverage?,
         engine: ParkingRulesEngine,
         from: Date,
         until: Date
     ) -> WPFreeCurbCount? {
-        var anyLoadedNearby = false
+        guard let coverage, coverage.covers(destination, radiusMeters: radiusMeters) else { return nil }
+        let nearestCovered = coverage.covers(destination, radiusMeters: coverageProbeMeters)
         var count = 0
         var nearest: Double?
         for segment in segments {
@@ -536,13 +662,13 @@ enum WPFreeCurbCounter {
             }
             let d = distance(from: destination, to: segment)
             guard d <= coverageProbeMeters else { continue }
-            anyLoadedNearby = true
             guard WPCurbVerdict.isParkable(segment: segment, engine: engine, from: from, until: until) else { continue }
             if d <= radiusMeters { count += 1 }
             if nearest == nil || d < nearest! { nearest = d }
         }
-        guard anyLoadedNearby else { return nil }
-        return WPFreeCurbCount(count: count, nearestMeters: count == 0 ? nearest : nil)
+        return WPFreeCurbCount(
+            count: count, nearestMeters: (count == 0 && nearestCovered) ? nearest : nil
+        )
     }
 
     /// Shortest distance from `point` to any vertex or edge midpoint of the segment's line (the
@@ -603,7 +729,7 @@ struct WPDragBubble: Equatable {
         switch model.variant {
         case .park, .planpark:
             return WPDragBubble(
-                tone: .park, headline: "Park", detail: "Free until \(model.big)", hint: "Let go to place your car"
+                tone: .park, headline: "Park", detail: model.freeLine, hint: "Let go to place your car"
             )
         case .soon:
             return WPDragBubble(
