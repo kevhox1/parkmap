@@ -2,39 +2,35 @@
 
 This document is the operating manual for any future Claude session working on WePark. **Read this first, then any spec doc in `docs/` for the feature in flight, then continue.** Don't reload chat history — the docs + git log are the source of truth.
 
-## ▶ RESUME HERE: reboot checkpoint, 2026-11-25 night
+## ▶ RESUME HERE: Stoop status, 2026-11-26 early morning
 
-Kevin rebooted for the macOS Tahoe 26.7.3 update. He did NOT install macOS 27, which is held until there's disk space and Xcode 27. The redesign workstream is called **"Stoop"**: design direction "Stoop, straight", font Fredoka, flag `designSystemV2Enabled`. See `docs/design/wepark-design-system-v0.1/DECISIONS.md`.
+The redesign workstream is called **"Stoop"**: flag `designSystemV2Enabled`, font Fredoka. Decisions are in `docs/design/wepark-design-system-v0.1/DECISIONS.md`.
 
-**TestFlight**
-- Build 33 is the flag-on archive. Xcode Organizer renumbered it from 32. It's live to Internal and submitted to the external "WePark - Test Groups".
-- Build 32 is a flags-off GUI archive. It's in no group, so never add it.
-- The CLI export fails with "Failed to Use Accounts". Upload via Organizer instead (see memory `testflight-upload-path`).
+**Merged:** #194 (2a map), #199 (2b curb/search/park), #200 (2b fixes), #201 (Phase 3 drive), #202 (polish 1).
 
-**Merged:** #194 (Stoop 2a, map) and #199 (Stoop 2b, curb sheet, search, parking).
+**Build 34**
+- This is the FIRST Stoop-ON build: the 7 tester flags plus `designSystemV2Enabled`, Spot Pass shortcuts and intent discovery.
+- Archive: `~/Library/Developer/Xcode/Archives/2026-11-26/WePark-34-stoop.xcarchive`, created 1:51 AM, made from 582cb13d.
+- The CLI upload still fails with "Failed to Use Accounts". Kevin uploads it via Organizer.
+- It goes to **internal testers only**. Do not add it to the external group. External testers stay on 33 until Stoop is complete.
 
-**Open, in order:**
-1. **PR #200** `fix/ds-phase2b-followups` (5315063e): the 2b QA follow-ups.
-   - Fixes: count needs full tile coverage, "Free for 7+ days", one neighbor verdict on all three surfaces, metered-curb sheet/map mismatch.
-   - The builder reports 3024 tests, 0 failures, and all 4 schemes build.
-   - **Next:** dispatch qa-verifier, then merge.
-2. **Stoop Phase 3 drive (B5)**, branch `feat/ds-phase3-drive` (c1bfc0f1, a WIP commit, no PR yet). The builder's remaining items:
-   1. Full suite with `-parallel-testing-enabled NO -jobs 4`.
-   2. Build WeParkClip, ClipLiveActivities and WeParkLiveActivities.
-   3. Check that `strings` on the Release binary has no `wp3Showcase`.
-   4. Write the flag-off proof.
-   5. View and fix the AX5 shots in `docs/qa/assets/ds-phase3/`.
-   6. Open the PR "feat(ios): Phase 3 drive mode (flag on only)".
-   - **Orchestrator decision to apply:** the drive card must use exactly the map's green gate (`WPCurbVerdict.isParkable` for the window). The builder made metered sides never `park` even when the window misses meter hours. Meters are only not-free when they run in the window (Kevin's rule), and the drive card must never disagree with the map (an old pain point). Remove that extra meter clause.
-   - The worktree is `.claude/worktrees/agent-ada77a97255495c53`. derivedData is kept at `~/Library/Caches/wepark-agent-dd`.
-3. **Then:** Stoop Phase 4 My Car (B7), 5 Spot Pass/Clip/LA/notifications/web, 6 onboarding/trip/settings/101/errors, 7 community backend (B8, Kevin runs the SQL).
-4. **Build 34 proposal (Kevin hasn't answered):** after Phase 3 merges, ship internal-only with the Stoop flag ON so Kevin can drive-test. External stays on 33 until Stoop is complete.
+**In flight:** one ios-engineer is doing, in order:
+1. `fix/stoop-drive-ax5`: QA #201 AX5 overflow plus the mislabeled screenshot.
+2. `fix/stoop-meter-dst`: QA #202's significant DST bug in `nextMeterStart`.
+3. `feat/stoop-phase4-mycar`: B7.
 
-**Mac rules:**
-- Two lanes are fine. Watch `sysctl -n vm.loadavg` and stagger heavy steps.
-- No parallel-clone testing. Keep one sim per agent and leave it booted between runs.
-- Check `ps -r` for non-WePark hogs (Spotify got stuck at >100% CPU).
-- After the reboot, verify the betting LaunchAgents are back: `launchctl list | grep -E "com\.(cbb|nba|wcbb)"` should show about 13.
+Each needs its own QA, then merge.
+
+**Then:** Phase 5 (Spot Pass, Clip, Live Activity, notifications, web), 6 (onboarding, trip, settings, Parking 101, errors), 7 (community backend: Kevin runs the SQL).
+
+**Known follow-ups**
+- Light-mode frames may still show building shading. Confirm live on build 34.
+- QA never did a flag-on live drive. Kevin's first drive on build 34 is the real test.
+
+**Mac rules**
+- Two lanes are OK. Watch `vm.loadavg` and use `-parallel-testing-enabled NO`.
+- Look sims up by name, not from shared udid files.
+- The Mac live tracker (Playbook) is disabled at Kevin's request.
 
 ## Session opening protocol
 
