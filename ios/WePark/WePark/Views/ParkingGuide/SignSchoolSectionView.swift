@@ -14,6 +14,8 @@ import SwiftUI
 
 struct SignSchoolSectionView: View {
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             aspSubsection
@@ -30,18 +32,14 @@ struct SignSchoolSectionView: View {
     private var aspSubsection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label {
-                Text("ASP / Street cleaning signs")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+                GuideText("ASP / Street cleaning signs", .heading)
             } icon: {
                 // Decorative mnemonic only — outside the plate face (spec §5).
                 Image(systemName: "trash")
                     .foregroundStyle(.secondary)
             }
 
-            Text("A real plate reads something like the one below. There's no broom icon on the actual sign — just the restriction, the days, and the window. Outside that window, or on a suspended day, you're free to park there.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText("A real plate reads something like the one below. There's no broom icon on the actual sign — just the restriction, the days, and the window. Outside that window, or on a suspended day, you're free to park there.", .body)
 
             SignPlateView(
                 lines: [
@@ -53,19 +51,16 @@ struct SignSchoolSectionView: View {
                 accessibilityDescription: "Sign reads: No Parking, 8 to 9:30 AM, Tuesday and Friday, street cleaning"
             )
         }
+        .wpGuideCard()
     }
 
     // MARK: - 3-tier restriction ladder
 
     private var restrictionLadderSubsection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("The 3-tier restriction ladder")
-                .font(.subheadline)
-                .fontWeight(.semibold)
+            GuideText("The 3-tier restriction ladder", .heading)
 
-            Text("The single most-misunderstood distinction for new drivers — and the actual legal test between the first two tiers is what you're allowed to load: No Parking permits passengers or merchandise; No Standing permits passengers only, never cargo. That's the real difference, not whether the driver stays in the car.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText("The single most-misunderstood distinction for new drivers — and the actual legal test between the first two tiers is what you're allowed to load: No Parking permits passengers or merchandise; No Standing permits passengers only, never cargo. That's the real difference, not whether the driver stays in the car.", .body)
 
             VStack(spacing: 10) {
                 ladderRow(
@@ -97,26 +92,29 @@ struct SignSchoolSectionView: View {
                 )
             }
         }
+        .wpGuideCard()
     }
 
     private func ladderRow(plate: SignPlateView, allowed: String, notAllowed: String) -> some View {
-        HStack(alignment: .top, spacing: 12) {
+        // Stoop at accessibility sizes: the plate sits above its two lines instead of squeezing them
+        // into a 120 pt-narrower column (flag off keeps the side-by-side layout at every size).
+        let stacked = AppConstants.designSystemV2Enabled && typeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+        return layout {
             plate
-                .frame(width: 120)
+                .frame(width: stacked ? nil : 120)
             VStack(alignment: .leading, spacing: 4) {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "checkmark.circle")
                         .foregroundStyle(ParkingColors.freeComfortably)
-                    Text(allowed)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    GuideText(allowed, .note)
                 }
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "xmark.circle")
                         .foregroundStyle(ParkingColors.restricted)
-                    Text(notAllowed)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                    GuideText(notAllowed, .note)
                 }
             }
         }
@@ -126,13 +124,9 @@ struct SignSchoolSectionView: View {
 
     private var meteredSubsection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Metered / Muni-Meter signs")
-                .font(.subheadline)
-                .fontWeight(.semibold)
+            GuideText("Metered / Muni-Meter signs", .heading)
 
-            Text("Pay during the posted hours. Outside them, and on major legal holidays, parking there is free.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText("Pay during the posted hours. Outside them, and on major legal holidays, parking there is free.", .body)
 
             SignPlateView(
                 lines: [
@@ -143,6 +137,7 @@ struct SignSchoolSectionView: View {
                 accessibilityDescription: "Sign reads: Pay to Park, 8 AM to 7 PM"
             )
         }
+        .wpGuideCard()
     }
 
     // MARK: - Hydrant 15-foot rule (no sign posted)
@@ -150,31 +145,24 @@ struct SignSchoolSectionView: View {
     private var hydrantSubsection: some View {
         VStack(alignment: .leading, spacing: 8) {
             Label {
-                Text("Hydrant 15-foot rule")
-                    .font(.subheadline)
-                    .fontWeight(.semibold)
+                GuideText("Hydrant 15-foot rule", .heading)
             } icon: {
                 Image(systemName: "drop")
                     .foregroundStyle(.secondary)
             }
 
-            Text("No sign is posted for this one — it's a universal NYC rule. Stay at least 15 feet from a hydrant on either side, roughly a car length. Standing there \"just for a second\" still counts as a violation.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText("No sign is posted for this one — it's a universal NYC rule. Stay at least 15 feet from a hydrant on either side, roughly a car length. Standing there \"just for a second\" still counts as a violation.", .body)
         }
+        .wpGuideCard()
     }
 
     // MARK: - Arrows and side-of-street semantics
 
     private var arrowsSubsection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Arrows and side-of-street semantics")
-                .font(.subheadline)
-                .fontWeight(.semibold)
+            GuideText("Arrows and side-of-street semantics", .heading)
 
-            Text("A sign with an arrow applies in the direction the arrow points, up to the next sign or the corner — not the whole block, and only on that side of the street.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText("A sign with an arrow applies in the direction the arrow points, up to the next sign or the corner — not the whole block, and only on that side of the street.", .body)
 
             SignPlateView(
                 lines: [
@@ -186,19 +174,16 @@ struct SignSchoolSectionView: View {
                 accessibilityDescription: "Sign reads: No Parking, 8 to 9:30 AM, Tuesday and Friday, with a left-pointing arrow"
             )
         }
+        .wpGuideCard()
     }
 
     // MARK: - Combined sign stacks
 
     private var combinedStacksSubsection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Combined sign stacks")
-                .font(.subheadline)
-                .fontWeight(.semibold)
+            GuideText("Combined sign stacks", .heading)
 
-            Text("Multiple plates on one pole means all of the rules apply at the same time. Read top to bottom, and the most restrictive rule in effect at a given moment wins.")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
+            GuideText("Multiple plates on one pole means all of the rules apply at the same time. Read top to bottom, and the most restrictive rule in effect at a given moment wins.", .body)
 
             VStack(spacing: 4) {
                 SignPlateView(
@@ -221,6 +206,7 @@ struct SignSchoolSectionView: View {
             }
             .frame(maxWidth: .infinity)
         }
+        .wpGuideCard()
     }
 }
 

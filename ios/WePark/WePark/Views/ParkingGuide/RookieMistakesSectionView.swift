@@ -28,9 +28,7 @@ struct RookieMistakesSectionView: View {
                         .imageScale(.small)
                         .foregroundStyle(ParkingColors.restrictionComingSoon)
                         .padding(.top, 2)
-                    Text(mistakes[i])
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                    GuideText(mistakes[i], .body)
                 }
             }
         }

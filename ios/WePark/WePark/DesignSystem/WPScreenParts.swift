@@ -32,6 +32,8 @@ struct WPScreenScaffold<Content: View>: View {
     let title: String
     var sub: String? = nil
     var primary: (title: String, kind: WPPrimaryKind, action: () -> Void)? = nil
+    /// Greyed (not hidden) while the screen's input is not valid; the Close pill and the content stay live.
+    var primaryDisabled: Bool = false
     var secondary: (title: String, action: () -> Void)? = nil
     @ViewBuilder var content: () -> Content
 
@@ -107,6 +109,7 @@ struct WPScreenScaffold<Content: View>: View {
                 if let primary {
                     Button(primary.title, action: primary.action)
                         .buttonStyle(primaryStyle(primary.kind))
+                        .disabled(primaryDisabled)
                 }
                 if let secondary {
                     Button(secondary.title, action: secondary.action)
