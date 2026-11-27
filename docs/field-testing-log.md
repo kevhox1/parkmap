@@ -1263,7 +1263,7 @@ Tapping a curb line and then Park here "locks" the car to a sign or snap point, 
 ### DT35-4 🟡 Park flow still uses the old screens
 Park here, and the screens after it, are pre-Stoop. **Redesign the park flow in Stoop.** Keep the checklist and checkboxes after Park here, because they're very useful for new users.
 
-**DT35-2 follow-up (Kevin, same day):** the side choice should read **"Left side / Right side"**, with east/west (or north/south) smaller next to it, because people often don't know which way they're facing. Spec updated (1C ask state).
+**DT35-2 follow-up (Kevin, same day):** the side choice is novice-first: "Which side did you park on?" with a mini map of both curbs, buttons "Curb on my right" / "Curb on my left", and the compass side + building number in small text. With no driving direction known, buttons say "This side" and the map does the work. Spec updated (1C ask state).
 
 ### DT35-5 🟡 Drive mode: show direction of travel
 "Stanton St" should say "Stanton St · Eastbound" (or E/W/N/S).
