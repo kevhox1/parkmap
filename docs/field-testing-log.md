@@ -1244,3 +1244,30 @@ from the same defect in the new token upsert), confirmed and fixed same-commit `
 (`on_conflict=pin_id,user_id` + `resolution=merge-duplicates`, wire-shape test added). Recorded per
 this log's convention so "has voting ever been broken in prod" has a citable answer: yes — vote
 *changing* (first votes always worked), from Tier 3 sub-PR #1 until build 20 S12.
+
+---
+
+## 2026-11-27 — Drive test, build 35 (first Stoop build), Lower East Side
+
+Kevin, Black Friday. Found a spot fast on Stanton St, so a short run. **Overall: Park & Forget "reads brilliantly, looks really good."**
+
+### DT35-1 🟡 "For days" has no way to pick how many days
+The For-days goal auto-picks a 7 / 3 / 1 day window (the `resolveParkAndForgetViewport` ladder, `WPMapLogic.spanDays`). Kevin wants to **add or subtract days** himself.
+
+### DT35-2 🔴 Park here snapped to the wrong side of the street (Stanton St)
+Parked on the **south** side of Stanton; Park here put the car on the **north** side, so My Car said "In front of 11 Stanton St" (north side). He was in front of about 15. The address resolver follows the snapped side (`ParkingAddressResolver` probes toward the segment's compass side and checks parity), so **the address is a symptom; the root cause is the side picked at park time.** GPS can't tell curbs apart on a narrow street. Needs: heading-at-park plus pulled-to-the-right logic, and an obvious "Wrong side? Switch" control.
+
+### DT35-3 🔴 Can't drag the car freely along the street
+Tapping a curb line and then Park here "locks" the car to a sign or snap point, so he couldn't drag it to where he actually was. He wants to drag the car icon anywhere along the block (and across to the other curb), and to know when placement is "queued" versus final.
+
+### DT35-4 🟡 Park flow still uses the old screens
+Park here, and the screens after it, are pre-Stoop. **Redesign the park flow in Stoop.** Keep the checklist and checkboxes after Park here, because they're very useful for new users.
+
+### DT35-5 🟡 Drive mode: show direction of travel
+"Stanton St" should say "Stanton St · Eastbound" (or E/W/N/S).
+
+### DT35-6 🟡 Apple Maps legal label overlaps the bottom buttons
+The "Legal" / Maps attribution sits under the Report / Park here / Voice off row in drive mode. Move it up or inset the map.
+
+### DT35-7 🔴 W Houston St: curb lines drawn in the middle of the road
+Colors are right, but the dotted lines sit mid-road, and on some blocks there are more lines than curbs. Houston is a wide, divided two-way street. Lines should sit at the curbs: when you drive one direction, the parking lane is on your right. Previous work: `docs/ft21-*`. Wants a QA run on Houston specifically and a manual offset override if the general logic can't get it right.
