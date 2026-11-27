@@ -1252,7 +1252,7 @@ this log's convention so "has voting ever been broken in prod" has a citable ans
 Kevin, Black Friday. Found a spot fast on Stanton St, so a short run. **Overall: Park & Forget "reads brilliantly, looks really good."**
 
 ### DT35-1 🟡 "For days" has no way to pick how many days
-The For-days goal auto-picks a 7 / 3 / 1 day window (the `resolveParkAndForgetViewport` ladder, `WPMapLogic.spanDays`). Kevin wants to **add or subtract days** himself.
+The For-days goal auto-picks a 7 / 3 / 1 day window (the `resolveParkAndForgetViewport` ladder, `WPMapLogic.spanDays`). Kevin wants to **add or subtract days** himself. **Follow-up (same day):** he wants an exact end **day and time**, e.g. "Tuesday at 9 AM" or "Monday at 5 PM", not just a day count.
 
 ### DT35-2 🔴 Park here snapped to the wrong side of the street (Stanton St)
 Parked on the **south** side of Stanton; Park here put the car on the **north** side, so My Car said "In front of 11 Stanton St" (north side). He was in front of about 15. The address resolver follows the snapped side (`ParkingAddressResolver` probes toward the segment's compass side and checks parity), so **the address is a symptom; the root cause is the side picked at park time.** GPS can't tell curbs apart on a narrow street. Needs: heading-at-park plus pulled-to-the-right logic, and an obvious "Wrong side? Switch" control.
