@@ -1554,6 +1554,13 @@ const DIVIDED_MEDIAN_ALLOWANCE_M  =  7.0;
 // but NOT on this list — tracked as a separate follow-up, not fixed here; see
 // the investigation doc §2 for the full allow-list audit this resurrection
 // deliberately scoped down from.)
+//
+// DT35-7: membership alone no longer means "add the +7 m median allowance". The allowance
+// only applies to a listed street whose OSM chains do NOT sit on its carriageways (today:
+// Allen St). A listed street whose chains measure as carriageway lines
+// (isCarriagewayChained(): E/W Houston, Bowery, Delancey) uses the per-face outer-curb rule
+// instead -- see pickOuterCarriageOffset(). Park Ave and the other unlisted streets are
+// the follow-up PR.
 const DIVIDED_STREET_ALLOW_LIST = new Set([
   'E HOUSTON ST',   // East Houston Street (divided east of 6th Ave; also OK for single section)
   'W HOUSTON ST',   // West Houston Street (same physical road)
@@ -1561,6 +1568,65 @@ const DIVIDED_STREET_ALLOW_LIST = new Set([
   'ALLEN ST',       // Allen Street: wide median
   'DELANCEY ST',    // Delancey: divided around bridge approach
 ]);
+
+// DT35-7: an allow-listed street is "carriageway-chained" when at least
+// CARRIAGEWAY_CHAIN_MIN_FRAC of its OSM chain vertices lie within
+// CARRIAGEWAY_CHAIN_TOL_M of a CSCL row polyline of the same street, i.e. the OSM
+// chains are drawn ON the carriageways (one chain per carriageway) rather than at a
+// median centerline. Measured from the data instead of assumed, so a street only
+// loses the +7 m median allowance when its geometry proves it. Needs OSM_STREETS and
+// OSM_WIDTHS loaded (main() loads both before initWidths(); tests must call
+// _setOsmStreets() before initWidths()). Measured on the committed data: E Houston
+// 0.80, W Houston 0.71, Bowery 0.93, Delancey 0.69, Allen 0.47 (Allen stays legacy).
+const CARRIAGEWAY_CHAIN_TOL_M = 3;
+const CARRIAGEWAY_CHAIN_MIN_FRAC = 0.65;
+let _chainedCache = { streets: null, widths: null, result: {}, fracs: {} };
+
+function _xyM(lat, lng, cosLat) { return [lng * cosLat * 111320, lat * 111320]; }
+
+function measureChainFraction(canonKey) {
+  const rows = ((OSM_WIDTHS && OSM_WIDTHS[canonKey]) || []).filter(r => r.polyline && r.polyline.length > 1);
+  if (!rows.length || !OSM_STREETS) return null;
+  let tot = 0, near = 0;
+  for (const name of Object.keys(OSM_STREETS)) {
+    if (canonicalNameForOneway(name) !== canonKey) continue;
+    for (const chain of OSM_STREETS[name]) {
+      for (const p of chain) {
+        tot++;
+        const cosLat = Math.cos(p[0] * DEG_TO_RAD);
+        const q = _xyM(p[0], p[1], cosLat);
+        let best = Infinity;
+        for (const r of rows) {
+          for (let i = 0; i < r.polyline.length - 1 && best > CARRIAGEWAY_CHAIN_TOL_M; i++) {
+            const a = _xyM(r.polyline[i][0], r.polyline[i][1], cosLat);
+            const b = _xyM(r.polyline[i + 1][0], r.polyline[i + 1][1], cosLat);
+            const dx = b[0] - a[0], dy = b[1] - a[1], l2 = dx * dx + dy * dy;
+            let t = l2 > 0 ? ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / l2 : 0;
+            t = Math.max(0, Math.min(1, t));
+            const d = Math.hypot(q[0] - a[0] - t * dx, q[1] - a[1] - t * dy);
+            if (d < best) best = d;
+          }
+          if (best <= CARRIAGEWAY_CHAIN_TOL_M) break;
+        }
+        if (best <= CARRIAGEWAY_CHAIN_TOL_M) near++;
+      }
+    }
+  }
+  return tot > 0 ? near / tot : null;
+}
+
+function isCarriagewayChained(canonKey) {
+  if (!DIVIDED_STREET_ALLOW_LIST.has(canonKey)) return false;
+  if (_chainedCache.streets !== OSM_STREETS || _chainedCache.widths !== OSM_WIDTHS) {
+    _chainedCache = { streets: OSM_STREETS, widths: OSM_WIDTHS, result: {}, fracs: {} };
+  }
+  if (_chainedCache.result[canonKey] === undefined) {
+    const f = measureChainFraction(canonKey);
+    _chainedCache.fracs[canonKey] = f;
+    _chainedCache.result[canonKey] = f !== null && f >= CARRIAGEWAY_CHAIN_MIN_FRAC;
+  }
+  return _chainedCache.result[canonKey];
+}
 
 // Pre-computed per-street offset map.  Populated by initWidths().
 // Key: canonical street name (same as OSM_WIDTHS key, e.g. "E HOUSTON ST").
@@ -2591,6 +2657,9 @@ async function main() {
   const rowsEntering = new Set();
   const rowsSurviving = new Set();
 
+  const curbOverrides = loadCurbOverrides(CURB_OVERRIDES_PATH);
+  const producedFaces = new Set();
+  const overridesApplied = [];
   for (const fullKey of blockKeys) {
     processed++;
     if (processed % 500 === 0) {
@@ -2598,6 +2667,10 @@ async function main() {
     }
 
     const block = blocks[fullKey];
+    const faceId = faceIdForBlock(block);
+    producedFaces.add(faceId);
+    const curbOverride = curbOverrides.get(faceId);
+    if (curbOverride && curbOverride.suppress) { overridesApplied.push({ face: faceId, what: 'suppress' }); continue; }
     const blockGeo = getBlockPolyline(block);
 
     if (blockGeo) {
@@ -2627,10 +2700,30 @@ async function main() {
       // what this block would have produced before this PR.
       const carriagewayCanonKey = canonicalNameForOneway(block.street);
       const carriagewayMatch = pickCarriagewayForBlock(carriagewayCanonKey, block, blockGeo);
-      const effectiveBlockGeo = carriagewayMatch ? carriagewayMatch.blockGeo : blockGeo;
-      const blockCurbOffset = carriagewayMatch
-        ? carriagewayMatch.offsetM
-        : getCurbOffsetFromWidth(block.street, blockMidLat, blockMidLng);
+      // DT35-7 precedence: override > Option A > general rule (carriageway-chained
+      // streets) > legacy per-street offset. An override replaces Option A entirely
+      // for its face (geometry = the block's own OSM line).
+      const generalPick = (curbOverride || !carriagewayMatch)
+        ? pickOuterCarriageOffset(carriagewayCanonKey, block, blockGeo) : null;
+      let overrideOffset = null;
+      if (curbOverride) {
+        if (curbOverride.base === 'outer-carriageway') {
+          if (!generalPick) throw new Error(`curb-overrides.json: ${faceId}: base "outer-carriageway" but the general rule cannot resolve this face`);
+          overrideOffset = generalPick.sepM + curbOverride.offsetM;
+        } else {
+          overrideOffset = curbOverride.offsetM;
+        }
+        overridesApplied.push({ face: faceId, what: `offset ${overrideOffset.toFixed(2)}m` });
+      }
+      const useOptionA = !curbOverride && carriagewayMatch;
+      const effectiveBlockGeo = useOptionA ? carriagewayMatch.blockGeo : blockGeo;
+      const blockCurbOffset = curbOverride
+        ? overrideOffset
+        : carriagewayMatch
+          ? carriagewayMatch.offsetM
+          : generalPick
+            ? generalPick.offsetM
+            : getCurbOffsetFromWidth(block.street, blockMidLat, blockMidLng);
 
       // FT-21 Option A "never a worse guess" per-zone safety net: a block-level
       // carriageway match can still fail for one specific zone (e.g. a short
@@ -2660,7 +2753,7 @@ async function main() {
           }
         } catch (e) { /* fall through to legacy retry below */ }
 
-        if (carriagewayMatch) {
+        if (useOptionA) {
           try {
             const legacyLine = wholeBlock ? blockGeo.line : extractSubSegment(blockGeo, distStart, distEnd);
             if (legacyLine && legacyLine.length >= 2) {
@@ -2815,6 +2908,13 @@ async function main() {
     }
     console.log('');
   }
+
+  // DT35-7: an override that names a face this build never produced is a hard error
+  // (catches renames and typos instead of silently doing nothing).
+  assertOverridesKnown(curbOverrides, producedFaces);
+  console.log(`   Curb overrides: ${overridesApplied.length} applied of ${curbOverrides.size} listed`);
+  for (const o of overridesApplied) console.log(`     ${o.face}: ${o.what}`);
+  console.log(`   DT35-7 general rule: ${JSON.stringify(GENERAL_STATS)}\n`);
 
   // 6. Assign segments to tiles
   console.log('🧩 Assigning segments to tiles...');
@@ -2999,6 +3099,16 @@ function initWidths(data) {
     const medianWidthM  = medianWidthFt * 0.3048;
 
     let rawOffset;
+    if (DIVIDED_STREET_ALLOW_LIST.has(canonKey) && isCarriagewayChained(canonKey)) {
+      // DT35-7: the OSM chains of this street are CARRIAGEWAY centerlines (measured,
+      // see isCarriagewayChained()), not a median centerline, so the +7 m median
+      // allowance and the name-tier floor would both double count. Street-level
+      // fallback for faces the per-face rule (pickOuterCarriageOffset()) cannot
+      // resolve: 0.88 x the median row half-width, no allowance, no floor.
+      rawOffset = (medianWidthM / 2) * CSCL_OFFSET_FRACTION;
+      _perStreetOffset[canonKey] = Math.max(rawOffset, CSCL_OFFSET_MIN_M);
+      continue;
+    }
     if (DIVIDED_STREET_ALLOW_LIST.has(canonKey)) {
       // Divided / dual-carriageway: OSM centerline at median center.
       // medianWidthM is the paved width of ONE carriageway (median edge → outer curb).
@@ -3081,6 +3191,8 @@ const CARRIAGEWAY_AMBIGUITY_RATIO = 1.25;
 // carriageway splits don't reliably land at the same intersections the
 // OSM-derived block geometry uses).
 const CARRIAGEWAY_SNAP_MAX_M = 45;
+// DT35-7: two CSCL rows whose endpoints are within this distance are chunks of one carriageway.
+const CARRIAGEWAY_SAME_CHAIN_M = 5;
 
 // canonKey -> [{ a: {way, range, midLat, midLng}, b: {...}, sepM }]
 let _carriagewayPairs = {};
@@ -3117,8 +3229,25 @@ function buildCarriagewayPairs(widthsData) {
     }
     if (candidates.length < 2) continue;
 
+    // DT35-7: CSCL chops each carriageway into per-block rows, so the "second best"
+    // opposite-side row is normally the NEXT CHUNK OF THE SAME carriageway as the
+    // best one (0.3-0.4 m farther away), which made the ambiguity ratio reject almost
+    // every interior row on Houston. Rows that touch the best row (an endpoint within
+    // CARRIAGEWAY_SAME_CHAIN_M of its polyline) are the same carriageway and are not
+    // alternatives, so they are skipped when computing secondDist.
+    // Scoped to DIVIDED_STREET_ALLOW_LIST streets for DT35-7 so no unlisted street's
+    // tiles move (Park Ave and the other unlisted streets are the follow-up PR).
+    const ignoreSameChain = DIVIDED_STREET_ALLOW_LIST.has(canonKey);
+    const touchesSameCarriageway = (rowA, rowB) => {
+      const ends = [rowB.polyline[0], rowB.polyline[rowB.polyline.length - 1]];
+      for (const e of ends) {
+        const cp = closestPointOnPolyline(rowA.polyline, e[0], e[1]);
+        if (cp && cp.dist <= CARRIAGEWAY_SAME_CHAIN_M) return true;
+      }
+      return false;
+    };
     const best = candidates.map((c, i) => {
-      let bestJ = -1, bestDist = Infinity, secondDist = Infinity;
+      const inRange = [];
       for (let j = 0; j < candidates.length; j++) {
         if (i === j) continue;
         const o = candidates[j];
@@ -3127,12 +3256,19 @@ function buildCarriagewayPairs(widthsData) {
         if (!overlap) continue;
         const dist = polylineCentroidDist(o.way.polyline, c.midLat, c.midLng);
         if (dist < CARRIAGEWAY_MIN_SEP_M || dist > CARRIAGEWAY_MAX_SEP_M) continue;
-        if (dist < bestDist) { secondDist = bestDist; bestDist = dist; bestJ = j; }
-        else if (dist < secondDist) secondDist = dist;
+        inRange.push({ j, dist });
       }
-      if (bestJ === -1) return null;
-      if (secondDist < bestDist * CARRIAGEWAY_AMBIGUITY_RATIO) return null; // ambiguous
-      return { j: bestJ, dist: bestDist };
+      if (!inRange.length) return null;
+      let top = inRange[0];
+      for (const x of inRange) if (x.dist < top.dist) top = x;
+      let secondDist = Infinity;
+      for (const x of inRange) {
+        if (x === top) continue;
+        if (ignoreSameChain && touchesSameCarriageway(candidates[top.j].way, candidates[x.j].way)) continue;
+        if (x.dist < secondDist) secondDist = x.dist;
+      }
+      if (secondDist < top.dist * CARRIAGEWAY_AMBIGUITY_RATIO) return null; // ambiguous
+      return { j: top.j, dist: top.dist };
     });
 
     const pairs = [];
@@ -3361,6 +3497,120 @@ function pickCarriagewayForBlock(canonKey, block, blockGeo) {
   return { blockGeo: carriagewayGeo, offsetM };
 }
 
+// ==== DT35-7: general rule for carriageway-chained streets ====
+//
+// docs/dt35-7-houston-curb-offset-investigation.md. For an allow-listed street whose
+// OSM chains are carriageway centerlines (isCarriagewayChained()), each block face is
+// drawn on the OUTER curb of the carriageway that faces the face's compass side:
+//   * the face's own OSM slice sits on one carriageway (the CSCL row nearest the slice
+//     midpoint, within GENERAL_OWN_ROW_MAX_M);
+//   * if another parallel CSCL row (the sibling carriageway) lies GENERAL_SIBLING_MIN_M
+//     to GENERAL_SIBLING_MAX_M farther toward the face side, the line is shifted to
+//     that carriageway's outer curb: sep + 0.88 x its half-width;
+//   * otherwise the own carriageway is already outermost: 0.88 x its half-width.
+// So a N face never draws on the S carriageway's inner side and each carriageway only
+// ever draws its outer curb; a single one-way carriageway (W Houston west of 6th Ave)
+// simply gets 0.88 x its own half-width on both sides. No median allowance, no
+// name-tier floor. Returns null on any low-confidence signal (caller falls back to the
+// street-level offset).
+const GENERAL_OWN_ROW_MAX_M = 6;
+const GENERAL_ROW_SEARCH_M = 40;
+const GENERAL_SIBLING_MIN_M = 8;
+const GENERAL_SIBLING_MAX_M = 35;
+const GENERAL_PARALLEL_COS = 0.9;     // within ~26 degrees of the block direction
+const GENERAL_MIN_ROW_LEN_FT = 100;   // ignore ramp/connector stubs
+const GENERAL_MAX_OFFSET_M = 40;
+const GENERAL_STATS = { applied: 0, ownSide: 0, siblingShift: 0, noOwnRow: 0, notChained: 0 };
+
+function pickOuterCarriageOffset(canonKey, block, blockGeo) {
+  if (!canonKey || !isCarriagewayChained(canonKey)) { GENERAL_STATS.notChained++; return null; }
+  if (!blockGeo || !blockGeo.line || blockGeo.line.length < 2) return null;
+  const rows = ((OSM_WIDTHS && OSM_WIDTHS[canonKey]) || []).filter(r =>
+    r.polyline && r.polyline.length > 1 && r.stWidthFt > 0 && (r.segLengthFt || 0) >= GENERAL_MIN_ROW_LEN_FT);
+  if (!rows.length) return null;
+
+  const midPt = interpolateOnBlockLine(blockGeo, blockGeo.blockLenFt / 2);
+  if (!midPt) return null;
+  const outward = outwardNormalProj(blockGeo.line, block.side);
+  if (!outward) return null;
+  const tx = -outward.ny, ty = outward.nx; // block tangent in projected space
+
+  const found = [];
+  for (const r of rows) {
+    const cp = closestPointOnPolyline(r.polyline, midPt[0], midPt[1]);
+    if (!cp || cp.dist > GENERAL_ROW_SEARCH_M) continue;
+    const a = r.polyline[cp.segIdx], b = r.polyline[cp.segIdx + 1];
+    const dx = (b[1] - a[1]) * outward.cosLat, dy = b[0] - a[0];
+    const dl = Math.sqrt(dx * dx + dy * dy);
+    if (!(dl > 0) || Math.abs((dx * tx + dy * ty) / dl) < GENERAL_PARALLEL_COS) continue;
+    found.push({
+      row: r, dist: cp.dist, hwM: r.stWidthFt * 0.3048 / 2,
+      // signedLateralOffset() works in degrees of projected space; x METERS_PER_DEG_LAT -> metres
+      lat: signedLateralOffset(outward, midPt[0], midPt[1], cp.pt[0], cp.pt[1]) * METERS_PER_DEG_LAT,
+    });
+  }
+  if (!found.length) { GENERAL_STATS.noOwnRow++; return null; }
+  let own = found[0];
+  for (const f of found) if (f.dist < own.dist) own = f;
+  if (own.dist > GENERAL_OWN_ROW_MAX_M) { GENERAL_STATS.noOwnRow++; return null; }
+
+  let outer = own, sepM = 0;
+  for (const f of found) {
+    if (f === own) continue;
+    const sep = f.lat - own.lat;
+    if (sep >= GENERAL_SIBLING_MIN_M && sep <= GENERAL_SIBLING_MAX_M && sep > sepM) { outer = f; sepM = sep; }
+  }
+  const offsetM = Math.min(Math.max(sepM + outer.hwM * CSCL_OFFSET_FRACTION, CSCL_OFFSET_MIN_M), GENERAL_MAX_OFFSET_M);
+  GENERAL_STATS.applied++;
+  if (outer === own) GENERAL_STATS.ownSide++; else GENERAL_STATS.siblingShift++;
+  return { offsetM, sepM, outerHwM: outer.hwM };
+}
+
+// ==== DT35-7: per-block-face curb overrides (build/curb-overrides.json) ====
+//
+// The reviewable escape hatch. Keyed by block-face id (the segment id without the
+// trailing _<n> sub-segment index): `${street}_${from}_${to}_${side}` with whitespace
+// turned into "_". Precedence: override > Option A > general rule > legacy.
+// Fields: offsetM (number, metres; may be negative = toward the opposite side of the face), base ("osm" = measure from the block's own OSM
+// line, default; "outer-carriageway" = measure from the outer carriageway's
+// centerline, i.e. the general rule's sibling shift is added to offsetM), suppress
+// (true drops the face). A face id the build never produces is a hard build error.
+const CURB_OVERRIDES_PATH = path.join(__dirname, 'curb-overrides.json');
+
+function faceIdForBlock(block) {
+  return `${block.street}_${block.from}_${block.to}_${block.side}`.replace(/\s+/g, '_');
+}
+
+function assertOverridesKnown(overrides, producedFaces) {
+  const unknown = [...overrides.keys()].filter(f => !producedFaces.has(f));
+  if (unknown.length) {
+    throw new Error(`curb-overrides.json: ${unknown.length} unknown block-face id(s): ${unknown.join(', ')}`);
+  }
+}
+
+function loadCurbOverrides(filePath) {
+  const map = new Map();
+  if (!fs.existsSync(filePath)) return map;
+  const doc = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  if (!doc || doc.version !== 1 || !Array.isArray(doc.overrides)) {
+    throw new Error(`curb-overrides.json: expected {"version":1,"overrides":[...]}`);
+  }
+  for (const o of doc.overrides) {
+    if (!o || typeof o.face !== 'string' || !o.face) throw new Error('curb-overrides.json: every override needs a string "face"');
+    if (map.has(o.face)) throw new Error(`curb-overrides.json: duplicate override for ${o.face}`);
+    if (o.offsetM !== undefined && !(typeof o.offsetM === 'number' && o.offsetM !== 0 && Math.abs(o.offsetM) <= GENERAL_MAX_OFFSET_M)) {
+      throw new Error(`curb-overrides.json: ${o.face}: offsetM must be a non-zero number, |offsetM| <= ${GENERAL_MAX_OFFSET_M}`);
+    }
+    if (o.base !== undefined && o.base !== 'osm' && o.base !== 'outer-carriageway') {
+      throw new Error(`curb-overrides.json: ${o.face}: base must be "osm" or "outer-carriageway"`);
+    }
+    if (o.suppress !== undefined && typeof o.suppress !== 'boolean') throw new Error(`curb-overrides.json: ${o.face}: suppress must be boolean`);
+    if (!o.suppress && o.offsetM === undefined) throw new Error(`curb-overrides.json: ${o.face}: needs offsetM or suppress`);
+    map.set(o.face, o);
+  }
+  return map;
+}
+
 // #27 determinism harness support: inject OSM street geometry into module scope the
 // same way initWidths() injects street_widths.json, without needing to run the full
 // main() pipeline. Also resets the memoized geometry caches so a harness can run
@@ -3419,6 +3669,13 @@ if (require.main !== module) {
     // FT-21 Option A probe surface
     buildCarriagewayPairs,
     pickCarriagewayForBlock,
+    pickOuterCarriageOffset,
+    isCarriagewayChained,
+    loadCurbOverrides,
+    assertOverridesKnown,
+    _GENERAL_STATS: GENERAL_STATS,
+    faceIdForBlock,
+    interpolateOnBlockLine,
     closestPointOnPolyline,
     extractChainBetween,
     buildCarriagewayBlockGeo,
@@ -3426,6 +3683,7 @@ if (require.main !== module) {
     signedLateralOffset,
     extractSubSegment,
     trimIntersectionSetback,
+    get _carriagewayChainFractions() { return _chainedCache.fracs; },
     get _carriagewayPairs() { return _carriagewayPairs; },
     get _CARRIAGEWAY_STATS() { return CARRIAGEWAY_STATS; },
     get _CARRIAGEWAY_MATCHED_STREETS() { return CARRIAGEWAY_MATCHED_STREETS; },

@@ -1,6 +1,6 @@
 # DT35-7 — W Houston St curb lines drawn mid-road / too many lines — Investigation + proposed fix
 
-**Status:** investigation and proposal only. No pipeline code changed, no tiles regenerated, no Supabase, no Xcode.
+**Status:** IMPLEMENTED in the DT35-7 fix PR (general rule, Option A guard fix, `build/curb-overrides.json`, limited tile regen). This document is the original investigation, kept as written; where the implementation deviates (street-level fallback, guard scoped to allow-listed streets, offsets taken from CSCL rows instead of sliced sibling OSM chains) the PR description says so.
 **Date:** 2026-11-27 · **Author:** @backend-data
 **Trigger:** `docs/field-testing-log.md` DT35-7 (build 35 drive test).
 **Data examined:** `tiles/` (1,077 tiles, `generatedAt 2026-11-25T22:59:10Z`; byte-identical to `ios/WePark/WePark/Resources/tiles/`, 1077/1077 files, so this is exactly what build 35 shipped), `osm_data.json` (what `build/preprocess.js` reads as `OSM_STREETS`), `street_widths.json` (CSCL `inkn-q76z`), `osm_oneway.json`, and `build/preprocess.js` run offline through its own module exports (no network).
