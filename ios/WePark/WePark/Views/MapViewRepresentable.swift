@@ -3188,7 +3188,8 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
                 Self.styleSelectedLine(
                     renderer, kind: kind,
-                    scale: curbRenderScale(latitudeDelta: mapView.region.span.latitudeDelta)
+                    scale: curbRenderScale(latitudeDelta: mapView.region.span.latitudeDelta),
+                    compensateDash: !parent.driveModeActive
                 )
                 return renderer
             }
@@ -3340,13 +3341,21 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         /// The selected curb's colored line: same color and dash as its kind, thicker, round caps
         /// when solid (flag on only).
-        private static func styleSelectedLine(_ renderer: MKOverlayPathRenderer, kind: CurbLineKind, scale: CGFloat) {
+        private static func styleSelectedLine(
+            _ renderer: MKOverlayPathRenderer, kind: CurbLineKind, scale: CGFloat, compensateDash: Bool
+        ) {
             let base = CurbLineStyleV2.style(for: kind)
             let thick = CurbLineStyle(
                 colorHex: base.colorHex, width: WP.CurbLine.selectedWidth,
                 dashPattern: base.dashPattern, roundCaps: base.dashPattern == nil || base.roundCaps
             )
-            CurbLineStyleV2.apply(thick, to: renderer, scale: scale)
+            if compensateDash {
+                // R35 PR2b: browse (not Drive Mode): a dashed selected curb is also inflated by
+                // MapKit, so it takes the same width correction as every other dashed curb.
+                CurbLineStyleV2.applyZoomBand(thick, to: renderer, scale: scale)
+            } else {
+                CurbLineStyleV2.apply(thick, to: renderer, scale: scale)
+            }
         }
 
         /// Casing (ink, cream in dark) and backing (white) under the selected curb (flag on only).
@@ -3387,7 +3396,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                 }
                 if let sel = overlay as? SelectedPolyline {
                     let kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
-                    Self.styleSelectedLine(renderer, kind: kind, scale: scale)
+                    Self.styleSelectedLine(
+                        renderer, kind: kind, scale: scale, compensateDash: !parent.driveModeActive
+                    )
                     renderer.setNeedsDisplay()
                     continue
                 }

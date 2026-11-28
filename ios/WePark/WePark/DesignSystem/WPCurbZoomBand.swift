@@ -19,7 +19,9 @@
 //
 
 import CoreGraphics
+import CoreLocation
 import Foundation
+import MapKit
 import os
 
 nonisolated enum WPCurbZoomConstants {
@@ -130,4 +132,22 @@ nonisolated enum WPCurbZoomBand: Equatable {
 /// os_signpost intervals around the overlay rebuild and publish, so Instruments can show the cost.
 nonisolated enum WPOverlayPerf {
     static let signposter = OSSignposter(subsystem: "com.kevinhoxha.wepark", category: "overlays")
+}
+
+extension WPTileCoverage {
+    /// R35 PR2b: true when a tile EXISTS under `center` and is not loaded yet. After zoom out, pan far,
+    /// zoom in, the loaded set is the old area, so the screen is blank until this tile lands; the map
+    /// then says "loading" instead of showing nothing. A centre over no tiles at all (outside the
+    /// data) is not pending: there is nothing to wait for.
+    nonisolated func hasPendingTile(atCenter center: CLLocationCoordinate2D) -> Bool {
+        guard center.latitude.isFinite, center.longitude.isFinite else { return false }
+        let probe = MKCoordinateRegion(
+            center: center, span: MKCoordinateSpan(latitudeDelta: 0.0002, longitudeDelta: 0.0002)
+        )
+        let needed = TileLoader.tileKeys(
+            forRegion: probe, gridRows: gridRows, gridCols: gridCols, latMin: latMin, lngMin: lngMin,
+            rowSize: rowSize, colSize: colSize, tileSet: existingTiles, buffer: 0
+        )
+        return !needed.isEmpty && !needed.allSatisfy { loadedTiles.contains($0) }
+    }
 }

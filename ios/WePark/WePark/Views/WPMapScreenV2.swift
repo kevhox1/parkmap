@@ -40,6 +40,9 @@ struct WPGoalSheetInput: Equatable {
     /// (it feeds the end labels, the search count and the picker); only the countdowns read this,
     /// so "2 h 57 min from now" ticks every minute while the end stays on its grid. nil = `now`.
     var liveNow: Date? = nil
+    /// R35 PR2b: zoomed past the curb cutoff (Stoop). Nothing is drawn and nothing is resolved, so
+    /// the lead says so instead of claiming what the green means for curbs that are not on screen.
+    var zoomedOut: Bool = false
 
     /// The instant a countdown counts down from.
     /// Never earlier than the window instant, so an end can never read more than its window.
@@ -58,6 +61,8 @@ struct WPGoalSheetInput: Equatable {
     var isManualForDays: Bool { forDaysState != nil }
 
     var headlineEnd: String {
+        // R35 PR2b: zoomed out nothing is computed, so no goal states an end (no parking claim).
+        if zoomedOut { return WPGoalCopy.zoomedOutEnd }
         if selectedGoal == .parkAndForget, isManualForDays { return WPForDaysCopy.headline(end: selectedEnd) }
         return WPGoalCopy.headlineEnd(goal: selectedGoal, end: selectedEnd, now: now)
     }
@@ -71,6 +76,7 @@ struct WPGoalSheetInput: Equatable {
 
     /// Tile sub-line for a goal ("until Tue 9 AM" for a manual For-days end).
     func tileUntil(_ goal: ParkingGoal) -> String {
+        if zoomedOut { return WPGoalCopy.zoomedOutEnd }
         if goal == .parkAndForget, isManualForDays { return WPForDaysCopy.tile(end: forDaysEnd) }
         return WPGoalCopy.tileUntil(goal: goal, end: end(for: goal))
     }
@@ -80,7 +86,9 @@ struct WPGoalSheetInput: Equatable {
         guard selectedGoal == .parkAndForget, let state = forDaysState, state.kind != nil else { return nil }
         return state
     }
-    var lead: String { WPGoalCopy.lead(detailMode: detailMode, loading: loading) }
+    var lead: String {
+        zoomedOut ? WPGoalCopy.zoomedOutLead : WPGoalCopy.lead(detailMode: detailMode, loading: loading)
+    }
 
     /// The flat fact line shown under the headline: the sparse / stepped-down message (with the
     /// real span), else the caller's note.
@@ -257,7 +265,7 @@ struct WPGoalSheetV2: View {
         WPEndTimeHeadline(
             lead: input.lead,
             end: input.headlineEnd,
-            sub: (leverOpen && input.selectedGoal == .freeOvernight) ? nil : input.countdown,
+            sub: ((leverOpen && input.selectedGoal == .freeOvernight) || input.zoomedOut) ? nil : input.countdown,
             lever: leverState,
             onLever: { withAnimation(.easeOut(duration: 0.18)) { leverOpen.toggle() } }
         )
