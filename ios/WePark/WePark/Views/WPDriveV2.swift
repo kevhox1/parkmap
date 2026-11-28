@@ -530,8 +530,9 @@ extension View {
     /// lines tall, overlapping the street pill and the Apple Maps attribution. With `stoop`
     /// false this is a no-op (range up to AX5, no fixed size), so flag-off layout is unchanged.
     ///
-    /// At accessibility sizes the pill is also a single line (scaled, then truncated; VoiceOver
-    /// keeps the full sentence) so the drive stack stays inside the attribution's budget.
+    /// At accessibility sizes `GoalParkUntilPill` shows the short "Until <end>" form (see
+    /// `WPDriveStackBudget.compactPillText`); it wraps if it must and is never cut with an
+    /// ellipsis. VoiceOver keeps the full sentence.
     func wpDrivePillLayout(stoop: Bool) -> some View {
         modifier(WPDrivePillLayout(stoop: stoop))
     }
@@ -542,11 +543,8 @@ private struct WPDrivePillLayout: ViewModifier {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     func body(content: Content) -> some View {
-        let oneLine = stoop && dynamicTypeSize.isAccessibilitySize
         content
             .dynamicTypeSize(...(stoop ? DynamicTypeSize.accessibility1 : DynamicTypeSize.accessibility5))
-            .lineLimit(oneLine ? 1 : nil)
-            .minimumScaleFactor(oneLine ? 0.75 : 1)
             .fixedSize(horizontal: false, vertical: stoop)
     }
 }
@@ -556,6 +554,13 @@ private struct WPDrivePillLayout: ViewModifier {
 /// logo and Legal link a clear strip below the top chrome, so the verdicts cap lower and scroll
 /// (indicators stay visible) when they would not fit.
 enum WPDriveStackBudget {
+    /// The Park Until pill's accessibility-size text: "Until 7:00 AM tomorrow", "Until 8:15 PM",
+    /// "Until Mon 11/30". The end of the window is what the driver needs; the goal name and
+    /// "Now →" go first. Times keep a non-breaking space before AM/PM so a wrap never splits one.
+    nonisolated static func compactPillText(endLabel: String) -> String {
+        ParkingGoals.nonBreakingMeridiem("Until " + endLabel)
+    }
+
     nonisolated static func sidesMaxHeightFraction(accessibilitySize: Bool) -> CGFloat {
         accessibilitySize ? 0.38 : 0.55
     }

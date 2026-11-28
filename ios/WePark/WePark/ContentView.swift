@@ -4401,7 +4401,12 @@ struct ContentView: View {
                     GoalParkUntilPill(
                         icon: content.icon,
                         shortName: content.shortName,
-                        trailingClause: content.trailingClause
+                        trailingClause: content.trailingClause,
+                        compactText: v2DriveActive && driveModeActive
+                            ? WPDriveStackBudget.compactPillText(
+                                endLabel: ParkingGoals.windowEndLabel(for: activeGoal, end: target, from: lastEvaluatedAt)
+                            )
+                            : nil
                     ) {
                         clearParkUntilFilter()
                     }

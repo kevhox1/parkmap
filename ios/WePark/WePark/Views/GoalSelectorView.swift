@@ -946,7 +946,14 @@ struct GoalParkUntilPill: View {
     /// the full per-goal breakdown).
     let trailingClause: String
 
+    /// DT35-6b (Stoop drive only): the short form shown at accessibility sizes, "Until 7:00 AM
+    /// tomorrow". Keeps the end of the window and drops the goal name and "Now →", so it wraps
+    /// instead of being cut. nil (flag-off, legacy callers) keeps today's full text everywhere.
+    var compactText: String? = nil
+
     let onClear: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         HStack(spacing: 8) {
@@ -960,7 +967,8 @@ struct GoalParkUntilPill: View {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .foregroundStyle(.primary)
-                Text("\(shortName) · \(trailingClause)")
+                Text(compactText.flatMap { dynamicTypeSize.isAccessibilitySize ? $0 : nil }
+                     ?? "\(shortName) · \(trailingClause)")
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.primary)
             }
