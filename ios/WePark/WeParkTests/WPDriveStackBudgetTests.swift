@@ -51,4 +51,33 @@ final class WPDriveStackBudgetTests: XCTestCase {
         let text = WPDriveStackBudget.compactPillText(endLabel: "Mon 11/30 7:00 AM")
         XCTAssertTrue(text.contains("7:00\u{00A0}AM") || text.contains("7:00\u{202F}AM"), text)
     }
+
+    // MARK: For-days picks with a time
+
+    private func etDate(_ y: Int, _ m: Int, _ d: Int, _ h: Int, _ min: Int = 0) -> Date {
+        Calendar.easternTime.date(from: DateComponents(year: y, month: m, day: d, hour: h, minute: min))!
+    }
+
+    func testForDaysAutoMidnightEndKeepsTheDateOnlyWording() {
+        let now = etDate(2026, 11, 24, 12)
+        let end = now.startOfDayET(offsetDays: 6)
+        XCTAssertEqual(ParkingGoals.windowEndLabel(for: .parkAndForget, end: end, from: now), "Mon 11/30")
+        XCTAssertEqual(ParkingGoals.windowLabel(for: .parkAndForget, end: end, from: now), "Now \u{2192} Mon 11/30")
+    }
+
+    func testForDaysPickWithATimeIncludesTheTime() {
+        let now = etDate(2026, 11, 24, 12)
+        let end = etDate(2026, 11, 30, 9)
+        XCTAssertEqual(ParkingGoals.windowEndLabel(for: .parkAndForget, end: end, from: now), "Mon 11/30 9:00 AM")
+        XCTAssertEqual(ParkingGoals.windowLabel(for: .parkAndForget, end: end, from: now), "Now \u{2192} Mon 11/30 9:00 AM")
+        let text = compact(.parkAndForget, end: end, from: now)
+        XCTAssertTrue(text.hasPrefix("Until Mon 11/30 9:00"), text)
+        XCTAssertTrue(text.contains("\u{00A0}AM"), text)
+    }
+
+    func testForDaysPickAtHalfPastIncludesMinutes() {
+        let now = etDate(2026, 11, 24, 12)
+        let end = etDate(2026, 11, 30, 21, 30)
+        XCTAssertEqual(ParkingGoals.windowEndLabel(for: .parkAndForget, end: end, from: now), "Mon 11/30 9:30 PM")
+    }
 }

@@ -387,7 +387,7 @@ struct WPDriveTopChromeV2: View {
             let layout = HStackLayout(alignment: .top, spacing: WP.Space.s3)
             layout {
                 if let street {
-                    Text(WPDriveDirection.pillText(street: street, direction: direction))
+                    WPDriveStreetText(street: street, direction: direction)
                         .font(WP.Font.fredoka(22, .semibold, relativeTo: .title3))
                         .foregroundStyle(WPDrivePalette.ink)
                         .fixedSize(horizontal: false, vertical: true)
@@ -552,7 +552,9 @@ private struct WPDrivePillLayout: ViewModifier {
 /// Budget for the drive card's scrolling verdicts. Standard sizes keep 55% of the screen. At
 /// accessibility sizes the whole drive stack (pill, verdicts, actions) has to leave the Apple Maps
 /// logo and Legal link a clear strip below the top chrome, so the verdicts cap lower and scroll
-/// (indicators stay visible) when they would not fit.
+/// (indicators stay visible) when they would not fit. 0.35 (was 0.38) reserves the worst case for
+/// the top street pill: two lines (name over direction) at the AX2 drive cap, about 45 pt taller
+/// than the one-line pill.
 enum WPDriveStackBudget {
     /// The Park Until pill's accessibility-size text: "Until 7:00 AM tomorrow", "Until 8:15 PM",
     /// "Until Mon 11/30". The end of the window is what the driver needs; the goal name and
@@ -562,6 +564,39 @@ enum WPDriveStackBudget {
     }
 
     nonisolated static func sidesMaxHeightFraction(accessibilitySize: Bool) -> CGFloat {
-        accessibilitySize ? 0.38 : 0.55
+        accessibilitySize ? 0.35 : 0.55
+    }
+}
+
+// MARK: - Street pill text (DT35-6b)
+
+/// The street pill's text. Standard sizes keep today's single wrapping line, "Stanton St \u{00B7}
+/// Eastbound". At accessibility sizes it is at most two lines and never breaks inside a word:
+/// 1. "Street \u{00B7} Direction" on one line if it fits;
+/// 2. else the street on line 1 and the direction on line 2;
+/// 3. else the street alone (wrapping by words, scaled before it would be cut) and the direction
+///    is dropped. The street is never dropped.
+/// VoiceOver always gets "Street: Stanton St, eastbound".
+private struct WPDriveStreetText: View {
+    let street: String
+    let direction: String?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize, let direction {
+            ViewThatFits(in: .horizontal) {
+                Text(WPDriveDirection.pillText(street: street, direction: direction))
+                    .lineLimit(1)
+                VStack(alignment: .leading, spacing: 0) {
+                    Text(street).lineLimit(1)
+                    Text(direction).lineLimit(1)
+                }
+                Text(street).lineLimit(2).minimumScaleFactor(0.7)
+            }
+        } else if dynamicTypeSize.isAccessibilitySize {
+            Text(street).lineLimit(2).minimumScaleFactor(0.7)
+        } else {
+            Text(WPDriveDirection.pillText(street: street, direction: direction))
+        }
     }
 }
