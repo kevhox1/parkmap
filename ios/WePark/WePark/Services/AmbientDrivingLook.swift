@@ -127,10 +127,19 @@ enum AmbientDrivingLook {
     /// intersection large); only the ambient resting look uses these.
     nonisolated static let stoopTightSpan: CLLocationDegrees = 0.008
 
-    /// Stoop span for a poor GPS fix or a cold launch: still the full red and green band
-    /// (`WPCurbZoomConstants.fullMaxDelta`), and it tightens to `stoopTightSpan` when a good fix
-    /// arrives (`shouldTighten`).
-    nonisolated static let stoopWideSpan: CLLocationDegrees = 0.012
+    /// Stoop span for a poor GPS fix or a cold launch: still the full red and green band, and it
+    /// tightens to `stoopTightSpan` when a good fix arrives (`shouldTighten`). R35-11: set a little
+    /// INSIDE `WPCurbZoomConstants.fullMaxDelta` (0.012), not on it, so a map-view rounding
+    /// difference can never push a cold launch into the green-only band.
+    nonisolated static let stoopWideSpan: CLLocationDegrees = 0.011
+
+    /// Camera altitude the ambient look applies for a step. The single funnel `recenterMap` ->
+    /// `applyAmbientDrivingLook` uses, so the `stoop` pass-through is testable without a view.
+    nonisolated static func altitude(
+        for step: ZoomStep, cruiseSpan: CLLocationDegrees, stoop: Bool
+    ) -> CLLocationDistance {
+        MapViewRepresentable.altitudeForSpan(span(for: step, cruiseSpan: cruiseSpan, stoop: stoop))
+    }
 
     /// Latitude span for a step. `stoop` true returns the Stoop spans and ignores `cruiseSpan`;
     /// false is exactly `span(for:cruiseSpan:)` (flag off stays byte-identical).

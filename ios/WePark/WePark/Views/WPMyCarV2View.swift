@@ -61,6 +61,10 @@ struct WPMyCarV2View: View {
     @State private var remindMe: Bool
     @State private var offsets: ReminderOffsets
     @State private var activeSheet: StartSheet?
+    /// R35-10: the open sub-sheet's measured content height and bottom inset, so it opens as tall
+    /// as its content instead of at a fixed half screen.
+    @State private var subSheetHeight: CGFloat = 0
+    @State private var subSheetInset: CGFloat = 0
     @State private var leavingMinutes: Int = 10
     @State private var leavingSoonSubmitting = false
     @State private var leavingSoonJustPosted = false
@@ -127,6 +131,13 @@ struct WPMyCarV2View: View {
     private var now: Date { pinService?.nowProvider() ?? nowProvider() }
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
+
+    /// Full height the open sub-sheet wants; 0 until measured (`clamp` then uses its minimum).
+    private var subSheetMeasured: CGFloat {
+        guard subSheetHeight > 0 else { return 0 }
+        if #available(iOS 26, *) { return subSheetHeight }
+        return subSheetHeight + subSheetInset
+    }
 
     /// The car as saved right now. `parkedCar` is the value captured when the sheet opened; after
     /// "Wrong side? Switch" the saved car (same id) has a new segment, so everything that depends on
@@ -291,21 +302,22 @@ struct WPMyCarV2View: View {
                 engine: engine
             )
         }
+        .onChange(of: activeSheet) { _, _ in subSheetHeight = 0 }
         .sheet(item: $activeSheet) { sheet in
             switch sheet {
             case .reminders:
                 remindersSheet
-                    .presentationDetents([.medium, .large])
+                    .wpContentSizedSheet(measured: subSheetMeasured, largeOnly: isAX)
                     .presentationDragIndicator(.visible)
                     .presentationBackground(WP.card)
             case .signs:
                 signsSheet
-                    .presentationDetents([.medium, .large])
+                    .wpContentSizedSheet(measured: subSheetMeasured, largeOnly: isAX)
                     .presentationDragIndicator(.visible)
                     .presentationBackground(WP.card)
             case .leaving:
                 leavingSheet
-                    .presentationDetents([.medium, .large])
+                    .wpContentSizedSheet(measured: subSheetMeasured, largeOnly: isAX)
                     .presentationDragIndicator(.visible)
                     .presentationBackground(WP.card)
             }
@@ -581,8 +593,10 @@ struct WPMyCarV2View: View {
             .padding(.horizontal, WP.Space.screenMargin)
             .padding(.top, WP.Space.s6)
             .padding(.bottom, WP.Space.s4)
+            .wpReportHeight(into: $subSheetHeight)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .wpReportBottomInset(into: $subSheetInset)
     }
 
     private var leadColumns: [GridItem] {
@@ -663,8 +677,10 @@ struct WPMyCarV2View: View {
             .padding(.horizontal, WP.Space.screenMargin)
             .padding(.top, WP.Space.s6)
             .padding(.bottom, WP.Space.s4)
+            .wpReportHeight(into: $subSheetHeight)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .wpReportBottomInset(into: $subSheetInset)
     }
 
     // MARK: Leaving sheet (B7.7)
@@ -695,8 +711,10 @@ struct WPMyCarV2View: View {
             .padding(.horizontal, WP.Space.screenMargin)
             .padding(.top, WP.Space.s6)
             .padding(.bottom, WP.Space.s4)
+            .wpReportHeight(into: $subSheetHeight)
         }
         .scrollBounceBehavior(.basedOnSize)
+        .wpReportBottomInset(into: $subSheetInset)
         // Identity gate for the leaving-soon post, nested on this sheet so it never competes with
         // a second sheet presented from the parent.
         .sheet(isPresented: identitySheetPresented) {

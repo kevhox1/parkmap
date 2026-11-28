@@ -135,7 +135,7 @@ final class AmbientDrivingLookTests: XCTestCase {
         let tight = AmbientDrivingLook.stoopTightSpan
         let wide = AmbientDrivingLook.stoopWideSpan
         XCTAssertEqual(tight, 0.008, accuracy: 0.0000001)
-        XCTAssertEqual(wide, 0.012, accuracy: 0.0000001)
+        XCTAssertEqual(wide, 0.011, accuracy: 0.0000001)
         XCTAssertLessThan(tight, wide, "poor-fix opens wider, a good fix tightens")
     }
 
@@ -144,7 +144,7 @@ final class AmbientDrivingLookTests: XCTestCase {
         let tight = AmbientDrivingLook.span(for: .tight, cruiseSpan: cruiseSpan, stoop: true)
         let wide = AmbientDrivingLook.span(for: .wide, cruiseSpan: cruiseSpan, stoop: true)
         XCTAssertEqual(tight, 0.008, accuracy: 0.0000001)
-        XCTAssertEqual(wide, 0.012, accuracy: 0.0000001)
+        XCTAssertEqual(wide, 0.011, accuracy: 0.0000001)
     }
 
     func testStoopSpan_flagOff_isByteIdenticalToTheCruiseSpans() {
@@ -163,6 +163,24 @@ final class AmbientDrivingLookTests: XCTestCase {
         let fullMax = WPCurbZoomConstants.fullMaxDelta
         XCTAssertLessThanOrEqual(AmbientDrivingLook.stoopTightSpan, fullMax)
         XCTAssertLessThanOrEqual(AmbientDrivingLook.stoopWideSpan, fullMax)
+    }
+
+    func testStoopWideSpan_isStrictlyInsideTheFullBandBoundary() {
+        XCTAssertLessThan(AmbientDrivingLook.stoopWideSpan, WPCurbZoomConstants.fullMaxDelta)
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: AmbientDrivingLook.stoopWideSpan), .full)
+    }
+
+    /// `recenterMap` -> `applyAmbientDrivingLook` takes its altitude from this funnel; the flag
+    /// must pick the Stoop span, flag off the legacy one.
+    func testAmbientAltitude_passesStoopThrough() {
+        let cruise = MapViewRepresentable.driveModeCameraSpan
+        let on = AmbientDrivingLook.altitude(for: .tight, cruiseSpan: cruise, stoop: true)
+        let off = AmbientDrivingLook.altitude(for: .tight, cruiseSpan: cruise, stoop: false)
+        XCTAssertEqual(on, MapViewRepresentable.altitudeForSpan(AmbientDrivingLook.stoopTightSpan), accuracy: 0.001)
+        XCTAssertEqual(off, MapViewRepresentable.altitudeForSpan(cruise), accuracy: 0.001)
+        XCTAssertNotEqual(on, off)
+        let wideOn = AmbientDrivingLook.altitude(for: .wide, cruiseSpan: cruise, stoop: true)
+        XCTAssertEqual(wideOn, MapViewRepresentable.altitudeForSpan(AmbientDrivingLook.stoopWideSpan), accuracy: 0.001)
     }
 
     func testStoopTightAltitude_isAbout1657Meters() {

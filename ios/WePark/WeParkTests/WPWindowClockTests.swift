@@ -285,4 +285,71 @@ final class WPWindowClockTests: XCTestCase {
         XCTAssertEqual(key(t1, stoop: true), key(t2, stoop: true))
         XCTAssertNotEqual(key(t1, stoop: false), key(t2, stoop: false), "flag off keeps the legacy now key")
     }
+
+    // MARK: - R35-6 goal copy clock
+
+    func testGoalCopyClock_stoop_usesTheLaterOfLiveAndInstant() {
+        let live = et(2026, 11, 28, 21, 7, 40)
+        let instant = WPWindowClock.instant(live)
+        XCTAssertEqual(instant, et(2026, 11, 28, 21, 5))
+        XCTAssertEqual(WPWindowClock.goalCopyClock(stoop: true, instant: instant, live: live), live)
+        // A live clock that fell behind the instant (clock set back) never counts from the past.
+        let behind = et(2026, 11, 28, 21, 3)
+        XCTAssertEqual(WPWindowClock.goalCopyClock(stoop: true, instant: instant, live: behind), instant)
+    }
+
+    func testGoalCopyClock_flagOff_isTheLiveClock() {
+        let live = et(2026, 11, 28, 21, 7, 40)
+        let instant = et(2026, 11, 28, 21, 5)
+        XCTAssertEqual(WPWindowClock.goalCopyClock(stoop: false, instant: instant, live: live), live)
+    }
+
+    func testGoalCopyClock_endLabelStaysOnTheFiveMinuteGrid() {
+        // A few hours from 9:05 PM instant ends 12:05 AM: the end is built from the instant, so the
+        // label does not creep with the live minute.
+        let instant = et(2026, 11, 28, 21, 5)
+        let end = ParkingGoals.target(for: .freeFewHours, from: instant)
+        let early = WPWindowClock.goalCopyClock(stoop: true, instant: instant, live: et(2026, 11, 28, 21, 6))
+        let late = WPWindowClock.goalCopyClock(stoop: true, instant: instant, live: et(2026, 11, 28, 21, 9))
+        XCTAssertEqual(
+            ParkingGoals.windowEndLabel(for: .freeFewHours, end: end, from: early),
+            ParkingGoals.windowEndLabel(for: .freeFewHours, end: end, from: late)
+        )
+    }
+
+    // MARK: - R35-8 the active goal owns the end
+
+    func testGoalEnd_overnightIgnoresALeftoverForDaysPick() {
+        let now = et(2026, 11, 28, 14, 0)
+        let leftover = et(2026, 11, 30, 23, 59)
+        let end = WPGoalEnd.end(goal: .freeOvernight, now: now, morningHour: 7, manualForDaysEffective: leftover)
+        XCTAssertEqual(end, ParkingGoals.target(for: .freeOvernight, from: now, overnightMorningHour: 7))
+        XCTAssertNotEqual(end, leftover)
+    }
+
+    func testGoalEnd_fewHoursIgnoresALeftoverForDaysPick() {
+        let now = et(2026, 11, 28, 14, 0)
+        let leftover = et(2026, 11, 30, 23, 59)
+        let end = WPGoalEnd.end(goal: .freeFewHours, now: now, morningHour: 7, manualForDaysEffective: leftover)
+        XCTAssertEqual(end, ParkingGoals.target(for: .freeFewHours, from: now, overnightMorningHour: 7))
+    }
+
+    func testGoalEnd_switchingGoalsAfterAPick_followsTheActiveGoal() {
+        let now = et(2026, 11, 28, 14, 0)
+        let pick = et(2026, 11, 30, 18, 0)
+        let days = WPGoalEnd.end(goal: .parkAndForget, now: now, morningHour: 7, manualForDaysEffective: pick)
+        XCTAssertEqual(days, pick, "For days uses its own pick")
+        let overnight = WPGoalEnd.end(goal: .freeOvernight, now: now, morningHour: 7, manualForDaysEffective: pick)
+        let back = WPGoalEnd.end(goal: .parkAndForget, now: now, morningHour: 7, manualForDaysEffective: pick)
+        XCTAssertNotEqual(overnight, pick)
+        XCTAssertEqual(back, pick, "the pick is kept for when For days is chosen again")
+    }
+
+    func testGoalEnd_forDaysWithoutAPick_usesTheGoalTarget() {
+        let now = et(2026, 11, 28, 14, 0)
+        XCTAssertEqual(
+            WPGoalEnd.end(goal: .parkAndForget, now: now, morningHour: 7, manualForDaysEffective: nil),
+            ParkingGoals.target(for: .parkAndForget, from: now, overnightMorningHour: 7)
+        )
+    }
 }

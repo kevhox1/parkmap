@@ -276,7 +276,7 @@ struct WPTripPlannerV2: View {
 
     /// Up to three recent destinations, one tap to change the place.
     @ViewBuilder private var recentChips: some View {
-        let shown = Array(recents.destinations.filter { $0.name != destination?.name }.prefix(3))
+        let shown = WPTripDestinationPickerLogic.chipRecents(recents.destinations, excluding: destination)
         if !shown.isEmpty {
             let layout = typeSize.isAccessibilitySize
                 ? AnyLayout(VStackLayout(alignment: .leading, spacing: WP.Space.s2))
@@ -465,7 +465,7 @@ struct WPTripMapCard: View {
                 // text does not fit, so nothing is ever truncated.
                 ViewThatFits(in: .vertical) {
                     textBlock
-                    ScrollView { textBlock }.scrollBounceBehavior(.basedOnSize)
+                    WPMoreBelowScroll { textBlock }
                 }
                 .frame(maxHeight: WPTripMapCard.axTextMaxHeight)
             } else {
@@ -647,5 +647,62 @@ struct WPTripMapCardHost: View {
         gaveUp = false
         try? await Task.sleep(for: .seconds(WPTripDestinationSummary.giveUpSeconds))
         if !Task.isCancelled { gaveUp = true }
+    }
+}
+
+
+// MARK: - Scroll cue (R35-13)
+
+/// A vertical ScrollView that says when there is more below: a soft fade at the bottom edge and a
+/// small "More below" arrow while content is hidden, and the scroll indicator flashes on appear.
+/// Both vanish once the end is reached. Used where a card scrolls only at the largest text sizes.
+struct WPMoreBelowScroll<Content: View>: View {
+    @ViewBuilder let content: () -> Content
+    @State private var contentBottom: CGFloat = 0
+    @State private var visibleHeight: CGFloat = 0
+
+    private var hasMoreBelow: Bool {
+        WPScrollCue.hasMoreBelow(contentBottom: contentBottom, visibleHeight: visibleHeight)
+    }
+
+    var body: some View {
+        ScrollView {
+            content()
+                // The content's bottom edge in the scroll view's own space: it moves up as the user
+                // scrolls and reaches `visibleHeight` when the end is in view.
+                .onGeometryChange(for: CGFloat.self, of: { $0.frame(in: .named("wpMoreBelowScroll")).maxY }) {
+                    contentBottom = $0
+                }
+        }
+        .coordinateSpace(name: "wpMoreBelowScroll")
+        .scrollBounceBehavior(.basedOnSize)
+        .scrollIndicatorsFlash(onAppear: true)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { visibleHeight = $0 }
+        .overlay(alignment: .bottom) {
+            if hasMoreBelow {
+                ZStack(alignment: .bottom) {
+                    LinearGradient(colors: [WP.card.opacity(0), WP.card], startPoint: .top, endPoint: .bottom)
+                        .frame(height: 44)
+                    Image(systemName: "chevron.compact.down")
+                        .font(.system(size: 22, weight: .bold))
+                        .foregroundStyle(WP.muted)
+                        .padding(.bottom, 2)
+                        .accessibilityHidden(true)
+                }
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: hasMoreBelow)
+    }
+}
+
+nonisolated enum WPScrollCue {
+    /// True when part of the content is hidden below the visible area (more than 1 pt, so layout
+    /// rounding never shows a cue for nothing).
+    /// `contentBottom` is the content's bottom edge measured from the top of the visible area.
+    static func hasMoreBelow(contentBottom: CGFloat, visibleHeight: CGFloat) -> Bool {
+        guard contentBottom.isFinite, visibleHeight.isFinite, visibleHeight > 0 else { return false }
+        return contentBottom - visibleHeight > 1
     }
 }

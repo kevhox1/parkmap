@@ -592,10 +592,19 @@ private struct WPDriveStreetText: View {
 
     var body: some View {
         if dynamicTypeSize.isAccessibilitySize {
-            Text(street)
-                .lineLimit(1)
-                .minimumScaleFactor(0.6)
-                .truncationMode(.middle)
+            // R35-9: the full name when it fits, else the short form (a small table of long Manhattan
+            // names), else the old scaled middle-truncation. VoiceOver always reads the full name.
+            let short = WPDriveVerdict.abbreviatedStreet(street)
+            ViewThatFits(in: .horizontal) {
+                Text(street).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                Text(short).lineLimit(1).fixedSize(horizontal: true, vertical: false)
+                Text(short)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                    .truncationMode(.middle)
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(street)
         } else {
             Text(WPDriveDirection.pillText(street: street, direction: direction))
         }

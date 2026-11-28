@@ -1312,3 +1312,14 @@ The spot was free until Tuesday morning, so no short reminder could be set. Not 
 - **R35-12 🟡** Plan a Trip: a destination inside Manhattan's bounding box but with no curb tiles (DUMBO, Downtown Brooklyn) shows "Checking curbs near X." for 10 s, then "Curb count isn't available right now." It should say it's outside coverage. Treat "no tile within the radius" as outside coverage (PR #232 QA finding 1).
 - **R35-13 🟢** At AX5 the trip card's "nearest X ft" clause sits below the fold with no scroll cue. Add a fade or scroll indicator. Recent trip chips dedupe by name only.
 - **R35-14 ❓** QA saw the Stoop browse search sheet open large with the keyboard focused, and Cancel didn't dismiss it, on a fresh sim. That was on a branch *without* #231. Check on device that search Cancel/Close works.
+
+### R35 polish batch (branch `ios/polish-r35`)
+
+- **R35-6** done: Stoop goal copy counts from `max(live, window instant)` (`WPWindowClock.goalCopyClock`); the end stays on the 5 minute grid. Note the only visible difference is day words ("tomorrow") and these can never differ across midnight, so the change is mostly about consistency with the dock.
+- **R35-8** done (see PR for the caveat): the end for Overnight / A few hours comes from `WPGoalEnd` (never a For days pick), and the drive verdict cards are recomputed when the goal changes instead of waiting for the next GPS tick.
+- **R35-9** done: the AX drive street pill uses a small abbreviation table only when the full name does not fit. VoiceOver reads the full name.
+- **R35-10** done for the More sheet and the My Car reminders / signs / leaving sub-sheets (content-sized). NOT changed: the curb sheet (`WPCurbSheetV2`, variable content, needs a live look), the reminder priming sheet (in `WPParkFlowV2.swift`, park flow, another engineer is in that file).
+- **R35-11** done: Stoop wide span 0.011, `AmbientDrivingLook.altitude(for:cruiseSpan:stoop:)` is the tested funnel for `recenterMap`.
+- **R35-12** done: no tile within 160 m of the destination is outside coverage ("Not covered yet"). The planner's own "Not covered yet" card on the destination row still uses only the bounding box (it has no tile data).
+- **R35-13** done: AX trip card text block shows a fade and chevron while content is hidden below; recent chips dedupe by name and coordinate. `RecentDestinationsStore.add` still dedupes by name only (shared with the flag-off Drive destination flow, left alone).
+

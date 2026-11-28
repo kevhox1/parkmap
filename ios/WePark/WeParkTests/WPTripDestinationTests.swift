@@ -167,7 +167,39 @@ final class WPTripDestinationTests: XCTestCase {
         let result = outcome(destination: newark, segments: [makeSegment(clearRules, id: "A")], coverage: allLoaded)
         XCTAssertEqual(result, .outsideCoverage)
         let line = WPTripDestinationSummary.line(for: .outsideCoverage, destination: newark)
-        XCTAssertEqual(line, "Newark Penn Station is outside Manhattan. WePark can't show free curbs there yet.")
+        XCTAssertEqual(line, "Not covered yet. WePark covers Manhattan today. Curbs here aren't mapped, so nothing is marked as free.")
+    }
+
+    /// R35-12: inside Manhattan's bounding box but no tile anywhere near: not covered, decided at
+    /// once (never "Checking curbs..."), never a count.
+    func testSummary_noTileWithinRadius_isOutsideCoverage_dumbo() {
+        let dumbo = TripDestination(name: "DUMBO", address: nil, latitude: 40.7033, longitude: -73.9890)
+        XCTAssertTrue(AppConstants.isInManhattanCoverage(dumbo.coordinate), "fixture must sit inside the box")
+        XCTAssertEqual(
+            outcome(destination: dumbo, segments: [makeSegment(clearRules, id: "A")], coverage: allLoaded),
+            .outsideCoverage
+        )
+        // Even with nothing loaded: no tile exists there, so it is not "still loading".
+        XCTAssertEqual(outcome(destination: dumbo, segments: [], coverage: coverage { _, _ in false }), .outsideCoverage)
+    }
+
+    func testSummary_noTileWithinRadius_isOutsideCoverage_downtownBrooklyn() {
+        let downtown = TripDestination(name: "Downtown Brooklyn", address: nil, latitude: 40.6928, longitude: -73.9903)
+        let result = outcome(destination: downtown, segments: [makeSegment(clearRules, id: "A")], coverage: allLoaded)
+        XCTAssertEqual(result, .outsideCoverage)
+        // Borough Hall is south of the box; the Brooklyn waterfront by the bridge is inside it.
+        let waterfront = TripDestination(name: "Brooklyn Bridge Park", address: nil, latitude: 40.7015, longitude: -73.9965)
+        XCTAssertTrue(AppConstants.isInManhattanCoverage(waterfront.coordinate))
+        XCTAssertEqual(
+            outcome(destination: waterfront, segments: [makeSegment(clearRules, id: "A")], coverage: allLoaded),
+            .outsideCoverage
+        )
+    }
+
+    func testSummary_midtownWithTiles_isStillCounted() {
+        guard case .counted? = outcome(segments: [makeSegment(clearRules, id: "A")], coverage: allLoaded) else {
+            return XCTFail("a covered destination still counts")
+        }
     }
 
     func testSummaryLine_plural() {
@@ -290,5 +322,46 @@ final class WPTripDestinationTests: XCTestCase {
     func testResolver_withTimeout_returnsFastResult() async throws {
         let value = try await WPPlaceResolver.withTimeout(seconds: 5) { 7 }
         XCTAssertEqual(value, 7)
+    }
+
+    // MARK: R35-13 recent chips and the scroll cue
+
+    private func recent(_ name: String, _ lat: Double, _ lng: Double) -> RecentDestination {
+        RecentDestination(id: UUID(), name: name, latitude: lat, longitude: lng)
+    }
+
+    func testChipRecents_sameNameDifferentCoordinate_areTwoChips() {
+        let a = recent("Starbucks", 40.7500, -73.9900)
+        let b = recent("Starbucks", 40.7600, -73.9800)
+        let shown = WPTripDestinationPickerLogic.chipRecents([a, b], excluding: nil)
+        XCTAssertEqual(shown.count, 2)
+    }
+
+    func testChipRecents_sameNameAndSpot_isOneChip() {
+        let a = recent("Penn Station", 40.7506, -73.9935)
+        let b = recent("Penn Station", 40.75061, -73.99351)
+        XCTAssertEqual(WPTripDestinationPickerLogic.chipRecents([a, b], excluding: nil).count, 1)
+    }
+
+    func testChipRecents_excludesOnlyTheChosenPlace_notASameNamedOtherPlace() {
+        let here = TripDestination(name: "Starbucks", address: nil, latitude: 40.7500, longitude: -73.9900)
+        let same = recent("Starbucks", 40.7500, -73.9900)
+        let other = recent("Starbucks", 40.7600, -73.9800)
+        let shown = WPTripDestinationPickerLogic.chipRecents([same, other], excluding: here)
+        XCTAssertEqual(shown.map(\.id), [other.id])
+    }
+
+    func testChipRecents_capsAtThree() {
+        let all = (0..<5).map { recent("Place \($0)", 40.70 + Double($0) * 0.01, -73.99) }
+        XCTAssertEqual(WPTripDestinationPickerLogic.chipRecents(all, excluding: nil).count, 3)
+    }
+
+    func testScrollCue_showsOnlyWhileContentIsHiddenBelow() {
+        XCTAssertTrue(WPScrollCue.hasMoreBelow(contentBottom: 400, visibleHeight: 200))
+        XCTAssertTrue(WPScrollCue.hasMoreBelow(contentBottom: 250, visibleHeight: 200))
+        XCTAssertFalse(WPScrollCue.hasMoreBelow(contentBottom: 200, visibleHeight: 200))
+        XCTAssertFalse(WPScrollCue.hasMoreBelow(contentBottom: 200.5, visibleHeight: 200), "rounding is not overflow")
+        XCTAssertFalse(WPScrollCue.hasMoreBelow(contentBottom: .nan, visibleHeight: 200))
+        XCTAssertFalse(WPScrollCue.hasMoreBelow(contentBottom: 400, visibleHeight: 0))
     }
 }

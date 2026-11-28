@@ -649,17 +649,28 @@ struct WPTileCoverage: Equatable {
     /// EVERY tile that exists under that circle's bounding box is loaded. An area with no tiles at
     /// all is not "covered": there is nothing to count.
     nonisolated func covers(_ center: CLLocationCoordinate2D, radiusMeters: Double) -> Bool {
+        let needed = neededTiles(center, radiusMeters: radiusMeters)
+        guard !needed.isEmpty else { return false }
+        return needed.allSatisfy { loadedTiles.contains($0) }
+    }
+
+    /// R35-12: true when at least one tile EXISTS under the circle of `radiusMeters` around
+    /// `center` (loaded or not). False means there is no curb data there at all (DUMBO, Downtown
+    /// Brooklyn): the place is outside what WePark covers, even inside Manhattan's bounding box.
+    nonisolated func hasTiles(near center: CLLocationCoordinate2D, radiusMeters: Double) -> Bool {
+        !neededTiles(center, radiusMeters: radiusMeters).isEmpty
+    }
+
+    private nonisolated func neededTiles(_ center: CLLocationCoordinate2D, radiusMeters: Double) -> [String] {
         let dLat = radiusMeters / 111_320
         let dLng = radiusMeters / (111_320 * max(0.2, cos(center.latitude * .pi / 180)))
         let region = MKCoordinateRegion(
             center: center, span: MKCoordinateSpan(latitudeDelta: dLat * 2, longitudeDelta: dLng * 2)
         )
-        let needed = TileLoader.tileKeys(
+        return Array(TileLoader.tileKeys(
             forRegion: region, gridRows: gridRows, gridCols: gridCols, latMin: latMin, lngMin: lngMin,
             rowSize: rowSize, colSize: colSize, tileSet: existingTiles, buffer: 0
-        )
-        guard !needed.isEmpty else { return false }
-        return needed.allSatisfy { loadedTiles.contains($0) }
+        ))
     }
 }
 

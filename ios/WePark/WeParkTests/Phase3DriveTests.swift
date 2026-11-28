@@ -327,3 +327,20 @@ final class Phase3DriveTests: XCTestCase {
         XCTAssertLessThan(WPDriveTintPolygon.alpha, 0.6)
     }
 }
+
+// MARK: - R35-9 street abbreviations
+
+final class WPDriveStreetAbbreviationTests: XCTestCase {
+    func testLongManhattanNames_haveShortForms() {
+        XCTAssertEqual(WPDriveVerdict.abbreviatedStreet(WPDriveVerdict.streetTitle("ADAM CLAYTON POWELL JR BOULEVARD")), "ACP Jr Blvd")
+        XCTAssertEqual(WPDriveVerdict.abbreviatedStreet(WPDriveVerdict.streetTitle("ADAM C POWELL BOULEVARD")), "ACP Jr Blvd")
+        XCTAssertEqual(WPDriveVerdict.abbreviatedStreet(WPDriveVerdict.streetTitle("FREDERICK DOUGLASS BOULEVARD")), "F Douglass Blvd")
+        XCTAssertEqual(WPDriveVerdict.abbreviatedStreet(WPDriveVerdict.streetTitle("FRED DOUGLASS BOULEVARD")), "F Douglass Blvd")
+        XCTAssertEqual(WPDriveVerdict.abbreviatedStreet("Martin Luther King Jr Blvd"), "MLK Jr Blvd")
+    }
+
+    func testOtherNames_areUnchanged() {
+        XCTAssertEqual(WPDriveVerdict.abbreviatedStreet("E 1st St"), "E 1st St")
+        XCTAssertEqual(WPDriveVerdict.abbreviatedStreet(""), "")
+    }
+}
