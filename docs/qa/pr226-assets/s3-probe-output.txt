@@ -1,0 +1,28 @@
+== narrow EAST 74TH STREET S piece EAST_74TH_STREET_LEXINGTON_AVENUE_3RD_AVENUE_S_1 facing-curb gap ~12.0 m
+  street-side: 0m=S@0.0  5m=S@5.0  9m=N@3.0  11m=N@1.0  13m=N@1.0  20m=N@7.9  30m=NOT-ON-CURB  
+  building-side: 0m=S@0.0  5m=S@5.0  9m=S@9.0  11m=NOT-ON-CURB  13m=NOT-ON-CURB  20m=NOT-ON-CURB  30m=E@9.9  
+  hysteresis building-side walk-away: 3.0=v 5.0=v 8.0=v 10.0=v 11.0=v 11.9=v 12.1=none 13.0=none 15.0=none 11.0=none 9.0=v 
+== narrow2 WEST 72ND STREET N piece WEST_72ND_STREET_BROADWAY_WEST_END_AVENUE_N_5 facing-curb gap ~20.0 m
+  street-side: 0m=N@0.0  5m=N@5.0  9m=N@9.0  11m=S@9.0  13m=S@7.0  20m=S@0.0  30m=NOT-ON-CURB  
+  building-side: 0m=N@0.0  5m=N@5.0  9m=N@9.0  11m=NOT-ON-CURB  13m=NOT-ON-CURB  20m=NOT-ON-CURB  30m=NOT-ON-CURB  
+  hysteresis building-side walk-away: 3.0=v 5.0=v 8.0=v 10.0=v 11.0=v 11.9=v 12.1=none 13.0=none 15.0=none 11.0=none 9.0=v 
+== avenue LEXINGTON AVENUE E piece LEXINGTON_AVENUE_EAST_73RD_STREET_EAST_72ND_STREET_E_1 facing-curb gap ~20.0 m
+  street-side: 0m=E@0.0  5m=E@5.0  9m=E@9.0  11m=W@9.0  13m=W@7.0  20m=W@0.0  30m=W@10.0  
+  building-side: 0m=E@0.0  5m=E@5.0  9m=E@9.0  11m=NOT-ON-CURB  13m=NOT-ON-CURB  20m=NOT-ON-CURB  30m=NOT-ON-CURB  
+  hysteresis building-side walk-away: 3.0=v 5.0=v 8.0=v 10.0=v 11.0=v 11.9=v 12.1=none 13.0=none 15.0=none 11.0=none 9.0=v 
+== avenue2 MADISON AVENUE W piece MADISON_AVENUE_EAST_138TH_STREET_EAST_135TH_STREET_W_5 facing-curb gap ~19.9 m
+  street-side: 0m=W@0.0  5m=W@5.0  9m=W@9.0  11m=E@9.0  13m=E@7.0  20m=E@0.0  30m=NOT-ON-CURB  
+  building-side: 0m=W@0.0  5m=W@5.0  9m=W@9.0  11m=NOT-ON-CURB  13m=NOT-ON-CURB  20m=NOT-ON-CURB  30m=NOT-ON-CURB  
+  hysteresis building-side walk-away: 3.0=v 5.0=v 8.0=v 10.0=v 11.0=v 11.9=v 12.1=none 13.0=none 15.0=none 11.0=none 9.0=v 
+== wide PARK AVENUE W piece PARK_AVENUE_EAST_60TH_STREET_EAST_59TH_STREET_W_3 facing-curb gap ~20.0 m
+  street-side: 0m=W@0.0  5m=W@5.0  9m=W@9.0  11m=E@9.0  13m=E@7.0  20m=E@0.0  30m=NOT-ON-CURB  
+  building-side: 0m=W@0.0  5m=W@5.0  9m=W@9.0  11m=NOT-ON-CURB  13m=NOT-ON-CURB  20m=NOT-ON-CURB  30m=NOT-ON-CURB  
+  hysteresis building-side walk-away: 3.0=v 5.0=v 8.0=v 10.0=v 11.0=v 11.9=v 12.1=none 13.0=none 15.0=none 11.0=none 9.0=v 
+== wide2 BROADWAY E piece BROADWAY_WEST_101ST_STREET_WEST_102ND_STREET_E_0 facing-curb gap ~20.0 m
+  street-side: 0m=E@0.0  5m=E@5.0  9m=E@9.0  11m=W@9.0  13m=W@7.0  20m=W@0.0  30m=NOT-ON-CURB  
+  building-side: 0m=E@0.0  5m=E@5.0  9m=E@9.0  11m=NOT-ON-CURB  13m=NOT-ON-CURB  20m=NOT-ON-CURB  30m=NOT-ON-CURB  
+  hysteresis building-side walk-away: 3.0=v 5.0=v 8.0=v 10.0=v 11.0=v 11.9=v 12.1=none 13.0=none 15.0=none 11.0=none 9.0=v 
+== wide3 WEST END AVENUE E piece WEST_END_AVENUE_WEST_95TH_STREET_WEST_96TH_STREET_E_0 facing-curb gap ~20.0 m
+  street-side: 0m=E@0.0  5m=E@5.0  9m=E@9.0  11m=W@9.0  13m=W@7.0  20m=W@0.0  30m=N@8.3  
+  building-side: 0m=E@0.0  5m=E@5.0  9m=N@8.3  11m=N@8.4  13m=N@8.4  20m=N@8.4  30m=N@8.5  
+  hysteresis building-side walk-away: 3.0=v 5.0=v 8.0=v 10.0=v 11.0=v 11.9=v 12.1=v 13.0=v 15.0=v 11.0=v 9.0=v 

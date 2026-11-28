@@ -1,0 +1,85 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+@MainActor
+final class QA226S3Tests: XCTestCase {
+    static let outPath = "/private/tmp/claude-501/-Users-kevinhoxha-repos-parkmap/f8d5a3ca-5371-4933-9534-79989e164bb8/scratchpad/qa226-s3.txt"
+    func log(_ s: String) {
+        if let h = FileHandle(forWritingAtPath: Self.outPath) { h.seekToEndOfFile(); h.write((s + "\n").data(using: .utf8)!); h.closeFile() }
+        else { try? (s + "\n").write(toFile: Self.outPath, atomically: true, encoding: .utf8) }
+    }
+
+    func offset(_ c: CLLocationCoordinate2D, east: Double, north: Double) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: c.latitude + north / 111_320,
+                               longitude: c.longitude + east / (111_320 * cos(c.latitude * .pi / 180)))
+    }
+
+    func testS3Probes() async throws {
+        try? FileManager.default.removeItem(atPath: Self.outPath)
+        let all = try QA226.loadAll()
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(60)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertTrue(flow.indexReady)
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let picks: [(String, String, [String])] = [
+            ("narrow", "EAST 74TH STREET", []),
+            ("narrow2", "WEST 72ND STREET", []),
+            ("avenue", "LEXINGTON AVENUE", []),
+            ("avenue2", "MADISON AVENUE", []),
+            ("wide", "PARK AVENUE", []),
+            ("wide2", "BROADWAY", ["WEST 101ST STREET", "WEST 102ND STREET"]),
+            ("wide3", "WEST END AVENUE", []),
+        ]
+        let dists: [Double] = [0, 5, 9, 11, 13, 20, 30]
+        for (label, street, cross) in picks {
+            // choose a piece: long, with a facing opposite piece, middle of the street list
+            let cands = all.filter { $0.street == street && (cross.isEmpty || (cross.contains($0.fromStreet) && cross.contains($0.to))) && $0.coordinates.count >= 2 }
+            var chosen: (Segment, Double)?
+            for p in cands.shuffled().prefix(400) {
+                guard let mid = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: p.coordinates),
+                      let f = ParkSideResolver.facingOpposite(of: p, near: mid, in: all) else { continue }
+                if f.snap.distanceMeters > 2 && f.snap.distanceMeters < 60 { chosen = (p, f.snap.distanceMeters); break }
+            }
+            guard let (piece, width) = chosen, let mid = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: piece.coordinates) else { log("\(label) \(street): no piece"); continue }
+            // direction & normals
+            let a = piece.coordinates.first!, b = piece.coordinates.last!
+            let dx = (b.longitude - a.longitude) * cos(a.latitude * .pi / 180) * 111_320
+            let dy = (b.latitude - a.latitude) * 111_320
+            let len = max(1, hypot(dx, dy))
+            let n1 = (x: -dy / len, y: dx / len)
+            // which normal points toward the opposite curb?
+            let facing = ParkSideResolver.facingOpposite(of: piece, near: mid, in: all)!
+            let toOpp = (x: (facing.snap.coordinate.longitude - mid.longitude) * cos(a.latitude * .pi / 180) * 111_320,
+                         y: (facing.snap.coordinate.latitude - mid.latitude) * 111_320)
+            let toward = (n1.x * toOpp.x + n1.y * toOpp.y) >= 0 ? n1 : (x: -n1.x, y: -n1.y)
+            log("== \(label) \(street) \(piece.side) piece \(piece.id) facing-curb gap ~\(String(format: "%.1f", width)) m")
+            for (dirName, sign) in [("street-side", 1.0), ("building-side", -1.0)] {
+                var line = "  \(dirName): "
+                for d in dists {
+                    // fresh acquire
+                    flow.reset()
+                    flow.beginDrag(from: .zero)
+                    let p = offset(mid, east: toward.x * d * sign, north: toward.y * d * sign)
+                    flow.update(point: .zero, coordinate: p, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil)
+                    let got = flow.snap.map { "\($0.segment.side)@\(String(format: "%.1f", $0.distanceMeters))" } ?? "NOT-ON-CURB"
+                    line += "\(Int(d))m=\(got)  "
+                }
+                log(line)
+            }
+            // wide-street hysteresis: acquire at 5 m street-side then walk 5,7,9,11,12.5,14
+            flow.reset(); flow.beginDrag(from: .zero)
+            var hline = "  hysteresis building-side walk-away: "
+            for d in [3.0, 5, 8, 10, 11, 11.9, 12.1, 13, 15, 11, 9] {
+                let p = offset(mid, east: -toward.x * d, north: -toward.y * d)
+                flow.update(point: .zero, coordinate: p, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil)
+                hline += "\(d)=\(flow.snap == nil ? "none" : "v") "
+            }
+            log(hline)
+            flow.reset()
+        }
+    }
+}

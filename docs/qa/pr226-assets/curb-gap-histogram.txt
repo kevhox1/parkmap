@@ -1,0 +1,14 @@
+gap histogram (m: count): 0:10 4:2 7:1 8:5 9:9 10:4 11:3 12:3706 13:52 14:39 15:20 16:116 17:16 18:15 19:14 20:797 21:10 22:7 23:10 24:6 25:7 26:9 27:24 28:6 29:5 30:2 31:4 32:2 33:3 34:2 35:1 36:2 37:1 39:1 40:1 45:1
+EAST HOUSTON STREET: n=10 min=10.2 max=34.4
+WEST HOUSTON STREET: n=12 min=9.0 max=29.5
+PARK AVENUE: n=12 min=19.9 max=31.3
+BROADWAY: n=12 min=19.4 max=27.4
+LEXINGTON AVENUE: n=11 min=19.9 max=20.0
+WEST 14TH STREET: n=12 min=19.8 max=20.0
+EAST 125TH STREET: n=11 min=19.9 max=20.1
+WEST 34TH STREET: n=11 min=19.9 max=20.0
+CANAL STREET: n=9 min=19.9 max=25.0
+EAST 74TH STREET: n=12 min=11.9 max=12.6
+WEST END AVENUE: n=12 min=19.9 max=20.0
+FIRST AVENUE: no facing pair within reach / absent (pieces=0)
+FDR DRIVE: n=3 min=11.3 max=12.0

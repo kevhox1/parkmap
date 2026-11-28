@@ -1,0 +1,30 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+@MainActor
+final class QA226TraceTests: XCTestCase {
+    func testTraceWestEnd() async throws {
+        let all = try QA226.loadAll()
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(60)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let g = all.filter { QA226.key($0) == "WEST END AVENUE|E|WEST 66TH STREET/WEST 70TH STREET" }
+        for p in g {
+            let f = p.coordinates.first!, l = p.coordinates.last!
+            QA226.log("PIECE \(p.id.suffix(3)) from \(p.fromStreet) to \(p.to) len=\(Int(QA226.m(f, l))) first=\(f.latitude),\(f.longitude) last=\(l.latitude),\(l.longitude) n=\(p.coordinates.count)")
+        }
+        let start = g[0]
+        let snap = WPParkFlowController.pendingSnap(on: start, near: nil)!
+        flow.enterPending(at: snap, segments: all, engine: engine, now: now, windowEnd: nil, trip: nil)
+        for i in 0..<40 {
+            let r = flow.nudge(meters: 5, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil)
+            let s = flow.snap!
+            QA226.log("step \(i) \(r) piece \(s.segment.id.suffix(3)) frac \(String(format: "%.3f", s.positionFraction)) at \(flow.groundCoordinate!.latitude),\(flow.groundCoordinate!.longitude)")
+            if r == .endOfBlock { break }
+        }
+    }
+}
