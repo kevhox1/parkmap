@@ -56,3 +56,25 @@ Single source of truth for the shown end, clean binary search with the empty and
 - Background the app past the Overnight end and reopen: pick should reset to Auto.
 - AX5 on a real phone: reach the stepper and Done with one thumb.
 - VoiceOver: swipe the "Free until" value up/down to step.
+
+---
+
+# Re-verification (pass 2) at `cfaba092`
+
+**Verdict: PASS.** All three findings are fixed. 0 blocking, 0 significant. Full suite green, no flakes hit.
+
+## Results
+- **Full `WeParkTests`, shipped flags (all off), PR head:** 3261 tests, 1 skipped, 0 failures (3257 + 4 new). No flakes hit.
+- **Diff scope** `deff3047..HEAD`: code touches only `ContentView.swift` (1 call site), `WPForDaysUntil.swift`, `WPForDaysPickerV2.swift`, `ForDaysUntilTests.swift`, plus my QA docs and screenshots. Nothing unrelated.
+- **#1 clamp note (fixed):** chips now pass the raw end; `applyPick` snaps and keeps `clamped`; `setForDaysUntil` stores the flag. New tests cover Today 9 AM (clamped, equals the Overnight end), day chip earlier than the minimum (clamped), and a later pick (not clamped). Live: Today chip gives "Sat 11/28, 7 AM", minus disabled, and the note "Overnight already covers this. Use Overnight for earlier." is shown (`docs/screenshots/dt35-1-qa2/clamp-note.png`).
+- **#2 `restoredPick` `>=` (fixed):** new `testRestoredPick_equalToMinimum_survives`. Live: relaunch with the pick at Sat 7 AM (= Overnight end) kept the For days tile at "until Sat 7 AM".
+- **Changed assertion:** `testRestoredPick_staleOrMissing_resetsToAuto` still asserts 0 and a far-past pick give nil, and the replaced "at minimum resets" line is now "6:30 AM, 30 min before the 7 AM minimum, resets". So a pick strictly before the minimum still resets, and the equality case has its own positive test. The relaxed check does not hide a stale-pick bug. Boundary is covered on both sides (6:30 reset, 7:00 survives); only a 1-second-before case is untested, which is fine.
+- **#3 Tomorrow chip (fixed):** day grid is 3 columns, `singleLine: false`. "Tomorrow" renders at full size, same as siblings (`default-3col.png`, `clamp-note.png`). The picker (header, chips, stepper, quick chips, Auto, Done) fits on iPhone 17 Pro at default size without scrolling.
+- **AX5 (accessibility-XXXL):** day chips become a full-width stack, the content scrolls, Done stays pinned and reachable (tapping it closes the picker; the row shows "Free until: Sat 7 AM"). The clamp note wraps to 4 lines at the bottom of the scroll and is readable (`ax5-top.png`, `ax5-bottom-note.png`).
+
+## Observations (not caused by this PR, not blocking)
+- Selecting "Today" after a clamp highlights "Tomorrow", since the clamped value lands on Sat. This is correct (the chip shows the day of the effective end) but could briefly surprise a user. Minor, 🟢.
+- The "Street cleaning in effect today" pill still overflows its box at AX5 (also seen in pass 1; not in this diff, unverified on `main`).
+
+## Smoke environment
+Own sim `wepark-qa220b-sim` (iPhone 17 Pro, iOS 26.5), location 40.7128,-74.0060, `StoopFlag.designSystemV2Enabled` and `driveModeDefaultEnabled` flipped locally only and reverted (not committed). Sim and derived data deleted.
