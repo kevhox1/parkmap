@@ -343,8 +343,19 @@ nonisolated enum WPParkSideMiniMapLayout {
             let d = delta(from: car, to: coordinate)
             return (d.east * axis.east + d.north * axis.north, d.east * up.east + d.north * up.north)
         }
-        let a = first.map(project)
-        let b = second.map(project)
+        var a = first.map(project)
+        var b = second.map(project)
+        // DT35-3 F1: real blocks are cut into pieces per side, so the two curbs can start and end at
+        // different places along the street. Draw only the span both curbs share, so the two lines
+        // read as aligned (no trapezoid). Skipped when they barely overlap.
+        if let span = commonSpan(a, b) {
+            let clippedA = clip(a, lo: span.lo, hi: span.hi)
+            let clippedB = clip(b, lo: span.lo, hi: span.hi)
+            if clippedA.count >= 2, clippedB.count >= 2 {
+                a = clippedA
+                b = clippedB
+            }
+        }
         let carPoint = project(car)
         let all = a + b + [carPoint]
         guard let minX = all.map(\.x).min(), let maxX = all.map(\.x).max(),
@@ -379,11 +390,98 @@ nonisolated enum WPParkSideMiniMapLayout {
         )
     }
 
+    /// Smallest overlap (metres along the street) worth clipping to.
+    static let minimumCommonSpanMeters = 5.0
+
+    /// The along-street range both polylines cover, or nil when they overlap by less than
+    /// `minimumCommonSpanMeters`.
+    static func commonSpan(
+        _ a: [(x: Double, up: Double)], _ b: [(x: Double, up: Double)]
+    ) -> (lo: Double, hi: Double)? {
+        guard let aMin = a.map(\.x).min(), let aMax = a.map(\.x).max(),
+              let bMin = b.map(\.x).min(), let bMax = b.map(\.x).max() else { return nil }
+        let lo = max(aMin, bMin)
+        let hi = min(aMax, bMax)
+        guard hi - lo >= minimumCommonSpanMeters else { return nil }
+        return (lo, hi)
+    }
+
+    /// The part of the polyline whose along-street coordinate is inside `[lo, hi]`, with the cut
+    /// ends interpolated exactly onto the boundary.
+    static func clip(
+        _ points: [(x: Double, up: Double)], lo: Double, hi: Double
+    ) -> [(x: Double, up: Double)] {
+        var result: [(x: Double, up: Double)] = []
+        func append(_ point: (x: Double, up: Double)) {
+            if let last = result.last, abs(last.x - point.x) < 1e-9, abs(last.up - point.up) < 1e-9 { return }
+            result.append(point)
+        }
+        guard points.count >= 2 else { return [] }
+        for index in 1..<points.count {
+            let p = points[index - 1]
+            let q = points[index]
+            let dx = q.x - p.x
+            var tIn = 0.0
+            var tOut = 1.0
+            if abs(dx) < 1e-12 {
+                guard p.x >= lo, p.x <= hi else { continue }
+            } else {
+                let t0 = (lo - p.x) / dx
+                let t1 = (hi - p.x) / dx
+                tIn = max(0, min(t0, t1))
+                tOut = min(1, max(t0, t1))
+                guard tIn < tOut else { continue }
+            }
+            append((p.x + tIn * dx, p.up + tIn * (q.up - p.up)))
+            append((p.x + tOut * dx, p.up + tOut * (q.up - p.up)))
+        }
+        return result
+    }
+
     private static func delta(
         from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D
     ) -> (east: Double, north: Double) {
         let metersPerDegreeLat = 111_320.0
         let metersPerDegreeLng = metersPerDegreeLat * cos(a.latitude * Double.pi / 180)
         return ((b.longitude - a.longitude) * metersPerDegreeLng, (b.latitude - a.latitude) * metersPerDegreeLat)
+    }
+}
+
+// MARK: - My Car flip memory (DT35-3 F2)
+
+/// Remembers the two curbs of a "Wrong side? Switch" so flipping twice returns EXACTLY to where the
+/// car started (same piece, same coordinate). Re-projecting from the live car each time drifted 1-11 m
+/// and could land on the adjacent piece of a multi-piece block (5.6% of sampled cases). The memory
+/// only applies while the saved car is still at one of the two remembered curbs; any other change to
+/// the car (a re-park, a different car) makes it fall away and the target is recomputed.
+nonisolated struct WPSideFlipMemory: Equatable {
+    private(set) var first: ParkSideOption?
+    private(set) var second: ParkSideOption?
+
+    init() {}
+
+    /// The car was at `current` and the user flipped it to `target`.
+    mutating func recordFlip(from current: ParkSideOption, to target: ParkSideOption) {
+        first = current
+        second = target
+    }
+
+    /// The pair to offer for a car saved at (`segmentID`, `coordinate`): `here` is that curb as
+    /// remembered, `target` the other one. Nil when the car is at neither remembered curb.
+    func pair(
+        segmentID: String?, coordinate: CLLocationCoordinate2D
+    ) -> (here: ParkSideOption, target: ParkSideOption)? {
+        guard let segmentID, let first, let second else { return nil }
+        if Self.matches(first, segmentID: segmentID, coordinate: coordinate) { return (first, second) }
+        if Self.matches(second, segmentID: segmentID, coordinate: coordinate) { return (second, first) }
+        return nil
+    }
+
+    private static func matches(
+        _ option: ParkSideOption, segmentID: String, coordinate: CLLocationCoordinate2D
+    ) -> Bool {
+        option.segment.id == segmentID
+            && abs(option.coordinate.latitude - coordinate.latitude) < 1e-9
+            && abs(option.coordinate.longitude - coordinate.longitude) < 1e-9
     }
 }

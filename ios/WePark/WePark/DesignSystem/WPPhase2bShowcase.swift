@@ -118,7 +118,7 @@ struct WPPhase2bShowcase: View {
         case "snap-park", "snap-dont":
             snapDemo(model: model)
         case "confirm-park", "confirm-dont":
-            VStack { Spacer(); WPParkConfirmCard(model: model, address: "In front of 61 E 12th St", onPark: {}, onMove: {}) }
+            VStack { Spacer(); WPParkConfirmCard(model: model, address: "In front of 61 E 12th St", onPark: {}, onCancel: {}) }
         default:
             VStack(spacing: 0) {
                 Spacer()

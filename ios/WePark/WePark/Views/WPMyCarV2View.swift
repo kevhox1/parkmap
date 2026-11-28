@@ -71,6 +71,10 @@ struct WPMyCarV2View: View {
     /// DT35-2: the other curb of this car's block, found off the main thread. Nil = none in the
     /// data (the row is hidden) or not computed yet.
     @State private var sideTarget: ParkSideOption?
+    /// The curb the car is on, as an option (its saved coordinate, not a re-projection), and the
+    /// memory of the last flip so "Switch" twice returns exactly (DT35-3 F2).
+    @State private var sideHere: ParkSideOption?
+    @State private var flipMemory = WPSideFlipMemory()
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -363,22 +367,39 @@ struct WPMyCarV2View: View {
     private func refreshSideTarget() async {
         guard onSwitchSide != nil, let segment else {
             sideTarget = nil
+            sideHere = nil
             return
         }
         let coordinate = CLLocationCoordinate2D(latitude: liveCar.latitude, longitude: liveCar.longitude)
+        // After a flip the remembered pair is exact: the way back is the original piece and coordinate.
+        if let remembered = flipMemory.pair(segmentID: segment.id, coordinate: coordinate) {
+            sideHere = remembered.here
+            sideTarget = remembered.target
+            return
+        }
         let segments = loadedSegments
-        sideTarget = await Task.detached(priority: .userInitiated) { () -> ParkSideOption? in
+        let resolved = await Task.detached(priority: .userInitiated) { () -> (here: ParkSideOption, target: ParkSideOption)? in
             guard let foot = CandidateSegmentSearch.nearestPointOnPolyline(
                 from: coordinate, polyline: segment.coordinates
             ) else { return nil }
-            let here = ParkSideOption(segment: segment, coordinate: foot.coordinate, fraction: foot.fraction)
-            return ParkSideResolver.switched(from: here, in: segments)
+            // The car's own saved coordinate (not the foot point) is what a flip back restores.
+            let here = ParkSideOption(segment: segment, coordinate: coordinate, fraction: foot.fraction)
+            let footOption = ParkSideOption(segment: segment, coordinate: foot.coordinate, fraction: foot.fraction)
+            guard let target = ParkSideResolver.switched(from: footOption, in: segments) else { return nil }
+            return (here, target)
         }.value
+        sideHere = resolved?.here
+        sideTarget = resolved?.target
+    }
+
+    private func switchSide(to target: ParkSideOption) {
+        if let sideHere { flipMemory.recordFlip(from: sideHere, to: target) }
+        onSwitchSide?(target)
     }
 
     private func switchSideRow(_ target: ParkSideOption) -> some View {
         let otherSide = WPCurbCopy.sideLabel(target.segment.side).lowercased()
-        return Button { onSwitchSide?(target) } label: {
+        return Button { switchSide(to: target) } label: {
             VStack(alignment: .leading, spacing: 2) {
                 Text("Wrong side? Switch")
                     .font(WP.Font.fredoka(18, .semibold, relativeTo: .body))
