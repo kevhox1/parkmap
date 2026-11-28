@@ -647,6 +647,14 @@ struct ContentView: View {
     /// Design system Phase 2a: the ladder's resolution for "For days", computed on every rebuild
     /// while the flag is on so the tile can show the real end date even when not selected.
     @State private var forDaysResolution: ParkAndForgetViewportResolution? = nil
+    /// DT35-1 (Stoop): the user's exact For-days end as seconds since 1970 (0 = Auto ladder).
+    @AppStorage(ForDaysUntilConstants.defaultsKey) private var storedForDaysUntil: Double = 0
+    /// DT35-1: the resolved manual window (effective end + fallback). nil while on Auto.
+    @State private var forDaysState: WPForDaysState? = nil
+    @State private var forDaysPickerOpen: Bool = false
+    @State private var forDaysClampNote: Bool = false
+    /// DT35-1: the launch-time stale-pick reset has run.
+    @State private var forDaysPickChecked: Bool = false
     /// Design system Phase 2a: "Show all sign details" (five curb styles + legend). Persisted.
     @AppStorage("wepark.signDetailsOn") private var signDetailsOn: Bool = false
     /// Flag on: the resting car token's "Drag to a curb to park" hint, until the first park.
@@ -2978,12 +2986,24 @@ struct ContentView: View {
                 )
                 parkAndForgetGuardState = nil
                 if AppConstants.designSystemV2Enabled {
-                    // The "For days" tile always shows the real end date the ladder picks.
-                    forDaysResolution = resolveParkAndForgetViewport(
-                        segments: tileLoader.segments, from: now, engine: engine, strictGreen: true
-                    )
+                    // The "For days" tile always shows the real end date the ladder picks, or
+                    // the user's own pick (DT35-1) when there is one.
+                    resolveForDaysManual(now: now)
+                    if forDaysState == nil {
+                        forDaysResolution = resolveParkAndForgetViewport(
+                            segments: tileLoader.segments, from: now, engine: engine, strictGreen: true
+                        )
+                    }
                 }
             case .parkAndForget:
+                if AppConstants.designSystemV2Enabled { resolveForDaysManual(now: now) }
+                if let manual = forDaysState {
+                    // DT35-1: the map is coloured for the EFFECTIVE end only (the pick, or the
+                    // latest step that still has a clear curb), never the requested time.
+                    parkAndForgetGuardState = nil
+                    parkUntilTarget = manual.effective
+                    break
+                }
                 let resolution = resolveParkAndForgetViewport(
                     segments: tileLoader.segments,
                     from: now,
@@ -4432,6 +4452,9 @@ struct ContentView: View {
     private var v2GoalInput: WPGoalSheetInput {
         let now = lastEvaluatedAt
         let daysEnd: Date
+        if let manual = forDaysState {
+            daysEnd = manual.effective
+        } else {
         switch forDaysResolution {
         case .resolved(let offsetDays, _):
             daysEnd = now.startOfDayET(offsetDays: offsetDays)
@@ -4439,6 +4462,7 @@ struct ContentView: View {
             daysEnd = now.startOfDayET(offsetDays: ParkingGoals.parkAndForgetLadderOffsetDays.last ?? 2)
         case nil:
             daysEnd = ParkingGoals.target(for: .parkAndForget, from: now)
+        }
         }
         var note: String?
         if case .todaySuspended(let reason) = bannerState {
@@ -4454,7 +4478,10 @@ struct ContentView: View {
             loading: v2Loading,
             guardKind: emptyMapGuardKind,
             note: note,
-            morningHour: overnightMorningHour
+            morningHour: overnightMorningHour,
+            forDaysPick: forDaysState == nil ? nil : forDaysPick,
+            forDaysState: forDaysState,
+            forDaysClampNote: forDaysClampNote
         )
     }
 
@@ -4502,7 +4529,9 @@ struct ContentView: View {
                 onLocate: { recenterOnUser() },
                 onParkMyCar: parkPinService.parkedCar == nil && tripPlan == nil
                     ? { if !v2PlaceCarAtUser() { presentBrowseNavSearch() } } : nil,
-                onTileRowFrame: { onboardingTileRowFrame = $0 }
+                onTileRowFrame: { onboardingTileRowFrame = $0 },
+                forDaysPickerOpen: $forDaysPickerOpen,
+                onSetForDaysUntil: { setForDaysUntil($0) }
             )
         }
     }
@@ -4834,6 +4863,7 @@ struct ContentView: View {
     /// straight to the view) so `GoalSelectorView` never needs to import/know about
     /// `ParkingGoals`'s ladder offsets at all — pure presentation, per that file's own header.
     private var emptyMapGuardKind: EmptyMapGuardKind? {
+        if let manual = forDaysState { return manual.guardKind }
         switch parkAndForgetGuardState {
         case .resolved(_, let banner):
             return banner
@@ -4870,6 +4900,78 @@ struct ContentView: View {
         tripPlan = nil
         rebuildOverlays(at: .nowET)
         if let toast { ToastService.shared.show(message: toast) }
+    }
+
+    // MARK: - DT35-1: For-days "Free until" pick (Stoop only)
+
+    /// The stored exact end, or nil for Auto.
+    private var forDaysPick: Date? {
+        storedForDaysUntil > 0 ? Date(timeIntervalSince1970: storedForDaysUntil) : nil
+    }
+
+    /// Resets a stale stored pick (at or before the current Overnight end) back to Auto. Runs on
+    /// the first rebuild after launch and on every foreground.
+    private func resetStaleForDaysPick(now: Date) {
+        guard storedForDaysUntil > 0 else { return }
+        let restored = ForDaysUntil.restoredPick(
+            stored: storedForDaysUntil, now: now, morningHour: overnightMorningHour
+        )
+        if restored == nil {
+            storedForDaysUntil = 0
+            forDaysClampNote = false
+        }
+    }
+
+    /// Recomputes `forDaysState` from the loaded tiles. Called from every rebuild (tile load,
+    /// region settle), never mid-gesture, so a pan always recomputes and a stale fallback is
+    /// never kept. Sets nil on Auto. The user's pick is never overwritten by the fallback.
+    private func resolveForDaysManual(now: Date) {
+        guard AppConstants.designSystemV2Enabled else { forDaysState = nil; return }
+        if !forDaysPickChecked {
+            forDaysPickChecked = true
+            resetStaleForDaysPick(now: now)
+        }
+        guard let pick = forDaysPick else { forDaysState = nil; return }
+        let grid = ForDaysUntil.grid(now: now, morningHour: overnightMorningHour)
+        let snapped = ForDaysUntil.snap(pick, grid: grid)
+        if snapped.date != pick {
+            // The minimum moved past the pick (time passed, or the morning lever): bump it up
+            // and say why once.
+            storedForDaysUntil = snapped.date.timeIntervalSince1970
+            if snapped.clamped { forDaysClampNote = true }
+        }
+        let segments = tileLoader.segments
+        let engine = self.engine
+        let state = ForDaysFallback.resolve(
+            requested: snapped.date,
+            grid: grid,
+            anyClear: { ForDaysFallback.anyClear(segments: segments, engine: engine, from: now, until: $0) },
+            count: { ForDaysFallback.clearCount(segments: segments, engine: engine, from: now, until: $0) }
+        )
+        if selectedGoal == .parkAndForget, state.isFallback,
+           let previous = forDaysState, previous.effective != state.effective {
+            UIAccessibility.post(
+                notification: .announcement,
+                argument: WPForDaysCopy.announcement(effective: state.effective)
+            )
+        }
+        if forDaysState != state { forDaysState = state }
+    }
+
+    /// The picker's single entry point: snaps to the 30 minute grid, clamps up to the Overnight
+    /// end (with the one-line why), stores, and recolors. nil goes back to Auto.
+    private func setForDaysUntil(_ date: Date?) {
+        guard let date else {
+            storedForDaysUntil = 0
+            forDaysClampNote = false
+            rebuildOverlays(at: .nowET)
+            return
+        }
+        let now = Date.nowET
+        let snapped = ForDaysUntil.applyPick(date, now: now, morningHour: overnightMorningHour)
+        forDaysClampNote = snapped.clamped
+        storedForDaysUntil = snapped.date.timeIntervalSince1970
+        rebuildOverlays(at: now)
     }
 
     /// Goals-rework §2: applies a new Overnight morning end hour and recolors live.
@@ -6724,6 +6826,8 @@ struct ContentView: View {
         notificationsMuted = UserDefaults.standard.bool(forKey: AppConstants.notificationsMutedKey)
         // FT-6: Re-sync reminder offsets on foreground (mirrors mute sync pattern).
         reminderOffsets = ReminderOffsets.load(from: .standard)
+        // DT35-1: a stale For-days pick never lingers across a foreground.
+        if AppConstants.designSystemV2Enabled { resetStaleForDaysPick(now: .nowET) }
         // W7.5: Stale-target guard — clear the Park Until filter if the target has passed.
         // This covers the case where the user backgrounded the app past their departure time.
         if let target = parkUntilTarget, target < .nowET {
