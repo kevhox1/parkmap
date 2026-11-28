@@ -2196,10 +2196,18 @@ struct ContentView: View {
             if AppConstants.designSystemV2Enabled {
                 WPTripPlannerV2(
                     initialPlan: tripPlan,
+                    mapCenter: region.center,
+                    userLocation: locationService.userLocation,
                     onConfirm: { plan in
                         activeSheet = dismissTargetOutsideBrowseNav
+                        // R35 F-1: frame the destination, but only when it is a new one (Change
+                        // dates keeps the map where the user left it).
+                        let previousDestination = tripPlan?.destination
                         tripPlan = plan
                         rebuildOverlays(at: .nowET)
+                        if let destination = plan.destination, destination != previousDestination {
+                            recenterMap(on: destination.coordinate)
+                        }
                     },
                     onCancel: { activeSheet = dismissTargetOutsideBrowseNav }
                 )
@@ -4443,11 +4451,14 @@ struct ContentView: View {
             // Ambient-only (§0.8.7) — never rebuilt inside the escalated Cruise session.
             if let plan = tripPlan, !driveModeActive {
                 if AppConstants.designSystemV2Enabled {
-                    WPTripMapCard(
+                    WPTripMapCardHost(
                         plan: plan,
                         now: lastEvaluatedAt,
                         arrivalCovered: aspService.calendarCovers(plan.arrival),
                         departureCovered: aspService.calendarCovers(plan.departure),
+                        segments: tileLoader.segments,
+                        tileCoverage: tileLoader.tileCoverage,
+                        engine: engine,
                         onChangeDates: { activeSheet = .tripPlanner },
                         onBackToLive: { exitTripPlan() }
                     )
