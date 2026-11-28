@@ -1301,3 +1301,7 @@ The spot was free until Tuesday morning, so no short reminder could be set. Not 
 ### New feature requests (Kevin, same session)
 - **F-1 Plan a Trip needs a destination address.** Today it only takes arrival and departure times (`Views/WPTripPlannerV2.swift`). Kevin wants to enter an address and see that destination's parking for the trip window.
 - **F-2 Optimal parking route ("Parking Hunt").** Set a destination, and the app plans the best route or loop to find free parking near it, either with in-app directions or handed off to Apple Maps. Stickier for new users. "Optimal" needs workshopping. Builds on `docs/smart-parking-route-2.0-concept.md` (June 2026) and the cruise-guidance docs.
+
+### Follow-ups queued (2026-11-28)
+- **R35-6 🟡** Since #230, in Stoop the legacy Drive Mode goal pill and `goalWindowLabel` count down from the 5-minute window instant, so the countdown may step every 5 min instead of every minute. Should be `max(live, instant)` like the dock (PR #230 QA finding 3).
+- **R35-7 ℹ️** The #230 zoom-out lag fix was verified by code reading only. The Mac was too loaded to measure. Check on the device in build 36: zoom out past about 2 km and see whether the map hangs.
