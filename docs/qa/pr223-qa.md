@@ -144,3 +144,28 @@ Screenshots: `docs/qa/pr223-assets/reverify2/`. Text sizes were set with `simctl
 
 ## What's working
 The bottom-only margin plus compensation fixed the original puck problem exactly (51.4% vs 52.3% on `main`), the logo now survives the default and AX2 moving cases that failed last pass, margins reset cleanly, and the suite is green. One more round on the tall-stack case should close it.
+
+---
+
+# Re-verification 3 (re-frame guard, head `64bedd87`) — 2026-11-27
+
+**Verdict on (a): PASS.** The 1.5 s re-frame no longer overrides a user pan. AX3/AX5 moving attribution (b) is out of scope here, as agreed.
+
+## Diff review (`b8bc9240..HEAD`, 4 files, +32/-3)
+- Both re-frames are guarded. The single `reframe` closure in `onSetBottomChromeInset` now checks `MapBottomInsetReframePolicy.shouldReframe(followPaused: actions?.driveFollowPaused ?? true)` at fire time. The same closure is used for the immediate call and the 1.5 s delayed call, so both are covered. The weak `actions` capture defaults to "paused" if the actions object is gone, which fails safe.
+- `driveFollowPaused` is set true in `handleDrivePanDetected` (pan and pinch both route here, per the FT-17 note) and false on drive start, `recenterDriveMode()` and drive end. Every site that writes `followPaused = false` also writes the mirror (lines 6114, 6564, 6605); the one `= true` site mirrors too. No other writer of `followPaused` exists.
+- Backgrounding mid-drive: no reset on either flag, and none is needed, since `followPaused` itself persists across backgrounding. The two stay in lockstep.
+- Nothing else changed.
+
+## Tests
+`MapBottomInsetTests`, `DriveCameraTiltTests`, `StoopPhase6aFollowupTests`: 35 tests, 0 failures (`-parallel-testing-enabled NO -jobs 4`). Full suite not re-run (builder reported 3357/0).
+
+## Live check (own sim, flags flipped locally and reverted, nothing committed)
+Screenshots in `docs/qa/pr223-assets/reverify3/`.
+- **Pan right after start: PASS.** Tapped Start driving, then began a pan about 0.3 s later (1 s slow swipe, so it landed inside the 1.5 s window). With GPS moving at 12 m/s, the Recenter button showed and the map stayed where I panned at about 3 s (`pan-race-3s.png`) and about 6 s (`pan-race-6s.png`), through several ticks. The puck drifted through the panned map rather than being re-centred.
+- **Recenter: PASS.** After a pan, tapping Recenter put the puck at 1333/2576 = 51.7% of screen height (`recenter.png`).
+- **Normal start, no touch: PASS.** Puck at about 51.2% (1328/2576) with Maps logo and Legal visible above the card stack at default size (`normal-start.png`).
+- **Tooling note:** the axe fast swipe (0.25-0.3 s) did not register as a pan at all, in this build or at any point, so it neither confirms nor refutes the guard. A slow swipe (1 s, `--delta 5`) registers. The first-run "Keep WePark in Front" modal also swallowed my first attempt; I dismissed it and restarted.
+- **Limit:** my swipe latency means I cannot place the pan at an exact millisecond inside the window. Combined with the code reading (guard checked at fire time in the closure that both paths share), I rate this PASS rather than "inconclusive".
+
+Sim and derived data deleted at the end of the run.
