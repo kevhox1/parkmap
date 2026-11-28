@@ -374,6 +374,8 @@ struct WPDriveTopChromeV2: View {
     let approaching: Bool
     let endAccessibilityLabel: String
     let onEnd: () -> Void
+    /// DT35-5: "Eastbound" etc. Nil (default) shows the street alone.
+    var direction: String? = nil
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
@@ -383,7 +385,7 @@ struct WPDriveTopChromeV2: View {
             let layout = HStackLayout(alignment: .top, spacing: WP.Space.s3)
             layout {
                 if let street {
-                    Text(street)
+                    Text(WPDriveDirection.pillText(street: street, direction: direction))
                         .font(WP.Font.fredoka(22, .semibold, relativeTo: .title3))
                         .foregroundStyle(WPDrivePalette.ink)
                         .fixedSize(horizontal: false, vertical: true)
@@ -391,7 +393,7 @@ struct WPDriveTopChromeV2: View {
                         .padding(.vertical, WP.Space.s2)
                         .frame(minHeight: 56, alignment: .leading)
                         .background(RoundedRectangle(cornerRadius: 28, style: .continuous).fill(WPDrivePalette.white))
-                        .accessibilityLabel("Street: \(street)")
+                        .accessibilityLabel(WPDriveDirection.accessibilityText(street: street, direction: direction))
                 }
                 Spacer(minLength: 0)
                 Button("End", action: onEnd)
