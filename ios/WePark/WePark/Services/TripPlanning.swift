@@ -15,15 +15,35 @@
 //  (the safe side, red); `calendarCovers` only drives the user-facing notice.
 //
 
+import CoreLocation
 import Foundation
 
 // MARK: - TripPlan
 
 /// A planned visit. Never read by the drive card, voice, or Start Driving: it lives only in
 /// `ContentView.tripPlan` and the trip overlay branch of `rebuildOverlays`.
+///
+/// R35 F-1: the plan may name a destination (Stoop planner "Where to?"). It is optional with a nil
+/// default, so every `TripPlan(arrival:departure:)` call keeps compiling, and a plan without one
+/// is the old whole-map trip. Memberwise-init order equals the property order below.
 nonisolated struct TripPlan: Equatable {
     let arrival: Date
     let departure: Date
+    var destination: TripDestination? = nil
+}
+
+/// Where a trip is going. Not persisted (the plan lives in `ContentView` `@State`).
+nonisolated struct TripDestination: Equatable {
+    /// "Penn Station", "350 5th Ave", or "Near 350 5th Ave" for a map-centre default.
+    let name: String
+    /// Street address when the place has one and it differs from the name.
+    let address: String?
+    let latitude: Double
+    let longitude: Double
+
+    var coordinate: CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+    }
 }
 
 // MARK: - Validation
