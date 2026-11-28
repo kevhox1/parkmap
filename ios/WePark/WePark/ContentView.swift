@@ -244,6 +244,9 @@ enum ActiveSheet: Identifiable {
     /// On "I checked — Park here" → transitions to ActiveSheet.parkConfirm(intent).
     /// The W8.5d arrival prompt path BYPASSES this sheet (spec §5.4).
     case signCheckConfirm(intent: PinDropIntent)
+    /// DT35-2 (Stoop only): the side-aware park card that replaces `parkConfirm` in Stoop. Asks
+    /// "Which side did you park on?" when GPS cannot tell the two curbs apart.
+    case parkSide(WPParkSideSession)
     /// Community 1.0 / Tier 1: read-only detail sheet for a community pin (filming / special_event).
     /// Presented when the user taps a `CommunityPinAnnotation` on the map.
     case pinDetail(CommunityPin)
@@ -377,6 +380,7 @@ enum ActiveSheet: Identifiable {
         case .pinDetail(let pin):         return "pinDetail-\(pin.id)"
         case .reportPin(let coord, _, _, _, _): return "reportPin-\(coord.latitude)-\(coord.longitude)"
         case .signCheckConfirm(let intent): return "signCheckConfirm-\(intent.id)"
+        case .parkSide(let session):      return "parkSide-\(session.id)"
         case .parkingGuide:               return "parkingGuide"
         case .blockRestrictionReport(let segments):
             return "blockRestrictionReport-" + segments.map(\.id).joined(separator: ",")
@@ -542,6 +546,9 @@ struct ContentView: View {
     /// Used by onReceive(pinDropped) to cancel the old car's notifications precisely.
     /// Initialized from parkPinService.parkedCar at load time (in .task).
     @State private var previousCarID: UUID? = nil
+    /// DT35-2 (Stoop only): the side decision made when the driver tapped "Park here", carried
+    /// across the sign checklist to the side card. Nil on every legacy path.
+    @State private var v2PendingParkSide: WPParkSideSession? = nil
 
     /// Overlay payload passed into MapViewRepresentable.
     /// Rebuilt on every tick or when selectedSegmentID changes.
@@ -1733,6 +1740,9 @@ struct ContentView: View {
             .presentationBackground(.regularMaterial)
             .presentationCornerRadius(20)
 
+        case .parkSide(let session):
+            v2ParkSideSheetContent(session)
+
         case .parkedCarDetail(let car):
             myCarSheetContent(car)
 
@@ -1960,7 +1970,12 @@ struct ContentView: View {
             SignCheckConfirmView(
                 intent: intent,
                 onConfirm: { confirmedIntent in
-                    activeSheet = .parkConfirm(confirmedIntent)
+                    // DT35-2: Stoop goes to the side-aware card; legacy is unchanged.
+                    if AppConstants.designSystemV2Enabled, let session = v2PendingParkSide {
+                        activeSheet = .parkSide(session)
+                    } else {
+                        activeSheet = .parkConfirm(confirmedIntent)
+                    }
                 },
                 onCancel: {
                     // Always presented while driveModeActive == true, so this always
@@ -1987,6 +2002,15 @@ struct ContentView: View {
             // "Not Yet" dismiss path:
             //   1. Dismiss sheet only. Drive Mode stays active. arrivalPromptFired stays true.
             let arrivalParkHere: (CLLocationCoordinate2D) -> Void = { arrivalCoord in
+                    // DT35-2 (Stoop): decide the side first (confident / ask), never save a car with
+                    // no side. The card's "Park here" runs the same save, end-drive and Park Until
+                    // steps as below.
+                    if AppConstants.designSystemV2Enabled {
+                        activeSheet = .parkSide(WPParkSideSession(
+                            decision: v2DecideParkSide(), source: .arrival, rawCoordinate: arrivalCoord
+                        ))
+                        return
+                    }
                     // driveModeActive is still true at this instant (endDriveMode() below
                     // is what flips it) — dismissTargetOutsideBrowseNav resolves to nil
                     // here either way; it's immediately reassigned to `.parkUntil` below.
@@ -2255,7 +2279,8 @@ struct ContentView: View {
                 onDismiss: { activeSheet = dismissTargetOutsideBrowseNav },
                 onClearPin: { performClearParkedCar(car) },
                 onOpenSpotPass: myCarSpotPassAction,
-                spotPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass
+                spotPassArmed: AppConstants.spotHandoffEnabled && SpotPassDriverRuntime.shared.hasArmedPass,
+                onSwitchSide: { option in v2SwitchCarSide(option) }
             )
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)
@@ -4836,6 +4861,136 @@ struct ContentView: View {
         confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true), address: address)
     }
 
+    // MARK: DT35-2 side-aware park card (Stoop)
+
+    /// The side decision from the latest fix and the recent track. No fix at all is a weak fix
+    /// (nothing is picked).
+    private func v2DecideParkSide() -> ParkSideDecision {
+        guard let fix = locationService.latestParkFix else { return .weakFix }
+        return ParkSideResolver.decide(
+            fix: fix, track: locationService.recentTrack, segments: tileLoader.segments
+        )
+    }
+
+    /// Stoop drive "Park here": decide the side now, then show the sign checklist (unchanged), then
+    /// the side card.
+    private func v2DriveParkHereTapped(at loc: CLLocationCoordinate2D) {
+        let decision = v2DecideParkSide()
+        v2PendingParkSide = WPParkSideSession(decision: decision, source: .drive, rawCoordinate: loc)
+        var detected: Segment?
+        switch decision {
+        case .confident(let pick), .onlyCurb(let pick): detected = pick.segment
+        case .ask, .weakFix, .noCurb: detected = nil
+        }
+        let intent = PinDropIntent(
+            pinLat: loc.latitude,
+            pinLng: loc.longitude,
+            detectedSegment: detected,
+            detectedSegmentDistance: nil,
+            alternativeCandidates: []
+        )
+        activeSheet = .signCheckConfirm(intent: intent)
+    }
+
+    @ViewBuilder
+    private func v2ParkSideSheetContent(_ session: WPParkSideSession) -> some View {
+        WPParkSideCardV2(
+            decision: session.decision,
+            segments: tileLoader.segments,
+            addresses: addressCoordinator,
+            verdict: { segment in
+                WPNeighborVerdict.resolve(
+                    segment: segment, engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan,
+                    reports: v2NeighborReports(for: segment, now: .nowET)
+                )
+            },
+            onFocus: { focus in v2ParkSideFocusChanged(focus) },
+            onPark: { pick in v2ParkSidePark(pick, session: session) },
+            onSaveWithoutCurb: { v2ParkSideSaveWithoutCurb(session) },
+            onRetry: { v2DecideParkSide() },
+            onPlaceOnMap: { v2ParkSidePlaceOnMap() },
+            onCancel: {
+                v2PendingParkSide = nil
+                activeSheet = dismissTargetOutsideBrowseNav
+            }
+        )
+        .presentationDragIndicator(.visible)
+        .presentationBackground(WP.card)
+        .presentationCornerRadius(WP.Radius.sheet)
+    }
+
+    /// Resolves addresses for whatever the card is about: both curbs while asking (so each button
+    /// can say "near 15 Stanton St"), the placement address for the picked curb.
+    private func v2ParkSideFocusChanged(_ focus: WPParkSideFocus) {
+        guard AppConstants.addressAnchoredParkingEnabled else { return }
+        switch focus {
+        case .none:
+            addressCoordinator.clearPlacement()
+            addressCoordinator.clearSideHints()
+        case .ask(let first, let second):
+            addressCoordinator.clearPlacement()
+            addressCoordinator.resolveSideHints([
+                ParkingAddressRequest(option: first), ParkingAddressRequest(option: second)
+            ])
+        case .picked(let option):
+            addressCoordinator.placementSnapChanged(ParkingAddressRequest(option: option))
+        }
+    }
+
+    /// The card's "Park here": the existing `confirmPinDrop` (park, save, reminders are not
+    /// forked). The arrival source also ends Drive Mode and opens Park Until, like the arrival
+    /// prompt's own save does.
+    private func v2ParkSidePark(_ pick: ParkSidePick, session: WPParkSideSession) {
+        let address = AppConstants.addressAnchoredParkingEnabled ? addressCoordinator.placementAddress : nil
+        let intent = PinDropIntent(
+            pinLat: pick.coordinate.latitude, pinLng: pick.coordinate.longitude,
+            detectedSegment: pick.segment, detectedSegmentDistance: nil,
+            alternativeCandidates: []
+        )
+        v2FinishParkSide(intent: intent, address: address, source: session.source)
+    }
+
+    /// noCurb: save the car at the raw position with no street (same as the legacy no-data save).
+    private func v2ParkSideSaveWithoutCurb(_ session: WPParkSideSession) {
+        let intent = PinDropIntent(
+            pinLat: session.rawCoordinate.latitude, pinLng: session.rawCoordinate.longitude,
+            detectedSegment: nil, detectedSegmentDistance: nil, alternativeCandidates: []
+        )
+        v2FinishParkSide(intent: intent, address: nil, source: session.source)
+    }
+
+    private func v2FinishParkSide(intent: PinDropIntent, address: ParkingAddress?, source: WPParkSideSession.Source) {
+        v2PendingParkSide = nil
+        activeSheet = dismissTargetOutsideBrowseNav
+        confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true), address: address)
+        if source == .arrival {
+            endDriveMode()
+            activeSheet = .parkUntil
+        }
+    }
+
+    /// weakFix "Place it on the map": leaves Drive Mode so the resting car token (drag to a curb) is
+    /// available. Nothing is saved.
+    private func v2ParkSidePlaceOnMap() {
+        v2PendingParkSide = nil
+        activeSheet = dismissTargetOutsideBrowseNav
+        if driveModeActive { endDriveMode() }
+    }
+
+    /// My Car "Wrong side? Switch": moves the saved car to `option`, re-resolves its address and
+    /// reschedules reminders (old ones are cancelled by the same call).
+    private func v2SwitchCarSide(_ option: ParkSideOption) {
+        guard let car = parkPinService.parkedCar,
+              let updated = parkPinService.replaceSide(
+                carID: car.id, with: option.segment, coordinate: option.coordinate
+              ) else { return }
+        addressCoordinator.forgetAttempts(forCarID: car.id)
+        ensureParkedCarAddress()
+        NotificationScheduler.shared.cancelAllThenSchedule(
+            for: updated, oldCarID: updated.id, loadedSegments: tileLoader.segments, engine: engine
+        )
+    }
+
     @ViewBuilder
     private var v2ReminderPrimingContent: some View {
         WPReminderPrimingSheet(
@@ -5379,6 +5534,11 @@ struct ContentView: View {
     private func driveParkHereTapped() {
         guard noBlockingSheetPresented else { return }
         guard let loc = locationService.userLocation else { return }
+        // DT35-2 (Stoop): the side-aware path. Legacy below is unchanged.
+        if AppConstants.designSystemV2Enabled {
+            v2DriveParkHereTapped(at: loc)
+            return
+        }
         let candidates = findCandidateSegments(
             lat: loc.latitude,
             lng: loc.longitude,
