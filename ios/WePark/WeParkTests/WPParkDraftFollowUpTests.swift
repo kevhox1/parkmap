@@ -84,21 +84,17 @@ final class WPParkNudgeBlockEndTests: XCTestCase {
             switch WPParkFlowController.nudgeTarget(on: segment, fraction: fraction, meters: meters, in: all) {
             case .endOfBlock:
                 return (step, true, nil)
-            case .move(let coordinate):
-                var best: (piece: Segment, distance: Double, fraction: Double)?
-                for piece in group {
-                    guard let foot = CandidateSegmentSearch.nearestPointOnPolyline(
-                        from: coordinate, polyline: piece.coordinates
-                    ) else { continue }
-                    if best == nil || foot.distanceMeters < (best?.distance ?? .infinity) {
-                        best = (piece, foot.distanceMeters, foot.fraction)
-                    }
-                }
-                guard let best, best.distance < 1.0 else {
+            case .move(let landing):
+                // The step names its own piece: it must be one of the block's, with the coordinate
+                // on that curb.
+                guard group.contains(where: { $0.id == landing.segment.id }),
+                      let foot = CandidateSegmentSearch.nearestPointOnPolyline(
+                        from: landing.coordinate, polyline: landing.segment.coordinates
+                      ), foot.distanceMeters < 1.0 else {
                     return (step, false, "step \(step) landed off the block (\(segment.id))")
                 }
-                segment = best.piece
-                fraction = best.fraction
+                segment = landing.segment
+                fraction = landing.fraction
             }
         }
         return (400, false, nil)
@@ -136,7 +132,7 @@ final class WPParkNudgeBlockEndTests: XCTestCase {
         guard case .move(let toEnd) = WPParkFlowController.nudgeTarget(on: lone, fraction: 0.95, meters: 10, in: [lone, cross]) else {
             return XCTFail("expected a move to the end")
         }
-        XCTAssertLessThan(Pr2FollowUpTiles.meters(toEnd, CurbSnapTestFixtures.coordinate(x: 60, y: 0)), 0.5)
+        XCTAssertLessThan(Pr2FollowUpTiles.meters(toEnd.coordinate, CurbSnapTestFixtures.coordinate(x: 60, y: 0)), 0.5)
     }
 
     /// The full flow (snap index, verdict, card), on Lexington with E 105th and E 106th present: the
