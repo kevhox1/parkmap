@@ -2393,7 +2393,7 @@ struct ContentView: View {
             },
             onDone: { activeSheet = dismissTargetOutsideBrowseNav }
         )
-        .presentationDetents([.fraction(0.8), .large])
+        // R35-10: detents come from `WPMoreSheetV2` itself (content-sized, plus large).
         .presentationDragIndicator(.visible)
         .presentationBackground(WP.card)
         .presentationCornerRadius(WP.Radius.sheet)
@@ -3059,8 +3059,10 @@ struct ContentView: View {
             parkUntilIgnoresMeteredPayment = false
             switch selectedGoal {
             case .freeOvernight, .freeFewHours:
-                parkUntilTarget = ParkingGoals.target(
-                    for: selectedGoal, from: now, overnightMorningHour: overnightMorningHour
+                // R35-8: the end is the goal's OWN, never a leftover For days pick.
+                parkUntilTarget = WPGoalEnd.end(
+                    goal: selectedGoal, now: now, morningHour: overnightMorningHour,
+                    manualForDaysEffective: forDaysState?.effective
                 )
                 parkAndForgetGuardState = nil
                 if zoomedOutOff {
@@ -4554,7 +4556,7 @@ struct ContentView: View {
                         trailingClause: content.trailingClause,
                         compactText: v2DriveActive && driveModeActive
                             ? WPDriveStackBudget.compactPillText(
-                                endLabel: ParkingGoals.windowEndLabel(for: activeGoal, end: target, from: lastEvaluatedAt)
+                                endLabel: ParkingGoals.windowEndLabel(for: activeGoal, end: target, from: goalClockNow)
                             )
                             : nil
                     ) {
@@ -5322,6 +5324,25 @@ struct ContentView: View {
     private func selectGoal(_ goal: ParkingGoal) {
         selectedGoal = goal
         rebuildOverlays(at: .nowET)
+        refreshDrivingContextForGoalChange()
+    }
+
+    /// R35-8: the drive verdict cards are computed on GPS ticks, so after a goal change they could
+    /// keep describing the previous goal's window until the next tick. Recompute once, against the
+    /// goal that is now active. No-op outside Drive Mode.
+    private func refreshDrivingContextForGoalChange() {
+        guard driveModeActive, let service = drivingContextService,
+              let coord = locationService.userLocation else { return }
+        service.update(
+            coordinate: coord,
+            heading: locationService.driveHeading,
+            segments: tileLoader.segments,
+            engine: engine,
+            parkUntilMode: parkUntilMode,
+            parkUntilTarget: parkUntilTarget,
+            parkUntilIgnoresMeteredPayment: parkUntilIgnoresMeteredPayment
+        )
+        drivingContext = service.currentContext
     }
 
     /// Goals-rework §2: the dock banner's window copy for the active goal. Uses the resolved
@@ -5338,7 +5359,7 @@ struct ContentView: View {
     /// R35 PR2b: the instant goal copy counts from. Stoop: the window instant the map is coloured
     /// for (the end comes from it, so the "from" must too). Flag off: unchanged `lastEvaluatedAt`.
     private var goalClockNow: Date {
-        AppConstants.designSystemV2Enabled ? windowInstant : lastEvaluatedAt
+        WPWindowClock.goalCopyClock(stoop: AppConstants.designSystemV2Enabled, instant: windowInstant, live: lastEvaluatedAt)
     }
 
     /// Plan a Trip: leaves trip mode and returns the map to the live goal/palette. `toast`
@@ -6560,7 +6581,7 @@ struct ContentView: View {
     ) {
         ambientLookStep = step
         ambientLookUserAdjusted = false
-        let span = AmbientDrivingLook.span(
+        let altitude = AmbientDrivingLook.altitude(
             for: step, cruiseSpan: MapViewRepresentable.driveModeCameraSpan,
             stoop: AppConstants.designSystemV2Enabled
         )
@@ -6569,7 +6590,7 @@ struct ContentView: View {
             // Design system flag on: top-down (round-2 mocks). Flag off: today's tilted look.
             AppConstants.designSystemV2Enabled ? 0 : MapViewRepresentable.driveModePitch,
             AmbientDrivingLook.heading,
-            MapViewRepresentable.altitudeForSpan(span),
+            altitude,
             animated
         )
     }

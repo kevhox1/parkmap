@@ -222,6 +222,25 @@ enum WPDriveVerdict {
         StreetNameFormatter.displayCanonical(raw)
     }
 
+    /// R35-9: short forms of the long Manhattan names, used ONLY by the drive street pill when the
+    /// full name would not fit on one line. Keys are lower case display names. VoiceOver always
+    /// reads the full name.
+    nonisolated private static let streetAbbreviations: [String: String] = [
+        "adam clayton powell jr blvd": "ACP Jr Blvd",
+        "adam clayton powell blvd": "ACP Jr Blvd",
+        "adam c powell blvd": "ACP Jr Blvd",
+        "frederick douglass blvd": "F Douglass Blvd",
+        "fred douglass blvd": "F Douglass Blvd",
+        "frederick douglass cir": "F Douglass Cir",
+        "martin luther king jr blvd": "MLK Jr Blvd",
+        "dr martin luther king jr blvd": "MLK Jr Blvd",
+    ]
+
+    /// The short form of `title` when the table has one, else `title` unchanged.
+    nonisolated static func abbreviatedStreet(_ title: String) -> String {
+        streetAbbreviations[title.lowercased()] ?? title
+    }
+
     /// Final-approach window: closer than this reads "Destination in 400 ft".
     nonisolated static let nearMeters: Double = 161
 

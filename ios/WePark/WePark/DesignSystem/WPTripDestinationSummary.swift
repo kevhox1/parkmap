@@ -51,6 +51,11 @@ nonisolated enum WPTripDestinationSummary {
     ) -> Outcome? {
         let point = destination.coordinate
         guard isInsideCoverage(point) else { return .outsideCoverage }
+        // R35-12: inside the Manhattan box is not enough. No tile within the counting radius means
+        // there is no curb data here (DUMBO, Downtown Brooklyn): say so now, never "Checking...".
+        if let coverage, !coverage.hasTiles(near: point, radiusMeters: WPFreeCurbCounter.radiusMeters) {
+            return .outsideCoverage
+        }
         guard let coverage, coverage.covers(point, radiusMeters: WPFreeCurbCounter.radiusMeters) else { return nil }
         let nearestCovered = coverage.covers(point, radiusMeters: WPFreeCurbCounter.coverageProbeMeters)
         var free = 0
@@ -77,7 +82,8 @@ nonisolated enum WPTripDestinationSummary {
     static func line(for outcome: Outcome, destination: TripDestination) -> String {
         switch outcome {
         case .outsideCoverage:
-            return "\(subject(destination)) is outside Manhattan. WePark can't show free curbs there yet."
+            // Same plain words as the destination picker's "Not covered yet" row.
+            return WPTripDestinationPickerLogic.notCoveredTitle + ". " + WPTripDestinationPickerLogic.notCoveredDetail
         case .counted(let free, let nearest):
             let prefix = nearPrefix(destination)
             if free == 0 {

@@ -148,9 +148,24 @@ struct WPMoreSheetV2: View {
     let onToggleSignDetails: () -> Void
     let onDone: () -> Void
 
+    /// R35-10: the sheet opens as tall as its rows (title bar + list), not at a fixed fraction that
+    /// left about 225 pt of empty card below them.
+    @State private var titleHeight: CGFloat = 0
+    @State private var listHeight: CGFloat = 0
+    @State private var bottomInset: CGFloat = 0
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    /// 0 until both parts are measured (`clamp` then falls back to its minimum).
+    private var measuredHeight: CGFloat {
+        guard titleHeight > 0, listHeight > 0 else { return 0 }
+        if #available(iOS 26, *) { return titleHeight + listHeight }
+        return titleHeight + listHeight + bottomInset
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             WPSheetTitleBar(title: "More", onClose: onDone)
+                .wpReportHeight(into: $titleHeight)
             ScrollView {
                 WPListCard {
                     ForEach(Array(rows.enumerated()), id: \.element.title) { index, row in
@@ -169,10 +184,13 @@ struct WPMoreSheetV2: View {
                 }
                 .padding(.horizontal, WP.Space.screenMargin)
                 .padding(.bottom, WP.Space.s4)
+                .wpReportHeight(into: $listHeight)
             }
             .scrollBounceBehavior(.basedOnSize)
         }
+        .wpReportBottomInset(into: $bottomInset)
         .background(WP.card.ignoresSafeArea())
+        .wpContentSizedSheet(measured: measuredHeight, largeOnly: typeSize.isAccessibilitySize)
     }
 }
 

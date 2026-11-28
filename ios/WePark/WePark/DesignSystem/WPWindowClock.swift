@@ -30,6 +30,15 @@ nonisolated enum WPWindowClock {
         return Date(timeIntervalSince1970: (t / step).rounded(.down) * step)
     }
 
+    /// R35-6: the instant goal copy ("Now → ...", the pill, the dock label) counts from. Stoop uses
+    /// the later of the live clock and the window instant (the instant is never later than real
+    /// now, so this is the live clock; `max` keeps it safe if the clock was set back) so day words
+    /// and countdowns step with the minute, not every 5 minutes. The END stays on the 5 minute
+    /// grid because it is computed from the instant. Flag off: the legacy live clock.
+    static func goalCopyClock(stoop: Bool, instant: Date, live: Date) -> Date {
+        stoop ? max(live, instant) : live
+    }
+
     /// True when a recolor is due: the grid cell changed (either direction, so a clock that was set
     /// back also heals), or `now` is at or after the end the map is currently showing.
     static func needsRecolor(applied: Date, now: Date, displayedEnd: Date?) -> Bool {
@@ -119,5 +128,14 @@ nonisolated final class WPOverlaySignatureBox {
         last = signature
         publishCount += 1
         return true
+    }
+}
+
+/// R35-8: which end the map and the drive cards use for the ACTIVE goal. A For days pick only
+/// ever applies to the For days goal; a leftover pick must never leak into Overnight or A few hours.
+nonisolated enum WPGoalEnd {
+    static func end(goal: ParkingGoal, now: Date, morningHour: Int, manualForDaysEffective: Date?) -> Date {
+        if goal == .parkAndForget, let manualForDaysEffective { return manualForDaysEffective }
+        return ParkingGoals.target(for: goal, from: now, overnightMorningHour: morningHour)
     }
 }

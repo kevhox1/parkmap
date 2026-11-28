@@ -39,6 +39,30 @@ nonisolated enum WPTripDestinationPickerLogic {
     static let notCoveredTitle = "Not covered yet"
     static let notCoveredDetail = "WePark covers Manhattan today. Curbs here aren't mapped, so nothing is marked as free."
 
+    /// R35-13: two places are the same recent only when the name AND the spot match (within about
+    /// 11 m). Two "Starbucks" on different blocks are two chips; a repeat of the same one is not.
+    static func isSamePlace(_ a: RecentDestination, _ b: RecentDestination) -> Bool {
+        a.name == b.name
+            && abs(a.latitude - b.latitude) < 0.0001 && abs(a.longitude - b.longitude) < 0.0001
+    }
+
+    /// The recent chips on the planner: most recent first, no repeats, never the place already
+    /// chosen (matched by name AND coordinate), at most `limit`.
+    static func chipRecents(
+        _ recents: [RecentDestination], excluding current: TripDestination?, limit: Int = 3
+    ) -> [RecentDestination] {
+        var shown: [RecentDestination] = []
+        for recent in recents {
+            if let current, recent.name == current.name,
+               abs(recent.latitude - current.latitude) < 0.0001,
+               abs(recent.longitude - current.longitude) < 0.0001 { continue }
+            if shown.contains(where: { isSamePlace($0, recent) }) { continue }
+            shown.append(recent)
+            if shown.count == limit { break }
+        }
+        return shown
+    }
+
     static func content(query: String, completionCount: Int, settled: Bool) -> Content {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return .recents }
