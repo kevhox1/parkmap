@@ -66,3 +66,52 @@ Never-ask-nothing flow reads well, big targets, honest weakFix, clean `replaceSi
 4. Pull in, then Other side, then back: car returns to the same spot; verdict follows the side.
 5. My Car, "Wrong side? Switch": same car, new address, exactly one set of reminders (check the pending notifications).
 6. Hold GPS poor (garage exit): weakFix, nothing saved.
+
+---
+
+# Re-verification (QA pass 2) — head `4b15e385`
+
+**Verdict: PASS with follow-ups.** The blocker is fixed. No new blocking findings.
+
+## Diff scope (item 7)
+`git diff b75f1716..4b15e385` touches exactly two files: `Services/ParkSideResolver.swift` (+60/-10: new `facingOpposite`, used by `decide` and `switched`) and the new `WeParkTests/ParkSideMultiPieceTests.swift`. Legacy `oppositeSideCandidate` is unchanged and its only remaining caller (`ContentView.swift:7451`) is the legacy path. All Stoop call sites (`WPParkSideLogic`, `WPParkFlowV2.oppositeSnap`, `WPMyCarV2View.refreshSideTarget`) go through `switched`. Flag-off: no non-Stoop code changed; full suite flags off passes (below).
+
+## Independent probes on real tiles (items 1-2)
+Probe: `docs/qa/pr221-assets/QA221bSweepProbeTests.swift.txt` (throwaway, not committed to the target). Ground truth is independent of the resolver: the facing piece is the opposite-side piece whose along-street interval (on the car-side piece's axis) contains the car; checks run on all ~47.7k Manhattan segments.
+
+- Original Stanton Bowery-Chrystie N_1/N_2/N_3 probe, both tile orders: now ASK/pair with the facing S piece; no confident-at-55 m. (Builder's test and live sim agree.)
+- Named blocks (not the builder's fixtures), 3 car positions per piece, flip/flip-back, decide: Lexington Ave E105-106 (N-S avenue, 6 pieces), Madison Ave E74-75 (4/3 pieces), Amsterdam Ave W72-73 (4/5), Avenue A E11-12, Broadway W101-102 (curved), Broadway E10-12 vs W10-11 + W11-12 (cross-street labels DIFFER between sides), Canal Hudson-Renwick vs Hudson-Watts (labels differ). Result: 0 wrong pieces, 0 along-street jump over 25 m, 0 confident-with-far-piece, 0 misaligned asks. Only oddities are on Canal (tiny 4 m pieces and a diagonal street): flip-back landed on the adjacent piece 1 m away twice, and one tiny piece has no switch (graceful onlyCurb).
+- Sweep, 1 in 20 multi-piece blocks (5,119 car positions): confident-with-far-piece **0**, misaligned ask **0**, switch jump over 25 m **0** (max 8 m). 70 "different piece than my nearest-truth" cases, all within 8 m along-street; they are overlapping pieces (1st Ave, Riverside Dr service roads, Park Ave median, Delancey/Broome) where the resolver prefers the same-cross-street piece, which is the intended rule.
+- Flip-and-return at the stored-option level: card model keeps both options, so exact; verified live below. Re-projection flips (My Car "Wrong side? Switch" twice, which re-projects from the live car each time) return to the same piece in most cases but drift 1-11 m or land on the adjacent piece in 288 of 5,119 sampled cases (5.6%), mostly where the two sides' labels differ. Not unsafe (still the facing curb) — see follow-up F2.
+- Block ends (9,596 positions at 0, 3, 97, 100% of a piece): 546 nil (no switch offered, graceful), 55 "far" cases, all but a few are same-block pieces clamped at the other side's end (8-11 m) in short-piece data; a handful (St Nicholas Ave, Riverside Dr W158, 2nd Ave E124, Stone St) pick a different-block piece 25-50 m along on the loose-label path with the car AT a curb end, where decide still goes confident on the near curb, so no wrong verdict. It never picked the next block's piece when a same-cross-street counterpart existed.
+- One-piece side / side with no pieces / angled street: covered by builder's `testNoParallelOrNoNearbyPiece_returnsNil` plus sweep nils; Broadway W101-102 curved block clean.
+
+## Address hints (item 3)
+Live sim, Stanton Bowery-Chrystie N_2 car, ask card shows "North side - near 10 Stanton St" and "South side - near 15 Stanton St". Picked card: "In front of 10 Stanton St, North side"; Other side shows "In front of 15 Stanton St, South side"; Other side again returns "10 Stanton St, North side". So the hint is for the facing piece at the car's along-street position, matches the earlier ground-truth (even north, odd south, ~15 south as Kevin parked), and flip/flip-back is exact. Screens: `rev-ask-card.png`, `rev-side-north.png`, `rev-side-south-after-flip.png`, `rev-side-back.png`.
+
+## Tests (items 4-5)
+- Full `WeParkTests`, shipped flags, PR head, `-parallel-testing-enabled NO -jobs 4`: **3277 tests, 1 skipped, 0 failures** (no flakes hit).
+- Flags flipped locally (StoopFlag, driveModeDefault, curbPin, addressAnchored, myCarSheetV2), PR head: 3277 run, **34 failure lines = 23 unique tests**, all flag-default/registry guards (e.g. `DesignSystemV01Tests.testFlag_defaultsFalse`, `NotificationCategoryRegistryTests`, `ClipFlowControllerTests.testArm_*`, `StoopPhase6aTests`).
+- Same flips on `origin/main` (`20ffe8f6`), only those 17 test classes: 281 tests, **34 failure lines, 23 unique, name-for-name identical** (`diff` clean). So the 34 are pre-existing (they assert the shipped defaults), not caused by this PR. Resolves old finding #3.
+
+## Sim smoke (item 6)
+Own sim `wepark-qa221b-sim` iOS 26.5, flags flipped locally, never committed.
+- Home map at Stanton shows both curbs aligned (green lines parallel).
+- Drive Mode, Park here, sign checklist, then with fresh fixes the **ask** card (not weak, not confident) with mini map and two "This side" buttons: `rev-ask-card.png`.
+- Pick, Other side, Other side: 10 -> 15 -> 10 (above).
+- AX5 (accessibility-XXXL): side card header and Cancel intact, sheet scrolls to Park here and Other side (`rev-ax5-side-card.png`, `rev-ax5-side-card-scrolled.png`); ask chooser header wraps, Cancel intact, buttons wrap (`rev-ax5-ask-chooser.png`).
+- Not exercised: right/left wording (simulator has no course), My Car Switch, token confirm card, real motion.
+
+## Remaining findings
+- **F1 (minor, visual): the ask mini-map still draws a trapezoid on multi-piece blocks.** On Stanton N_2/S_2 the north line spans the full piece and the south line starts ~12 m late and ends ~2 m early, joined by a diagonal fill. It is data-faithful (the two sides' pieces have different extents) but not "aligned". Suggest clipping both lines to their common along-street span. Owner `@ios-engineer`. Not blocking; the pairing and hints are right.
+- **F2 (minor): My Car "Wrong side? Switch" re-projects each time**, so flipping twice can drift 1-11 m or land on the adjacent piece (5.6% of sampled cases, mostly differing-label blocks). Card/token flows hold stored options and are exact. Optional: remember the original option for one flip-back.
+- **F3 (minor): block-end clamp** can pair a curb up to ~10 m along-street from the car where the other side's piece ends early; no wrong verdict seen.
+- Earlier finding #1: **resolved**. #2: **resolved** (live). #3: **resolved** (above).
+
+## Kevin must check on a real drive
+1. Stanton Bowery-Chrystie, park mid-block on the south side: ask card names near 15 (odd) vs near 10 (even); pick the side you are really on and confirm the verdict matches the signs you see.
+2. Park near a block end/intersection and at an avenue (Lexington/2nd Ave): the card must still offer both sides of THIS block and never a curb up the next one.
+3. Real approach heading: "Curb on your right/left" wording (needs real course; simulator cannot test).
+4. Other side flip: the other curb should be directly across from the car (look at the mini map; a small trapezoid skew is known, F1).
+5. My Car after saving: "Wrong side? Switch" then switch back; check the address and verdict return to what you started with (F2 drift).
+6. A one-way street and a street with a median (Park Ave, 1st Ave tunnel stretch, Riverside Dr): ask vs confident should feel sane and never place you on a service road you are not on.
