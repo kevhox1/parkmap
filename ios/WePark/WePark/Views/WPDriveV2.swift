@@ -345,12 +345,14 @@ struct WPDriveBottomV2: View {
     let onReport: () -> Void
     let onPark: () -> Void
     let onToggleVoice: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let sides = WPDriveVerdict.sides(for: context)
-        // Only the verdicts scroll (AX sizes on a short phone); the actions stay pinned in view.
+        // Only the verdicts scroll (AX sizes); the actions stay pinned in view.
         VStack(spacing: WP.Space.s3) {
-            WPFitScroll(maxHeight: UIScreen.main.bounds.height * 0.55) {
+            WPFitScroll(maxHeight: UIScreen.main.bounds.height
+                * WPDriveStackBudget.sidesMaxHeightFraction(accessibilitySize: dynamicTypeSize.isAccessibilitySize)) {
                 WPDriveSidesV2(left: sides.left, right: sides.right)
             }
             WPDriveActionsV2(
@@ -527,9 +529,34 @@ extension View {
     /// height. At AX5 the pill was squeezed into a one-line frame while its text rendered three
     /// lines tall, overlapping the street pill and the Apple Maps attribution. With `stoop`
     /// false this is a no-op (range up to AX5, no fixed size), so flag-off layout is unchanged.
+    ///
+    /// At accessibility sizes the pill is also a single line (scaled, then truncated; VoiceOver
+    /// keeps the full sentence) so the drive stack stays inside the attribution's budget.
     func wpDrivePillLayout(stoop: Bool) -> some View {
-        self
+        modifier(WPDrivePillLayout(stoop: stoop))
+    }
+}
+
+private struct WPDrivePillLayout: ViewModifier {
+    let stoop: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        let oneLine = stoop && dynamicTypeSize.isAccessibilitySize
+        content
             .dynamicTypeSize(...(stoop ? DynamicTypeSize.accessibility1 : DynamicTypeSize.accessibility5))
+            .lineLimit(oneLine ? 1 : nil)
+            .minimumScaleFactor(oneLine ? 0.75 : 1)
             .fixedSize(horizontal: false, vertical: stoop)
+    }
+}
+
+/// Budget for the drive card's scrolling verdicts. Standard sizes keep 55% of the screen. At
+/// accessibility sizes the whole drive stack (pill, verdicts, actions) has to leave the Apple Maps
+/// logo and Legal link a clear strip below the top chrome, so the verdicts cap lower and scroll
+/// (indicators stay visible) when they would not fit.
+enum WPDriveStackBudget {
+    nonisolated static func sidesMaxHeightFraction(accessibilitySize: Bool) -> CGFloat {
+        accessibilitySize ? 0.38 : 0.55
     }
 }
