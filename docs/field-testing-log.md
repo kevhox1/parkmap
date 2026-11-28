@@ -1324,3 +1324,8 @@ The spot was free until Tuesday morning, so no short reminder could be set. Not 
 - **R35-13** done: AX trip card text block shows a fade and chevron while content is hidden below; recent chips dedupe by name and coordinate. `RecentDestinationsStore.add` still dedupes by name only (shared with the flag-off Drive destination flow, left alone).
 
 - **R35-12 follow-up** (`ios/polish-r35-followup`): coverage is decided from the real tile index. No tile within 400 m is "Not covered yet" (DUMBO, Randall's, Southpoint). A tile within 400 m but none within 160 m is "No street parking right at X" plus the nearest free curb and its street (Central Park). The planner row and the trip card share `coverageClass`. The More sheet and My Car sub-sheets keep map interaction at the content detent, matching the search card (same helper).
+- **R35-15 🟢** (PR #237 QA) Plan a Trip coverage edge cases:
+  - (a) Inside Central Park, only pins near the centre get "No street parking right at…". Great Lawn, Reservoir and Sheep Meadow read "no free curbs within 2 blocks". Both are honest, but they're inconsistent. Use segment distance, not tile bounding squares.
+  - (b) The Harlem River's Bronx bank counts as covered, so the "nearest curb" can be across the river.
+  - (c) The planner row says "The trip map shows the free curbs nearby" while the card says none are free within a quarter mile. Make the row's promise conditional.
+  - (d) At AX5 the long sentence clips behind the scroll cue.
