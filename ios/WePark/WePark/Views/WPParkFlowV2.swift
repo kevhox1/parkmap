@@ -38,10 +38,16 @@ final class WPParkFlowController {
     private(set) var snap: CurbSnapResult?
     private(set) var model: WPCurbSheetModel?
     private(set) var indexReady = false
+    /// DT35-2: the other curb of the placed block (same position along the street), computed once
+    /// when the token lands. Non-nil = "Other side of the street" is offered. After a switch it
+    /// holds the curb just left, so a second tap returns exactly there.
+    private(set) var alternateSnap: CurbSnapResult?
 
     @ObservationIgnored private var index: CurbSnapIndex?
     @ObservationIgnored private var indexKey: Int?
     @ObservationIgnored private var lastSegmentID: String?
+    /// The loaded segments, kept from `prepareIndex` so landing can look up the opposite curb.
+    @ObservationIgnored private var knownSegments: [Segment] = []
     @ObservationIgnored private let selection = UISelectionFeedbackGenerator()
     @ObservationIgnored private let impact = UIImpactFeedbackGenerator(style: .light)
     @ObservationIgnored private let notify = UINotificationFeedbackGenerator()
@@ -56,6 +62,7 @@ final class WPParkFlowController {
         )
         if indexKey == key, index != nil { return }
         indexKey = key
+        knownSegments = segments
         Task { @MainActor in
             let built = await Task.detached(priority: .userInitiated) { CurbSnapIndex(segments: segments) }.value
             guard indexKey == key else { return }
@@ -70,6 +77,7 @@ final class WPParkFlowController {
         originPoint = originPoint ?? point
         tokenPoint = point
         lastSegmentID = nil
+        alternateSnap = nil
         impact.prepare()
         impact.impactOccurred()
     }
@@ -142,6 +150,7 @@ final class WPParkFlowController {
         if snap != nil, model != nil {
             phase = .placed
             if let landingPoint { tokenPoint = landingPoint }
+            alternateSnap = Self.oppositeSnap(of: snap, in: knownSegments)
             impact.impactOccurred()
             return true
         }
@@ -154,6 +163,48 @@ final class WPParkFlowController {
         guard phase == .placed else { return }
         phase = .dragging
         originPoint = tokenPoint
+        alternateSnap = nil
+    }
+
+    /// "Other side of the street": swaps the placed snap to the opposite curb at the same position
+    /// along the street, re-runs the verdict, and keeps the curb just left so a second tap returns to
+    /// it. The token's side stays "what the finger dropped on"; there is no ask state here because
+    /// the user pointed at a curb. No-op without an opposite curb.
+    func switchSide(
+        engine: ParkingRulesEngine,
+        now: Date,
+        windowEnd: Date?,
+        trip: TripPlan?,
+        reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() }
+    ) {
+        guard phase == .placed, let current = snap, let target = alternateSnap else { return }
+        alternateSnap = current
+        snap = target
+        lastSegmentID = target.segment.id
+        model = WPNeighborVerdict.resolve(
+            segment: target.segment, engine: engine, now: now, windowEnd: windowEnd, trip: trip,
+            reports: reports(target.segment)
+        )
+        selection.prepare(); selection.selectionChanged()
+    }
+
+    /// Moves the placed token to `point` (window coordinates), e.g. onto the other curb.
+    func landToken(at point: CGPoint) {
+        guard phase == .placed else { return }
+        tokenPoint = point
+    }
+
+    /// The opposite curb of `snap`'s block as a snap result, or nil when the data has none.
+    nonisolated static func oppositeSnap(of snap: CurbSnapResult?, in segments: [Segment]) -> CurbSnapResult? {
+        guard let snap else { return nil }
+        let here = ParkSideOption(
+            segment: snap.segment, coordinate: snap.snappedCoordinate, fraction: snap.positionFraction
+        )
+        guard let other = ParkSideResolver.switched(from: here, in: segments) else { return nil }
+        return CurbSnapResult(
+            segment: other.segment, positionFraction: other.fraction,
+            distanceMeters: snap.distanceMeters, snappedCoordinate: other.coordinate
+        )
     }
 
     func reset() {
@@ -163,6 +214,7 @@ final class WPParkFlowController {
         snap = nil
         model = nil
         lastSegmentID = nil
+        alternateSnap = nil
     }
 }
 
@@ -322,9 +374,21 @@ struct WPParkLayerV2: View {
                 WPParkConfirmCard(
                     model: model, address: address,
                     onPark: onConfirm,
-                    onMove: { flow.pickUpAgain() }
+                    onMove: { flow.pickUpAgain() },
+                    onSwitchSide: flow.alternateSnap == nil ? nil : { switchSide() }
                 )
             }
+        }
+    }
+
+    /// "Other side of the street": swap the snap, then land the token on the other curb.
+    private func switchSide() {
+        let ctx = resolveContext()
+        flow.switchSide(
+            engine: ctx.engine, now: ctx.now, windowEnd: ctx.windowEnd, trip: ctx.trip, reports: ctx.reports
+        )
+        if let coordinate = flow.snap?.snappedCoordinate, let point = pointForCoordinate(coordinate) {
+            flow.landToken(at: point)
         }
     }
 
@@ -393,6 +457,8 @@ struct WPParkConfirmCard: View {
     let address: String?
     let onPark: () -> Void
     let onMove: () -> Void
+    /// DT35-2: "Other side of the street". Nil hides the button (no opposite curb in the data).
+    var onSwitchSide: (() -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -423,6 +489,10 @@ struct WPParkConfirmCard: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 actions
+                if let onSwitchSide {
+                    Button(action: onSwitchSide) { Text(WPParkSideCopy.otherSide) }
+                        .buttonStyle(WPParkSideSecondaryStyle())
+                }
             }
         }
     }

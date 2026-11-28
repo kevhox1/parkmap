@@ -1,0 +1,63 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+/// QA-only probe (PR #221): real bundled tiles, real Stanton St multi-piece blockfaces.
+final class QA221RealTilesProbeTests: XCTestCase {
+
+    private func load(_ names: [String]) throws -> [Segment] {
+        var all: [Segment] = []
+        for name in names {
+            let url = URL(fileURLWithPath: "/Users/kevinhoxha/repos/parkmap/.claude/worktrees/agent-aa1f08e507e01bfb5/ios/WePark/WePark/Resources/tiles/\(name).json")
+            all += try JSONDecoder().decode([Segment].self, from: Data(contentsOf: url))
+        }
+        return all
+    }
+
+    private func report(_ order: [String]) throws {
+        let segs = try load(order)
+        let ids = ["STANTON_STREET_BOWERY_CHRYSTIE_STREET_N_1", "STANTON_STREET_BOWERY_CHRYSTIE_STREET_N_2", "STANTON_STREET_BOWERY_CHRYSTIE_STREET_N_3"]
+        for id in ids {
+            guard let a = segs.first(where: { $0.id == id }) else { XCTFail("missing \(id)"); continue }
+            let mid = a.coordinates[0]
+            let midpoint = CLLocationCoordinate2D(
+                latitude: (a.coordinates[0].latitude + a.coordinates[a.coordinates.count - 1].latitude) / 2,
+                longitude: (a.coordinates[0].longitude + a.coordinates[a.coordinates.count - 1].longitude) / 2)
+            _ = mid
+            // True opposite = nearest S piece of the same block.
+            let sPieces = segs.filter { $0.street == a.street && $0.side == "S" && $0.fromStreet == a.fromStreet && $0.to == a.to }
+            let nearestS = sPieces.min { l, r in
+                (CandidateSegmentSearch.nearestPointOnPolyline(from: midpoint, polyline: l.coordinates)?.distanceMeters ?? 1e9) <
+                (CandidateSegmentSearch.nearestPointOnPolyline(from: midpoint, polyline: r.coordinates)?.distanceMeters ?? 1e9)
+            }!
+            let foot = CandidateSegmentSearch.nearestPointOnPolyline(from: midpoint, polyline: nearestS.coordinates)!
+            let car = CLLocationCoordinate2D(latitude: (midpoint.latitude + foot.coordinate.latitude) / 2, longitude: (midpoint.longitude + foot.coordinate.longitude) / 2)
+            let opp = CandidateSegmentSearch.oppositeSideCandidate(of: a, in: segs)
+            let oppDist = opp.flatMap { CandidateSegmentSearch.nearestPointOnPolyline(from: car, polyline: $0.coordinates)?.distanceMeters } ?? -1
+            let here = ParkSideOption(segment: a, coordinate: car, fraction: 0.5)
+            if let sw = ParkSideResolver.switched(from: here, in: segs) {
+                let jump = ParkingAddressGeometry.distanceMeters(car, sw.coordinate)
+                print("QA221 switched piece=\(id.suffix(3)) -> \(sw.segment.id.suffix(3)) carMovesAlongStreet=\(Int(jump))m")
+            }
+            let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+            let fix = ParkTrackFix(coordinate: car, course: nil, courseAccuracy: nil, speed: 0, horizontalAccuracy: 8, timestamp: now)
+            let decision = ParkSideResolver.decide(fix: fix, track: [], segments: segs, now: now)
+            print("QA221 order=\(order) piece=\(id.suffix(3)) trueOpp=\(nearestS.id.suffix(3)) chosenOpp=\(opp?.id.suffix(3) ?? "nil") chosenOppDistFromCar=\(Int(oppDist))m decision=\(describe(decision))")
+        }
+    }
+
+    private func describe(_ d: ParkSideDecision) -> String {
+        switch d {
+        case .confident(let p): return "CONFIDENT \(p.segment.id.suffix(3)) basis=\(p.basis)"
+        case .ask(let c): return "ASK first=\(c.first.segment.id.suffix(3)) second=\(c.second.segment.id.suffix(3)) reason=\(c.reason)"
+        case .onlyCurb(let p): return "ONLYCURB \(p.segment.id.suffix(3))"
+        case .weakFix: return "weakFix"
+        case .noCurb: return "noCurb"
+        }
+    }
+
+    func testRealStantonTiles() throws {
+        try report(["tile_10_12", "tile_9_12", "tile_9_13"])
+        try report(["tile_9_13", "tile_9_12", "tile_10_12"])
+    }
+}

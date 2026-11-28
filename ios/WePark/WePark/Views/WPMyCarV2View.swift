@@ -20,6 +20,7 @@
 //  `DesignSystem/WPMyCarLogic.swift`.
 //
 
+import CoreLocation
 import SwiftUI
 import UserNotifications
 
@@ -46,6 +47,9 @@ struct WPMyCarV2View: View {
     var addressesEnabled: Bool = AppConstants.addressAnchoredParkingEnabled
     /// Screenshot aids (DEBUG showcase only): open a sub-sheet on appear.
     var startsWith: StartSheet? = nil
+    /// DT35-2: moves the saved car to the other curb of its block. Nil hides the "Wrong side?
+    /// Switch" row (the DEBUG showcase and previews pass nothing).
+    var onSwitchSide: ((ParkSideOption) -> Void)? = nil
 
     enum StartSheet: String, Identifiable {
         case reminders, signs, leaving
@@ -64,6 +68,9 @@ struct WPMyCarV2View: View {
     @State private var pendingIdentityAction: (() -> Void)?
     /// System notification permission, read async on appear; nil until read.
     @State private var notificationStatus: UNAuthorizationStatus?
+    /// DT35-2: the other curb of this car's block, found off the main thread. Nil = none in the
+    /// data (the row is hidden) or not computed yet.
+    @State private var sideTarget: ParkSideOption?
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.scenePhase) private var scenePhase
@@ -88,8 +95,10 @@ struct WPMyCarV2View: View {
         spotPassArmed: Bool = false,
         nowProvider: @escaping () -> Date = { .nowET },
         addressesEnabled: Bool = AppConstants.addressAnchoredParkingEnabled,
-        startsWith: StartSheet? = nil
+        startsWith: StartSheet? = nil,
+        onSwitchSide: ((ParkSideOption) -> Void)? = nil
     ) {
+        self.onSwitchSide = onSwitchSide
         self.parkedCar = parkedCar
         self.engine = engine
         self.loadedSegments = loadedSegments
@@ -115,8 +124,16 @@ struct WPMyCarV2View: View {
 
     private var isAX: Bool { typeSize.isAccessibilitySize }
 
+    /// The car as saved right now. `parkedCar` is the value captured when the sheet opened; after
+    /// "Wrong side? Switch" the saved car (same id) has a new segment, so everything that depends on
+    /// the curb reads this.
+    private var liveCar: ParkedCar {
+        if let saved = parkPinService.parkedCar, saved.id == parkedCar.id { return saved }
+        return parkedCar
+    }
+
     private var segment: Segment? {
-        guard let id = parkedCar.detectedSegmentID else { return nil }
+        guard let id = liveCar.detectedSegmentID else { return nil }
         return loadedSegments.first { $0.id == id }
     }
 
@@ -142,7 +159,7 @@ struct WPMyCarV2View: View {
 
     private var streetName: String? {
         if let segment { return StreetNameFormatter.displayCanonical(segment.street) }
-        if let street = parkedCar.street { return StreetNameFormatter.displayCanonical(street) }
+        if let street = liveCar.street { return StreetNameFormatter.displayCanonical(street) }
         return nil
     }
 
@@ -188,8 +205,8 @@ struct WPMyCarV2View: View {
             in: pinService?.visiblePins ?? [],
             authorId: pinService?.authService?.currentUserId,
             segmentId: segment?.id,
-            carLatitude: parkedCar.latitude,
-            carLongitude: parkedCar.longitude,
+            carLatitude: liveCar.latitude,
+            carLongitude: liveCar.longitude,
             now: now,
             communityEnabled: AppConstants.communityEnabled
         )
@@ -219,6 +236,7 @@ struct WPMyCarV2View: View {
                     header
                     verdictBlock
                     if let note = suspensionNote { noteCard(note) }
+                    if onSwitchSide != nil, let sideTarget { switchSideRow(sideTarget) }
                     if verdict.offersReminders { reminderRow }
                     else if verdict.variant == .nodata || verdict.variant == .unclear { noReminderRow }
                     if showsLeavingSoonCard { leavingSoonCard }
@@ -241,6 +259,7 @@ struct WPMyCarV2View: View {
         // alone fills a short phone. Everything is reachable by scrolling; nothing truncates.
         .dynamicTypeSize(...DynamicTypeSize.accessibility3)
         .task { await refreshNotificationStatus() }
+        .task(id: liveCar.detectedSegmentID) { await refreshSideTarget() }
         // Returning from Settings (where the driver may have flipped notifications) re-reads the
         // permission, so the reminder copy never keeps saying the old thing.
         .onChange(of: scenePhase) { _, phase in
@@ -262,7 +281,7 @@ struct WPMyCarV2View: View {
             ReminderOffsets.save(newOffsets, to: .standard)
             guard remindMe else { return }
             scheduler.cancelAllThenSchedule(
-                for: parkedCar,
+                for: liveCar,
                 oldCarID: parkedCar.id,
                 loadedSegments: loadedSegments,
                 engine: engine
@@ -337,6 +356,48 @@ struct WPMyCarV2View: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: WP.Radius.chip, style: .continuous).fill(WP.park.opacity(0.14)))
             .overlay(RoundedRectangle(cornerRadius: WP.Radius.chip, style: .continuous).strokeBorder(WP.park, lineWidth: WP.Border.fact))
+    }
+
+    // MARK: DT35-2 Wrong side? Switch
+
+    private func refreshSideTarget() async {
+        guard onSwitchSide != nil, let segment else {
+            sideTarget = nil
+            return
+        }
+        let coordinate = CLLocationCoordinate2D(latitude: liveCar.latitude, longitude: liveCar.longitude)
+        let segments = loadedSegments
+        sideTarget = await Task.detached(priority: .userInitiated) { () -> ParkSideOption? in
+            guard let foot = CandidateSegmentSearch.nearestPointOnPolyline(
+                from: coordinate, polyline: segment.coordinates
+            ) else { return nil }
+            let here = ParkSideOption(segment: segment, coordinate: foot.coordinate, fraction: foot.fraction)
+            return ParkSideResolver.switched(from: here, in: segments)
+        }.value
+    }
+
+    private func switchSideRow(_ target: ParkSideOption) -> some View {
+        let otherSide = WPCurbCopy.sideLabel(target.segment.side).lowercased()
+        return Button { onSwitchSide?(target) } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Wrong side? Switch")
+                    .font(WP.Font.fredoka(18, .semibold, relativeTo: .body))
+                    .foregroundStyle(WP.text)
+                Text("Move your car to the \(otherSide).")
+                    .font(WP.Font.fredoka(14, .regular, relativeTo: .callout))
+                    .foregroundStyle(WP.muted)
+            }
+            .multilineTextAlignment(.leading)
+            .padding(.horizontal, WP.Space.s4)
+            .padding(.vertical, WP.Space.s3)
+            .frame(maxWidth: .infinity, minHeight: WP.Target.standard, alignment: .leading)
+            .background(RoundedRectangle(cornerRadius: WP.Radius.tile, style: .continuous).fill(WP.card))
+            .overlay(RoundedRectangle(cornerRadius: WP.Radius.tile, style: .continuous).strokeBorder(WP.line, lineWidth: WP.Border.fact))
+            .contentShape(RoundedRectangle(cornerRadius: WP.Radius.tile, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Wrong side? Switch")
+        .accessibilityHint("Moves your car to the \(otherSide) of the street.")
     }
 
     // MARK: 3. Reminder row

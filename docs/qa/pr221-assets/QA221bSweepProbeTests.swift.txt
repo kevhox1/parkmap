@@ -1,0 +1,169 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+/// QA-only probe (PR #221 re-verify). Independent sweep over REAL bundled Manhattan tiles.
+/// Truth is NOT the resolver's own logic: for a car on the street centreline between the curbs,
+/// the facing piece is the opposite-side piece whose ALONG-STREET interval (projected on the
+/// car-side piece's axis) contains the car's along coordinate.
+final class QA221bSweepProbeTests: XCTestCase {
+    static let root = "/Users/kevinhoxha/repos/parkmap/.claude/worktrees/agent-a3404eff8da61c1c0/ios/WePark/WePark/Resources/tiles"
+    var segs: [Segment] = []
+
+    override func setUpWithError() throws {
+        let names = try FileManager.default.contentsOfDirectory(atPath: Self.root).filter { $0.hasPrefix("tile_") }
+        for n in names {
+            if let d = try? Data(contentsOf: URL(fileURLWithPath: Self.root + "/" + n)),
+               let s = try? JSONDecoder().decode([Segment].self, from: d) { segs += s }
+        }
+        segs = segs.filter {
+            let c = $0.coordinates.first
+            return (c?.latitude ?? 0) > 40.70 && (c?.latitude ?? 0) < 40.88 && (c?.longitude ?? 0) > -74.03 && (c?.longitude ?? 0) < -73.90
+        }
+        print("QA221b loaded \(segs.count)")
+    }
+
+    struct ENU { let e: Double; let n: Double }
+    func enu(_ c: CLLocationCoordinate2D, o: CLLocationCoordinate2D) -> ENU {
+        ENU(e: (c.longitude - o.longitude) * 111_320 * cos(o.latitude * .pi / 180), n: (c.latitude - o.latitude) * 110_540)
+    }
+    func fromEnu(_ p: ENU, o: CLLocationCoordinate2D) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: o.latitude + p.n / 110_540, longitude: o.longitude + p.e / (111_320 * cos(o.latitude * .pi / 180)))
+    }
+
+    func probe(block: String, pieces: [Segment], verbose: Bool) -> (cases: Int, bad: Int, confidentFar: Int, flipBad: Int, lines: [String]) {
+        var cases = 0, bad = 0, confFar = 0, flipBad = 0
+        var lines: [String] = []
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        for a in pieces {
+            let ac = a.coordinates
+            guard ac.count >= 2 else { continue }
+            let o = ac[0]
+            let axisRaw = enu(ac[ac.count - 1], o: o)
+            let len = hypot(axisRaw.e, axisRaw.n); if len < 3 { continue }
+            let u = ENU(e: axisRaw.e / len, n: axisRaw.n / len)
+            func along(_ c: CLLocationCoordinate2D) -> Double { let p = enu(c, o: o); return p.e * u.e + p.n * u.n }
+            let near = segs.filter { abs((($0.coordinates.first?.latitude ?? 0) - o.latitude)) < 0.004 && abs((($0.coordinates.first?.longitude ?? 0) - o.longitude)) < 0.005 }
+            let others = near.filter { $0.street == a.street && $0.side != a.side && $0.id != a.id }
+            for f in [0.1, 0.5, 0.9] {
+                let pa = fromEnu(ENU(e: axisRaw.e * f, n: axisRaw.n * f), o: o)
+                var truths: [(Segment, Double)] = []
+                for b in others {
+                    let bc = b.coordinates; guard bc.count >= 2 else { continue }
+                    let a0 = along(bc[0]), a1 = along(bc[bc.count - 1])
+                    let lo = min(a0, a1) + 2, hi = max(a0, a1) - 2
+                    let al = along(pa)
+                    guard al >= lo && al <= hi else { continue }
+                    guard let s = CandidateSegmentSearch.nearestPointOnPolyline(from: pa, polyline: bc), s.distanceMeters < 40 else { continue }
+                    let bd = enu(bc[bc.count - 1], o: bc[0]); let bl = hypot(bd.e, bd.n); if bl < 3 { continue }
+                    let cosv = abs((bd.e * u.e + bd.n * u.n) / bl)
+                    guard cosv > 0.95 else { continue }
+                    truths.append((b, s.distanceMeters))
+                }
+                guard let truth = truths.min(by: { $0.1 < $1.1 }), let tsnap = CandidateSegmentSearch.nearestPointOnPolyline(from: pa, polyline: truth.0.coordinates) else { continue }
+                let car = CLLocationCoordinate2D(latitude: (pa.latitude + tsnap.coordinate.latitude) / 2, longitude: (pa.longitude + tsnap.coordinate.longitude) / 2)
+                cases += 1
+                let here = ParkSideOption(segment: a, coordinate: pa, fraction: f)
+                guard let sw = ParkSideResolver.switched(from: here, in: near) else {
+                    bad += 1; lines.append("QA221b NOSWITCH \(a.id)@\(f) truth=\(truth.0.id)"); continue
+                }
+                let jump = abs(along(sw.coordinate) - along(pa))
+                let right = sw.segment.id == truth.0.id
+                if !right || jump > 25 { bad += 1; lines.append("QA221b BAD switched \(a.id)@\(f) -> \(sw.segment.id) truth=\(truth.0.id) jump=\(Int(jump))m") }
+                if let back = ParkSideResolver.switched(from: sw, in: near) {
+                    let d = ParkingAddressGeometry.distanceMeters(back.coordinate, pa)
+                    if back.segment.id != a.id || d > 1.5 { flipBad += 1; lines.append("QA221b FLIPBACK \(a.id)@\(f) -> \(sw.segment.id) -> \(back.segment.id) off=\(Int(d))m") }
+                } else { flipBad += 1; lines.append("QA221b FLIPBACK nil \(a.id)@\(f)") }
+                let fix = ParkTrackFix(coordinate: car, course: nil, courseAccuracy: nil, speed: 0, horizontalAccuracy: 8, timestamp: now)
+                let d = ParkSideResolver.decide(fix: fix, track: [], segments: near, now: now)
+                switch d {
+                case .confident(let p):
+                    if let opp = ParkSideResolver.switched(from: p.option, in: near) {
+                        let al = abs(along(opp.coordinate) - along(p.option.coordinate))
+                        if al > 25 { confFar += 1; lines.append("QA221b CONFIDENT-FAR \(a.id)@\(f) pick=\(p.segment.id) opp=\(opp.segment.id) al=\(Int(al))") }
+                    }
+                case .ask(let c):
+                    let al = abs(along(c.first.coordinate) - along(c.second.coordinate))
+                    if al > 25 || c.first.segment.side == c.second.segment.side { bad += 1; lines.append("QA221b ASK-MISALIGNED \(a.id)@\(f) \(c.first.segment.id)/\(c.second.segment.id) al=\(Int(al))") }
+                default: break
+                }
+            }
+        }
+        if verbose { lines.append("QA221b BLOCK \(block): cases=\(cases) bad=\(bad) confFar=\(confFar) flipBad=\(flipBad)") }
+        return (cases, bad, confFar, flipBad, lines)
+    }
+
+    func testNamedBlocks() throws {
+        let wanted: [(String, String, Set<String>)] = [
+            ("LEXINGTON AVENUE", "ave N-S", ["EAST 105TH STREET", "EAST 106TH STREET"]),
+            ("MADISON AVENUE", "ave 4/3", ["EAST 74TH STREET", "EAST 75TH STREET"]),
+            ("AMSTERDAM AVENUE", "ave 4/5", ["WEST 72ND STREET", "WEST 73RD STREET"]),
+            ("AVENUE A", "ave A", ["EAST 11TH STREET", "EAST 12TH STREET"]),
+            ("BROADWAY", "curved", ["WEST 101ST STREET", "WEST 102ND STREET"]),
+            ("BROADWAY", "differing E10-12", ["EAST 10TH STREET", "EAST 12TH STREET"]),
+            ("BROADWAY", "differing W10-11", ["EAST 10TH STREET", "EAST 11TH STREET"]),
+            ("BROADWAY", "differing W11-12", ["EAST 11TH STREET", "EAST 12TH STREET"]),
+            ("CANAL STREET", "differing Canal N", ["HUDSON STREET", "RENWICK STREET"]),
+            ("CANAL STREET", "differing Canal S", ["HUDSON STREET", "WATTS STREET"]),
+        ]
+        for (street, tag, pair) in wanted {
+            let pcs = segs.filter { $0.street == street && Set([$0.fromStreet, $0.to]) == pair }
+            let r = probe(block: "\(street) \(tag) pieces=\(pcs.count)", pieces: pcs, verbose: true)
+            r.lines.prefix(12).forEach { print($0) }
+        }
+    }
+
+    func testSweepAll() throws {
+        var tot = (0, 0, 0, 0)
+        var worst: [String] = []
+        var byStreet: [String: (Int, Int)] = [:]
+        let groups = Dictionary(grouping: segs) { "\($0.street)|\(Set([$0.fromStreet, $0.to]).sorted().joined(separator: "/"))" }
+        var n = 0
+        for (k, pcs) in groups {
+            n += 1
+            if pcs.count < 3 || n % 20 != 0 { continue }
+            let r = probe(block: k, pieces: pcs, verbose: false)
+            tot.0 += r.cases; tot.1 += r.bad; tot.2 += r.confidentFar; tot.3 += r.flipBad
+            let st = String(k.split(separator: "|")[0])
+            let cur = byStreet[st] ?? (0, 0); byStreet[st] = (cur.0 + r.cases, cur.1 + r.bad + r.confidentFar)
+            if worst.count < 60 { worst += r.lines.prefix(2).map { k + " :: " + $0 } }
+        }
+        print("QA221b SWEEP cases=\(tot.0) bad=\(tot.1) confidentFar=\(tot.2) flipBad=\(tot.3)")
+        worst.forEach { print($0) }
+        byStreet.filter { $0.value.1 > 0 }.sorted { $0.value.1 > $1.value.1 }.prefix(15).forEach { print("QA221b STREET \($0.key) cases=\($0.value.0) bad=\($0.value.1)") }
+    }
+
+    func testBlockEnds() throws {
+        var cases = 0, bad = 0, nilCount = 0, otherBlock = 0
+        var lines: [String] = []
+        let groups = Dictionary(grouping: segs) { "\($0.street)|\(Set([$0.fromStreet, $0.to]).sorted().joined(separator: "/"))" }
+        var n = 0
+        for (k, pcs) in groups {
+            n += 1
+            if pcs.count < 3 || n % 20 != 0 { continue }
+            for a in pcs {
+                let ac = a.coordinates; guard ac.count >= 2 else { continue }
+                let o = ac[0]
+                let axisRaw = enu(ac[ac.count - 1], o: o)
+                let len = hypot(axisRaw.e, axisRaw.n); if len < 3 { continue }
+                let u = ENU(e: axisRaw.e / len, n: axisRaw.n / len)
+                func along(_ c: CLLocationCoordinate2D) -> Double { let p = enu(c, o: o); return p.e * u.e + p.n * u.n }
+                let near = segs.filter { abs(($0.coordinates.first?.latitude ?? 0) - o.latitude) < 0.004 && abs(($0.coordinates.first?.longitude ?? 0) - o.longitude) < 0.005 }
+                for f in [0.0, 0.03, 0.97, 1.0] {
+                    let pa = fromEnu(ENU(e: axisRaw.e * f, n: axisRaw.n * f), o: o)
+                    cases += 1
+                    let here = ParkSideOption(segment: a, coordinate: pa, fraction: f)
+                    guard let sw = ParkSideResolver.switched(from: here, in: near) else { nilCount += 1; continue }
+                    let bc = sw.segment.coordinates
+                    let a0 = along(bc[0]), a1 = along(bc[bc.count - 1])
+                    let inside = along(pa) >= min(a0, a1) - 8 && along(pa) <= max(a0, a1) + 8
+                    let sameBlock = Set([sw.segment.fromStreet, sw.segment.to]) == Set([a.fromStreet, a.to])
+                    if !sameBlock { otherBlock += 1 }
+                    if !inside || ParkingAddressGeometry.distanceMeters(sw.coordinate, pa) > 70 { bad += 1; if lines.count < 60 { lines.append("QA221b ENDS BAD \(a.id)@\(f) -> \(sw.segment.id) dist=\(Int(ParkingAddressGeometry.distanceMeters(sw.coordinate, pa)))m alongGap=\(Int(max(min(a0, a1) - along(pa), along(pa) - max(a0, a1))))m sameBlock=\(sameBlock) len=\(Int(len))m")} }
+                }
+            }
+        }
+        print("QA221b ENDS cases=\(cases) bad=\(bad) nil=\(nilCount) otherBlockPair=\(otherBlock)")
+        lines.forEach { print($0) }
+    }
+}
