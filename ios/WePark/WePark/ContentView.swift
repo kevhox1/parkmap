@@ -5002,11 +5002,11 @@ struct ContentView: View {
             },
             onClose: { activeSheet = driveModeDefaultRestStateSheet() }
         )
-        .presentationDetents([.medium, .large])
+        // R35 PR4: the detents (and map interaction) live inside `WPSearchSheetV2`: the destination
+        // card opens at its content height, the typing state keeps medium and large.
         .presentationDragIndicator(.visible)
         .presentationBackground(WP.card)
         .presentationCornerRadius(WP.Radius.sheet)
-        .presentationBackgroundInteraction(.enabled(upThrough: .medium))
     }
 
     // MARK: B6 parking

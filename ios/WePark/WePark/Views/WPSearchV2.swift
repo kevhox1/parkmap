@@ -78,6 +78,11 @@ struct WPSearchSheetV2: View {
     @State private var coverage: [String: Bool] = [:]
     @State private var distances: [String: Double] = [:]
     @State private var count: WPFreeCurbCount?
+    /// R35 PR4: the destination card's measured heights (scrolling content, pinned footer, and the
+    /// bottom safe area the sheet adds). They size the sheet's content detent.
+    @State private var cardBodyHeight: CGFloat = 0
+    @State private var cardFooterHeight: CGFloat = 0
+    @State private var cardBottomInset: CGFloat = 0
     @FocusState private var focused: Bool
 
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -91,12 +96,25 @@ struct WPSearchSheetV2: View {
             }
         }
         .background(WP.card.ignoresSafeArea())
+        .modifier(WPSearchSheetDetents(
+            showingCard: place != nil, measured: measuredCardHeight, largeOnly: typeSize.isAccessibilitySize
+        ))
         .onAppear {
             completer.completer.region = currentRegion
             if let initialPlace, place == nil { place = initialPlace }
             if !initialQuery.isEmpty, query.isEmpty { query = initialQuery }
             if place == nil { focused = true }
         }
+    }
+
+    /// Full sheet height the destination card wants; 0 until both parts have been measured.
+    private var measuredCardHeight: CGFloat {
+        guard cardBodyHeight > 0, cardFooterHeight > 0 else { return 0 }
+        // iOS 26 sheets float above the home indicator, so the bottom safe area is not part of the
+        // sheet's content height (measured on the simulator: adding it left about 34 pt of gap).
+        // Earlier iOS versions run the sheet to the screen edge and need it.
+        if #available(iOS 26, *) { return cardBodyHeight + cardFooterHeight }
+        return cardBodyHeight + cardFooterHeight + cardBottomInset
     }
 
     // MARK: Search body (peek + typing)
@@ -282,13 +300,16 @@ struct WPSearchSheetV2: View {
                 .padding(.horizontal, WP.Space.screenMargin)
                 .padding(.top, WP.Space.s5)
                 .padding(.bottom, WP.Space.s3)
+                .wpReportHeight(into: $cardBodyHeight)
             }
             .scrollBounceBehavior(.basedOnSize)
             driveHere(place)
                 .padding(.horizontal, WP.Space.screenMargin)
                 .padding(.top, WP.Space.s2)
                 .padding(.bottom, WP.Space.s4)
+                .wpReportHeight(into: $cardFooterHeight)
         }
+        .wpReportBottomInset(into: $cardBottomInset)
         .task(id: WPSearchCountKey(place: place, goal: goalInput.selectedGoal, segments: segments.count, loadedTiles: tileCoverage?.loadedTiles ?? [], end: goalInput.selectedEnd)) {
             recomputeCount(place)
         }
@@ -545,6 +566,29 @@ struct WPSearchSheetV2: View {
             }
         } catch {
             errorMessage = "Route unavailable. Please try again."
+        }
+    }
+}
+
+
+// MARK: - Detents (R35 PR4)
+
+/// The search sheet's detents. Typing and the suggestion list keep `.medium` and `.large` (the
+/// keyboard and a long list want the room). The destination card opens at its content height plus
+/// `.large`; at accessibility text sizes it opens `.large` only, like the curb sheet.
+private struct WPSearchSheetDetents: ViewModifier {
+    let showingCard: Bool
+    let measured: CGFloat
+    let largeOnly: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if showingCard {
+            content.wpContentSizedSheet(measured: measured, largeOnly: largeOnly)
+        } else {
+            content
+                .presentationDetents([.medium, .large])
+                .presentationBackgroundInteraction(.enabled(upThrough: .medium))
         }
     }
 }
