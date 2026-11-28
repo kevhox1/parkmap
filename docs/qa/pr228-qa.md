@@ -74,3 +74,37 @@ The compact pill is clean and wraps instead of cutting; VoiceOver keeps the full
 
 ### 🟢 Notes
 - I did not re-run the builder's `r6/` shots, so I do not know why they looked clean. A likely difference is the shorter verdict cards under an Auto pick (unverified).
+
+---
+
+# Re-verification 2 (QA pass 3), 2026-11-28
+
+**Reviewed:** `ios/dt35-6b-drive-stack-ax` at `b1088796` (diff `7cb5e4ba..HEAD`: ContentView, WPDriveV2, WPDriveStackBudgetTests). Own sim `wepark-qa228c-sim` (iPhone 17 Pro, iOS 26.5), flags (Stoop, driveModeDefaultEnabled) flipped locally for the live smoke only and reverted. Screenshots in `docs/qa/pr228c-assets/`.
+
+**Verdict: PASS with follow-ups.** The Maps logo and Legal are clear in every AX3/AX5 moving shot I captured, the full end time is visible, the pill is one line, and the stack does not jitter. Follow-ups are cosmetic/coverage items below, none blocking.
+
+## Results
+1. **Repros (size set and read back before and after each shot).**
+   - ACP northbound, AX3, For days Free until Mon 9 AM: pill "Adam C...well Blvd", Maps + Legal clear, "Until Mon 11/30 9:00 AM" fully shown, both verdicts visible, Park here / Report / Voice pinned (`acp-ax3-pick.png`). PASS.
+   - Frederick Douglass Blvd, AX3 and AX5, same pick: pill "Frederi...lass Blvd", logo and Legal clear, end time shown (`fd-ax3-pick.png`, `fd-ax5-pick.png`). PASS.
+   - ACP at AX5 with the pick: same single-line pill, logo clear (the capture that coincided with W 132nd St is `w132-ax5-pick.png`; the ACP frame at AX3 is the one above). PASS.
+   - Auto (For days, no time): ACP/W 129th at AX5, "Until Mon 11/30", logo and Legal clear (`w129-ax5-auto.png`). PASS.
+   - 6th Ave, AX5: pill "6th Ave", logo and Legal clear, verdict cards shrink to make room, buttons pinned (`6thave-ax5.png`). PASS.
+   - Orchard St, AX5: NOT reproduced. The simulated route snaps to Ludlow/Essex/Delancey (five routes tried, Orchard never matched). Ludlow St at AX5 with an Overnight goal is clean (`ludlow-ax5-overnight-scroll.png`). Orchard is a short name, so it is covered in principle by Ludlow, but I did not see it.
+2. **Street names.** At AX the pill is one line, direction dropped, long names middle-truncated ("Adam C...well Blvd", "Frederi...lass Blvd"). Readable enough as a context pill. VoiceOver label (accessibility tree) is still the full "Street: Adam C Powell Blvd, northbound" / "Street: Frederick Douglass Blvd, northbound". ASP banner at AX is one line "ASP in Effect Today" and is the same sentence as at default size (honest, not truncated in any shot).
+3. **Measured strip.** Polled the accessibility frames 14 times while driving at AX5 (`frames.py`): Park here (y 662), Report (y 756) never moved; verdict height toggled only between two stable values (154 and 103 pt) as the street/card content changed, with the Legal row moving with it (245 to 281). No oscillation inside a state, no jitter. The shrink is visible: at 6th Ave the cards shrank to leave a clear strip; at W 129th / Ludlow the verdicts scroll (right card clipped, Park here pinned, `ludlow-ax5-overnight-scroll.png`). The 120 pt floor itself was not reached live (lowest observed card section was well above it); it is covered by the unit test only. Not verified live.
+4. **Default size.** Pill "Park & Forget · Now → Mon 11/30", direction shown ("Adam C Powell Blvd · Northbound", two lines, wraps by words), puck at about 51% of screen height, Maps logo and Legal above the stack and clear (`default-acp.png`). Unchanged. PASS.
+5. **Tests.** Full `WeParkTests`, shipped flags, `-parallel-testing-enabled NO -jobs 4`: 3389 tests, 1 skipped, 0 failures (no flakes). `git merge-tree --write-tree` dry-run: clean against `origin/main` (7e4482e9, includes #227, #230) and clean against `origin/ios/dt35-3-nudge-trap` (#229).
+
+## Findings
+### 🟢 #7: Middle-truncated street names at AX are a little ugly
+"Adam C...well Blvd" and "Frederi...lass Blvd" are the worst cases. Acceptable per the PR's stated tradeoff; a tail ellipsis or a smaller scale floor would read better. No action required to ship.
+
+### 🟢 #8: Overnight goal with a leftover Free until pick shows mixed windows
+With the goal Overnight (pill "Until 7:00 AM") the verdict cards read "Park until Mon 11/30 midnight". Likely a stale For days pick leaking into the verdicts. Pre-existing, not from this commit; logged only.
+
+### 🟢 #9: Orchard St and the 120 pt floor not exercised live
+See results 1 and 3. Recommend a quick device check on a street the simulator will snap to (or a unit-level read of the floor, already present).
+
+## Process note
+The session scratchpad is shared between agents, and another agent overwrote my `udid` file; from about 03:17 to 03:38 some of my simctl commands (size changes, location, taps, one uninstall/reinstall of WePark with flags on, privacy reset) hit `wepark-r35b-sim` instead of my own sim. Those runs showed an older drive layout (wrapped pill and banner) because that sim had a different build, so I discarded them and redid everything above on my own sim with a hard-coded UDID. The R35 QA/builder should reinstall their build on that sim.
