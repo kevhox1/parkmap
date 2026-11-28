@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "_readme": [
+    "Hand fixes for individual block faces. Loaded by build/preprocess.js (loadCurbOverrides).",
+    "To add one: copy the face id from a tile segment id and drop the trailing _<n> (e.g. segment WEST_HOUSTON_STREET_BROADWAY_MERCER_STREET_N_3 -> face WEST_HOUSTON_STREET_BROADWAY_MERCER_STREET_N).",
+    "Fields: offsetM (metres from the base line toward the face's compass side; negative = away from it), base ('osm' = from the block's own OSM line, the default; 'outer-carriageway' = from the outer carriageway centerline, i.e. offsetM is added to the general rule's sibling shift), suppress (true drops the face).",
+    "Precedence: override > Option A > general carriageway rule > legacy per-street offset.",
+    "An id the build never produces is a HARD BUILD ERROR (typo / rename guard). Give every row a note and a verified date. Keep this file small.",
+    "After editing run: node scripts/test-width-offset-resurrection.js and node scripts/report-tile-changes.js."
+  ],
+  "overrides": [
+    {
+      "face": "WEST_HOUSTON_STREET_SULLIVAN_STREET_MACDOUGAL_STREET_N",
+      "base": "osm",
+      "offsetM": -3.7,
+      "note": "DT35-7: OSM slice here is a stub chain 9.7 m north of the north carriageway centre (nearest CSCL row 10 m away, so the general rule declines). Curb = row centre + 0.88 x 6.7 m, i.e. 3.7 m back toward the road from the stub.",
+      "verified": "2026-11-27"
+    },
+    {
+      "face": "WEST_HOUSTON_STREET_MACDOUGAL_STREET_SULLIVAN_STREET_S",
+      "base": "osm",
+      "offsetM": 29.7,
+      "note": "DT35-7: same stub chain; the south curb is the 34 ft TF row 25.1 m south of the stub + 0.88 x 5.18 m = 29.7 m.",
+      "verified": "2026-11-27"
+    },
+    {
+      "face": "EAST_HOUSTON_STREET_AVENUE_A_AVENUE_D_N",
+      "suppress": true,
+      "note": "DT35-7: stray from/to pairing (Avenue A to Avenue D is not a block); sits exactly on top of AVENUE_D>EAST_2ND_STREET N.",
+      "verified": "2026-11-27"
+    }
+  ]
+}

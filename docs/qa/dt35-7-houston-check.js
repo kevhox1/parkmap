@@ -12,6 +12,9 @@ const fs = require('fs'), path = require('path');
 const ROOT = path.resolve(__dirname, '..', '..');
 const argv = process.argv.slice(2);
 const street = (argv.includes('--street') ? argv[argv.indexOf('--street') + 1] : 'HOUSTON').toUpperCase();
+// --tiles <dir> checks a scratch regen instead of the committed tiles/ (default). --summary prints only the
+// per-street "faces within +-3 m of the curb" line (face ok = median sub-segment err within +-3 m).
+const TILES = path.resolve(argv.includes('--tiles') ? argv[argv.indexOf('--tiles') + 1] : path.join(ROOT, 'tiles'));
 const widths = JSON.parse(fs.readFileSync(path.join(ROOT, 'street_widths.json')));
 const osm = JSON.parse(fs.readFileSync(path.join(ROOT, 'osm_data.json')));
 const cosL = Math.cos(40.726 * Math.PI / 180);
@@ -37,9 +40,9 @@ function nearest(poly, q, v) {
 }
 const canon = s => s.replace(/\bEAST\b/, 'E').replace(/\bWEST\b/, 'W').replace(/\bSTREET\b/, 'ST');
 const segs = [];
-for (const f of fs.readdirSync(path.join(ROOT, 'tiles'))) {
+for (const f of fs.readdirSync(TILES)) {
   if (!f.startsWith('tile_')) continue;
-  for (const s of JSON.parse(fs.readFileSync(path.join(ROOT, 'tiles', f)))) if (s.street.includes(street)) segs.push(s);
+  for (const s of JSON.parse(fs.readFileSync(path.join(TILES, f)))) if (s.street.includes(street)) segs.push(s);
 }
 const rowsFor = {};
 function rows(s) {
@@ -60,8 +63,24 @@ for (const s of segs) {
   const np = s.line.map(pick);
   if (np.every(Boolean)) line(np.map(p => LL([p.c[0] + p.n[0] * FRAC * p.hw, p.c[1] + p.n[1] * FRAC * p.hw])), { layer: 'proposed-line', name: s.id, side: s.side, category: s.dominantCategory, stroke: '#2e7d32', 'stroke-width': 4 });
 }
+{
+  const med = a => { const b = a.filter(x => x != null).sort((x, y) => x - y); return b.length ? b[Math.floor(b.length / 2)] : null; };
+  const faces = Object.entries(faceErr).map(([k, e]) => [k, med(e)]);
+  const ok = faces.filter(([, m]) => m != null && Math.abs(m) <= 3).length;
+  const inside = faces.filter(([, m]) => m != null && m < -3).length, outside = faces.filter(([, m]) => m != null && m > 3).length;
+  console.log(`SUMMARY ${street}: ${faces.length} faces, ${ok} within +-3 m of curb, ${inside} inside roadway (< -3), ${outside} beyond curb (> +3), ${faces.length - ok - inside - outside} unmeasured`);
+}
+if (argv.includes('--summary')) process.exit(0);
 for (const [k, e] of Object.entries(faceErr).sort()) console.log(k.padEnd(70), e.map(x => x == null ? '?' : x.toFixed(1)).join(' '));
 if (argv.includes('--write-geojson')) {
+  // --baseline <dir>: also draw the pre-fix tile lines (layer before-tile-line, orange) next to the current ones.
+  if (argv.includes('--baseline')) {
+    const bdir = path.resolve(argv[argv.indexOf('--baseline') + 1]);
+    for (const f of fs.readdirSync(bdir)) {
+      if (!f.startsWith('tile_')) continue;
+      for (const s of JSON.parse(fs.readFileSync(path.join(bdir, f)))) if (s.street.includes(street)) line(s.line, { layer: 'before-tile-line', name: s.id, side: s.side, stroke: '#ef6c00', 'stroke-width': 3 });
+    }
+  }
   for (const ck of Object.keys(rowsFor)) for (const r of widths[ck]) if (r.polyline && r.polyline.length > 1) line(r.polyline, { layer: 'ref-cscl-carriageway-row', name: `${ck} ${r.trafdir} ${r.stWidthFt}ft`, stroke: '#9e9e9e', 'stroke-width': 2 });
   const out = path.join(__dirname, 'dt35-7-houston-current-vs-proposed.geojson');
   fs.writeFileSync(out, JSON.stringify({ type: 'FeatureCollection', features: feats }));
