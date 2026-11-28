@@ -2,15 +2,16 @@
 //  WPParkNudgeTrapTests.swift
 //  WeParkTests
 //
-//  PR #226 QA finding #1: at some junctions between pieces the VoiceOver nudge stopped moving but kept
-//  answering "moved" (West End Ave E 66-70, 2nd Ave W E61-62, Cabrini Blvd E W187-190), trapping the car
-//  mid-block in both directions. The guarantee tested here, on real tiles:
-//    - every nudge either advances the car along the block (coordinate strictly changes) or returns
-//      "End of block"; it never reports "moved" without moving
-//    - a walk from any piece, either way, ends at a true end of the block within N steps
-//    - forward always ends at the same end and back at the other, whichever way pieces are digitised
-//  Plus the flow-level check (the car is placed on the chosen piece, so the dead-band cannot undo a
-//  crossing). Helpers are enum-namespaced with unique names (no XCTestCase extensions).
+//  The VoiceOver "Move forward / back along the block" contract, on real tiles (PR #226 finding 1, then
+//  PR #229 QA findings 1 to 3):
+//    - every nudge either advances the car along the block (it really moves, at least 0.5 m) or
+//      returns "End of block"; it never reports "moved" without moving, and never leaves the block
+//    - from ANY piece, at 0, 0.5 and 1.0 of it, a walk either way reaches "End of block" within N steps
+//    - within one connected run of pieces, forward always ends at the same place and back at the other
+//      end, whichever piece the walk started on, however the pieces are digitised, on curved blocks
+//      (Paladino Ave), and with short overlapping stubs at the end (Bowery, Broadway W125-126)
+//  Runs are computed independently here (piece ends within 6 m), so a block with a real gap is checked
+//  per connected run. Helpers are enum-namespaced with unique names (no XCTestCase extensions).
 //
 
 import XCTest
@@ -47,23 +48,45 @@ enum Pr2NudgeTrapTiles {
         return hypot(east, north)
     }
 
-    /// Piece endpoints that no other piece of the block joins (within 1 m): the real ends of the chain.
-    static func chainEnds(_ pieces: [Segment]) -> [CLLocationCoordinate2D] {
-        var ends: [CLLocationCoordinate2D] = []
-        for piece in pieces {
-            guard let first = piece.coordinates.first, let last = piece.coordinates.last else { continue }
-            for endpoint in [first, last] {
-                let joined = pieces.contains { other in
-                    guard other.id != piece.id, let a = other.coordinates.first, let b = other.coordinates.last else {
-                        return false
-                    }
-                    // Real joins are exact (0 m); a short end piece must not make its far end look joined.
-                    return meters(endpoint, a) <= 1 || meters(endpoint, b) <= 1
+    /// Connected runs of pieces: a piece belongs to a run when one of its ends is within 6 m of an end
+    /// of a piece already in it.
+    static func runs(of pieces: [Segment]) -> [[Segment]] {
+        var parent = Array(0..<pieces.count)
+        func root(_ x: Int) -> Int {
+            var r = x
+            while parent[r] != r { r = parent[r] }
+            return r
+        }
+        func ends(_ piece: Segment) -> [CLLocationCoordinate2D] {
+            let line = piece.coordinates
+            guard let first = line.first, let last = line.last else { return [] }
+            return [first, last]
+        }
+        for i in 0..<pieces.count {
+            for j in (i + 1)..<max(i + 1, pieces.count) {
+                var close = false
+                for a in ends(pieces[i]) {
+                    for b in ends(pieces[j]) where meters(a, b) <= 6 { close = true }
                 }
-                if !joined { ends.append(endpoint) }
+                if close { parent[root(i)] = root(j) }
             }
         }
-        return ends
+        var grouped: [Int: [Segment]] = [:]
+        for (index, piece) in pieces.enumerated() { grouped[root(index), default: []].append(piece) }
+        return grouped.keys.sorted().compactMap { grouped[$0] }
+    }
+
+    /// How far apart the farthest two piece ends of a run are.
+    static func extent(of run: [Segment]) -> Double {
+        var points: [CLLocationCoordinate2D] = []
+        for piece in run {
+            if let first = piece.coordinates.first, let last = piece.coordinates.last { points += [first, last] }
+        }
+        var widest = 0.0
+        for a in points {
+            for b in points { widest = max(widest, meters(a, b)) }
+        }
+        return widest
     }
 
     struct Walk {
@@ -72,29 +95,34 @@ enum Pr2NudgeTrapTiles {
         var failure: String?
     }
 
-    /// Walks `meters` at a time from `start` (a piece, fraction 0.5) until "End of block".
-    static func walk(pieces: [Segment], start: Segment, meters step: Double, limit: Int = 400) -> Walk {
+    /// Walks `meters` at a time from `fraction` of `start` until "End of block", on a spine built
+    /// around `start` (so the spine's direction and ends are tested for every start piece).
+    static func walk(
+        block: [Segment], start: Segment, fraction startFraction: Double, meters step: Double, limit: Int = 400
+    ) -> Walk {
         var result = Walk()
-        var segment = start
-        var fraction = 0.5
-        guard var position = CandidateSegmentSearch.coordinate(atFraction: fraction, along: start.coordinates) else {
-            result.failure = "no start coordinate"
+        guard let spine = WPBlockSpine(around: start, in: block),
+              var position = CandidateSegmentSearch.coordinate(atFraction: startFraction, along: start.coordinates)
+        else {
+            result.failure = "no spine"
             return result
         }
+        var segment = start
+        var fraction = startFraction
         for count in 1...limit {
-            switch WPParkFlowController.nudgeTarget(on: segment, fraction: fraction, meters: step, in: pieces) {
+            switch WPParkFlowController.nudgeTarget(spine: spine, on: segment, fraction: fraction, meters: step) {
             case .endOfBlock:
                 result.steps = count
                 result.end = position
                 return result
             case .move(let landing):
-                guard pieces.contains(where: { $0.id == landing.segment.id }) else {
+                guard block.contains(where: { $0.id == landing.segment.id }) else {
                     result.failure = "step \(count) left the block (\(landing.segment.id))"
                     return result
                 }
                 let moved = meters(position, landing.coordinate)
                 guard moved >= 0.5 else {
-                    result.failure = "step \(count) reported a move of \(moved) m on \(landing.segment.id) at fraction \(landing.fraction)"
+                    result.failure = "step \(count) reported a move of \(moved) m on \(landing.segment.id)"
                     return result
                 }
                 segment = landing.segment
@@ -102,31 +130,37 @@ enum Pr2NudgeTrapTiles {
                 position = landing.coordinate
             }
         }
-        result.failure = "no end of block within \(limit) steps"
+        result.failure = "no end of block within \(limit) steps from \(start.id)@\(startFraction) (\(step))"
         return result
     }
 
     /// The whole contract for one block. Returns the first problem, or nil.
     static func check(_ block: (key: String, pieces: [Segment])) -> String? {
-        let ends = chainEnds(block.pieces)
-        var forwardEnds: [CLLocationCoordinate2D] = []
-        var backEnds: [CLLocationCoordinate2D] = []
-        for start in block.pieces {
-            for step in [5.0, -5.0] {
-                let result = walk(pieces: block.pieces, start: start, meters: step)
-                if let failure = result.failure { return "\(block.key) from \(start.id) (\(step)): \(failure)" }
-                guard let end = result.end else { return "\(block.key): no end" }
-                if !ends.contains(where: { meters($0, end) <= 3 }) {
-                    return "\(block.key) from \(start.id) (\(step)): stopped at a spot that is not a block end"
+        for run in runs(of: block.pieces) {
+            var forwardEnds: [CLLocationCoordinate2D] = []
+            var backEnds: [CLLocationCoordinate2D] = []
+            for start in run {
+                for fraction in [0.0, 0.5, 1.0] {
+                    for step in [5.0, -5.0] {
+                        let result = walk(block: block.pieces, start: start, fraction: fraction, meters: step)
+                        if let failure = result.failure { return "\(block.key): \(failure)" }
+                        guard let end = result.end else { return "\(block.key): no end" }
+                        if step > 0 { forwardEnds.append(end) } else { backEnds.append(end) }
+                    }
                 }
-                if step > 0 { forwardEnds.append(end) } else { backEnds.append(end) }
             }
-        }
-        // A clean chain has two ends: forward always ends at one, back at the other.
-        if ends.count == 2, let f = forwardEnds.first, let b = backEnds.first, meters(ends[0], ends[1]) > 20 {
-            if forwardEnds.contains(where: { meters($0, f) > 3 }) { return "\(block.key): forward ends differ" }
-            if backEnds.contains(where: { meters($0, b) > 3 }) { return "\(block.key): back ends differ" }
-            if meters(f, b) < 10 { return "\(block.key): forward and back ended at the same place" }
+            // One end for forward, the other for back, whichever piece the walk started on.
+            if let f = forwardEnds.first, let b = backEnds.first {
+                if let stray = forwardEnds.first(where: { meters($0, f) > 3 }) {
+                    return "\(block.key): forward ends differ by \(meters(stray, f)) m depending on the start"
+                }
+                if let stray = backEnds.first(where: { meters($0, b) > 3 }) {
+                    return "\(block.key): back ends differ by \(meters(stray, b)) m depending on the start"
+                }
+                if extent(of: run) > 20, meters(f, b) < 10 {
+                    return "\(block.key): forward and back ended at the same place"
+                }
+            }
         }
         return nil
     }
@@ -134,72 +168,168 @@ enum Pr2NudgeTrapTiles {
 
 final class WPParkNudgeTrapTests: XCTestCase {
 
-    /// The three blocks QA found trapped.
+    private func block(_ key: String, in blocks: [(key: String, pieces: [Segment])]) -> (key: String, pieces: [Segment])? {
+        blocks.first { $0.key == key }
+    }
+
+    /// The three blocks QA found trapped in PR #226.
     func testQATrapBlocks_walkToTheEnd_bothWays_fromEveryPiece() throws {
         let blocks = try Pr2NudgeTrapTiles.multiPieceBlocks()
-        let wanted = [
+        for key in [
             "WEST END AVENUE|WEST 66TH STREET|WEST 70TH STREET|E",
             "2ND AVENUE|EAST 62ND STREET|EAST 61ST STREET|W",
             "CABRINI BOULEVARD|WEST 187TH STREET|WEST 190TH STREET|E"
-        ]
-        for key in wanted {
-            guard let block = blocks.first(where: { $0.key == key }) else {
-                XCTFail("missing real block \(key)"); continue
-            }
-            XCTAssertNil(Pr2NudgeTrapTiles.check(block), key)
+        ] {
+            guard let found = block(key, in: blocks) else { XCTFail("missing real block \(key)"); continue }
+            XCTAssertNil(Pr2NudgeTrapTiles.check(found), key)
         }
     }
 
-    /// A broad sample (every 7th multi-piece blockface, all pieces as starts, both directions).
-    func testBroadSample_everyWalkTerminatesAtATrueEnd_strictlyAdvancing() throws {
+    /// PR #229 QA finding 1: on a curved block a piece at one end counted as "reversed", so forward
+    /// flipped, back ping-ponged and forward from the first piece said "End of block" at once.
+    func testPaladino_curvedBlock_forwardAndBackAreStable() throws {
+        let blocks = try Pr2NudgeTrapTiles.multiPieceBlocks()
+        let paladino = blocks.filter { $0.key.hasPrefix("PALADINO") }
+        XCTAssertGreaterThanOrEqual(paladino.count, 2, "expected Paladino Ave east and west")
+        for found in paladino {
+            XCTAssertNil(Pr2NudgeTrapTiles.check(found), found.key)
+            // Forward from the very first piece must not stop at once on a block hundreds of metres long.
+            let ordered = found.pieces.sorted { $0.id < $1.id }
+            guard let first = ordered.first else { continue }
+            let forward = Pr2NudgeTrapTiles.walk(block: found.pieces, start: first, fraction: 0.5, meters: 5)
+            let back = Pr2NudgeTrapTiles.walk(block: found.pieces, start: first, fraction: 0.5, meters: -5)
+            XCTAssertNil(forward.failure)
+            XCTAssertNil(back.failure)
+            if let f = forward.end, let b = back.end {
+                XCTAssertGreaterThan(Pr2NudgeTrapTiles.meters(f, b), 100, "\(found.key): the two ends are far apart")
+            }
+        }
+    }
+
+    /// PR #229 QA finding 2: a short stub at the block end made the walk alternate main, stub, main.
+    func testStubPieces_walkReachesEndOfBlock() throws {
+        let blocks = try Pr2NudgeTrapTiles.multiPieceBlocks()
+        var named: [(key: String, pieces: [Segment])] = []
+        for found in blocks {
+            guard let any = found.pieces.first else { continue }
+            let labels = "\(any.fromStreet) \(any.to)"
+            if any.street == "BOWERY", labels.contains("CANAL"), labels.contains("BAYARD") { named.append(found) }
+            if any.street == "BROADWAY", any.side == "E", labels.contains("125"), labels.contains("126") { named.append(found) }
+        }
+        XCTAssertFalse(named.isEmpty, "expected the Bowery and Broadway W125-126 blocks")
+        for found in named {
+            XCTAssertNil(Pr2NudgeTrapTiles.check(found), found.key)
+        }
+    }
+
+    /// A broad sample as large as QA's (every 7th multi-piece blockface plus every one on the long
+    /// curved or busy streets), from every piece at 0, 0.5 and 1.0, both ways: every walk reaches an end
+    /// within 400 steps, strictly advancing, and the ends are consistent within each connected run.
+    func testBroadSample_everyWalkTerminates_endsAreConsistent() throws {
         let blocks = try Pr2NudgeTrapTiles.multiPieceBlocks()
         XCTAssertGreaterThan(blocks.count, 5000, "expected thousands of multi-piece blockfaces")
+        let streets = [
+            "AMSTERDAM", "BROADWAY", "COLUMBUS", "RIVERSIDE", "NICHOLAS", "FORT WASHINGTON", "CENTRAL PARK WEST",
+            "BOWERY", "EAST END", "WEST 4TH", "CABRINI", "PALADINO"
+        ]
         var problems: [String] = []
         var checked = 0
-        for (index, block) in blocks.enumerated() where index % 7 == 0 {
+        for (index, found) in blocks.enumerated() {
+            let street = found.pieces.first?.street ?? ""
+            guard index % 7 == 3 || streets.contains(where: { street.contains($0) }) else { continue }
             checked += 1
             // A pool per block: the walks allocate many temporary objects.
             autoreleasepool {
-                if let problem = Pr2NudgeTrapTiles.check(block) { problems.append(problem) }
+                if let problem = Pr2NudgeTrapTiles.check(found) { problems.append(problem) }
             }
         }
-        XCTAssertGreaterThan(checked, 700)
-        XCTAssertTrue(problems.isEmpty, "\(problems.count) problem blocks, first: \(problems.prefix(5))")
+        XCTAssertGreaterThan(checked, 2000, "sample at least as large as QA's 2,387")
+        XCTAssertTrue(problems.isEmpty, "\(problems.count) problem blocks, first: \(problems.prefix(8))")
     }
 
     /// Through the flow: the car is placed on the chosen piece, so the incumbent dead-band cannot keep
-    /// it on the old one. Walks West End Ave E from every piece; each answer is moved or end of block.
+    /// it on the old one. Walks West End Ave E and Paladino from every piece; each answer is moved or
+    /// end of block, and "moved" always moved.
     @MainActor
-    func testFlow_westEnd_neverSaysMovedWithoutMoving() async throws {
+    func testFlow_neverSaysMovedWithoutMoving() async throws {
         let blocks = try Pr2NudgeTrapTiles.multiPieceBlocks()
-        guard let block = blocks.first(where: { $0.key == "WEST END AVENUE|WEST 66TH STREET|WEST 70TH STREET|E" }) else {
-            return XCTFail("missing West End Ave E 66-70")
-        }
-        let flow = WPParkFlowController()
-        flow.prepareIndex(segments: block.pieces)
-        let deadline = Date().addingTimeInterval(10)
-        while !flow.indexReady && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+        var chosen: [(key: String, pieces: [Segment])] = []
+        if let westEnd = block("WEST END AVENUE|WEST 66TH STREET|WEST 70TH STREET|E", in: blocks) { chosen.append(westEnd) }
+        if let paladino = blocks.first(where: { $0.key.hasPrefix("PALADINO") }) { chosen.append(paladino) }
+        XCTAssertEqual(chosen.count, 2)
         let engine = ParkingRulesEngine()
         let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
-        for start in block.pieces {
-            for meters in [5.0, -5.0] {
-                guard let snap = WPParkFlowController.pendingSnap(on: start, near: nil) else { continue }
-                flow.enterPending(at: snap, segments: block.pieces, engine: engine, now: now, windowEnd: nil, trip: nil)
-                var previous = try XCTUnwrap(flow.groundCoordinate)
-                var ended = false
-                for _ in 0..<300 {
-                    let result = flow.nudge(
-                        meters: meters, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil
-                    )
-                    let current = try XCTUnwrap(flow.groundCoordinate)
-                    if result == .endOfBlock { ended = true; break }
-                    XCTAssertEqual(result, .moved)
-                    XCTAssertGreaterThan(Pr2NudgeTrapTiles.meters(previous, current), 0.1, "moved without moving from \(start.id)")
-                    previous = current
+        for found in chosen {
+            let flow = WPParkFlowController()
+            flow.prepareIndex(segments: found.pieces)
+            let deadline = Date().addingTimeInterval(10)
+            while !flow.indexReady && Date() < deadline { try await Task.sleep(for: .milliseconds(20)) }
+            for start in found.pieces {
+                for meters in [5.0, -5.0] {
+                    guard let snap = WPParkFlowController.pendingSnap(on: start, near: nil) else { continue }
+                    flow.enterPending(at: snap, segments: found.pieces, engine: engine, now: now, windowEnd: nil, trip: nil)
+                    var previous = try XCTUnwrap(flow.groundCoordinate)
+                    var ended = false
+                    for _ in 0..<400 {
+                        let result = flow.nudge(
+                            meters: meters, point: .zero, metersPerPoint: 0.1, engine: engine, now: now,
+                            windowEnd: nil, trip: nil
+                        )
+                        let current = try XCTUnwrap(flow.groundCoordinate)
+                        if result == .endOfBlock { ended = true; break }
+                        XCTAssertEqual(result, .moved)
+                        XCTAssertGreaterThan(Pr2NudgeTrapTiles.meters(previous, current), 0.1, "moved without moving from \(start.id)")
+                        previous = current
+                    }
+                    XCTAssertTrue(ended, "\(start.id) \(meters): never reached End of block")
+                    flow.reset()
                 }
-                XCTAssertTrue(ended, "\(start.id) \(meters): never reached End of block")
-                flow.reset()
             }
+        }
+    }
+}
+
+// MARK: - The spine itself
+
+final class WPBlockSpineTests: XCTestCase {
+
+    /// Pieces drawn in mixed directions along a straight block chain into one spine, one direction.
+    func testMixedDirectionPieces_makeOneStraightSpine() {
+        let a = CurbSnapTestFixtures.segment(id: "A", side: "S", points: [(0, 0), (40, 0)])
+        let b = CurbSnapTestFixtures.segment(id: "B", side: "S", points: [(80, 0), (40, 0)]) // drawn backwards
+        let c = CurbSnapTestFixtures.segment(id: "C", side: "S", points: [(80, 0), (120, 0)])
+        guard let spine = WPBlockSpine(around: b, in: [c, a, b]) else { return XCTFail("no spine") }
+        XCTAssertEqual(spine.legs.map { $0.segment.id }, ["A", "B", "C"])
+        XCTAssertEqual(spine.legs.map { $0.reversed }, [false, true, false])
+        XCTAssertEqual(spine.total, 120, accuracy: 0.5)
+    }
+
+    /// The same spine, whichever piece it is built around.
+    func testSpine_isTheSameFromEveryStartPiece() {
+        let pieces = [
+            CurbSnapTestFixtures.segment(id: "A", side: "S", points: [(0, 0), (40, 0)]),
+            CurbSnapTestFixtures.segment(id: "B", side: "S", points: [(40, 0), (80, 30)]),
+            CurbSnapTestFixtures.segment(id: "C", side: "S", points: [(80, 30), (80, 90)])
+        ]
+        let orders = pieces.compactMap { start in
+            WPBlockSpine(around: start, in: Array(pieces.reversed()))?.legs.map { $0.segment.id }
+        }
+        XCTAssertEqual(orders.count, 3)
+        XCTAssertTrue(orders.allSatisfy { $0 == orders[0] })
+    }
+
+    /// A short stub at the end that overlaps the main piece is not on the spine.
+    func testStub_isLeftOffTheSpine_andACarOnItIsPlacedOnTheSpine() throws {
+        let main = CurbSnapTestFixtures.segment(id: "MAIN", side: "S", points: [(0, 0), (100, 0)])
+        let stub = CurbSnapTestFixtures.segment(id: "STUB", side: "S", points: [(100, 0), (96, 0)])
+        let spine = try XCTUnwrap(WPBlockSpine(around: main, in: [main, stub]))
+        XCTAssertFalse(spine.legs.contains { $0.segment.id == "STUB" })
+        let onStub = try XCTUnwrap(WPBlockSpine(around: stub, in: [main, stub]))
+        XCTAssertEqual(onStub.position(of: stub, fraction: 0.5), 98, accuracy: 1)
+        // Forward from the end of the main piece is the end of the block, not a bounce onto the stub.
+        if case .endOfBlock = WPParkFlowController.nudgeTarget(spine: spine, on: main, fraction: 1, meters: 5) {
+        } else {
+            XCTFail("at the end of the block the nudge must stop")
         }
     }
 }
