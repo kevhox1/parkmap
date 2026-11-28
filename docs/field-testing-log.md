@@ -1273,3 +1273,6 @@ The "Legal" / Maps attribution sits under the Report / Park here / Voice off row
 
 ### DT35-7 🔴 W Houston St: curb lines drawn in the middle of the road
 Colors are right, but the dotted lines sit mid-road, and on some blocks there are more lines than curbs. Houston is a wide, divided two-way street. Lines should sit at the curbs: when you drive one direction, the parking lane is on your right. Previous work: `docs/ft21-*`. Wants a QA run on Houston specifically and a manual offset override if the general logic can't get it right.
+
+### DT35-8 🟡 AX5 drive mode: the Park Until pill is squeezed (found by the PR #223 builder)
+In AX5 drive mode with Stoop on, the Park Until pill gets a tiny layout frame. Its text renders three lines tall and overlaps the street pill and End, and it partly covers the Maps logo. Reproduces on `main`. It's the same compression family as the street-cleaning pill (fixed in #223). In AX5 the drive card already takes about 55% of the screen. Follow-up PR queued.
