@@ -1,0 +1,24 @@
+TIMING RIVERSIDE DRIVE|W|WEST 155TH STREET|WEST 135TH STREET pieces 59: 33 nudges in 529 ms = 15 ms/nudge
+TIMING RIVERSIDE DRIVE|W|WEST 95TH STREET|WEST 79TH STREET pieces 42: 30 nudges in 225 ms = 7 ms/nudge
+TIMING RIVERSIDE DRIVE|W|TIEMANN PLACE|WEST 110TH STREET pieces 41: 5 nudges in 86 ms = 14 ms/nudge
+TIMING EAST 20TH STREET|S|1ST AVENUE|AVENUE C pieces 36: 63 nudges in 1253 ms = 19 ms/nudge
+TIMING ST NICHOLAS AVENUE|W|WEST 141ST STREET|WEST 127TH STREET pieces 35: 35 nudges in 260 ms = 7 ms/nudge
+SPINEALL runs=10315 droppedPieces=4 droppedLenMax=6.247757698715125 droppedCategoryDiffers=1 bridges=64 tailBridges=5 endShortfall>3m=5 >6m=3 determinismDiff=0 maxBuildMs=9.044051170349121 at RIVERSIDE DRIVE|W|WEST 155TH STREET|WEST 135TH STREET pieces 59 over5ms=1
+DROPDIFF COOPER_SQUARE_EAST_5TH_STREET_EAST_6TH_STREET_E_3 len 62/10 dom Optional(WePark.Category.noParking) vs covering [] (n=0)
+SHORT PALADINO AVENUE|E|EAST 120TH STREET|1ST AVENUE shortfall 92/10 m pieces 13 dropped 0
+SHORT RIVERSIDE DRIVE|E|WEST 160TH STREET|WEST 161ST STREET shortfall 66/10 m pieces 3 dropped 0
+SHORT WEST BROADWAY|W|FRANKLIN STREET|LEONARD STREET shortfall 68/10 m pieces 5 dropped 0
+TAILBRIDGE BOWERY|W|CANAL STREET|BAYARD STREET gap 55/10 m tail legs 1 tail len 49/10 spineTotal 114
+TAILBRIDGE EAST 112TH STREET|N|2ND AVENUE|1ST AVENUE gap 15/10 m tail legs 1 tail len 128/10 spineTotal 186
+TAILBRIDGE EAST 42ND STREET|S|1ST AVENUE|FDR DRIVE gap 15/10 m tail legs 1 tail len 145/10 spineTotal 64
+TAILBRIDGE RIVERSIDE DRIVE|E|WEST 160TH STREET|WEST 161ST STREET gap 35/10 m tail legs 1 tail len 53/10 spineTotal 61
+TAILBRIDGE WEST BROADWAY|W|FRANKLIN STREET|LEONARD STREET gap 48/10 m tail legs 1 tail len 26/10 spineTotal 59
+STUBFLOW checked=24 verdictMismatch=0 endOfBlock=2
+  stub STREET_E_2 f0.0 dir 5.0 -> moved to STREET_E_1 @96% dist from start 50/10 m
+  stub STREET_E_2 f0.0 dir -5.0 -> moved to STREET_E_1 @71% dist from start 50/10 m
+  stub STREET_E_2 f0.5 dir 5.0 -> moved to STREET_E_1 @100% dist from start 46/10 m
+  stub STREET_E_2 f0.5 dir -5.0 -> moved to STREET_E_1 @76% dist from start 51/10 m
+  stub STREET_E_2 f1.0 dir 5.0 -> moved to STREET_E_1 @100% dist from start 31/10 m
+  stub STREET_E_2 f1.0 dir -5.0 -> moved to STREET_E_1 @81% dist from start 52/10 m
+  stub TREET_E_35 f0.0 dir 5.0 -> endOfBlock
+  stub AVENUE_S_0 f1.0 dir -5.0 -> endOfBlock

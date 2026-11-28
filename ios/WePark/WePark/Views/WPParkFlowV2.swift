@@ -154,7 +154,13 @@ final class WPParkFlowController {
     @ObservationIgnored private var indexKey: Int?
     @ObservationIgnored private var lastSegmentID: String?
     /// The loaded segments, kept from `prepareIndex` so landing can look up the opposite curb.
-    @ObservationIgnored private var knownSegments: [Segment] = []
+    @ObservationIgnored private var knownSegments: [Segment] = [] {
+        didSet { blockPieces = [:]; streetPieces = [:] }
+    }
+    /// Pieces of a blockface / street, filled on first use while a draft is active, so a nudge does not
+    /// scan every loaded segment each time.
+    @ObservationIgnored private var blockPieces: [String: [Segment]] = [:]
+    @ObservationIgnored private var streetPieces: [String: [Segment]] = [:]
     @ObservationIgnored private let selection = UISelectionFeedbackGenerator()
     @ObservationIgnored private let impact = UIImpactFeedbackGenerator(style: .light)
     @ObservationIgnored private let notify = UINotificationFeedbackGenerator()
@@ -306,7 +312,7 @@ final class WPParkFlowController {
             phase = .placed
             groundCoordinate = snap.snappedCoordinate
             if let landingPoint { tokenPoint = landingPoint }
-            alternateSnap = Self.oppositeSnap(of: snap, in: knownSegments)
+            alternateSnap = Self.oppositeSnap(of: snap, in: pieces(onStreet: snap.segment.street))
             lastLanding = nil
             landingTick += 1
             impact.impactOccurred()
@@ -344,7 +350,14 @@ final class WPParkFlowController {
         trip: TripPlan?,
         reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() }
     ) {
-        if !segments.isEmpty { knownSegments = segments }
+        // Only a different set resets the caches (a nudge passes the same set every time).
+        if !segments.isEmpty,
+           CurbPlacementPolicy.segmentsVersion(count: segments.count, firstID: segments.first?.id, lastID: segments.last?.id)
+            != CurbPlacementPolicy.segmentsVersion(
+                count: knownSegments.count, firstID: knownSegments.first?.id, lastID: knownSegments.last?.id
+            ) {
+            knownSegments = segments
+        }
         phase = .placed
         tokenPoint = nil
         originPoint = nil
@@ -356,7 +369,7 @@ final class WPParkFlowController {
             segment: result.segment, engine: engine, now: now, windowEnd: windowEnd, trip: trip,
             reports: reports(result.segment)
         )
-        alternateSnap = Self.oppositeSnap(of: result, in: knownSegments)
+        alternateSnap = Self.oppositeSnap(of: result, in: pieces(onStreet: result.segment.street))
         clearNotice()
         landingTick += 1
         impact.prepare(); impact.impactOccurred()
@@ -401,7 +414,7 @@ final class WPParkFlowController {
     ) -> WPNudgeResult {
         guard phase == .placed, let snap else { return .noCurb }
         switch Self.nudgeTarget(
-            on: snap.segment, fraction: snap.positionFraction, meters: meters, in: knownSegments
+            on: snap.segment, fraction: snap.positionFraction, meters: meters, in: pieces(ofBlock: snap.segment)
         ) {
         case .endOfBlock:
             return .endOfBlock
@@ -420,117 +433,54 @@ final class WPParkFlowController {
         }
     }
 
-    /// Where a nudge of `meters` from `fraction` on `segment` goes, walking the pieces of its block
-    /// (`segments` may hold other streets; only the same blockface is used). Positive meters = the
-    /// block's reference direction, negative = the other way. Within a piece: along it. Past a piece
-    /// end: onto the piece that joins there (within 6 m), continuing the same way, so the walk follows
-    /// the block through pieces drawn in either direction. With no joining piece the car goes to the
-    /// end, and once it has moved less than 0.5 m in total the answer is `.endOfBlock`.
+    /// The loaded pieces of `segment`'s blockface (cached).
+    private func pieces(ofBlock segment: Segment) -> [Segment] {
+        let key = "\(segment.street)|\(segment.fromStreet)|\(segment.to)|\(segment.side)"
+        if let cached = blockPieces[key] { return cached }
+        let found = knownSegments.filter { Self.isSameBlock($0, segment) }
+        blockPieces[key] = found
+        return found
+    }
+
+    /// The loaded pieces on `street` (cached); the opposite-curb search only ever reads these.
+    private func pieces(onStreet street: String) -> [Segment] {
+        if let cached = streetPieces[street] { return cached }
+        let found = knownSegments.filter { $0.street == street }
+        streetPieces[street] = found
+        return found
+    }
+
+    /// Where a nudge of `meters` from `fraction` on `segment` goes: along the block's spine
+    /// (`WPBlockSpine`: one ordered line through the pieces, direction decided once for the block).
+    /// Positive meters = forward along the spine, negative = back. A nudge either moves the car at
+    /// least 0.5 m from where it was, or is `.endOfBlock`, the end of the run of pieces `segment` is on.
     nonisolated static func nudgeTarget(
-        on segment: Segment, fraction: Double, meters: Double, in segments: [Segment], attempt: Int = 0
+        on segment: Segment, fraction: Double, meters: Double, in segments: [Segment]
     ) -> WPNudgeTarget {
-        guard meters != 0, segment.coordinates.count >= 2 else { return .endOfBlock }
-        var pieces = segments.filter { isSameBlock($0, segment) && $0.coordinates.count >= 2 }
-        if !pieces.contains(where: { $0.id == segment.id }) { pieces.append(segment) }
-
-        // One reference direction for the whole block: the sum of the pieces' own directions.
-        var refEast = 0.0
-        var refNorth = 0.0
-        for piece in pieces {
-            let d = direction(of: piece)
-            refEast += d.east
-            refNorth += d.north
-        }
-        func isReversed(_ piece: Segment) -> Bool {
-            let d = direction(of: piece)
-            return d.east * refEast + d.north * refNorth < 0
-        }
-
-        var current = segment
-        var length = polylineLength(current.coordinates)
-        guard length > 1 else { return .endOfBlock }
-        var position = min(1, max(0, fraction)) * length
-        // +1 = toward the piece's end (increasing fraction).
-        var along: Double = ((meters > 0) != isReversed(current)) ? 1 : -1
-        var remaining = abs(meters)
-        var travelled = 0.0
-        var visited: Set<String> = [current.id]
-
-        for _ in 0...pieces.count {
-            let room = along > 0 ? length - position : position
-            if remaining <= room {
-                position += along * remaining
-                travelled += remaining
-                remaining = 0
-                break
-            }
-            travelled += room
-            remaining -= room
-            position = along > 0 ? length : 0
-            let line = current.coordinates
-            let joint = along > 0 ? line[line.count - 1] : line[0]
-            // The end we came from: a piece that joins THERE is behind us, not ahead (matters when
-            // the current piece is shorter than the joining tolerance).
-            let behind = along > 0 ? line[0] : line[line.count - 1]
-            var next: (piece: Segment, atStart: Bool, distance: Double)?
-            for piece in pieces where !visited.contains(piece.id) {
-                guard let first = piece.coordinates.first, let last = piece.coordinates.last else { continue }
-                let toStart = metersBetween(joint, first)
-                let toEnd = metersBetween(joint, last)
-                let best = min(toStart, toEnd)
-                guard best <= 6 else { continue }
-                let touch = toStart <= toEnd ? first : last
-                guard best < metersBetween(touch, behind) else { continue }
-                if next == nil || best < (next?.distance ?? .infinity) {
-                    next = (piece, toStart <= toEnd, best)
-                }
-            }
-            guard let next else { break }
-            visited.insert(next.piece.id)
-            current = next.piece
-            length = polylineLength(current.coordinates)
-            guard length > 1 else { break }
-            along = next.atStart ? 1 : -1
-            position = next.atStart ? 0 : length
-        }
-
-        // "Moved" must mean the car really ends up somewhere else: at least half a metre from where it
-        // was (not just half a metre of walking that ends back where it began, e.g. across a small gap).
-        guard travelled >= 0.5,
-              let coordinate = CandidateSegmentSearch.coordinate(
-                atFraction: position / length, along: current.coordinates
-              ),
-              let origin = CandidateSegmentSearch.coordinate(atFraction: fraction, along: segment.coordinates) else {
-            return .endOfBlock
-        }
-        if metersBetween(origin, coordinate) < 0.5 {
-            // The curb doubled back on itself (a small hook in the data) so walking `meters` ended
-            // where it began: keep walking further, so the car still gets somewhere new. The block is
-            // only over when there is no road left to walk (`travelled < 0.5` above).
-            guard attempt < 5 else { return .endOfBlock }
-            return nudgeTarget(
-                on: segment, fraction: fraction, meters: meters * 2, in: segments, attempt: attempt + 1
-            )
-        }
-        return .move(WPNudgeStep(segment: current, fraction: position / length, coordinate: coordinate))
+        guard meters != 0, let spine = WPBlockSpine(around: segment, in: segments) else { return .endOfBlock }
+        return nudgeTarget(spine: spine, on: segment, fraction: fraction, meters: meters)
     }
 
-    nonisolated private static func polylineLength(_ line: [CLLocationCoordinate2D]) -> Double {
-        guard line.count >= 2 else { return 0 }
-        var total = 0.0
-        for index in 1..<line.count {
-            total += metersBetween(line[index - 1], line[index])
+    /// The same, on a spine that is already built (a caller walking one block many times).
+    nonisolated static func nudgeTarget(
+        spine: WPBlockSpine, on segment: Segment, fraction: Double, meters: Double
+    ) -> WPNudgeTarget {
+        guard meters != 0,
+              let origin = CandidateSegmentSearch.coordinate(atFraction: fraction, along: segment.coordinates)
+        else { return .endOfBlock }
+        let here = spine.position(of: segment, fraction: fraction)
+        // A curb that doubles back on itself (a small hook in the data) can end a short walk where it
+        // began: keep walking further so the car still gets somewhere new.
+        var reach = meters
+        for _ in 0..<6 {
+            let target = min(spine.total, max(0, here + reach))
+            guard abs(target - here) >= 0.5 else { return .endOfBlock }
+            if let step = spine.landing(at: target), metersBetween(origin, step.coordinate) >= 0.5 {
+                return .move(step)
+            }
+            reach *= 2
         }
-        return total
-    }
-
-    /// Unit direction (east, north) of a piece from its first to its last vertex.
-    nonisolated private static func direction(of piece: Segment) -> (east: Double, north: Double) {
-        guard let first = piece.coordinates.first, let last = piece.coordinates.last else { return (0, 0) }
-        let east = (last.longitude - first.longitude) * 111_320 * cos(first.latitude * Double.pi / 180)
-        let north = (last.latitude - first.latitude) * 111_320
-        let norm = hypot(east, north)
-        return norm > 0 ? (east / norm, north / norm) : (0, 0)
+        return .endOfBlock
     }
 
     /// Same blockface: street, side and both cross streets.

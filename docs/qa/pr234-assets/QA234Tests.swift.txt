@@ -1,0 +1,308 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+enum QA234 {
+    static let outPath = "/private/tmp/claude-501/-Users-kevinhoxha-repos-parkmap/f8d5a3ca-5371-4933-9534-79989e164bb8/scratchpad/qa234.txt"
+    static func log(_ s: String) {
+        if let h = FileHandle(forWritingAtPath: outPath) { h.seekToEndOfFile(); h.write((s + "\n").data(using: .utf8)!); h.closeFile() }
+        else { try? (s + "\n").write(toFile: outPath, atomically: true, encoding: .utf8) }
+    }
+    static func loadAll() throws -> [Segment] {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("WePark/Resources/tiles")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("tile_") }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var seen = Set<String>(); var all: [Segment] = []
+        for f in files { for s in try JSONDecoder().decode([Segment].self, from: Data(contentsOf: f)) where seen.insert(s.id).inserted { all.append(s) } }
+        return all
+    }
+    static func key(_ s: Segment) -> String { "\(s.street)|\(s.side)|\(s.fromStreet)|\(s.to)" }
+    static func m(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let n = (b.latitude - a.latitude) * 111_320
+        let e = (b.longitude - a.longitude) * 111_320 * cos((a.latitude + b.latitude) / 2 * .pi / 180)
+        return hypot(e, n)
+    }
+    static func len(_ l: [CLLocationCoordinate2D]) -> Double { l.count < 2 ? 0 : (1..<l.count).reduce(0) { $0 + m(l[$1-1], l[$1]) } }
+    /// own runs: ends within 6 m
+    static func runs(_ g: [Segment]) -> [[Segment]] {
+        var p = Array(0..<g.count)
+        func r(_ x: Int) -> Int { var y = x; while p[y] != y { y = p[y] }; return y }
+        let E = g.map { s -> [CLLocationCoordinate2D] in let c = s.coordinates; return c.count >= 2 ? [c.first!, c.last!] : [] }
+        for i in 0..<g.count { for j in (i+1)..<max(i+1, g.count) {
+            var close = false
+            for a in E[i] { for b in E[j] where m(a, b) <= 6 { close = true } }
+            if close { p[r(i)] = r(j) }
+        } }
+        var out: [Int: [Segment]] = [:]
+        for (i, s) in g.enumerated() { out[r(i), default: []].append(s) }
+        return out.keys.sorted().map { out[$0]! }
+    }
+    /// ends not within 1.5 m of another piece's end
+    static func looseEnds(_ g: [Segment]) -> Int {
+        var pts: [(CLLocationCoordinate2D, Int)] = []
+        for (gi, s) in g.enumerated() { let c = s.coordinates; if c.count >= 2 { pts.append((c.first!, gi)); pts.append((c.last!, gi)) } }
+        var n = 0
+        for (i, p) in pts.enumerated() where !pts.enumerated().contains(where: { $0.offset != i && $0.element.1 != p.1 && m($0.element.0, p.0) < 1.5 }) { n += 1 }
+        return n
+    }
+    static func diameter(_ g: [Segment]) -> (CLLocationCoordinate2D, CLLocationCoordinate2D, Double)? {
+        var pts: [CLLocationCoordinate2D] = []
+        for s in g { let c = s.coordinates; if c.count >= 2 { pts.append(c.first!); pts.append(c.last!) } }
+        var best: (CLLocationCoordinate2D, CLLocationCoordinate2D, Double)?
+        for a in pts { for b in pts { let d = m(a, b); if best == nil || d > best!.2 { best = (a, b, d) } } }
+        return best
+    }
+    static let streets: Set<String> = ["LEXINGTON AVENUE", "PARK AVENUE", "PARK AVENUE SOUTH", "2ND AVENUE", "MADISON AVENUE", "WEST END AVENUE",
+        "EAST HOUSTON STREET", "WEST HOUSTON STREET", "CANAL STREET", "DELANCEY STREET", "RIVERSIDE DRIVE", "RIVERSIDE BOULEVARD"]
+    static func isNamed(_ street: String) -> Bool { streets.contains(street) || street.contains("BROADWAY") }
+}
+
+@MainActor
+final class QA234WalkTests: XCTestCase {
+
+    func testWalks() async throws {
+        let all = try QA234.loadAll()
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA234.key(s), default: []].append(s) }
+        let multis = groups.filter { $0.value.count >= 2 }.keys.sorted()
+        var chosen = Set<String>()
+        for (i, k) in multis.enumerated() where i % 5 == 2 { chosen.insert(k) }
+        let offsetCount = chosen.count
+        var namedCount: [String: Int] = [:]
+        for k in multis { let st = String(k.split(separator: "|", omittingEmptySubsequences: false)[0]); if QA234.isNamed(st) { chosen.insert(k); namedCount[st, default: 0] += 1 } }
+        QA234.log("segments \(all.count) multi \(multis.count) offsetSample \(offsetCount) total \(chosen.count) named \(namedCount.sorted { $0.key < $1.key })")
+        var blocks = 0, runsN = 0, walks = 0, stray = 0, crossRun = 0, shortStep = 0, noEnd = 0, fwdSpread = 0, backSpread = 0, sameEnd = 0, notDiameter = 0
+        var multiRun = 0, looseNot2 = 0, spineDiff = 0, droppedReal = 0, droppedAny = 0, spineNil = 0
+        var maxSteps = 0, maxDrift = 0.0, maxDriftKey = ""
+        var fails: [String] = [], info: [String] = []
+        let step = 5.0
+
+        for k in chosen.sorted() {
+            autoreleasepool {
+                let g = groups[k]!
+                blocks += 1
+                let rs = QA234.runs(g)
+                if rs.count > 1 { multiRun += 1; info.append("MULTIRUN \(k): runs \(rs.map { $0.count }) gaps") }
+                for run in rs where run.count >= 2 {
+                    runsN += 1
+                    let runIDs = Set(run.map { $0.id })
+                    if QA234.looseEnds(run) != 2 { looseNot2 += 1; info.append("LOOSE\(QA234.looseEnds(run)) \(k) pieces \(run.count)") }
+                    guard let dia = QA234.diameter(run) else { return }
+                    // spine determinism and dropped pieces
+                    var sigs = Set<String>()
+                    for start in run {
+                        guard let sp = WPBlockSpine(around: start, in: g) else { spineNil += 1; fails.append("SPINENIL \(k) \(start.id)"); continue }
+                        let ids = sp.legs.map { $0.segment.id }
+                        let sig = ids.joined(separator: ",") < ids.reversed().joined(separator: ",") ? ids.joined(separator: ",") : ids.reversed().joined(separator: ",")
+                        sigs.insert(sig)
+                        if start.id == run[0].id {
+                            let onSpine = Set(ids)
+                            for p in run where !onSpine.contains(p.id) {
+                                droppedAny += 1
+                                // distance of the dropped piece's samples to the spine and rules comparison
+                                var worst = 0.0
+                                var coverRulesEqual = false
+                                for f in [0.0, 0.25, 0.5, 0.75, 1.0] {
+                                    guard let pt = CandidateSegmentSearch.coordinate(atFraction: f, along: p.coordinates) else { continue }
+                                    var dmin = Double.infinity
+                                    for leg in sp.legs { if let ft = CandidateSegmentSearch.nearestPointOnPolyline(from: pt, polyline: leg.segment.coordinates) { dmin = min(dmin, ft.distanceMeters) } }
+                                    worst = max(worst, dmin)
+                                }
+                                let L = QA234.len(p.coordinates)
+                                for leg in sp.legs where leg.segment.rules == p.rules { coverRulesEqual = true }
+                                let anyRulesDiffer = !sp.legs.contains { $0.segment.rules == p.rules }
+                                _ = coverRulesEqual
+                                let real = L >= 8 || worst > 3 || anyRulesDiffer
+                                if real { droppedReal += 1 }
+                                info.append("DROPPED\(real ? "!" : "") \(k) \(p.id) len \(Int(L*10))/10 m worstDistToSpine \(Int(worst*10))/10 rulesMatchNoSpinePiece=\(anyRulesDiffer) spineLen \(Int(sp.total)) pieces \(run.count)")
+                            }
+                        }
+                    }
+                    if sigs.count > 1 { spineDiff += 1; fails.append("SPINEDIFF \(k): \(sigs.count) distinct spines by start piece") }
+
+                    // walks
+                    var fwd: [CLLocationCoordinate2D] = [], back: [CLLocationCoordinate2D] = []
+                    let cap = max(400, Int(QA234.len(run.flatMap { $0.coordinates }) / step) * 3)
+                    for start in run {
+                        for frac in [0.0, 0.5, 1.0] {
+                            for dir in [1.0, -1.0] {
+                                walks += 1
+                                var cs = start, cf = frac
+                                var here = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates)!
+                                var err: String?; var n = 0
+                                loop: for i in 1...cap {
+                                    n = i
+                                    switch WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir * step, in: g) {
+                                    case .endOfBlock: break loop
+                                    case .move(let t):
+                                        if QA234.key(t.segment) != k { err = "STRAY \(t.segment.id)"; stray += 1; break loop }
+                                        if !runIDs.contains(t.segment.id) { err = "CROSSRUN \(t.segment.id)"; crossRun += 1; break loop }
+                                        let d = QA234.m(here, t.coordinate)
+                                        if d < 0.5 { err = "SHORT \(d) at \(cs.id)@\(cf)"; shortStep += 1; break loop }
+                                        cs = t.segment; cf = t.fraction; here = t.coordinate
+                                    }
+                                    if i == cap { err = "NOEND \(cap) steps"; noEnd += 1 }
+                                }
+                                maxSteps = max(maxSteps, n)
+                                if let err { fails.append("\(k) \(start.id) f=\(frac) dir \(dir): \(err)"); continue }
+                                if dir > 0 { fwd.append(here) } else { back.append(here) }
+                                let dd = min(QA234.m(here, dia.0), QA234.m(here, dia.1))
+                                if dd > 5 { notDiameter += 1; fails.append("NOTDIAM \(k) \(start.id) f=\(frac) dir \(dir): ended \(Int(dd)) m from the run's extreme ends") }
+                            }
+                        }
+                        // out and back drift
+                        if QA234.len(start.coordinates) > 12 {
+                            for (dir, ns) in [(1.0, 1), (-1.0, 1), (1.0, 3), (-1.0, 3), (1.0, 6), (-1.0, 6)] {
+                                var cs = start, cf = 0.5
+                                let origin = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: start.coordinates)!
+                                var ok = true
+                                for _ in 0..<ns { if case .move(let t) = WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir * step, in: g) { cs = t.segment; cf = t.fraction } else { ok = false } }
+                                for _ in 0..<ns { if case .move(let t) = WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: -dir * step, in: g) { cs = t.segment; cf = t.fraction } else { ok = false } }
+                                if ok, let b = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates) {
+                                    let drift = QA234.m(origin, b)
+                                    if drift > maxDrift { maxDrift = drift; maxDriftKey = "\(k) \(start.id) dir \(dir) n \(ns)" }
+                                }
+                            }
+                        }
+                    }
+                    func spread(_ pts: [CLLocationCoordinate2D]) -> Double { pts.isEmpty ? 0 : pts.map { QA234.m(pts[0], $0) }.max()! }
+                    if spread(fwd) > 3 { fwdSpread += 1; fails.append("FWDSPREAD \(k) \(spread(fwd))") }
+                    if spread(back) > 3 { backSpread += 1; fails.append("BACKSPREAD \(k) \(spread(back))") }
+                    if let f = fwd.first, let b = back.first, QA234.m(f, b) < 3, dia.2 > 6 { sameEnd += 1; fails.append("SAMEEND \(k)") }
+                }
+            }
+        }
+        QA234.log("RESULT blocks=\(blocks) runs=\(runsN) multiRunBlocks=\(multiRun) walks=\(walks) stray=\(stray) crossRun=\(crossRun) shortStep=\(shortStep) noEnd=\(noEnd) fwdSpread=\(fwdSpread) backSpread=\(backSpread) sameEnd=\(sameEnd) notDiameter=\(notDiameter) runsLooseNot2=\(looseNot2) spineDiff=\(spineDiff) spineNil=\(spineNil) droppedPieces=\(droppedAny) droppedReal=\(droppedReal) maxSteps=\(maxSteps) maxDrift=\(maxDrift) at \(maxDriftKey)")
+        for f in fails.prefix(150) { QA234.log("FAIL " + f) }
+        for f in info.filter({ $0.hasPrefix("DROPPED!") }).prefix(150) { QA234.log(f) }
+        for f in info.filter({ $0.hasPrefix("DROPPED ") }).prefix(40) { QA234.log(f) }
+        for f in info.filter({ $0.hasPrefix("MULTIRUN") }).prefix(60) { QA234.log(f) }
+        for f in info.filter({ $0.hasPrefix("LOOSE") }).prefix(80) { QA234.log(f) }
+        XCTAssertEqual(fails.count, 0)
+    }
+
+    /// Named cases + spine dumps + stub placement.
+    func testNamed() async throws {
+        let all = try QA234.loadAll()
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA234.key(s)] = (groups[QA234.key(s)] ?? []) + [s] }
+        let names: [(String, (String) -> Bool)] = [
+            ("PALADINO E", { $0.hasPrefix("PALADINO AVENUE|E|") }), ("PALADINO W", { $0.hasPrefix("PALADINO AVENUE|W|") }),
+            ("BOWERY W Canal-Bayard", { $0.hasPrefix("BOWERY|W|") && $0.contains("CANAL") && $0.contains("BAYARD") }),
+            ("BROADWAY E W125-126", { $0.hasPrefix("BROADWAY|E|WEST 125TH") && $0.contains("WEST 126TH") }),
+            ("WEST END E W66-70", { $0.hasPrefix("WEST END AVENUE|E|WEST 66TH") }),
+            ("2ND AVE W E61-62", { $0.hasPrefix("2ND AVENUE|W|EAST 61") }),
+            ("2ND AVE W E59-60", { $0.hasPrefix("2ND AVENUE|W|EAST 59") || ($0.hasPrefix("2ND AVENUE|W|") && $0.contains("EAST 59") && $0.contains("EAST 60")) }),
+            ("CABRINI E W187-190", { $0.hasPrefix("CABRINI BOULEVARD|E|") && $0.contains("187") && $0.contains("190") }),
+        ]
+        for (label, pred) in names {
+            for k in groups.keys.sorted() where pred(k) {
+                let g = groups[k]!
+                QA234.log("== \(label): \(k) pieces \(g.count)")
+                for p in g { QA234.log("   piece \(p.id) len \(Int(QA234.len(p.coordinates)*10))/10 first \(p.coordinates.first!.latitude),\(p.coordinates.first!.longitude) last \(p.coordinates.last!.latitude),\(p.coordinates.last!.longitude) rules \(p.rules.count)") }
+                let rs = QA234.runs(g)
+                QA234.log("   runs \(rs.map { $0.count }) looseEnds \(rs.map { QA234.looseEnds($0) })")
+                for run in rs where run.count >= 2 {
+                    let sp = WPBlockSpine(around: run[0], in: g)!
+                    QA234.log("   SPINE total \(Int(sp.total*10))/10 legs " + sp.legs.map { "\($0.segment.id.split(separator: "_").suffix(2).joined(separator: "_")){\($0.reversed ? "R" : "F") \(Int($0.length))}" }.joined(separator: " "))
+                    let on = Set(sp.legs.map { $0.segment.id })
+                    for p in run where !on.contains(p.id) {
+                        let L = QA234.len(p.coordinates)
+                        QA234.log("   OFF-SPINE \(p.id) len \(Int(L*10))/10 position-of mid \(Int(sp.position(of: p, fraction: 0.5)*10))/10")
+                        // placement check
+                        for f in [0.0, 0.5, 1.0] {
+                            let pt = CandidateSegmentSearch.coordinate(atFraction: f, along: p.coordinates)!
+                            let pos = sp.position(of: p, fraction: f)
+                            let land = sp.landing(at: pos)!
+                            QA234.log("      f=\(f): placed on \(land.segment.id.split(separator: "_").suffix(2).joined(separator: "_")) dist from stub point \(Int(QA234.m(pt, land.coordinate)*10))/10 m; rules of stub == rules of landing piece: \(p.rules == land.segment.rules)")
+                        }
+                    }
+                    // walks
+                    for dir in [5.0, -5.0] {
+                        var ends: [String] = []
+                        for start in run { for f in [0.0, 0.5, 1.0] {
+                            var cs = start, cf = f; var n = 0
+                            var last = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates)!
+                            while n < 1000, case .move(let t) = WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir, in: g) { cs = t.segment; cf = t.fraction; last = t.coordinate; n += 1 }
+                            ends.append("\(Int(last.latitude*1e5)),\(Int(last.longitude*1e5)) n\(n)")
+                        } }
+                        QA234.log("   walk dir \(dir): distinct ends \(Set(ends.map { String($0.split(separator: " ")[0]) }).count) steps(max) \(ends.compactMap { Int($0.split(separator: "n").last!) }.max() ?? 0)")
+                    }
+                }
+            }
+        }
+        // 3 chain-ends blocks
+        var many: [String] = []
+        for (k, g) in groups where g.count >= 3 {
+            for run in QA234.runs(g) where run.count >= 3 && QA234.looseEnds(run) > 2 { many.append("\(k) pieces \(run.count) looseEnds \(QA234.looseEnds(run))") }
+        }
+        QA234.log("MORETHAN2ENDS count \(many.count)")
+        for x in many.sorted().prefix(60) { QA234.log("   " + x) }
+    }
+
+    /// Stub starts through the flow: car placed on spine, verdict for landing piece.
+    /// Also cache invalidation scenarios.
+    func testCache() async throws {
+        let all = try QA234.loadAll()
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(120)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA234.key(s)] = (groups[QA234.key(s)] ?? []) + [s] }
+        func startAt(_ seg: Segment, _ f: Double, _ segs: [Segment]) {
+            let c = CandidateSegmentSearch.coordinate(atFraction: f, along: seg.coordinates)!
+            flow.enterPending(at: CurbSnapResult(segment: seg, positionFraction: f, distanceMeters: 0, snappedCoordinate: c), segments: segs, engine: engine, now: now, windowEnd: nil, trip: nil)
+        }
+        func nudge(_ m: Double) -> WPNudgeResult { flow.nudge(meters: m, point: .zero, metersPerPoint: 1, engine: engine, now: now, windowEnd: nil, trip: nil) }
+        // 1. block A walk to end, reset(), new draft on block B: must stay on B
+        let kA = groups.keys.sorted().first { $0.hasPrefix("WEST END AVENUE|E|WEST 66TH") && groups[$0]!.count > 3 }!
+        let kB = groups.keys.sorted().first { $0.hasPrefix("CABRINI BOULEVARD|E|") && groups[$0]!.count > 3 }!
+        let a = groups[kA]!, b = groups[kB]!
+        startAt(a[0], 0.5, all)
+        var r = nudge(5); QA234.log("CACHE1 A first nudge \(r) on \(flow.snap?.segment.id ?? "nil") key==A \(flow.snap.map { QA234.key($0.segment) == kA } ?? false)")
+        flow.reset()
+        startAt(b[0], 0.5, all)
+        r = nudge(5); QA234.log("CACHE2 after reset, block B nudge \(r), key==B \(flow.snap.map { QA234.key($0.segment) == kB } ?? false)")
+        // 2. change block without reset (enterPending directly)
+        startAt(a[0], 0.5, all); r = nudge(5)
+        QA234.log("CACHE3 switch A->A no reset: \(r) key==A \(flow.snap.map { QA234.key($0.segment) == kA } ?? false)")
+        // 3. side flip
+        startAt(a[a.count/2], 0.5, all)
+        let before = flow.snap!.segment
+        flow.switchSide(engine: engine, now: now, windowEnd: nil, trip: nil)
+        let after = flow.snap!.segment
+        r = nudge(5)
+        QA234.log("CACHE4 flip \(before.side)->\(after.side); nudge after flip \(r) stays on flipped block: \(flow.snap.map { QA234.key($0.segment) == QA234.key(after) } ?? false); and flip back opposite is same street: \(flow.alternateSnap?.segment.street == after.street)")
+        flow.switchSide(engine: engine, now: now, windowEnd: nil, trip: nil)
+        r = nudge(-5)
+        QA234.log("CACHE5 flip back nudge \(r) key==orig: \(flow.snap.map { QA234.key($0.segment) == QA234.key(before) } ?? false)")
+        // 4. tile reload: a different set (fewer segments, block A truncated to 2 pieces): nudge must only use the new pieces
+        let reduced = all.filter { QA234.key($0) != kA || $0.id == a[0].id || $0.id == a[1].id }
+        flow.prepareIndex(segments: reduced)
+        startAt(a[0], 0.5, reduced)
+        var seen = Set<String>()
+        var guardN = 0
+        var rr = nudge(5)
+        while case .moved = rr, guardN < 200 { seen.insert(flow.snap!.segment.id); rr = nudge(5); guardN += 1 }
+        QA234.log("CACHE6 reload reduced set: pieces visited \(seen.sorted()) all within {\(a[0].id),\(a[1].id)}: \(seen.isSubset(of: [a[0].id, a[1].id]))")
+        // 5. reload with same count/first/last but different content (stale?): swap a middle piece's rules/line
+        var mutated = all
+        if let idx = mutated.firstIndex(where: { $0.id == a[2].id }), idx != 0, idx != mutated.count - 1 {
+            let o = mutated[idx]
+            // shift the piece by deleting it and putting a clone w/ same id: drop its line to a short stub
+            mutated[idx] = Segment(id: o.id, street: o.street, fromStreet: o.fromStreet, to: o.to, side: o.side, line: [o.line.first!, o.line.first!.map { $0 + 0.00001 }], rules: o.rules, dominantCategory: o.dominantCategory)
+        }
+        flow.prepareIndex(segments: all) // back to full
+        startAt(a[0], 0.5, all); _ = nudge(5)
+        flow.prepareIndex(segments: mutated) // same count/first/last
+        startAt(a[0], 0.5, mutated)
+        var visitedLens: [Double] = []
+        var n2 = 0; var r2 = nudge(5)
+        while case .moved = r2, n2 < 300 { visitedLens.append(0); if flow.snap!.segment.id == a[2].id { QA234.log("CACHE7 STALE: walk landed on mutated piece's old geometry? len \(QA234.len(flow.snap!.segment.coordinates))") }; r2 = nudge(5); n2 += 1 }
+        QA234.log("CACHE7 same-version content change: steps \(n2) (stale knownSegments would still hold old pieces; see STALE lines)")
+    }
+}
