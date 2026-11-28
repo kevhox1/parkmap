@@ -1,0 +1,118 @@
+//  QA-owned fake-clock scenarios for R35 PR1 (not the builder's tests).
+import XCTest
+@testable import WePark
+
+final class QA225FakeClockTests: XCTestCase {
+    private func et(_ y: Int, _ mo: Int, _ d: Int, _ h: Int, _ mi: Int = 0, _ s: Int = 0) -> Date {
+        var c = DateComponents(); c.year = y; c.month = mo; c.day = d; c.hour = h; c.minute = mi; c.second = s
+        c.timeZone = .easternTime
+        return Calendar.easternTime.date(from: c)!
+    }
+
+    /// Mirrors handleMinuteTick + rebuildOverlays.
+    private struct Sim {
+        var applied: Date
+        var live: Date
+        var end: Date?
+        var goal: ParkingGoal
+        mutating func rebuild(real: Date) { applied = WPWindowClock.instant(real); live = real; end = ParkingGoals.target(for: goal, from: applied) }
+        mutating func tick(real: Date) {
+            live = real
+            if WPWindowClock.needsRecolor(applied: applied, now: real, displayedEnd: end) { rebuild(real: real) }
+        }
+    }
+
+    private func check(_ sim: Sim, goal: ParkingGoal, file: StaticString = #filePath, line: UInt = #line) {
+        let now = sim.live
+        let input = WPGoalSheetInput(selectedGoal: goal, now: sim.applied,
+            fewHoursEnd: ParkingGoals.target(for: .freeFewHours, from: sim.applied),
+            overnightEnd: ParkingGoals.target(for: .freeOvernight, from: sim.applied),
+            forDaysEnd: ParkingGoals.target(for: .parkAndForget, from: sim.applied),
+            detailMode: false, loading: false, guardKind: nil, note: nil,
+            morningHour: 7, liveNow: now)
+        let end = input.selectedEnd
+        XCTAssertLessThanOrEqual(sim.applied, now, "window starts in the future", file: file, line: line)
+        XCTAssertLessThan(now.timeIntervalSince(sim.applied), 300, "applied lags >5min at \(now)", file: file, line: line)
+        XCTAssertGreaterThan(end, now, "end already passed at \(now) goal \(goal)", file: file, line: line)
+        if goal == .freeFewHours {
+            let rem = end.timeIntervalSince(now)
+            XCTAssertLessThanOrEqual(rem, 3 * 3600 + 1, file: file, line: line)
+            let capped = end == ParkingGoals.overnightEnd(from: sim.applied)
+            if !capped { XCTAssertGreaterThanOrEqual(rem, 3 * 3600 - 300 - 1, "few hours shorter than 2h55 at \(now)", file: file, line: line) }
+        }
+        if goal != .parkAndForget {
+            let minutes = Int((end.timeIntervalSince(max(now, sim.applied)) / 60).rounded())
+            let c = input.countdown
+            let parts = c.replacingOccurrences(of: " from now", with: "").split(separator: " ")
+            var total = 0
+            var i = 0
+            while i + 1 < parts.count { if parts[i+1] == "h" { total += Int(parts[i])! * 60 } else { total += Int(parts[i])! }; i += 2 }
+            XCTAssertEqual(total, max(1, minutes), "countdown \(c) disagrees with end at \(now)", file: file, line: line)
+        }
+    }
+
+    private func runDay(start: Date, hours: Int) {
+        for goal in [ParkingGoal.freeFewHours, .freeOvernight, .parkAndForget] {
+            var sim = Sim(applied: .distantPast, live: start, end: nil, goal: goal)
+            sim.rebuild(real: start)
+            var t = start
+            for _ in 0..<(hours * 60) {
+                t = t.addingTimeInterval(60.5)
+                sim.tick(real: t)
+                check(sim, goal: goal)
+            }
+        }
+    }
+
+    func testSpringForwardDay() { runDay(start: et(2026, 3, 7, 22), hours: 30) }
+    func testFallBackDay() { runDay(start: et(2026, 10, 31, 22), hours: 32) }
+    func testNewYearMidnight() { runDay(start: et(2026, 12, 31, 20), hours: 8) }
+    func testOvernightMorningSeven() { runDay(start: et(2026, 11, 28, 5, 50), hours: 3) }
+
+    func testIdleAnHourNoTicksThenOneTickHeals() {
+        for goal in [ParkingGoal.freeFewHours, .freeOvernight] {
+            var sim = Sim(applied: .distantPast, live: .now, end: nil, goal: goal)
+            let s = et(2026, 11, 28, 22, 5)
+            sim.rebuild(real: s)
+            sim.tick(real: s.addingTimeInterval(3600 + 7))
+            check(sim, goal: goal)
+        }
+    }
+    func testForegroundAfter14HourBackground() {
+        for goal in [ParkingGoal.freeFewHours, .freeOvernight, .parkAndForget] {
+            var sim = Sim(applied: .distantPast, live: .now, end: nil, goal: goal)
+            let s = et(2026, 11, 28, 22, 5)
+            sim.rebuild(real: s)
+            sim.tick(real: s.addingTimeInterval(14 * 3600 + 30))
+            check(sim, goal: goal)
+        }
+    }
+    func testClockSetBackHeals() {
+        var sim = Sim(applied: .distantPast, live: .now, end: nil, goal: .freeFewHours)
+        let s = et(2026, 11, 28, 22, 5)
+        sim.rebuild(real: s)
+        sim.tick(real: s.addingTimeInterval(-7200))
+        check(sim, goal: .freeFewHours)
+    }
+    func testDeviceTimeZoneChangeDoesNotChangeLabelsOrGrid() {
+        let t = et(2026, 11, 28, 22, 7, 30)
+        let ia = WPWindowClock.instant(t)
+        let a = WPGoalCopy.headlineEnd(goal: .freeFewHours, end: ParkingGoals.target(for: .freeFewHours, from: ia), now: ia)
+        let old = NSTimeZone.default
+        defer { NSTimeZone.default = old }
+        NSTimeZone.default = TimeZone(identifier: "Asia/Kolkata")!
+        let b = WPGoalCopy.headlineEnd(goal: .freeFewHours, end: ParkingGoals.target(for: .freeFewHours, from: WPWindowClock.instant(t)), now: WPWindowClock.instant(t))
+        XCTAssertEqual(a, b)
+        XCTAssertEqual(ia, WPWindowClock.instant(t))
+        XCTAssertEqual(Calendar.easternTime.component(.minute, from: ia) % 5, 0)
+    }
+    func testLabelSteps() {
+        var sim = Sim(applied: .distantPast, live: .now, end: nil, goal: .freeFewHours)
+        var t = et(2026, 11, 28, 22, 5, 5)
+        sim.rebuild(real: t)
+        var ends: [Date] = [sim.end!]
+        for _ in 0..<40 { t = t.addingTimeInterval(60.5); sim.tick(real: t); if sim.end! != ends.last! { ends.append(sim.end!) } }
+        for (a, b) in zip(ends, ends.dropFirst()) { XCTAssertEqual(b.timeIntervalSince(a), 300) }
+        XCTAssertGreaterThanOrEqual(ends.count, 7)
+    }
+}

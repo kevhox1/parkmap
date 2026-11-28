@@ -33,6 +33,8 @@ struct WPYouDot: View {
 /// Car token: 56pt taxi disc, 3pt line, raised 4. `isLifted` shows the pressed/dragging state.
 struct WPCarToken: View {
     var isLifted: Bool = false
+    /// DT35-3: a placement that is not saved yet gets a dashed outline ring.
+    var isPending: Bool = false
 
     var body: some View {
         WPRaisedPiece(
@@ -47,6 +49,13 @@ struct WPCarToken: View {
                 .font(.system(size: 24, weight: .semibold, design: .rounded))
                 .foregroundStyle(WP.ink)
                 .frame(width: WP.Marker.carToken, height: WP.Marker.carToken)
+        }
+        .overlay {
+            if isPending {
+                Circle()
+                    .strokeBorder(WP.ink, style: StrokeStyle(lineWidth: WP.Border.control, dash: [6, 4]))
+                    .padding(-6)
+            }
         }
         .accessibilityLabel("Car token")
     }

@@ -4516,10 +4516,12 @@ struct ContentView: View {
                     ) {
                         clearParkUntilFilter()
                     }
+                    .wpDrivePillLayout(stoop: v2DriveActive && driveModeActive)
                 } else {
                     ParkUntilPill(targetDate: target) {
                         clearParkUntilFilter()
                     }
+                    .wpDrivePillLayout(stoop: v2DriveActive && driveModeActive)
                 }
             }
             // W8.5c row 4: Drive Mode bottom card (AC-W85c.25) — the anchored "ground truth"
@@ -4545,6 +4547,13 @@ struct ContentView: View {
             // `.sheet` presentation layer problem, not a `bottomSafeAreaContent` layout
             // problem) and where it lives now.
         }
+        // DT35-6: Stoop drive only. Measure the stack (the card plus anything stacked above it,
+        // plus the home-indicator band under it) and lift the Apple logo / Legal link above it.
+        // The map runs under the bottom safe-area inset, so without this MapKit pins the
+        // attribution beneath the Report / Park here / Voice row. A no-op outside Stoop drive.
+        .onGeometryChange(for: CGFloat.self, of: { proxy in
+            proxy.frame(in: .global).minY
+        }) { applyDriveBottomInset(stackTop: $0) }
     }
 
     // MARK: - Design system Phase 2a: flag-on map chrome
@@ -4726,6 +4735,22 @@ struct ContentView: View {
             onPark: { driveParkHereTapped() },
             onToggleVoice: { drivingVoice.isMuted.toggle() }
         )
+        // DT35-6: the inset itself is measured on the whole bottom stack (`bottomSafeAreaContent`)
+        // so the Park Until pill and Recenter row above the card are cleared too.
+        .onDisappear { clearDriveBottomInset() }
+    }
+
+    /// Hops one run-loop turn: this mutates UIKit layout state and must never run inside a
+    /// SwiftUI update (the #31 rule).
+    private func applyDriveBottomInset(stackTop: CGFloat) {
+        DispatchQueue.main.async {
+            guard v2DriveActive, driveModeActive else { return }
+            coordinatorActions.setBottomChromeInset(stackTopInWindow: stackTop)
+        }
+    }
+
+    private func clearDriveBottomInset() {
+        DispatchQueue.main.async { coordinatorActions.setBottomChromeInset(stackTopInWindow: nil) }
     }
 
     // MARK: - Design system Phase 2b: curb sheet, search, parking (flag on only)
@@ -4830,10 +4855,33 @@ struct ContentView: View {
         .presentationBackgroundInteraction(.enabled(upThrough: .medium))
     }
 
-    /// Curb sheet "Park here" / "Park here anyway": the EXISTING save path (`confirmPinDrop`),
-    /// reminders on by default, same ordering as the placement commit (rest sheet first so a
-    /// first-ever park's priming sheet is not overwritten).
+    /// Curb sheet "Park here" / "Park here anyway" (DT35-3): does NOT save. It closes the sheet and puts
+    /// the car on the tapped curb as a pending draft ("Not saved yet"): at the foot point of the user's
+    /// fix when it is within 40 m of that curb, else at the curb's midpoint. The side is the tapped curb
+    /// (certain). The user can drag the car, flip with "Other side of the street", then confirm, which
+    /// runs the EXISTING save path (`confirmV2Park` -> `confirmPinDrop`).
+    ///
+    /// The pending card needs the rest state to be "no sheet" (the goal-sheet world,
+    /// `driveModeDefaultEnabled`). With the browse sheet as the rest state it would cover the card, so
+    /// that configuration keeps the earlier one-tap save (`v2ParkOnCurbNow`).
     private func v2ParkOnCurb(_ segment: Segment) {
+        guard AppConstants.driveModeDefaultEnabled, tripPlan == nil else {
+            v2ParkOnCurbNow(segment)
+            return
+        }
+        guard let snap = WPParkFlowController.pendingSnap(on: segment, near: locationService.userLocation) else { return }
+        activeSheet = dismissTargetOutsideBrowseNav
+        v2ParkFlow.prepareIndex(segments: tileLoader.segments)
+        v2ParkFlow.enterPending(
+            at: snap, segments: tileLoader.segments,
+            engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan,
+            reports: { v2NeighborReports(for: $0, now: .nowET) }
+        )
+        selectedSegmentID = segment.id
+    }
+
+    /// The one-tap save at the curb's midpoint (browse-sheet rest state only; see `v2ParkOnCurb`).
+    private func v2ParkOnCurbNow(_ segment: Segment) {
         guard let coord = segment.midpoint ?? segment.coordinates.first else { return }
         selectedSegmentID = nil
         activeSheet = dismissTargetOutsideBrowseNav
@@ -4950,7 +4998,8 @@ struct ContentView: View {
             address: addressCoordinator.placementAddress.map(ParkingAddressCopy.line),
             onConfirm: { confirmV2Park() },
             placeAtUser: { v2PlaceCarAtUser() },
-            restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28)
+            restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28),
+            onRevealCar: { ground, targetY in v2RevealPendingCar(ground, targetY: targetY) }
         )
         .task(id: tileLoader.segments.count) {
             // Build the snap index ahead of the first drag (a quick drag must not beat it).
@@ -4965,7 +5014,14 @@ struct ContentView: View {
                 addressCoordinator.placementSnapChanged(v2ParkFlow.snap.map { ParkingAddressRequest(snap: $0) })
             }
         }
+        .onChange(of: driveModeActive) { _, active in
+            // Entering Drive Mode discards a pending placement (a draft is never kept).
+            if active, v2ParkFlow.phase != .idle { v2ParkFlow.reset() }
+        }
         .onChange(of: v2ParkFlow.phase) { _, phase in
+            // The map reports every frame of a pan or pinch ONLY while a draft is pending, so the car
+            // stays glued to its ground point; otherwise the seam is nil and costs nothing.
+            coordinatorActions.onVisibleRegionMoved = phase == .placed ? { v2ParkFlow.mapMoved() } : nil
             // Starting the drag IS mark 3's real control (drag-to-park): the lesson is done.
             if phase != .idle, onboardingCoachMark == .tapABlock { finishOnboardingCoach() }
             if phase == .idle {
@@ -4973,6 +5029,19 @@ struct ContentView: View {
                 addressCoordinator.clearPlacement()
             }
         }
+    }
+
+    /// The pending card covers the lower part of the map: slide the map so the car sits at `targetY`
+    /// (window points) in the open part. Screen-space shift, so a rotated map works too.
+    private func v2RevealPendingCar(_ ground: CLLocationCoordinate2D, targetY: CGFloat) {
+        let screen = UIScreen.main.bounds
+        guard let current = coordinatorActions.screenPointForCoordinate?(ground) else { return }
+        let shift = current.y - targetY
+        guard let center = coordinatorActions.coordinateForWindowPoint?(
+            CGPoint(x: screen.width / 2, y: screen.height / 2 + shift)
+        ) else { return }
+        // Pan only: keeps the user's zoom, rotation and pitch (recenterMap would reset them).
+        coordinatorActions.panToCenter?(center)
     }
 
     /// Confirm card "Park here" / "Park here anyway": the existing `confirmPinDrop` (park, save,
@@ -4985,7 +5054,7 @@ struct ContentView: View {
             detectedSegment: snap.segment, detectedSegmentDistance: snap.distanceMeters,
             alternativeCandidates: []
         )
-        v2ParkFlow.reset()
+        v2ParkFlow.commit()
         selectedSegmentID = nil
         addressCoordinator.clearPlacement()
         confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true), address: address)
@@ -6211,6 +6280,7 @@ struct ContentView: View {
         )
         // Resume custom follow — future GPS ticks re-center via setDriveCamera.
         followPaused = false
+        coordinatorActions.driveFollowPaused = false
 
         if let coord = locationService.userLocation {
             // Immediately center + apply pitch/altitude in a single setCamera call — the
@@ -6660,6 +6730,7 @@ struct ContentView: View {
             locationService.startDriveMode()
             // Option A: followPaused starts false — follow is active from the first GPS tick.
             followPaused = false
+            coordinatorActions.driveFollowPaused = false
             // TF2-16: reset heading-snap state for the new session.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
@@ -6700,7 +6771,9 @@ struct ContentView: View {
             drivingContext = nil
             // Option A: clear follow state on Drive Mode exit.
             followPaused = false
+            coordinatorActions.driveFollowPaused = false
             currentDriveAltitude = 0
+            clearDriveBottomInset()  // DT35-6: restore the map margins (no-op if never applied)
             // TF2-16: reset heading-snap state on exit.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
@@ -8491,6 +8564,7 @@ struct ContentView: View {
     private func handleDrivePanDetected() {
         guard driveModeActive else { return }
         followPaused = true
+        coordinatorActions.driveFollowPaused = true  // DT35-6: stops the inset re-frame yanking the map back
     }
 
     /// Called by MapViewRepresentable's `onDrivePinchZoomed` when a pure pinch (no pan
