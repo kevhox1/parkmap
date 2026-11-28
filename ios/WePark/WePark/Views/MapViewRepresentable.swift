@@ -979,6 +979,9 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onSetPlacementBottomInset: ((CGFloat) -> Void)?
         /// DT35-6: general bottom inset (Stoop drive card). Independent of placement.
         var onSetBottomChromeInset: ((CGFloat?) -> Void)?
+        /// DT35-6: mirrors ContentView's `followPaused` (user panned or pinched). While true the
+        /// bottom-inset re-frame never moves the camera. Reset on drive start and end.
+        var driveFollowPaused = false
         var onFocusPlacement: ((CLLocationCoordinate2D) -> Void)?
         var onQueryPlacementActive: (() -> Bool)?
         var onQueryPlacementPin: (() -> CLLocationCoordinate2D?)?
@@ -1695,7 +1698,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         coordinatorActions.onSetPlacementBottomInset = { [weak coordinator] cardHeight in
             coordinator?.placementController?.setBottomInset(cardHeight)
         }
-        coordinatorActions.onSetBottomChromeInset = { [weak coordinator] stackTop in
+        coordinatorActions.onSetBottomChromeInset = { [weak coordinator, weak actions = coordinatorActions] stackTop in
             guard let coordinator, let mapView = coordinator.mapView else { return }
             guard let stackTop else {
                 coordinator.bottomInsetController.apply(inset: 0, to: mapView)
@@ -1713,8 +1716,10 @@ struct MapViewRepresentable: UIViewRepresentable {
             // First inset of a drive: re-frame on the puck now, so a static entry (no further GPS
             // fix) does not leave it riding high behind the top chrome.
             if !hadInset, controller.snapshot != nil {
-                let reframe: () -> Void = { [weak mapView, weak controller] in
-                    guard let mapView, let controller, controller.snapshot != nil else { return }
+                let reframe: () -> Void = { [weak mapView, weak controller, weak actions] in
+                    guard let mapView, let controller, controller.snapshot != nil,
+                          MapBottomInsetReframePolicy.shouldReframe(followPaused: actions?.driveFollowPaused ?? true)
+                    else { return }
                     let puck = mapView.userLocation.coordinate
                     guard CLLocationCoordinate2DIsValid(puck), puck.latitude != 0 || puck.longitude != 0 else { return }
                     mapView.layoutIfNeeded()

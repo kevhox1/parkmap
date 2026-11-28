@@ -109,3 +109,9 @@ final class MapBottomInsetController {
         centreShift = 0
     }
 }
+
+/// When the drive bottom-inset re-frame may move the camera: only while follow is still active.
+/// If the user has panned or pinched (`followPaused`), the map is theirs and is never yanked back.
+enum MapBottomInsetReframePolicy {
+    nonisolated static func shouldReframe(followPaused: Bool) -> Bool { !followPaused }
+}

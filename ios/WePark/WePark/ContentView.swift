@@ -6112,6 +6112,7 @@ struct ContentView: View {
         )
         // Resume custom follow — future GPS ticks re-center via setDriveCamera.
         followPaused = false
+        coordinatorActions.driveFollowPaused = false
 
         if let coord = locationService.userLocation {
             // Immediately center + apply pitch/altitude in a single setCamera call — the
@@ -6561,6 +6562,7 @@ struct ContentView: View {
             locationService.startDriveMode()
             // Option A: followPaused starts false — follow is active from the first GPS tick.
             followPaused = false
+            coordinatorActions.driveFollowPaused = false
             // TF2-16: reset heading-snap state for the new session.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
@@ -6601,6 +6603,7 @@ struct ContentView: View {
             drivingContext = nil
             // Option A: clear follow state on Drive Mode exit.
             followPaused = false
+            coordinatorActions.driveFollowPaused = false
             currentDriveAltitude = 0
             clearDriveBottomInset()  // DT35-6: restore the map margins (no-op if never applied)
             // TF2-16: reset heading-snap state on exit.
@@ -8389,6 +8392,7 @@ struct ContentView: View {
     private func handleDrivePanDetected() {
         guard driveModeActive else { return }
         followPaused = true
+        coordinatorActions.driveFollowPaused = true  // DT35-6: stops the inset re-frame yanking the map back
     }
 
     /// Called by MapViewRepresentable's `onDrivePinchZoomed` when a pure pinch (no pan

@@ -127,6 +127,20 @@ final class MapBottomInsetTests: XCTestCase {
         XCTAssertEqual(map.alpha, 1)
     }
 
+    // MARK: Re-frame guard
+
+    func testReframeOnlyWhileFollowIsActive() {
+        XCTAssertTrue(MapBottomInsetReframePolicy.shouldReframe(followPaused: false))
+        XCTAssertFalse(MapBottomInsetReframePolicy.shouldReframe(followPaused: true))
+    }
+
+    func testFollowPausedDefaultsToFalseAndIsSettable() {
+        let actions = MapViewRepresentable.CoordinatorActions()
+        XCTAssertFalse(actions.driveFollowPaused)
+        actions.driveFollowPaused = true
+        XCTAssertTrue(actions.driveFollowPaused)
+    }
+
     // MARK: Seam and the #31 rule
 
     func testCoordinatorActionsSeamIsCallable() {
