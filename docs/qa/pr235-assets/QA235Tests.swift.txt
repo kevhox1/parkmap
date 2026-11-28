@@ -1,0 +1,372 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+enum QA235 {
+    static let outPath = "/private/tmp/claude-501/-Users-kevinhoxha-repos-parkmap/f8d5a3ca-5371-4933-9534-79989e164bb8/scratchpad/qa235.txt"
+    static func log(_ s: String) {
+        if let h = FileHandle(forWritingAtPath: outPath) { h.seekToEndOfFile(); h.write((s + "\n").data(using: .utf8)!); h.closeFile() }
+        else { try? (s + "\n").write(toFile: outPath, atomically: true, encoding: .utf8) }
+    }
+    static func loadAll() throws -> [Segment] {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("WePark/Resources/tiles")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("tile_") }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var seen = Set<String>(); var all: [Segment] = []
+        for f in files { for s in try JSONDecoder().decode([Segment].self, from: Data(contentsOf: f)) where seen.insert(s.id).inserted { all.append(s) } }
+        return all
+    }
+    static func key(_ s: Segment) -> String { "\(s.street)|\(s.side)|\(s.fromStreet)|\(s.to)" }
+    static func m(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let n = (b.latitude - a.latitude) * 111_320
+        let e = (b.longitude - a.longitude) * 111_320 * cos((a.latitude + b.latitude) / 2 * .pi / 180)
+        return hypot(e, n)
+    }
+    static func len(_ l: [CLLocationCoordinate2D]) -> Double { l.count < 2 ? 0 : (1..<l.count).reduce(0) { $0 + m(l[$1-1], l[$1]) } }
+    static func runs(_ g: [Segment]) -> [[Segment]] {
+        var p = Array(0..<g.count)
+        func r(_ x: Int) -> Int { var y = x; while p[y] != y { y = p[y] }; return y }
+        let E = g.map { s -> [CLLocationCoordinate2D] in let c = s.coordinates; return c.count >= 2 ? [c.first!, c.last!] : [] }
+        for i in 0..<g.count { for j in (i+1)..<max(i+1, g.count) {
+            var close = false
+            for a in E[i] { for b in E[j] where m(a, b) <= 6 { close = true } }
+            if close { p[r(i)] = r(j) }
+        } }
+        var out: [Int: [Segment]] = [:]
+        for (i, s) in g.enumerated() { out[r(i), default: []].append(s) }
+        return out.keys.sorted().map { out[$0]! }
+    }
+    static func diameter(_ g: [Segment]) -> (CLLocationCoordinate2D, CLLocationCoordinate2D, Double)? {
+        var pts: [CLLocationCoordinate2D] = []
+        for s in g { let c = s.coordinates; if c.count >= 2 { pts.append(c.first!); pts.append(c.last!) } }
+        var best: (CLLocationCoordinate2D, CLLocationCoordinate2D, Double)?
+        for a in pts { for b in pts { let d = m(a, b); if best == nil || d > best!.2 { best = (a, b, d) } } }
+        return best
+    }
+    // independent "same kind": category and set of rule categories, my own code
+    static func kind(_ s: Segment) -> String {
+        "\(String(describing: s.dominantCategory))|" + Set(s.rules.map { String(describing: $0.category) }).sorted().joined(separator: ",")
+    }
+    static let named = ["COOPER SQUARE", "BOWERY", "WEST BROADWAY", "RIVERSIDE DRIVE", "EAST 112TH STREET", "EAST 42ND STREET", "BROADWAY", "EDGECOMBE"]
+    static func isNamed(_ st: String) -> Bool { named.contains { st.contains($0) } }
+    static func groupsAll(_ all: [Segment]) -> [String: [Segment]] {
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[key(s), default: []].append(s) }
+        return groups
+    }
+    static func sample(_ groups: [String: [Segment]]) -> Set<String> {
+        let multis = groups.filter { $0.value.count >= 2 }.keys.sorted()
+        var chosen = Set<String>()
+        for (i, k) in multis.enumerated() where i % 6 == 4 { chosen.insert(k) }
+        for k in multis { let st = String(k.split(separator: "|", omittingEmptySubsequences: false)[0]); if isNamed(st) { chosen.insert(k) } }
+        return chosen
+    }
+}
+
+@MainActor
+final class QA235Tests: XCTestCase {
+    func log(_ s: String) { QA235.log(s) }
+
+    /// 1. Kevin's rule over ALL multi-piece runs: folded pieces match their neighbour; own-run pieces stay alone.
+    func testRuleAll() throws {
+        let all = try QA235.loadAll()
+        let groups = QA235.groupsAll(all)
+        var runsN = 0, pieces = 0, onMain = 0, folded = 0, ownRun = 0, foldedKindDiffNearest = 0, foldedRulesDiffNearest = 0
+        var foldedKindDiffAnyNear = 0, detDiff = 0, spineNil = 0, ownRunNotAlone = 0, ownRunButSameKind = 0
+        var lines: [String] = []
+        for k in groups.keys.sorted() {
+            let g = groups[k]!; if g.count < 2 { continue }
+            autoreleasepool {
+                for run in QA235.runs(g) where run.count >= 2 {
+                    runsN += 1
+                    guard let main = WPBlockSpine(around: run[0], in: g) else { spineNil += 1; return }
+                    let mainIDs = main.legs.map { $0.segment.id }
+                    for p in run {
+                        pieces += 1
+                        guard let sp = WPBlockSpine(around: p, in: g) else { spineNil += 1; continue }
+                        let ids = sp.legs.map { $0.segment.id }
+                        if mainIDs.contains(p.id) {
+                            onMain += 1
+                            if ids != mainIDs && ids != mainIDs.reversed() { detDiff += 1; lines.append("DET \(k) \(p.id)") }
+                            continue
+                        }
+                        let pt = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: p.coordinates)!
+                        if ids == [p.id] {
+                            ownRun += 1
+                            var best: (Double, Segment)?
+                            for leg in main.legs { if let ft = CandidateSegmentSearch.nearestPointOnPolyline(from: pt, polyline: leg.segment.coordinates), best == nil || ft.distanceMeters < best!.0 { best = (ft.distanceMeters, leg.segment) } }
+                            if let b = best, QA235.kind(b.1) == QA235.kind(p) { ownRunButSameKind += 1; lines.append("OWNRUN-SAMEKIND \(p.id)") }
+                            lines.append("OWNRUN \(p.id) len \(Int(QA235.len(p.coordinates)*10))/10 kind \(QA235.kind(p)) nearest \(best.map { "\($0.1.id.suffix(6)) \(QA235.kind($0.1)) \(Int($0.0*10))/10m" } ?? "-")")
+                            continue
+                        }
+                        folded += 1
+                        if ids.contains(p.id) { ownRunNotAlone += 1; lines.append("ODD \(p.id)") }
+                        var best: (Double, Segment)?
+                        for leg in sp.legs { if let ft = CandidateSegmentSearch.nearestPointOnPolyline(from: pt, polyline: leg.segment.coordinates), best == nil || ft.distanceMeters < best!.0 { best = (ft.distanceMeters, leg.segment) } }
+                        if let b = best {
+                            if QA235.kind(b.1) != QA235.kind(p) { foldedKindDiffNearest += 1; lines.append("FOLD-KINDDIFF \(p.id) \(QA235.kind(p)) vs \(b.1.id.suffix(6)) \(QA235.kind(b.1))") }
+                            if b.1.rules != p.rules { foldedRulesDiffNearest += 1 }
+                        }
+                        var anyDiff = false
+                        for leg in sp.legs {
+                            for f in [0.1, 0.5, 0.9] {
+                                let q = CandidateSegmentSearch.coordinate(atFraction: f, along: p.coordinates)!
+                                if let ft = CandidateSegmentSearch.nearestPointOnPolyline(from: q, polyline: leg.segment.coordinates), ft.distanceMeters <= 4, QA235.kind(leg.segment) != QA235.kind(p) { anyDiff = true }
+                            }
+                        }
+                        if anyDiff { foldedKindDiffAnyNear += 1; lines.append("FOLD-NEAR4M-OTHERKIND \(p.id) len \(Int(QA235.len(p.coordinates)*10))/10 \(QA235.kind(p))") }
+                        lines.append("FOLDED \(p.id) len \(Int(QA235.len(p.coordinates)*10))/10 kind \(QA235.kind(p)) nearest \(best.map { "\($0.1.id.suffix(6)) \(QA235.kind($0.1)) \(Int($0.0*10))/10m" } ?? "-")")
+                    }
+                }
+            }
+        }
+        log("RULEALL runs=\(runsN) pieces=\(pieces) onMain=\(onMain) folded=\(folded) ownRun=\(ownRun) foldedKindDiffNearest=\(foldedKindDiffNearest) foldedRulesNotEqualNearest(info)=\(foldedRulesDiffNearest) foldedOtherKindWithin4m=\(foldedKindDiffAnyNear) ownRunButSameKind=\(ownRunButSameKind) ownRunNotAlone=\(ownRunNotAlone) detDiff=\(detDiff) spineNil=\(spineNil)")
+        for l in lines.prefix(200) { log("  " + l) }
+        XCTAssertEqual(foldedKindDiffNearest, 0)
+    }
+
+    /// 2. Walks from every piece on the sample.
+    func testWalks() throws {
+        let all = try QA235.loadAll()
+        let groups = QA235.groupsAll(all)
+        let chosen = QA235.sample(groups)
+        log("WALKSAMPLE blocks=\(chosen.count)")
+        var blocks = 0, runsN = 0, walks = 0, stray = 0, crossRun = 0, shortStep = 0, noEnd = 0, fwdSpread = 0, backSpread = 0, sameEnd = 0
+        var satWalks = 0, satEndOffMain = 0, ownWalks = 0, ownLeave = 0, maxSteps = 0
+        var fails: [String] = [], info: [String] = []
+        let step = 5.0
+        for k in chosen.sorted() {
+            autoreleasepool {
+                let g = groups[k]!; blocks += 1
+                for run in QA235.runs(g) where run.count >= 2 {
+                    runsN += 1
+                    let runIDs = Set(run.map { $0.id })
+                    guard let dia = QA235.diameter(run), let main = WPBlockSpine(around: run[0], in: g) else { continue }
+                    let mainIDs = Set(main.legs.map { $0.segment.id })
+                    var fwd: [CLLocationCoordinate2D] = [], back: [CLLocationCoordinate2D] = []
+                    var satEnds: [(CLLocationCoordinate2D, Double, String)] = []
+                    let cap = max(400, Int(QA235.len(run.flatMap { $0.coordinates }) / step) * 3)
+                    for start in run {
+                        let isMain = mainIDs.contains(start.id)
+                        let ownRunStart = !isMain && WPBlockSpine(around: start, in: g)?.legs.map { $0.segment.id } == [start.id]
+                        for frac in [0.0, 0.5, 1.0] { for dir in [1.0, -1.0] {
+                            walks += 1
+                            var cs = start, cf = frac
+                            var here = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates)!
+                            var err: String?; var n = 0
+                            loop: for i in 1...cap {
+                                n = i
+                                switch WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir * step, in: g) {
+                                case .endOfBlock: break loop
+                                case .move(let t):
+                                    if QA235.key(t.segment) != k { err = "STRAY \(t.segment.id)"; stray += 1; break loop }
+                                    if !runIDs.contains(t.segment.id) { err = "CROSSRUN \(t.segment.id)"; crossRun += 1; break loop }
+                                    if ownRunStart && t.segment.id != start.id { err = "OWNRUN-LEFT \(t.segment.id)"; ownLeave += 1; break loop }
+                                    let d = QA235.m(here, t.coordinate)
+                                    if d < 0.5 { err = "SHORT \(d)"; shortStep += 1; break loop }
+                                    cs = t.segment; cf = t.fraction; here = t.coordinate
+                                }
+                                if i == cap { err = "NOEND"; noEnd += 1 }
+                            }
+                            maxSteps = max(maxSteps, n)
+                            if let err { fails.append("\(k) \(start.id) f=\(frac) dir \(dir): \(err)"); continue }
+                            if ownRunStart { ownWalks += 1; continue }
+                            if isMain { if dir > 0 { fwd.append(here) } else { back.append(here) } }
+                            else { satEnds.append((here, dir, start.id)) }
+                        } }
+                    }
+                    func spread(_ pts: [CLLocationCoordinate2D]) -> Double { pts.isEmpty ? 0 : pts.map { QA235.m(pts[0], $0) }.max()! }
+                    if spread(fwd) > 3 { fwdSpread += 1; fails.append("FWDSPREAD \(k) \(spread(fwd))") }
+                    if spread(back) > 3 { backSpread += 1; fails.append("BACKSPREAD \(k) \(spread(back))") }
+                    if let f = fwd.first, let b = back.first, QA235.m(f, b) < 3, dia.2 > 6 { sameEnd += 1; fails.append("SAMEEND \(k)") }
+                    for (e, dir, id) in satEnds {
+                        satWalks += 1
+                        let ref = dir > 0 ? fwd : back
+                        if let r = ref.first, QA235.m(e, r) > 3 { satEndOffMain += 1; info.append("SATEND-OFF \(k) \(id.suffix(6)) dir \(dir) \(Int(QA235.m(e, r)*10))/10 m from main end") }
+                    }
+                }
+            }
+        }
+        log("WALKS blocks=\(blocks) runs=\(runsN) walks=\(walks) stray=\(stray) crossRun=\(crossRun) shortStep=\(shortStep) noEnd=\(noEnd) fwdSpread=\(fwdSpread) backSpread=\(backSpread) sameEnd=\(sameEnd) ownRunWalks=\(ownWalks) ownRunLeft=\(ownLeave) foldedStartWalks=\(satWalks) foldedEndsOffMain>3m=\(satEndOffMain) maxSteps=\(maxSteps)")
+        for f in fails.prefix(100) { log("FAIL " + f) }
+        for f in info.prefix(60) { log("  " + f) }
+        XCTAssertEqual(fails.count, 0)
+    }
+
+    /// 2b. The 5 stub runs from #234 QA finding 2 + Cooper Sq: ends vs true ends.
+    func testStubRuns() throws {
+        let all = try QA235.loadAll()
+        let groups = QA235.groupsAll(all)
+        let preds: [(String, (String) -> Bool)] = [
+            ("BOWERY W Canal-Bayard", { $0.hasPrefix("BOWERY|W|") && $0.contains("CANAL") && $0.contains("BAYARD") }),
+            ("RIVERSIDE E W160-161", { $0.hasPrefix("RIVERSIDE DRIVE|E|") && $0.contains("160") && $0.contains("161") }),
+            ("WEST BROADWAY W Franklin-Leonard", { $0.hasPrefix("WEST BROADWAY|W|") && $0.contains("FRANKLIN") && $0.contains("LEONARD") }),
+            ("E 112 N 2nd-1st", { $0.hasPrefix("EAST 112TH STREET|N|") }),
+            ("E 42 S 1st-FDR", { $0.hasPrefix("EAST 42ND STREET|S|") }),
+            ("COOPER E5-E6 E", { $0.hasPrefix("COOPER SQUARE|E|") }),
+        ]
+        for (label, pred) in preds {
+            for k in groups.keys.sorted() where pred(k) {
+                let g = groups[k]!
+                for run in QA235.runs(g) where run.count >= 2 {
+                    guard let dia = QA235.diameter(run) else { continue }
+                    let sp = WPBlockSpine(around: run[0], in: g)!
+                    var worst = 0.0; var maxN = 0
+                    var endsFwd = Set<String>(), endsBack = Set<String>()
+                    for start in run { for f in [0.0, 0.5, 1.0] { for dir in [5.0, -5.0] {
+                        var cs = start, cf = f; var n = 0
+                        var last = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates)!
+                        while n < 1000, case .move(let t) = WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir, in: g) { cs = t.segment; cf = t.fraction; last = t.coordinate; n += 1 }
+                        maxN = max(maxN, n)
+                        let d = min(QA235.m(last, dia.0), QA235.m(last, dia.1))
+                        if d > worst { worst = d }
+                        let tag = "\(Int(last.latitude*1e5)),\(Int(last.longitude*1e5))"
+                        if dir > 0 { endsFwd.insert(tag) } else { endsBack.insert(tag) }
+                    } } }
+                    let on = Set(sp.legs.map { $0.segment.id })
+                    log("STUBRUN \(label) \(k) pieces \(run.count) spineLegs \(sp.legs.count) offSpine \(run.filter { !on.contains($0.id) }.map { String($0.id.suffix(5)) }) worstEndDistToRunExtreme \(Int(worst*10))/10 m, maxSteps \(maxN), distinctFwdEnds \(endsFwd.count) back \(endsBack.count)")
+                }
+            }
+        }
+    }
+
+    /// 1b. Flow: a car on any piece ends on a piece whose verdict is shown, nudged or not.
+    func testFlow() async throws {
+        let all = try QA235.loadAll()
+        let groups = QA235.groupsAll(all)
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(120)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        let chosen = QA235.sample(groups)
+        var checks = 0, modelWrong = 0, moved = 0, eob = 0, landedOtherRun = 0, ownRunMoved = 0, ownRunFlow = 0, unnudgedWrong = 0
+        var rows: [String] = []
+        for k in chosen.sorted() {
+            let g = groups[k]!
+            for run in QA235.runs(g) where run.count >= 2 {
+                let runIDs = Set(run.map { $0.id })
+                let main = WPBlockSpine(around: run[0], in: g)!
+                let mainIDs = Set(main.legs.map { $0.segment.id })
+                for p in run {
+                    let ownRunStart = !mainIDs.contains(p.id) && WPBlockSpine(around: p, in: g)?.legs.map { $0.segment.id } == [p.id]
+                    for f in [0.0, 0.5, 1.0] {
+                        let c = CandidateSegmentSearch.coordinate(atFraction: f, along: p.coordinates)!
+                        for dir in [0.0, 5.0, -5.0] {
+                            flow.enterPending(at: CurbSnapResult(segment: p, positionFraction: f, distanceMeters: 0, snappedCoordinate: c), segments: g, engine: engine, now: now, windowEnd: nil, trip: nil)
+                            if dir != 0 { _ = flow.nudge(meters: dir, point: .zero, metersPerPoint: 1, engine: engine, now: now, windowEnd: nil, trip: nil) }
+                            checks += 1
+                            guard let seg = flow.snap?.segment else { modelWrong += 1; continue }
+                            let expected = WPNeighborVerdict.resolve(segment: seg, engine: engine, now: now, windowEnd: nil, trip: nil, reports: WPNeighborReports())
+                            if flow.model != expected { modelWrong += 1; rows.append("MODEL-MISMATCH \(p.id) -> \(seg.id)") }
+                            if dir == 0 && seg.id != p.id { unnudgedWrong += 1 }
+                            if !runIDs.contains(seg.id) { landedOtherRun += 1 }
+                            if ownRunStart { ownRunFlow += 1; if seg.id != p.id { ownRunMoved += 1; rows.append("OWNRUN-MOVED \(p.id) -> \(seg.id)") } }
+                            if dir != 0 { if seg.id == p.id && flow.snap?.positionFraction == f { eob += 1 } else { moved += 1 } }
+                        }
+                    }
+                }
+            }
+        }
+        log("FLOW blocks=\(chosen.count) checks=\(checks) modelMismatch=\(modelWrong) unnudgedNotOnOwnPiece=\(unnudgedWrong) landedOtherRun=\(landedOtherRun) ownRunFlows=\(ownRunFlow) ownRunMovedOffItself=\(ownRunMoved) nudgesMoved=\(moved) nudgesEndOfBlockOrStay=\(eob)")
+        for r in rows.prefix(30) { log("  " + r) }
+        XCTAssertEqual(modelWrong, 0)
+        XCTAssertEqual(ownRunMoved, 0)
+    }
+
+    /// 3 + 4. Content version, hash cost, cache.
+    func testVersionAndCache() async throws {
+        let all = try QA235.loadAll()
+        let groups = QA235.groupsAll(all)
+        var sink = 0
+        let t0 = Date()
+        for _ in 0..<50 { sink &+= WPParkFlowController.contentVersion(all) }
+        let per = Date().timeIntervalSince(t0) / 50 * 1000
+        log("HASHCOST segments=\(all.count) per call \(per) ms (sink \(sink != 0))")
+        let base = WPParkFlowController.contentVersion(all)
+        log("VERSION same set twice equal: \(base == WPParkFlowController.contentVersion(all))")
+        var idMut = all; let mid = all.count / 2
+        let o = idMut[mid]
+        idMut[mid] = Segment(id: o.id + "_X", street: o.street, fromStreet: o.fromStreet, to: o.to, side: o.side, line: o.line, rules: o.rules, dominantCategory: o.dominantCategory)
+        log("VERSION id swapped middle (same count/first/last) differs: \(base != WPParkFlowController.contentVersion(idMut))")
+        var swapped = all; swapped.swapAt(mid, mid + 1)
+        log("VERSION two middle ids reordered differs: \(base != WPParkFlowController.contentVersion(swapped))")
+        var geoMut = all
+        geoMut[mid] = Segment(id: o.id, street: o.street, fromStreet: o.fromStreet, to: o.to, side: o.side, line: [o.line.first!, o.line.first!.map { $0 + 0.00001 }], rules: o.rules, dominantCategory: o.dominantCategory)
+        log("VERSION same ids, changed geometry differs: \(base != WPParkFlowController.contentVersion(geoMut)) (false = id-only hash)")
+        log("VERSION empty vs one: \(WPParkFlowController.contentVersion([]) != WPParkFlowController.contentVersion([all[0]]))")
+
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(120)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        func startAt(_ seg: Segment, _ f: Double, _ segs: [Segment]) {
+            let c = CandidateSegmentSearch.coordinate(atFraction: f, along: seg.coordinates)!
+            flow.enterPending(at: CurbSnapResult(segment: seg, positionFraction: f, distanceMeters: 0, snappedCoordinate: c), segments: segs, engine: engine, now: now, windowEnd: nil, trip: nil)
+        }
+        func nudge(_ m: Double) -> WPNudgeResult { flow.nudge(meters: m, point: .zero, metersPerPoint: 1, engine: engine, now: now, windowEnd: nil, trip: nil) }
+        let kA = groups.keys.sorted().first { $0.hasPrefix("WEST END AVENUE|E|WEST 66TH") && groups[$0]!.count > 3 }!
+        let kB = groups.keys.sorted().first { $0.hasPrefix("CABRINI BOULEVARD|E|") && groups[$0]!.count > 3 }!
+        let a = groups[kA]!, b = groups[kB]!
+        log("CACHE0 fresh count \(flow.cachedPieceListCount)")
+        startAt(a[0], 0.5, all); _ = nudge(5)
+        log("CACHE1 after a nudge count \(flow.cachedPieceListCount) (expect >0)")
+        flow.reset()
+        log("CACHE2 after reset count \(flow.cachedPieceListCount) (expect 0)")
+        startAt(b[0], 0.5, all); _ = nudge(5)
+        log("CACHE3 block B after reset: on B \(flow.snap.map { QA235.key($0.segment) == kB } ?? false)")
+        startAt(a[0], 0.5, all); _ = nudge(5)
+        log("CACHE4 B->A no reset: on A \(flow.snap.map { QA235.key($0.segment) == kA } ?? false)")
+        startAt(a[a.count/2], 0.5, all)
+        let before = flow.snap!.segment
+        flow.switchSide(engine: engine, now: now, windowEnd: nil, trip: nil)
+        let after = flow.snap!.segment
+        _ = nudge(5)
+        log("CACHE5 flip \(before.side)->\(after.side) nudge stays on flipped block: \(flow.snap.map { QA235.key($0.segment) == QA235.key(after) } ?? false)")
+        flow.switchSide(engine: engine, now: now, windowEnd: nil, trip: nil); _ = nudge(-5)
+        log("CACHE6 flip back stays on original block: \(flow.snap.map { QA235.key($0.segment) == QA235.key(before) } ?? false)")
+        let reduced = all.filter { QA235.key($0) != kA || $0.id == a[0].id || $0.id == a[1].id }
+        flow.reset()
+        flow.prepareIndex(segments: reduced)
+        startAt(a[0], 0.5, reduced)
+        var seen = Set<String>(); var gN = 0; var rr = nudge(5)
+        while case .moved = rr, gN < 200 { seen.insert(flow.snap!.segment.id); rr = nudge(5); gN += 1 }
+        log("CACHE7 reduced set (after reset): visited only within the 2 kept pieces: \(seen.isSubset(of: [a[0].id, a[1].id])) visited \(seen.count)")
+        // same count/first/last, middle id swapped for a piece of block A that the walk visits
+        func visited(_ segs: [Segment], dir: Double) -> Set<String> {
+            startAt(a[0], 0.5, segs)
+            var s = Set<String>([a[0].id]); var n = 0; var r = nudge(dir)
+            while case .moved = r, n < 400 { s.insert(flow.snap!.segment.id); r = nudge(dir); n += 1 }
+            return s
+        }
+        flow.reset()
+        let orig = visited(all, dir: 5).union(visited(all, dir: -5))
+        let target = a.first { $0.id != a[0].id && orig.contains($0.id) }!
+        var mutated = all
+        if let idx = mutated.firstIndex(where: { $0.id == target.id }), idx != 0, idx != mutated.count - 1 {
+            let q = mutated[idx]
+            mutated[idx] = Segment(id: q.id + "_NEW", street: q.street, fromStreet: q.fromStreet, to: q.to, side: q.side, line: q.line, rules: q.rules, dominantCategory: q.dominantCategory)
+        }
+        let mut = visited(mutated, dir: 5).union(visited(mutated, dir: -5))
+        log("CACHE8 same count/first/last, a walked piece's id swapped, no reset, cache warm: walk sees NEW id \(mut.contains(target.id + "_NEW")), still sees OLD id \(mut.contains(target.id))")
+        // geometry-only change, same ids: expect stale (id-only hash)
+        var geo = all
+        if let idx = geo.firstIndex(where: { $0.id == target.id }), idx != 0, idx != geo.count - 1 {
+            let q = geo[idx]
+            geo[idx] = Segment(id: q.id, street: q.street, fromStreet: q.fromStreet, to: q.to, side: q.side, line: [q.line.first!, q.line.first!.map { $0 + 0.00001 }], rules: q.rules, dominantCategory: q.dominantCategory)
+        }
+        flow.reset()
+        _ = visited(all, dir: 5)
+        startAt(a[0], 0.5, geo)
+        let lenSeen = flow.snap.map { _ in 0 } ?? 0
+        _ = lenSeen
+        var geoLens: [Double] = []
+        var rg = nudge(5); var ng = 0
+        while case .moved = rg, ng < 400 { if flow.snap!.segment.id == target.id { geoLens.append(QA235.len(flow.snap!.segment.coordinates)) }; rg = nudge(5); ng += 1 }
+        log("CACHE9 geometry-only change with same ids: walked target piece lengths \(geoLens) (orig \(QA235.len(target.coordinates)); orig length seen = stale cache/index)")
+    }
+}

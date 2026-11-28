@@ -1,0 +1,58 @@
+FLOW blocks=2234 checks=91053 modelMismatch=0 unnudgedNotOnOwnPiece=0 landedOtherRun=0 ownRunFlows=9 ownRunMovedOffItself=0 nudgesMoved=56217 nudgesEndOfBlockOrStay=4485
+RULEALL runs=10315 pieces=47008 onMain=46999 folded=8 ownRun=1 foldedKindDiffNearest=0 foldedRulesNotEqualNearest(info)=6 foldedOtherKindWithin4m=0 ownRunButSameKind=0 ownRunNotAlone=2 detDiff=0 spineNil=0
+  ODD 10TH_AVENUE_WEST_16TH_STREET_WEST_17TH_STREET_E_2
+  FOLDED 10TH_AVENUE_WEST_16TH_STREET_WEST_17TH_STREET_E_2 len 303/10 kind Optional(WePark.Category.special)|special nearest ET_E_2 Optional(WePark.Category.special)|special 0/10m
+  ODD 10TH_AVENUE_WEST_16TH_STREET_WEST_17TH_STREET_E_3
+  FOLDED 10TH_AVENUE_WEST_16TH_STREET_WEST_17TH_STREET_E_3 len 89/10 kind Optional(WePark.Category.special)|special nearest ET_E_3 Optional(WePark.Category.special)|special 0/10m
+  FOLDED BOWERY_CANAL_STREET_BAYARD_STREET_W_5 len 49/10 kind Optional(WePark.Category.metered)|aspDaily,metered nearest ET_W_4 Optional(WePark.Category.metered)|aspDaily,metered 55/10m
+  FOLDED BROADWAY_WEST_125TH_STREET_WEST_126TH_STREET_E_2 len 39/10 kind Optional(WePark.Category.aspTueFri)|aspTueFri nearest ET_E_1 Optional(WePark.Category.aspTueFri)|aspTueFri 10/10m
+  OWNRUN COOPER_SQUARE_EAST_5TH_STREET_EAST_6TH_STREET_E_3 len 62/10 kind Optional(WePark.Category.noParking)|noParking nearest ET_E_1 Optional(WePark.Category.noStanding)|noStanding 71/10m
+  FOLDED EDGECOMBE_AVENUE_WEST_155TH_STREET_WEST_167TH_STREET_E_35 len 29/10 kind Optional(WePark.Category.noStanding)|noStanding nearest T_E_34 Optional(WePark.Category.noStanding)|noStanding 1/10m
+  FOLDED RIVERSIDE_DRIVE_WEST_160TH_STREET_WEST_161ST_STREET_E_2 len 53/10 kind Optional(WePark.Category.aspTueFri)|aspTueFri nearest ET_E_1 Optional(WePark.Category.aspTueFri)|aspTueFri 32/10m
+  FOLDED WEST_163RD_STREET_AMSTERDAM_AVENUE_ST_NICHOLAS_AVENUE_S_0 len 22/10 kind Optional(WePark.Category.aspTueFri)|aspTueFri nearest UE_S_1 Optional(WePark.Category.aspTueFri)|aspTueFri 2/10m
+  FOLDED WEST_BROADWAY_FRANKLIN_STREET_LEONARD_STREET_W_4 len 26/10 kind Optional(WePark.Category.noStanding)|noStanding nearest ET_W_3 Optional(WePark.Category.noStanding)|noStanding 57/10m
+STUBRUN BOWERY W Canal-Bayard BOWERY|W|CANAL STREET|BAYARD STREET pieces 6 spineLegs 5 offSpine ["T_W_5"] worstEndDistToRunExtreme 57/10 m, maxSteps 22, distinctFwdEnds 4 back 1
+STUBRUN RIVERSIDE E W160-161 RIVERSIDE DRIVE|E|WEST 160TH STREET|WEST 161ST STREET pieces 3 spineLegs 2 offSpine ["T_E_2"] worstEndDistToRunExtreme 2/10 m, maxSteps 12, distinctFwdEnds 1 back 1
+STUBRUN WEST BROADWAY W Franklin-Leonard WEST BROADWAY|W|FRANKLIN STREET|LEONARD STREET pieces 5 spineLegs 4 offSpine ["T_W_4"] worstEndDistToRunExtreme 48/10 m, maxSteps 12, distinctFwdEnds 2 back 1
+STUBRUN E 112 N 2nd-1st EAST 112TH STREET|N|2ND AVENUE|1ST AVENUE pieces 8 spineLegs 8 offSpine [] worstEndDistToRunExtreme 4/10 m, maxSteps 38, distinctFwdEnds 1 back 2
+STUBRUN E 112 N 2nd-1st EAST 112TH STREET|N|3RD AVENUE|2ND AVENUE pieces 7 spineLegs 7 offSpine [] worstEndDistToRunExtreme 2/10 m, maxSteps 40, distinctFwdEnds 1 back 2
+STUBRUN E 112 N 2nd-1st EAST 112TH STREET|N|5TH AVENUE|MADISON AVENUE pieces 6 spineLegs 6 offSpine [] worstEndDistToRunExtreme 4/10 m, maxSteps 27, distinctFwdEnds 1 back 2
+STUBRUN E 112 N 2nd-1st EAST 112TH STREET|N|LEXINGTON AVENUE|3RD AVENUE pieces 5 spineLegs 5 offSpine [] worstEndDistToRunExtreme 0/10 m, maxSteps 27, distinctFwdEnds 1 back 1
+STUBRUN E 112 N 2nd-1st EAST 112TH STREET|N|MADISON AVENUE|PARK AVENUE pieces 6 spineLegs 6 offSpine [] worstEndDistToRunExtreme 1/10 m, maxSteps 25, distinctFwdEnds 1 back 1
+STUBRUN E 112 N 2nd-1st EAST 112TH STREET|N|PARK AVENUE|LEXINGTON AVENUE pieces 5 spineLegs 5 offSpine [] worstEndDistToRunExtreme 4/10 m, maxSteps 25, distinctFwdEnds 1 back 2
+STUBRUN E 42 S 1st-FDR EAST 42ND STREET|S|1ST AVENUE|FDR DRIVE pieces 4 spineLegs 4 offSpine [] worstEndDistToRunExtreme 2/10 m, maxSteps 13, distinctFwdEnds 1 back 2
+STUBRUN E 42 S 1st-FDR EAST 42ND STREET|S|2ND AVENUE|1ST AVENUE pieces 7 spineLegs 7 offSpine [] worstEndDistToRunExtreme 2/10 m, maxSteps 40, distinctFwdEnds 1 back 2
+STUBRUN E 42 S 1st-FDR EAST 42ND STREET|S|3RD AVENUE|2ND AVENUE pieces 7 spineLegs 7 offSpine [] worstEndDistToRunExtreme 4/10 m, maxSteps 40, distinctFwdEnds 2 back 1
+STUBRUN E 42 S 1st-FDR EAST 42ND STREET|S|5TH AVENUE|MADISON AVENUE pieces 4 spineLegs 4 offSpine [] worstEndDistToRunExtreme 3/10 m, maxSteps 27, distinctFwdEnds 1 back 1
+STUBRUN E 42 S 1st-FDR EAST 42ND STREET|S|LEXINGTON AVENUE|3RD AVENUE pieces 5 spineLegs 5 offSpine [] worstEndDistToRunExtreme 1/10 m, maxSteps 27, distinctFwdEnds 1 back 1
+STUBRUN E 42 S 1st-FDR EAST 42ND STREET|S|MADISON AVENUE|PARK AVENUE pieces 5 spineLegs 5 offSpine [] worstEndDistToRunExtreme 3/10 m, maxSteps 27, distinctFwdEnds 2 back 2
+STUBRUN E 42 S 1st-FDR EAST 42ND STREET|S|PARK AVENUE|LEXINGTON AVENUE pieces 5 spineLegs 5 offSpine [] worstEndDistToRunExtreme 3/10 m, maxSteps 27, distinctFwdEnds 1 back 1
+STUBRUN COOPER E5-E6 E COOPER SQUARE|E|EAST 4TH STREET|EAST 5TH STREET pieces 3 spineLegs 3 offSpine [] worstEndDistToRunExtreme 1/10 m, maxSteps 12, distinctFwdEnds 1 back 1
+STUBRUN COOPER E5-E6 E COOPER SQUARE|E|EAST 5TH STREET|EAST 6TH STREET pieces 4 spineLegs 3 offSpine ["T_E_3"] worstEndDistToRunExtreme 138/10 m, maxSteps 11, distinctFwdEnds 3 back 2
+STUBRUN COOPER E5-E6 E COOPER SQUARE|E|EAST 6TH STREET|EAST 7TH STREET pieces 3 spineLegs 3 offSpine [] worstEndDistToRunExtreme 0/10 m, maxSteps 11, distinctFwdEnds 1 back 1
+STUBRUN COOPER E5-E6 E COOPER SQUARE|E|EAST 7TH STREET|ST MARKS PLACE pieces 3 spineLegs 3 offSpine [] worstEndDistToRunExtreme 2/10 m, maxSteps 13, distinctFwdEnds 1 back 2
+HASHCOST segments=47696 per call 12.215838432312012 ms (sink true)
+VERSION same set twice equal: true
+VERSION id swapped middle (same count/first/last) differs: true
+VERSION two middle ids reordered differs: true
+VERSION same ids, changed geometry differs: false (false = id-only hash)
+VERSION empty vs one: true
+CACHE0 fresh count 0
+CACHE1 after a nudge count 2 (expect >0)
+CACHE2 after reset count 0 (expect 0)
+CACHE3 block B after reset: on B true
+CACHE4 B->A no reset: on A true
+CACHE5 flip E->W nudge stays on flipped block: true
+CACHE6 flip back stays on original block: true
+CACHE7 reduced set (after reset): visited only within the 2 kept pieces: true visited 2
+CACHE8 same count/first/last, a walked piece's id swapped, no reset, cache warm: walk sees NEW id true, still sees OLD id false
+CACHE9 geometry-only change with same ids: walked target piece lengths [21.63629474025912, 21.63629474025912, 21.63629474025912, 21.63629474025912, 21.63629474025912] (orig 21.63629474025912; orig length seen = stale cache/index)
+WALKSAMPLE blocks=2234
+WALKS blocks=2234 runs=2239 walks=60702 stray=0 crossRun=0 shortStep=0 noEnd=0 fwdSpread=0 backSpread=0 sameEnd=0 ownRunWalks=6 ownRunLeft=0 foldedStartWalks=30 foldedEndsOffMain>3m=4 maxSteps=320
+  SATEND-OFF BOWERY|W|CANAL STREET|BAYARD STREET ET_W_5 dir 1.0 61/10 m from main end
+  SATEND-OFF BOWERY|W|CANAL STREET|BAYARD STREET ET_W_5 dir 1.0 55/10 m from main end
+  SATEND-OFF BOWERY|W|CANAL STREET|BAYARD STREET ET_W_5 dir 1.0 55/10 m from main end
+  SATEND-OFF WEST BROADWAY|W|FRANKLIN STREET|LEONARD STREET ET_W_4 dir 1.0 48/10 m from main end
+STUBEND BOWERY|W|CANAL STREET|BAYARD STREET main pieces 5 (extent 109 m): main-start walks worst distance to line end 2/10 m; stub-start walks worst 61/10 m
+STUBEND WEST BROADWAY|W|FRANKLIN STREET|LEONARD STREET main pieces 4 (extent 56 m): main-start walks worst distance to line end 0/10 m; stub-start walks worst 48/10 m
+STUBEND RIVERSIDE DRIVE|E|WEST 160TH STREET|WEST 161ST STREET main pieces 2 (extent 56 m): main-start walks worst distance to line end 0/10 m; stub-start walks worst 2/10 m

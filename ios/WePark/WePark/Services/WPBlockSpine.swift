@@ -160,9 +160,28 @@ nonisolated struct WPBlockSpine {
             degree[edge.a] += 1
             degree[edge.b] += 1
         }
+        // Which way the piece at a loose end runs: `inward` points into the piece, `outward` away.
+        func tangents(at jointIndex: Int) -> (inward: (east: Double, north: Double), outward: (east: Double, north: Double))? {
+            guard let edge = edges.first(where: { $0.piece != nil && ($0.a == jointIndex || $0.b == jointIndex) }),
+                  let piece = edge.piece, lines[piece].count >= 2 else { return nil }
+            let line = lines[piece]
+            let atStart = edge.a == jointIndex
+            let end = atStart ? line[0] : line[line.count - 1]
+            let next = atStart ? line[1] : line[line.count - 2]
+            let inward = unitVector(from: end, to: next)
+            return (inward, (-inward.east, -inward.north))
+        }
         for p in 0..<joints.count {
             for q in (p + 1)..<max(p + 1, joints.count) where degree[p] == 1 && degree[q] == 1
                 && jointRoot(p) != jointRoot(q) && metres(joints[p], joints[q]) <= gapMeters {
+                // Only a gap in the line: the piece beyond it must carry on away from this end. A stub
+                // running back alongside the line (a few metres off it) is not a continuation.
+                guard let here = tangents(at: p), let there = tangents(at: q) else { continue }
+                let across = unitVector(from: joints[p], to: joints[q])
+                let carriesOn = here.outward.east * there.inward.east + here.outward.north * there.inward.north > 0.3
+                let ahead = metres(joints[p], joints[q]) <= joinMeters
+                    || across.east * here.outward.east + across.north * here.outward.north >= 0
+                guard carriesOn, ahead else { continue }
                 edges.append(Edge(piece: nil, a: p, b: q, weight: 0))
                 jointParent[jointRoot(p)] = jointRoot(q)
             }
@@ -208,6 +227,16 @@ nonisolated struct WPBlockSpine {
             legs.append(Leg(segment: pieces[piece], reversed: edge.a != step.from, length: lengths[piece], start: 0))
         }
         guard !legs.isEmpty else { return nil }
+        // A run piece left off the spine is only dropped when it is the same kind of curb as the spine
+        // piece nearest it (same dominant category and rule categories). A real curb of another kind
+        // (say 6 m of no parking beside a metered piece) is its own run: a car on it keeps its own
+        // verdict, and the walk never relocates it onto the spine.
+        let onSpine = Set(legs.map { $0.segment.id })
+        if !onSpine.contains(segment.id), let own = ownRun(
+            for: startIndex, pieces: pieces, lines: lines, spine: legs
+        ), own {
+            return [Leg(segment: segment, reversed: false, length: lengths[startIndex], start: 0)]
+        }
         let agree = legs.filter { !$0.reversed }.reduce(0.0) { $0 + $1.length }
         let disagree = legs.filter { $0.reversed }.reduce(0.0) { $0 + $1.length }
         if disagree > agree + 1e-9 {
@@ -217,6 +246,38 @@ nonisolated struct WPBlockSpine {
     }
 
     // MARK: Geometry
+
+    /// True when the dropped piece at `index` is a different kind of curb from the spine piece nearest
+    /// it, so it must not be folded into the spine.
+    private static func ownRun(
+        for index: Int, pieces: [Segment], lines: [[CLLocationCoordinate2D]], spine: [Leg]
+    ) -> Bool? {
+        guard let point = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: lines[index]) else { return nil }
+        var nearest: (distance: Double, segment: Segment)?
+        for leg in spine {
+            guard let foot = CandidateSegmentSearch.nearestPointOnPolyline(
+                from: point, polyline: leg.segment.coordinates
+            ) else { continue }
+            if nearest == nil || foot.distanceMeters < (nearest?.distance ?? .infinity) {
+                nearest = (foot.distanceMeters, leg.segment)
+            }
+        }
+        guard let neighbour = nearest?.segment else { return nil }
+        return !sameKind(pieces[index], neighbour)
+    }
+
+    /// Same dominant category and the same set of rule categories.
+    static func sameKind(_ a: Segment, _ b: Segment) -> Bool {
+        a.dominantCategory == b.dominantCategory
+            && Set(a.rules.map { $0.category }) == Set(b.rules.map { $0.category })
+    }
+
+    private static func unitVector(from a: CLLocationCoordinate2D, to b: CLLocationCoordinate2D) -> (east: Double, north: Double) {
+        let east = (b.longitude - a.longitude) * 111_320 * cos((a.latitude + b.latitude) / 2 * Double.pi / 180)
+        let north = (b.latitude - a.latitude) * 111_320
+        let norm = hypot(east, north)
+        return norm > 0 ? (east / norm, north / norm) : (0, 0)
+    }
 
     /// Pieces shorter than this can be stubs.
     private static let stubMeters = 25.0

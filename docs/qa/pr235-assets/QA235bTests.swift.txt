@@ -1,0 +1,31 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+@MainActor
+final class QA235bTests: XCTestCase {
+    func testStubEnds() throws {
+        let all = try QA235.loadAll()
+        let groups = QA235.groupsAll(all)
+        let wants: [String] = ["BOWERY|W|CANAL STREET|BAYARD STREET", "WEST BROADWAY|W|FRANKLIN STREET|LEONARD STREET", "RIVERSIDE DRIVE|E|WEST 160TH STREET|WEST 161ST STREET"]
+        for k in wants {
+            let g = groups[k]!
+            for run in QA235.runs(g) where run.count >= 2 {
+                let sp = WPBlockSpine(around: run[0], in: g)!
+                let on = Set(sp.legs.map { $0.segment.id })
+                let mainPieces = run.filter { on.contains($0.id) }
+                guard let dia = QA235.diameter(mainPieces) else { continue }
+                var worstMain = 0.0, worstStub = 0.0
+                for start in run { for f in [0.0, 0.5, 1.0] { for dir in [5.0, -5.0] {
+                    var cs = start, cf = f
+                    var last = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates)!
+                    var n = 0
+                    while n < 1000, case .move(let t) = WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir, in: g) { cs = t.segment; cf = t.fraction; last = t.coordinate; n += 1 }
+                    let d = min(QA235.m(last, dia.0), QA235.m(last, dia.1))
+                    if on.contains(start.id) { worstMain = max(worstMain, d) } else { worstStub = max(worstStub, d) }
+                } } }
+                QA235.log("STUBEND \(k) main pieces \(mainPieces.count) (extent \(Int(dia.2)) m): main-start walks worst distance to line end \(Int(worstMain*10))/10 m; stub-start walks worst \(Int(worstStub*10))/10 m")
+            }
+        }
+    }
+}
