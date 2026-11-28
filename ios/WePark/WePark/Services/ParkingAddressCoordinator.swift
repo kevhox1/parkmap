@@ -33,6 +33,10 @@ final class ParkingAddressCoordinator {
     /// another key. Observed by the card.
     private(set) var placementAddress: ParkingAddress?
 
+    /// DT35-2: addresses for the two curbs of the "Which side did you park on?" chooser, keyed by
+    /// segment id. Only filled while the chooser is up; cleared with `clearSideHints()`.
+    private(set) var sideHints: [String: ParkingAddress] = [:]
+
     /// Max resolver attempts per saved car: the initial one plus one foreground retry.
     static let maxAttemptsPerCar = 2
 
@@ -42,6 +46,7 @@ final class ParkingAddressCoordinator {
     @ObservationIgnored private var placementKey: String?
     @ObservationIgnored private var placementTask: Task<Void, Never>?
     @ObservationIgnored private var carTask: Task<Void, Never>?
+    @ObservationIgnored private var hintsTask: Task<Void, Never>?
     @ObservationIgnored private var attemptsByCarID: [UUID: Int] = [:]
 
     init(
@@ -101,6 +106,42 @@ final class ParkingAddressCoordinator {
         placementAddress = nil
     }
 
+    // MARK: DT35-2: side-chooser hints
+
+    /// Resolves an address for each curb option (so the chooser can say "near 15 Stanton St"). One
+    /// resolver call per option, through the same throttled, cached resolver. Silent on failure:
+    /// a missing hint just leaves the compass side. Replaces any earlier set.
+    func resolveSideHints(_ requests: [ParkingAddressRequest]) {
+        guard isEnabled else { return }
+        hintsTask?.cancel()
+        sideHints = [:]
+        let ids = requests.map(\.segmentID)
+        hintsTask = Task { [weak self] in
+            guard let self else { return }
+            for request in requests {
+                guard !Task.isCancelled else { return }
+                let resolution = await self.resolver.resolve(request)
+                guard !Task.isCancelled else { return }
+                if case .resolved(let address) = resolution, ids.contains(request.segmentID) {
+                    self.sideHints[request.segmentID] = address
+                }
+            }
+        }
+    }
+
+    func clearSideHints() {
+        hintsTask?.cancel()
+        hintsTask = nil
+        sideHints = [:]
+    }
+
+    /// The car's side was changed (same id): forget the spent attempts so its new address resolves.
+    func forgetAttempts(forCarID carID: UUID) {
+        attemptsByCarID[carID] = nil
+        carTask?.cancel()
+        carTask = nil
+    }
+
     // MARK: (b)/(c) Saved car
 
     /// Fills in `car.address` if it has none. `apply` receives the resolved address and the car
@@ -132,6 +173,9 @@ final class ParkingAddressCoordinator {
         carTask = Task { [weak self] in
             guard let self else { return }
             let resolution = await self.resolver.resolve(request)
+            // DT35-2: cancelled by `forgetAttempts` (the car changed side): this answer describes
+            // the old curb, drop it.
+            guard !Task.isCancelled else { return }
             self.carTask = nil
             switch resolution {
             case .resolved(let address):

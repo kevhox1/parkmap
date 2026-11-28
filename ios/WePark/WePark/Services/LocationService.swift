@@ -187,6 +187,21 @@ final class LocationService: NSObject {
     /// below. Consumed by `DriveHeadingSnap.nextHeadingSource` as a low-confidence signal.
     private(set) var driveCourseAccuracy: CLLocationDirection?
 
+    /// DT35-2: `CLLocation.horizontalAccuracy` (metres) of the most-recent Drive Mode fix, nil
+    /// when invalid. The drive branch used to drop this, so "Park here" had no accuracy to judge
+    /// the fix by. Cleared in `endDriveMode()`.
+    private(set) var driveHorizontalAccuracy: CLLocationAccuracy?
+
+    /// DT35-2: the most recent fix with its course/speed/accuracy, recorded in both branches.
+    /// `ParkSideResolver` judges "Park here" with it. Never persisted, never logged.
+    @ObservationIgnored private(set) var latestParkFix: ParkTrackFix?
+
+    /// DT35-2: trail of recent fixes (max 40, 1 s apart, 120 s). Read-only. Cleared on
+    /// `endDriveMode()`. In memory only.
+    var recentTrack: [ParkTrackFix] { trackBuffer.fixes }
+
+    @ObservationIgnored private var trackBuffer = ParkTrackBuffer()
+
     /// True while Drive Mode is actively running.
     private var driveModeActiveInternal: Bool = false
 
@@ -304,6 +319,9 @@ final class LocationService: NSObject {
         driveHeading = nil
         driveSpeed = nil
         driveCourseAccuracy = nil
+        driveHorizontalAccuracy = nil
+        trackBuffer.removeAll()
+        latestParkFix = nil
         headingEMA = nil
         prevDriveCoordinate = nil
         flipGuard = DriveHeadingFlipGuard()  // wrong-way hardening change 2: fresh per session.
@@ -426,6 +444,13 @@ final class LocationService: NSObject {
         return headingEMA
     }
 
+    /// DT35-2: records a fix for the park-side resolver. `latestParkFix` always holds the newest
+    /// fix; the trail keeps one per second. Main thread only (called from the delegate's main hop).
+    private func recordParkFix(_ fix: ParkTrackFix) {
+        latestParkFix = fix
+        trackBuffer.append(fix)
+    }
+
     // MARK: - Private geometry helpers
 
     /// Haversine distance in meters between two coordinates.
@@ -514,8 +539,12 @@ extension LocationService: CLLocationManagerDelegate {
                 current: coordinate,
                 courseAccuracy: courseAccuracy
             )
+            let driveAccuracy: CLLocationAccuracy? = loc.horizontalAccuracy >= 0 ? loc.horizontalAccuracy : nil
+            let parkFix = ParkTrackFix(location: loc)
             DispatchQueue.main.async { [weak self] in
                 self?.userLocation = coordinate
+                self?.driveHorizontalAccuracy = driveAccuracy
+                self?.recordParkFix(parkFix)
                 self?.locationUpdateCount += 1
                 self?.driveSpeed = speed >= 0 ? speed : 0
                 self?.driveHeading = stabilized
@@ -524,9 +553,11 @@ extension LocationService: CLLocationManagerDelegate {
         } else {
             // Single-shot / recenter mode (unchanged W5.1 behavior).
             let horizontalAccuracy: CLLocationAccuracy? = loc.horizontalAccuracy >= 0 ? loc.horizontalAccuracy : nil
+            let parkFix = ParkTrackFix(location: loc)
             DispatchQueue.main.async { [weak self] in
                 self?.userLocation = coordinate
                 self?.userHorizontalAccuracy = horizontalAccuracy
+                self?.recordParkFix(parkFix)
                 self?.locationUpdateCount += 1
             }
         }

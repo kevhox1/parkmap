@@ -42,6 +42,7 @@
 //
 
 import Foundation
+import CoreLocation
 import Combine
 import Observation
 
@@ -270,6 +271,39 @@ final class ParkPinService {
     func updateAddress(_ address: ParkingAddress?, forCarID carID: UUID) -> ParkedCar? {
         guard let car = parkedCar, car.id == carID else { return nil }
         let updated = car.withAddress(address)
+        let envelope = SyncedCarEnvelope(kind: .parked, updatedAt: .nowET, car: updated)
+        guard writeEnvelope(envelope) else { return nil }
+
+        currentUpdatedAt = envelope.updatedAt
+        parkedCar = updated
+        return updated
+    }
+
+    // MARK: - DT35-2: fix the side after saving
+
+    /// Moves the CURRENT car to another curb (the "Wrong side? Switch" row on My Car): same `id`
+    /// (an edit, not a re-park, so `parkedAt` and the reminder opt-in are kept), new segment, side,
+    /// street and foot-point coordinate. The address is dropped because it described the old
+    /// side; the caller re-resolves it. Bumps `updatedAt` for last-write-wins and syncs through
+    /// iCloud KVS like `updateAddress`. Does NOT send `pinDropped` (no Park Until / priming
+    /// sheet): the caller cancels and reschedules reminders. Ignored when `carID` is no longer the
+    /// current car. Returns the updated car, or nil when nothing was written. Main thread only.
+    @discardableResult
+    func replaceSide(carID: UUID, with segment: Segment, coordinate: CLLocationCoordinate2D) -> ParkedCar? {
+        guard let car = parkedCar, car.id == carID else { return nil }
+        let updated = ParkedCar(
+            id: car.id,
+            latitude: coordinate.latitude,
+            longitude: coordinate.longitude,
+            detectedSegmentID: segment.id,
+            detectedSide: segment.side,
+            street: segment.street,
+            fromStreet: segment.fromStreet,
+            toStreet: segment.to,
+            parkedAt: car.parkedAt,
+            notifyOnRestriction: car.notifyOnRestriction,
+            address: nil
+        )
         let envelope = SyncedCarEnvelope(kind: .parked, updatedAt: .nowET, car: updated)
         guard writeEnvelope(envelope) else { return nil }
 
