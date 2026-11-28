@@ -387,7 +387,12 @@ enum ParkingGoals {
     }
 
     nonisolated static func windowEndLabel(for goal: ParkingGoal, end: Date, from: Date = .nowET) -> String {
-        if goal == .parkAndForget { return weekdayDateLabel(for: end) }
+        if goal == .parkAndForget {
+            // The Auto ladder ends at midnight of a day: date only, as before. A Free-until pick can
+            // end at any time (DT35-1), and then the time is part of the answer.
+            if end == Calendar.easternTime.startOfDay(for: end) { return weekdayDateLabel(for: end) }
+            return weekdayDateLabel(for: end) + " " + clockTimeLabel(for: end)
+        }
         let cal = Calendar.easternTime
         let dayDiff = cal.dateComponents(
             [.day], from: cal.startOfDay(for: from), to: cal.startOfDay(for: end)

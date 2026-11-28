@@ -324,6 +324,7 @@ struct WPDriveActionsV2: View {
 /// Scrolls only when its content is taller than `maxHeight` (AX sizes on a short phone).
 private struct WPFitScroll<Content: View>: View {
     let maxHeight: CGFloat
+    var onHeight: ((CGFloat) -> Void)? = nil
     @ViewBuilder let content: () -> Content
     @State private var contentHeight: CGFloat = 0
 
@@ -335,6 +336,7 @@ private struct WPFitScroll<Content: View>: View {
         }
         .scrollBounceBehavior(.basedOnSize)
         .frame(height: contentHeight > 0 ? min(contentHeight, maxHeight) : nil)
+        .onGeometryChange(for: CGFloat.self, of: { $0.size.height }) { onHeight?($0) }
     }
 }
 
@@ -345,12 +347,21 @@ struct WPDriveBottomV2: View {
     let onReport: () -> Void
     let onPark: () -> Void
     let onToggleVoice: () -> Void
+    /// DT35-6b: a measured verdict budget (points) that overrides the fraction below, and the
+    /// verdicts' actual height reported back, so the attribution strip is computed from layout.
+    var maxSidesHeight: CGFloat? = nil
+    var onSidesHeight: ((CGFloat) -> Void)? = nil
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         let sides = WPDriveVerdict.sides(for: context)
-        // Only the verdicts scroll (AX sizes on a short phone); the actions stay pinned in view.
+        // Only the verdicts scroll (AX sizes); the actions stay pinned in view.
         VStack(spacing: WP.Space.s3) {
-            WPFitScroll(maxHeight: UIScreen.main.bounds.height * 0.55) {
+            WPFitScroll(
+                maxHeight: maxSidesHeight ?? UIScreen.main.bounds.height
+                    * WPDriveStackBudget.sidesMaxHeightFraction(accessibilitySize: dynamicTypeSize.isAccessibilitySize),
+                onHeight: onSidesHeight
+            ) {
                 WPDriveSidesV2(left: sides.left, right: sides.right)
             }
             WPDriveActionsV2(
@@ -385,7 +396,7 @@ struct WPDriveTopChromeV2: View {
             let layout = HStackLayout(alignment: .top, spacing: WP.Space.s3)
             layout {
                 if let street {
-                    Text(WPDriveDirection.pillText(street: street, direction: direction))
+                    WPDriveStreetText(street: street, direction: direction)
                         .font(WP.Font.fredoka(22, .semibold, relativeTo: .title3))
                         .foregroundStyle(WPDrivePalette.ink)
                         .fixedSize(horizontal: false, vertical: true)
@@ -527,9 +538,120 @@ extension View {
     /// height. At AX5 the pill was squeezed into a one-line frame while its text rendered three
     /// lines tall, overlapping the street pill and the Apple Maps attribution. With `stoop`
     /// false this is a no-op (range up to AX5, no fixed size), so flag-off layout is unchanged.
+    ///
+    /// At accessibility sizes `GoalParkUntilPill` shows the short "Until <end>" form (see
+    /// `WPDriveStackBudget.compactPillText`); it wraps if it must and is never cut with an
+    /// ellipsis. VoiceOver keeps the full sentence.
     func wpDrivePillLayout(stoop: Bool) -> some View {
-        self
+        modifier(WPDrivePillLayout(stoop: stoop))
+    }
+}
+
+private struct WPDrivePillLayout: ViewModifier {
+    let stoop: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        content
             .dynamicTypeSize(...(stoop ? DynamicTypeSize.accessibility1 : DynamicTypeSize.accessibility5))
             .fixedSize(horizontal: false, vertical: stoop)
+    }
+}
+
+/// Budget for the drive card's scrolling verdicts. Standard sizes keep 55% of the screen. At
+/// accessibility sizes the whole drive stack (pill, verdicts, actions) has to leave the Apple Maps
+/// logo and Legal link a clear strip below the top chrome, so the verdicts cap lower and scroll
+/// (indicators stay visible) when they would not fit. 0.35 (was 0.38) reserves the worst case for
+/// the top street pill: two lines (name over direction) at the AX2 drive cap, about 45 pt taller
+/// than the one-line pill.
+enum WPDriveStackBudget {
+    /// The Park Until pill's accessibility-size text: "Until 7:00 AM tomorrow", "Until 8:15 PM",
+    /// "Until Mon 11/30". The end of the window is what the driver needs; the goal name and
+    /// "Now →" go first. Times keep a non-breaking space before AM/PM so a wrap never splits one.
+    nonisolated static func compactPillText(endLabel: String) -> String {
+        ParkingGoals.nonBreakingMeridiem("Until " + endLabel)
+    }
+
+    nonisolated static func sidesMaxHeightFraction(accessibilitySize: Bool) -> CGFloat {
+        accessibilitySize ? 0.38 : 0.55
+    }
+}
+
+// MARK: - Street pill text (DT35-6b)
+
+/// The street pill's text. Standard sizes keep today's single wrapping line, "Stanton St \u{00B7}
+/// Eastbound". At accessibility sizes the pill is ONE line (the street only; the direction is
+/// dropped, VoiceOver still gets "Street: Stanton St, eastbound"): scaled down to 60% first, and a
+/// street that still does not fit is middle-truncated. The street is context, not a parking
+/// statement, so cutting its middle is acceptable; a second line is not, because the top chrome
+/// must leave the Apple Maps logo and Legal link a clear strip.
+private struct WPDriveStreetText: View {
+    let street: String
+    let direction: String?
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        if dynamicTypeSize.isAccessibilitySize {
+            Text(street)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+                .truncationMode(.middle)
+        } else {
+            Text(WPDriveDirection.pillText(street: street, direction: direction))
+        }
+    }
+}
+
+// MARK: - Attribution strip (DT35-6b)
+
+/// Keeps a clear strip between the bottom of the top chrome and the top of the drive stack for
+/// the Apple Maps logo and Legal link, from MEASURED layout. When the gap is smaller than the
+/// strip, the verdict section's height budget shrinks by the shortfall (down to a floor), and it
+/// grows back toward its base when there is spare room. Stoop drive at accessibility sizes only.
+enum WPDriveAttributionStrip {
+    /// Logo height plus the 8 pt gaps above and below it.
+    nonisolated static let stripHeight: CGFloat = 48
+    /// The verdicts never shrink below this, however tight the screen is.
+    nonisolated static let floorSidesHeight: CGFloat = 120
+    /// Gap errors smaller than this are ignored (no flicker).
+    nonisolated static let tolerance: CGFloat = 6
+
+    /// - Parameters:
+    ///   - currentCap: the verdict budget in force now.
+    ///   - sidesHeight: the verdict section's actual height now.
+    ///   - base: the budget when there is room (`WPDriveStackBudget` fraction of the screen).
+    ///   - gap: measured stack top minus measured top-chrome bottom.
+    nonisolated static func adjustedSidesCap(
+        currentCap: CGFloat, sidesHeight: CGFloat, base: CGFloat, gap: CGFloat
+    ) -> CGFloat {
+        let delta = gap - stripHeight
+        if abs(delta) <= tolerance { return currentCap }
+        return min(base, max(floorSidesHeight, sidesHeight + delta))
+    }
+}
+
+// MARK: - ASP banner in Stoop drive (DT35-6b)
+
+extension View {
+    /// Stoop drive only: the ASP banner at accessibility sizes is one line (type capped at AX1,
+    /// scaled to 70%, tail-truncated only as a last resort), the same sentence, not hidden: the
+    /// street-cleaning state is a parking statement the cards do not repeat. At AX5 it used to
+    /// wrap to two lines and push the top chrome down onto the Apple Maps attribution.
+    /// A no-op elsewhere (flag-off, browse, standard sizes).
+    func wpDriveBannerOneLine(stoopDrive: Bool) -> some View {
+        modifier(WPDriveBannerOneLine(stoopDrive: stoopDrive))
+    }
+}
+
+private struct WPDriveBannerOneLine: ViewModifier {
+    let stoopDrive: Bool
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    func body(content: Content) -> some View {
+        let oneLine = stoopDrive && dynamicTypeSize.isAccessibilitySize
+        content
+            .dynamicTypeSize(...(stoopDrive ? DynamicTypeSize.accessibility1 : DynamicTypeSize.accessibility5))
+            .lineLimit(oneLine ? 1 : nil)
+            .minimumScaleFactor(oneLine ? 0.7 : 1)
     }
 }
