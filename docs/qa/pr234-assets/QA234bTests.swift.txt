@@ -1,0 +1,143 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+@MainActor
+final class QA234bTests: XCTestCase {
+    static let out = "/private/tmp/claude-501/-Users-kevinhoxha-repos-parkmap/f8d5a3ca-5371-4933-9534-79989e164bb8/scratchpad/qa234b.txt"
+    func log(_ s: String) {
+        if let h = FileHandle(forWritingAtPath: Self.out) { h.seekToEndOfFile(); h.write((s + "\n").data(using: .utf8)!); h.closeFile() }
+        else { try? (s + "\n").write(toFile: Self.out, atomically: true, encoding: .utf8) }
+    }
+
+    /// Spine-only audit over ALL multi-piece blockfaces (not just the sample).
+    func testSpineAll() throws {
+        let all = try QA234.loadAll()
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA234.key(s)] = (groups[QA234.key(s)] ?? []) + [s] }
+        var runsN = 0, dropped = 0, droppedCatDiff = 0, bridges = 0, backwardBridge = 0, shortfall3 = 0, shortfall6 = 0, detSpineDiff = 0
+        var maxMs = 0.0, maxMsKey = ""; var over5ms = 0
+        var lines: [String] = []
+        var droppedLens: [Double] = []
+        for k in groups.keys.sorted() {
+            let g = groups[k]!
+            if g.count < 2 { continue }
+            autoreleasepool {
+                for run in QA234.runs(g) where run.count >= 2 {
+                    runsN += 1
+                    let t0 = Date()
+                    guard let sp = WPBlockSpine(around: run[0], in: g) else { continue }
+                    let ms = Date().timeIntervalSince(t0) * 1000
+                    if ms > maxMs { maxMs = ms; maxMsKey = "\(k) pieces \(run.count)" }
+                    if ms > 5 { over5ms += 1 }
+                    if let sp2 = WPBlockSpine(around: run[run.count - 1], in: g) {
+                        let a = sp.legs.map { $0.segment.id }, b = sp2.legs.map { $0.segment.id }
+                        if a != b && a != b.reversed() { detSpineDiff += 1; lines.append("DET \(k)") }
+                    }
+                    let on = Set(sp.legs.map { $0.segment.id })
+                    for p in run where !on.contains(p.id) {
+                        dropped += 1
+                        let L = QA234.len(p.coordinates); droppedLens.append(L)
+                        var covering: [Segment] = []
+                        for leg in sp.legs {
+                            var near = 0
+                            for f in [0.1, 0.5, 0.9] {
+                                let pt = CandidateSegmentSearch.coordinate(atFraction: f, along: p.coordinates)!
+                                if let ft = CandidateSegmentSearch.nearestPointOnPolyline(from: pt, polyline: leg.segment.coordinates), ft.distanceMeters <= 4 { near += 1 }
+                            }
+                            if near > 0 { covering.append(leg.segment) }
+                        }
+                        let cats = Set(covering.map { String(describing: $0.dominantCategory) })
+                        let mine = String(describing: p.dominantCategory)
+                        if !cats.contains(mine) {
+                            droppedCatDiff += 1
+                            lines.append("DROPDIFF \(p.id) len \(Int(L*10))/10 dom \(mine) vs covering \(cats.sorted()) (n=\(covering.count))")
+                        }
+                    }
+                    var legEnd: CLLocationCoordinate2D?
+                    for (i, leg) in sp.legs.enumerated() {
+                        let c = leg.segment.coordinates
+                        let s0 = leg.reversed ? c.last! : c.first!, s1 = leg.reversed ? c.first! : c.last!
+                        if let prev = legEnd, QA234.m(prev, s0) > 1.5 {
+                            bridges += 1
+                            let after = sp.legs[i...].reduce(0.0) { $0 + $1.length }
+                            if after < 15 { backwardBridge += 1; lines.append("TAILBRIDGE \(k) gap \(Int(QA234.m(prev, s0)*10))/10 m tail legs \(sp.legs.count - i) tail len \(Int(after*10))/10 spineTotal \(Int(sp.total))") }
+                        }
+                        legEnd = s1
+                    }
+                    if let dia = QA234.diameter(run), let f = sp.landing(at: 0), let l = sp.landing(at: sp.total) {
+                        let s1 = QA234.m(f.coordinate, dia.0) + QA234.m(l.coordinate, dia.1)
+                        let s2 = QA234.m(f.coordinate, dia.1) + QA234.m(l.coordinate, dia.0)
+                        let sf = min(s1, s2)
+                        if sf > 3 { shortfall3 += 1 }
+                        if sf > 6 { shortfall6 += 1; lines.append("SHORT \(k) shortfall \(Int(sf*10))/10 m pieces \(run.count) dropped \(run.count - on.count)") }
+                    }
+                }
+            }
+        }
+        log("SPINEALL runs=\(runsN) droppedPieces=\(dropped) droppedLenMax=\(droppedLens.max() ?? 0) droppedCategoryDiffers=\(droppedCatDiff) bridges=\(bridges) tailBridges=\(backwardBridge) endShortfall>3m=\(shortfall3) >6m=\(shortfall6) determinismDiff=\(detSpineDiff) maxBuildMs=\(maxMs) at \(maxMsKey) over5ms=\(over5ms)")
+        for l in lines.sorted().prefix(120) { log(l) }
+    }
+
+    /// Start on a stub through the flow: where does the car go, and is the verdict the landing piece's.
+    func testStubFlow() async throws {
+        let all = try QA234.loadAll()
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(120)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA234.key(s)] = (groups[QA234.key(s)] ?? []) + [s] }
+        var checked = 0, mismatch = 0, noMove = 0
+        var rows: [String] = []
+        for k in groups.keys.sorted() {
+            let g = groups[k]!; if g.count < 2 { continue }
+            for run in QA234.runs(g) where run.count >= 2 {
+                guard let sp = WPBlockSpine(around: run[0], in: g) else { continue }
+                let on = Set(sp.legs.map { $0.segment.id })
+                for p in run where !on.contains(p.id) {
+                    for f in [0.0, 0.5, 1.0] { for dir in [5.0, -5.0] {
+                        let c = CandidateSegmentSearch.coordinate(atFraction: f, along: p.coordinates)!
+                        flow.enterPending(at: CurbSnapResult(segment: p, positionFraction: f, distanceMeters: 0, snappedCoordinate: c), segments: all, engine: engine, now: now, windowEnd: nil, trip: nil)
+                        let r = flow.nudge(meters: dir, point: .zero, metersPerPoint: 1, engine: engine, now: now, windowEnd: nil, trip: nil)
+                        checked += 1
+                        if case .moved = r {
+                            let landed = flow.snap!.segment
+                            let expected = WPNeighborVerdict.resolve(segment: landed, engine: engine, now: now, windowEnd: nil, trip: nil, reports: WPNeighborReports())
+                            if flow.model != expected { mismatch += 1; rows.append("VERDICT-MISMATCH \(p.id)") }
+                            if !on.contains(landed.id) { rows.append("LANDED OFF SPINE \(landed.id)") }
+                            if rows.count < 6 || k == "BROADWAY|E|WEST 125TH STREET|WEST 126TH STREET" { rows.append("stub \(p.id.suffix(10)) f\(f) dir \(dir) -> moved to \(landed.id.suffix(10)) @\(Int((flow.snap?.positionFraction ?? 0)*100))% dist from start \(Int(QA234.m(c, flow.snap!.snappedCoordinate)*10))/10 m") }
+                        } else { noMove += 1; if rows.count < 12 { rows.append("stub \(p.id.suffix(10)) f\(f) dir \(dir) -> \(r)") } }
+                    } }
+                }
+            }
+        }
+        log("STUBFLOW checked=\(checked) verdictMismatch=\(mismatch) endOfBlock=\(noMove)")
+        for r in rows.prefix(40) { log("  " + r) }
+        XCTAssertEqual(mismatch, 0)
+    }
+
+    /// Nudge timing on the biggest blocks through the controller.
+    func testNudgeTiming() async throws {
+        let all = try QA234.loadAll()
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(120)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA234.key(s)] = (groups[QA234.key(s)] ?? []) + [s] }
+        let big = groups.sorted { $0.value.count > $1.value.count }.prefix(5)
+        for (k, g) in big {
+            let c = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: g[0].coordinates)!
+            flow.enterPending(at: CurbSnapResult(segment: g[0], positionFraction: 0.5, distanceMeters: 0, snappedCoordinate: c), segments: all, engine: engine, now: now, windowEnd: nil, trip: nil)
+            let t0 = Date(); var n = 0
+            while case .moved = flow.nudge(meters: 5, point: .zero, metersPerPoint: 1, engine: engine, now: now, windowEnd: nil, trip: nil), n < 2000 { n += 1 }
+            let dt = Date().timeIntervalSince(t0)
+            log("TIMING \(k) pieces \(g.count): \(n) nudges in \(Int(dt*1000)) ms = \(Int(dt*1000/Double(max(1,n+1)))) ms/nudge")
+        }
+    }
+}
