@@ -459,6 +459,39 @@ struct WPTripMapCard: View {
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: WP.Radius.card, style: .continuous)
         VStack(alignment: .leading, spacing: WP.Space.s2) {
+            if isAX {
+                // R35 F-1: at accessibility sizes the text block may scroll (buttons stay pinned) so
+                // the card never covers more than about half the screen. It scrolls only when the
+                // text does not fit, so nothing is ever truncated.
+                ViewThatFits(in: .vertical) {
+                    textBlock
+                    ScrollView { textBlock }.scrollBounceBehavior(.basedOnSize)
+                }
+                .frame(maxHeight: WPTripMapCard.axTextMaxHeight)
+            } else {
+                textBlock
+            }
+            buttons
+                .padding(.top, WP.Space.s1)
+        }
+        .padding(WP.Space.s4)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(shape.fill(WP.card))
+        .overlay(shape.strokeBorder(WP.line, lineWidth: WP.Border.fact))
+        // Three lines of copy over two buttons: past AX1 it would cover the map it explains.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+        .accessibilityElement(children: .contain)
+    }
+
+    /// The share of the screen the text block may use at accessibility sizes (buttons are extra).
+    @MainActor private static var axTextMaxHeight: CGFloat {
+        let screen = UIApplication.shared.connectedScenes
+            .compactMap { ($0 as? UIWindowScene)?.screen.bounds.height }.first ?? 0
+        return screen > 0 ? screen * 0.27 : 220
+    }
+
+    private var textBlock: some View {
+        VStack(alignment: .leading, spacing: WP.Space.s2) {
             Text(WPTripCopy.mapHeadline)
                 .font(WP.Font.fredoka(15, .medium, relativeTo: .callout))
                 .foregroundStyle(WP.text)
@@ -472,8 +505,8 @@ struct WPTripMapCard: View {
                 .foregroundStyle(WP.muted)
                 .fixedSize(horizontal: false, vertical: true)
             if let destinationSummary {
-                // Under the headline block (after "until <time>"), so the headline and the time it
-                // finishes stay together.
+                // After "From ...", so the headline and the time it finishes stay together.
+                // Wraps by words; never truncated.
                 Text(destinationSummary)
                     .font(WP.Font.fredoka(15, .semibold, relativeTo: .callout))
                     .foregroundStyle(WP.text)
@@ -483,20 +516,16 @@ struct WPTripMapCard: View {
             if let notice = WPTripCopy.calendarNotice(plan, arrivalCovered: arrivalCovered, departureCovered: departureCovered) {
                 noticeBox(title: notice.title, detail: notice.detail)
             }
-            Text(WPTripCopy.caveat)
-                .font(WP.Font.fredoka(14, .regular, relativeTo: .footnote))
-                .foregroundStyle(WP.muted)
-                .fixedSize(horizontal: false, vertical: true)
-            buttons
-                .padding(.top, WP.Space.s1)
+            // Dropped at accessibility sizes: the dashed frame and the "TRIP PLAN · NOT LIVE" tag
+            // already say this is a plan.
+            if !isAX {
+                Text(WPTripCopy.caveat)
+                    .font(WP.Font.fredoka(14, .regular, relativeTo: .footnote))
+                    .foregroundStyle(WP.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
-        .padding(WP.Space.s4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(shape.fill(WP.card))
-        .overlay(shape.strokeBorder(WP.line, lineWidth: WP.Border.fact))
-        // Three lines of copy over two buttons: past AX1 it would cover the map it explains.
-        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
-        .accessibilityElement(children: .contain)
     }
 
     /// B14.7: a flat 1.5pt box (a fact, not a warning): bold line, then the detail.
