@@ -117,6 +117,33 @@ enum AmbientDrivingLook {
         }
     }
 
+    // MARK: - Stoop spans (R35 PR3)
+
+    /// Stoop (design system flag on): Locate, search results, the parked car and trip framing zoom
+    /// to this latitude span, about 890 m tall and 410 m wide on a portrait phone: your block, the
+    /// blocks on either side and the next 2 to 3 streets (about 1.5 avenues). Cruise's 0.003 deg is
+    /// about 150 m wide, less than one avenue block, which read as building level in build 35.
+    /// Drive Mode keeps `MapViewRepresentable.driveModeCameraSpan` (a driver needs the next
+    /// intersection large); only the ambient resting look uses these.
+    nonisolated static let stoopTightSpan: CLLocationDegrees = 0.008
+
+    /// Stoop span for a poor GPS fix or a cold launch: still the full red and green band
+    /// (`WPCurbZoomConstants.fullMaxDelta`), and it tightens to `stoopTightSpan` when a good fix
+    /// arrives (`shouldTighten`).
+    nonisolated static let stoopWideSpan: CLLocationDegrees = 0.012
+
+    /// Latitude span for a step. `stoop` true returns the Stoop spans and ignores `cruiseSpan`;
+    /// false is exactly `span(for:cruiseSpan:)` (flag off stays byte-identical).
+    nonisolated static func span(
+        for step: ZoomStep, cruiseSpan: CLLocationDegrees, stoop: Bool
+    ) -> CLLocationDegrees {
+        guard stoop else { return span(for: step, cruiseSpan: cruiseSpan) }
+        switch step {
+        case .tight: return stoopTightSpan
+        case .wide:  return stoopWideSpan
+        }
+    }
+
     /// Whether a newly arrived fix should tighten the current look. Only wide -> tight, only
     /// when the user has not touched the map since the look was last applied (never fight a
     /// pan/pinch the user just made), and only when the new fix actually earns `.tight`.

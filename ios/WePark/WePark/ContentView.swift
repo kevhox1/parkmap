@@ -6549,7 +6549,10 @@ struct ContentView: View {
     ) {
         ambientLookStep = step
         ambientLookUserAdjusted = false
-        let span = AmbientDrivingLook.span(for: step, cruiseSpan: MapViewRepresentable.driveModeCameraSpan)
+        let span = AmbientDrivingLook.span(
+            for: step, cruiseSpan: MapViewRepresentable.driveModeCameraSpan,
+            stoop: AppConstants.designSystemV2Enabled
+        )
         coordinatorActions.setAmbientDrivingLook?(
             center,
             // Design system flag on: top-down (round-2 mocks). Flag off: today's tilted look.
