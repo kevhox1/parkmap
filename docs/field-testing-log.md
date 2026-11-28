@@ -1329,3 +1329,9 @@ The spot was free until Tuesday morning, so no short reminder could be set. Not 
   - (b) The Harlem River's Bronx bank counts as covered, so the "nearest curb" can be across the river.
   - (c) The planner row says "The trip map shows the free curbs nearby" while the card says none are free within a quarter mile. Make the row's promise conditional.
   - (d) At AX5 the long sentence clips behind the scroll cue.
+- **DT35-3 VoiceOver nudge, parked minors (#235 QA):**
+  - A car started on a folded stub (Bowery W_5, West Broadway W_4) stops 4.8–6.1 m short of the line end. The verdict category is the same.
+  - The own-run curb (Cooper E_3) is reachable only by drag or Park here; consider a cue.
+  - `contentVersion` hashes ids only.
+
+  These are low priority and only reachable through VoiceOver.
