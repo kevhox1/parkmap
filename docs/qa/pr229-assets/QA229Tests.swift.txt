@@ -1,0 +1,241 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+enum QA229 {
+    static let outPath = "/private/tmp/claude-501/-Users-kevinhoxha-repos-parkmap/f8d5a3ca-5371-4933-9534-79989e164bb8/scratchpad/qa229b.txt"
+    static func log(_ s: String) {
+        if let h = FileHandle(forWritingAtPath: outPath) { h.seekToEndOfFile(); h.write((s + "\n").data(using: .utf8)!); h.closeFile() }
+        else { try? (s + "\n").write(toFile: outPath, atomically: true, encoding: .utf8) }
+    }
+    static func loadAll() throws -> [Segment] {
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("WePark/Resources/tiles")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("tile_") }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var seen = Set<String>(); var all: [Segment] = []
+        for f in files { for s in try JSONDecoder().decode([Segment].self, from: Data(contentsOf: f)) where seen.insert(s.id).inserted { all.append(s) } }
+        return all
+    }
+    static func key(_ s: Segment) -> String { "\(s.street)|\(s.side)|\(s.fromStreet)|\(s.to)" }
+    static func ukey(_ s: Segment) -> String { "\(s.street)|\(s.side)|\([s.fromStreet, s.to].sorted().joined(separator: "/"))" }
+    static func m(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        let n = (b.latitude - a.latitude) * 111_320
+        let e = (b.longitude - a.longitude) * 111_320 * cos((a.latitude + b.latitude) / 2 * .pi / 180)
+        return hypot(e, n)
+    }
+    static func len(_ l: [CLLocationCoordinate2D]) -> Double { l.count < 2 ? 0 : (1..<l.count).reduce(0) { $0 + m(l[$1-1], l[$1]) } }
+    /// extreme ends = endpoints not joined (<3 m) by another piece of the group
+    static func extremeEnds(_ g: [Segment]) -> [CLLocationCoordinate2D] {
+        var pts: [(CLLocationCoordinate2D, Int)] = []
+        for (gi, p) in g.enumerated() { if let a = p.coordinates.first, let b = p.coordinates.last { pts.append((a, gi)); pts.append((b, gi)) } }
+        var ext: [CLLocationCoordinate2D] = []
+        for (i, p) in pts.enumerated() {
+            let shared = pts.enumerated().contains { $0.offset != i && $0.element.1 != p.1 && m($0.element.0, p.0) < 3 }
+            if !shared { ext.append(p.0) }
+        }
+        return ext
+    }
+    static let named = ["BROADWAY", "FIRST AVENUE", "SECOND AVENUE", "THIRD AVENUE", "AMSTERDAM AVENUE", "COLUMBUS AVENUE",
+                        "RIVERSIDE DRIVE", "ST NICHOLAS AVENUE", "FORT WASHINGTON AVENUE", "WEST 4TH STREET", "BOWERY", "CENTRAL PARK WEST", "EAST END AVENUE", "CABRINI BOULEVARD"]
+}
+
+@MainActor
+final class QA229WalkTests: XCTestCase {
+    func testPureWalks() async throws {
+                let all = try QA229.loadAll()
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA229.key(s), default: []].append(s) }
+        var ugroups: [String: Set<String>] = [:]
+        for s in all { ugroups[QA229.ukey(s), default: []].insert(QA229.key(s)) }
+        QA229.log("segments \(all.count) exactGroups \(groups.count) unorderedGroupsWithSplitLabels \(ugroups.values.filter { $0.count > 1 }.count)")
+        let multis = groups.filter { $0.value.count >= 2 }.keys.sorted()
+        var chosen = Set<String>()
+        for (i, k) in multis.enumerated() where i % 7 == 3 { chosen.insert(k) }
+        let offsetCount = chosen.count
+        var namedCount: [String: Int] = [:]
+        for k in multis { let st = String(k.split(separator: "|", omittingEmptySubsequences: false)[0]); if QA229.named.contains(st) { chosen.insert(k); namedCount[st, default: 0] += 1 } }
+        QA229.log("multi groups \(multis.count); offset sample \(offsetCount); total with named \(chosen.count); named counts \(namedCount.sorted { $0.key < $1.key })")
+        var gcount = 0, walks = 0, stray = 0, shortStep = 0, noEnd = 0, notAtTrueEnd = 0, endMismatch = 0, backSameEnd = 0, extNot2 = 0, maxSteps = 0
+        var maxDrift = 0.0, maxDriftKey = ""
+        var fails: [String] = []
+        let step = 5.0
+        func walk(_ seg: Segment, _ frac: Double, _ dir: Double, _ pool: [Segment], key: String) -> (CLLocationCoordinate2D, Int, String?) {
+            var cs = seg, cf = frac
+            var here = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates)!
+            for n in 1...400 {
+                switch WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir * step, in: pool) {
+                case .endOfBlock: return (here, n, nil)
+                case .move(let t):
+                    if QA229.key(t.segment) != key { return (t.coordinate, n, "STRAY \(t.segment.street) \(t.segment.side) \(t.segment.fromStreet)-\(t.segment.to)") }
+                    if QA229.m(here, t.coordinate) < 0.5 { return (t.coordinate, n, "SHORT step \(QA229.m(here, t.coordinate)) at step \(n) piece \(cs.id) f=\(cf)") }
+                    cs = t.segment; cf = t.fraction; here = t.coordinate
+                }
+            }
+            return (here, 400, "no end in 400 steps")
+        }
+        for k in chosen.sorted() {
+            autoreleasepool {
+                let g = groups[k]!
+                gcount += 1
+                let ext = QA229.extremeEnds(g)
+                if ext.count != 2 { extNot2 += 1 }
+                var fwdEnds: [CLLocationCoordinate2D] = [], backEnds: [CLLocationCoordinate2D] = []
+                for start in g {
+                    for frac in [0.0, 0.5, 1.0] {
+                        for dir in [1.0, -1.0] {
+                            walks += 1
+                            let (end, n, err) = walk(start, frac, dir, g, key: k)
+                            maxSteps = max(maxSteps, n)
+                            if let err {
+                                fails.append("\(k) \(start.id) f=\(frac) dir \(dir): \(err)")
+                                if err.hasPrefix("STRAY") { stray += 1 } else if err.hasPrefix("SHORT") { shortStep += 1 } else { noEnd += 1 }
+                                continue
+                            }
+                            if ext.count == 2 {
+                                let d = ext.map { QA229.m($0, end) }.min()!
+                                if d > 3 { notAtTrueEnd += 1; fails.append("\(k) \(start.id) f=\(frac) dir \(dir): stopped \(Int(d)) m from a true end (pieces \(g.count))") }
+                            }
+                            if dir > 0 { fwdEnds.append(end) } else { backEnds.append(end) }
+                        }
+                    }
+                    // out-and-back drift
+                    if QA229.len(start.coordinates) > 12 {
+                        for (dir, nsteps) in [(1.0, 1), (-1.0, 1), (1.0, 3), (-1.0, 3)] {
+                            var cs = start, cf = 0.5
+                            let origin = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: start.coordinates)!
+                            var ok = true
+                            for _ in 0..<nsteps { if case .move(let t) = WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir * step, in: g) { cs = t.segment; cf = t.fraction } else { ok = false } }
+                            for _ in 0..<nsteps { if case .move(let t) = WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: -dir * step, in: g) { cs = t.segment; cf = t.fraction } else { ok = false } }
+                            if ok, let back = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates) {
+                                let drift = QA229.m(origin, back)
+                                if drift > maxDrift { maxDrift = drift; maxDriftKey = "\(k) \(start.id) dir \(dir) n \(nsteps)" }
+                            }
+                        }
+                    }
+                }
+                func spread(_ pts: [CLLocationCoordinate2D]) -> Double { pts.isEmpty ? 0 : pts.map { QA229.m(pts[0], $0) }.max()! }
+                if spread(fwdEnds) > 3 || spread(backEnds) > 3 { endMismatch += 1; fails.append("\(k): forward ends spread \(spread(fwdEnds)) back ends spread \(spread(backEnds))") }
+                if let f = fwdEnds.first, let b = backEnds.first, QA229.m(f, b) < 3 { backSameEnd += 1; fails.append("\(k): forward and back end at the same place") }
+            }
+        }
+        QA229.log("PURE groups=\(gcount) walks=\(walks) stray=\(stray) shortStep=\(shortStep) noEnd=\(noEnd) notAtTrueEnd=\(notAtTrueEnd) endMismatch=\(endMismatch) backSameEnd=\(backSameEnd) groupsWithExtNot2=\(extNot2) maxSteps=\(maxSteps) maxDrift=\(maxDrift) at \(maxDriftKey)")
+        for f in fails.prefix(80) { QA229.log("FAIL " + f) }
+        XCTAssertEqual(fails.count, 0)
+    }
+
+    /// Flow through `nudge` with the full tile set known: announcements and direction stability.
+    func testFlowAnnouncements() async throws {
+        let all = try QA229.loadAll()
+        let flow = WPParkFlowController()
+        flow.prepareIndex(segments: all)
+        let dl = Date().addingTimeInterval(60)
+        while !flow.indexReady && Date() < dl { try await Task.sleep(for: .milliseconds(50)) }
+        let engine = ParkingRulesEngine()
+        let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA229.key(s), default: []].append(s) }
+        let multis = groups.filter { $0.value.count >= 2 }.keys.sorted()
+        var chosen = Set<String>()
+        for (i, k) in multis.enumerated() where i % 7 == 3 && (i / 7) % 60 == 0 { chosen.insert(k) }
+        for k in multis {
+            let st = String(k.split(separator: "|", omittingEmptySubsequences: false)[0])
+            if ["WEST END AVENUE", "CABRINI BOULEVARD", "EAST 79TH STREET", "PALADINO AVENUE", "BOWERY"].contains(st) || k.hasPrefix("BROADWAY|E|WEST 125TH STREET|WEST 126TH STREET") || k.hasPrefix("SECOND AVENUE|W|EAST 61") { chosen.insert(k) }
+        }
+        var fails: [String] = []
+        var walks = 0, movedLies = 0, endLies = 0, other = 0, stray = 0, flips = 0
+        for k in chosen.sorted() {
+            autoreleasepool {
+                let g = groups[k]!
+                let ext = QA229.extremeEnds(g)
+                var endsFwd: [CLLocationCoordinate2D] = []
+                for start in [g.first!, g[g.count / 2], g.last!] {
+                    for dir in [5.0, -5.0] {
+                        guard let snap = WPParkFlowController.pendingSnap(on: start, near: nil) else { continue }
+                        walks += 1
+                        flow.reset()
+                        flow.enterPending(at: snap, segments: all, engine: engine, now: now, windowEnd: nil, trip: nil)
+                        var done = false
+                        for n in 1...300 {
+                            let before = flow.groundCoordinate!, beforeSeg = flow.snap!.segment.id
+                            let r = flow.nudge(meters: dir, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil)
+                            let after = flow.groundCoordinate!
+                            if let s = flow.snap?.segment, QA229.key(s) != k { stray += 1; fails.append("STRAY \(k) from \(start.id) at step \(n)"); done = true; break }
+                            switch r {
+                            case .moved:
+                                if QA229.m(before, after) < 0.5 { movedLies += 1; fails.append("MOVED-WITHOUT-MOVING \(k) \(start.id) step \(n) piece \(beforeSeg)"); done = true }
+                            case .endOfBlock:
+                                if QA229.m(before, after) > 0.01 || flow.snap!.segment.id != beforeSeg { endLies += 1; fails.append("END but state changed \(k)") }
+                                let again = flow.nudge(meters: dir, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil)
+                                if again != .endOfBlock { endLies += 1; fails.append("END not sticky \(k)") }
+                                if ext.count == 2 { let d = ext.map { QA229.m($0, after) }.min()!; if d > 3 { endLies += 1; fails.append("END \(Int(d)) m from true end \(k) \(start.id)") } }
+                                if dir > 0 { endsFwd.append(after) }
+                                done = true
+                            default:
+                                other += 1; fails.append("OTHER result \(r) \(k)"); done = true
+                            }
+                            if done { break }
+                        }
+                        if !done { fails.append("NO END in 300 steps \(k) \(start.id) dir \(dir)") }
+                    }
+                }
+                if let f = endsFwd.first, endsFwd.contains(where: { QA229.m(f, $0) > 3 }) { flips += 1; fails.append("forward end differs by start piece \(k)") }
+            }
+        }
+        QA229.log("FLOW groups=\(chosen.count) walks=\(walks) movedWithoutMoving=\(movedLies) endLies=\(endLies) stray=\(stray) other=\(other) fwdEndInconsistent=\(flips)")
+        for f in fails.prefix(80) { QA229.log("FFAIL " + f) }
+        XCTAssertEqual(fails.count, 0)
+    }
+
+    func testTrace() async throws {
+        let all = try QA229.loadAll()
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA229.key(s), default: []].append(s) }
+        for (k, dirs) in [("PALADINO AVENUE|E|EAST 120TH STREET|1ST AVENUE", [1.0, -1.0]), ("BOWERY|W|CANAL STREET|BAYARD STREET", [1.0, -1.0]), ("BROADWAY|E|WEST 125TH STREET|WEST 126TH STREET", [1.0, -1.0])] {
+            let g = groups[k]!
+            for dir in dirs {
+                for si in [0, 1] {
+                    var cs = g[si], cf = 0.5
+                    var line = "TRACE \(k) start \(cs.id.suffix(3)) dir \(dir):"
+                    for _ in 1...30 {
+                        switch WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir * 5, in: g) {
+                        case .endOfBlock: line += " END"; break
+                        case .move(let t): cs = t.segment; cf = t.fraction; line += " \(cs.id.suffix(3))@\(Int(cf * 100))"
+                        }
+                    }
+                    QA229.log(line)
+                }
+            }
+        }
+    }
+
+    func testNamedOriginals() async throws {
+        let all = try QA229.loadAll()
+        var groups: [String: [Segment]] = [:]
+        for s in all { groups[QA229.key(s), default: []].append(s) }
+        for k in groups.keys.sorted() where groups[k]!.count >= 2 {
+            let ok = (k.hasPrefix("WEST END AVENUE|E|") && (k.contains("WEST 66TH") || k.contains("WEST 70TH") || k.contains("WEST 67TH"))) || k.hasPrefix("CABRINI BOULEVARD|E|") || (k.contains("AVENUE|W|") && k.contains("EAST 61ST STREET") && k.contains("EAST 62ND STREET") && (k.hasPrefix("2ND") || k.hasPrefix("SECOND"))) || k.hasPrefix("EAST 79TH STREET|")
+            guard ok else { continue }
+            let g = groups[k]!
+            var summary = "NAMED \(k) pieces \(g.count) ext \(QA229.extremeEnds(g).count):"
+            let ext = QA229.extremeEnds(g)
+            for dir in [1.0, -1.0] {
+                var ends: [CLLocationCoordinate2D] = []; var maxN = 0; var bad = 0
+                for start in g { for frac in [0.0, 0.5, 1.0] {
+                    var cs = start, cf = frac; var n = 0; var ended = false
+                    var here = CandidateSegmentSearch.coordinate(atFraction: cf, along: cs.coordinates)!
+                    while n < 400 { n += 1
+                        switch WPParkFlowController.nudgeTarget(on: cs, fraction: cf, meters: dir * 5, in: g) {
+                        case .endOfBlock: ended = true
+                        case .move(let t): if QA229.m(here, t.coordinate) < 0.5 { bad += 1 }; cs = t.segment; cf = t.fraction; here = t.coordinate }
+                        if ended { break } }
+                    maxN = max(maxN, n); if ended { ends.append(here) } else { bad += 1 }
+                } }
+                let sp = ends.isEmpty ? -1 : ends.map { QA229.m(ends[0], $0) }.max()!
+                let atEnd = ext.count == 2 && !ends.isEmpty ? ext.map { QA229.m($0, ends[0]) }.min()! : -1
+                summary += " dir\(Int(dir)) walks \(g.count*3) bad \(bad) maxSteps \(maxN) endSpread \(Int(sp)) endToTrueEnd \(Int(atEnd));"
+            }
+            QA229.log(summary)
+        }
+    }
+}
