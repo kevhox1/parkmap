@@ -36,6 +36,14 @@ struct WPGoalSheetInput: Equatable {
     var forDaysState: WPForDaysState? = nil
     /// DT35-1: the pick was clamped up to the Overnight end; show the one-line why.
     var forDaysClampNote: Bool = false
+    /// R35 PR1: the live clock. `now` above is the 5 minute window instant the map is coloured for
+    /// (it feeds the end labels, the search count and the picker); only the countdowns read this,
+    /// so "2 h 57 min from now" ticks every minute while the end stays on its grid. nil = `now`.
+    var liveNow: Date? = nil
+
+    /// The instant a countdown counts down from.
+    /// Never earlier than the window instant, so an end can never read more than its window.
+    var countdownNow: Date { max(liveNow ?? now, now) }
 
     nonisolated func end(for goal: ParkingGoal) -> Date {
         switch goal {
@@ -54,8 +62,11 @@ struct WPGoalSheetInput: Equatable {
         return WPGoalCopy.headlineEnd(goal: selectedGoal, end: selectedEnd, now: now)
     }
     var countdown: String {
-        if selectedGoal == .parkAndForget, isManualForDays { return WPForDaysCopy.countdown(end: selectedEnd, now: now) }
-        return WPGoalCopy.countdown(goal: selectedGoal, end: selectedEnd, now: now)
+        if selectedGoal == .parkAndForget, isManualForDays { return WPForDaysCopy.countdown(end: selectedEnd, now: countdownNow) }
+        // The Auto For-days line counts whole calendar days of the ladder, which is computed from
+        // the window instant, so it stays on that instant; the hour-based goals tick live.
+        return WPGoalCopy.countdown(goal: selectedGoal, end: selectedEnd,
+                                    now: selectedGoal == .parkAndForget ? now : countdownNow)
     }
 
     /// Tile sub-line for a goal ("until Tue 9 AM" for a manual For-days end).

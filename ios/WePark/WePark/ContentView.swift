@@ -559,6 +559,15 @@ struct ContentView: View {
     /// so the UIView update path fires exactly when we want it to.
     @State private var overlayGeneration: Int = 0
 
+    /// R35 PR1 (Stoop only): the 5 minute grid instant the map is coloured for. Every goal end,
+    /// the headline, the search count and the Free until picker read this, so they all describe the
+    /// same window. Set at the top of `rebuildOverlays`. See `WPWindowClock`.
+    @State private var windowInstant: Date = WPWindowClock.instant(.nowET)
+
+    /// R35 PR1 (Stoop only): last published overlay fingerprint; a rebuild that would draw the same
+    /// thing is skipped. Reference type so mutating it never invalidates the body.
+    @State private var overlaySignatureBox = WPOverlaySignatureBox()
+
     // MARK: - W7: ASP Banner state
 
     /// Service is immutable after init — not @Observable by design (see ASPSuspensionService header).
@@ -2967,7 +2976,23 @@ struct ContentView: View {
     ///   - 60s timer tick
     ///   - Segment array change (tile load complete)
     ///   - Selection change
-    private func rebuildOverlays(at now: Date) {
+    private func rebuildOverlays(at requestedNow: Date) {
+        // R35 PR1 (Stoop): the `now` argument is IGNORED on purpose. Callers pass either a fresh
+        // `.nowET` or a stale `lastEvaluatedAt`; honouring either made the green and the headline
+        // describe different instants. Stoop always colours for the 5 minute grid instant
+        // (`WPWindowClock`), which is never later than the real now. Flag off: unchanged.
+        let now: Date
+        if AppConstants.designSystemV2Enabled {
+            now = WPWindowClock.instant(Date.nowET)
+            if windowInstant != now {
+                windowInstant = now
+                // A rebuild that crossed into a new cell also refreshes the live clock, so a dead
+                // ticker heals on the next interaction.
+                lastEvaluatedAt = Date.nowET
+            }
+        } else {
+            now = requestedNow
+        }
         // DM-2 (`docs/drive-mode-default-spec.md` §0.8.6/§0.8.9): when the goal-first
         // ambient dock owns the filter (flag on, not toggled to full-palette), (re)resolve
         // the active goal's target FRESH on every single rebuild — Free Overnight/Few
@@ -3061,8 +3086,7 @@ struct ContentView: View {
 
         // Phase 2a (flag on): outside Manhattan no curb lines are drawn at all.
         if AppConstants.designSystemV2Enabled, v2OutsideCoverage {
-            overlayGeneration += 1
-            overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
+            commitOverlayPayload(MapViewRepresentable.OverlayPayload())
             return
         }
 
@@ -3072,15 +3096,15 @@ struct ContentView: View {
         // `parkAndForgetGuardState`, which must stay truthful even while the map is zoomed
         // out too far to draw any polylines at all.
         guard region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold else {
-            overlayGeneration += 1
-            overlayPayload = MapViewRepresentable.OverlayPayload(generation: overlayGeneration)
+            commitOverlayPayload(MapViewRepresentable.OverlayPayload())
             return
         }
 
         // Plan a Trip: binary green/red for [arrival, departure] with the same one free rule as
         // every live goal. Wins over the goal/park-until branches; never touches their state.
         if let plan = tripPlan {
-            if plan.departure <= now {
+            // Live clock, not the grid instant: "Trip plan ended." must fire within a minute.
+            if plan.departure <= (AppConstants.designSystemV2Enabled ? Date.nowET : now) {
                 // Trip is over; fall back to live.
                 tripPlan = nil
                 ToastService.shared.show(message: "Trip plan ended.")
@@ -3089,8 +3113,13 @@ struct ContentView: View {
             }
             var freeCoords: [[CLLocationCoordinate2D]] = []
             var notFreeCoords: [[CLLocationCoordinate2D]] = []
+            // R35 PR1: trip classification does not depend on `now` (`TripPlanning.isFree`), so the
+            // Stoop cache is keyed on the plan alone and survives every tick. Flag off: `now`.
             let tripKey = OverlayClassificationKey(
-                now: now, mode: .trip(arrival: plan.arrival, departure: plan.departure)
+                now: WPWindowClock.tripCacheStamp(
+                    arrival: plan.arrival, now: now, stoop: AppConstants.designSystemV2Enabled
+                ),
+                mode: .trip(arrival: plan.arrival, departure: plan.departure)
             )
             for segment in tileLoader.segments {
                 let coords = segment.coordinates
@@ -3117,8 +3146,7 @@ struct ContentView: View {
                 )
                     ? .freeComfortably : .restrictedNow
             }
-            overlayGeneration += 1
-            overlayPayload = MapViewRepresentable.OverlayPayload(
+            commitOverlayPayload(MapViewRepresentable.OverlayPayload(
                 freeComfortably:        freeCoords,
                 freeButRestrictionSoon: [],
                 meteredActive:          [],
@@ -3126,8 +3154,8 @@ struct ContentView: View {
                 unknown:                [],
                 selectedCoords:         selectedCoords,
                 selectedState:          selectedState,
-                generation:             overlayGeneration
-            )
+                generation:             0
+            ))
             return
         }
 
@@ -3218,8 +3246,7 @@ struct ContentView: View {
                 }
             }
 
-            overlayGeneration += 1
-            overlayPayload = MapViewRepresentable.OverlayPayload(
+            commitOverlayPayload(MapViewRepresentable.OverlayPayload(
                 freeComfortably:        freeCoords,
                 freeButRestrictionSoon: soonCoords,
                 meteredActive:          meteredCoords,
@@ -3227,13 +3254,15 @@ struct ContentView: View {
                 unknown:                noDataCoords,
                 selectedCoords:         selectedCoords,
                 selectedState:          selectedState,
-                generation:             overlayGeneration
-            )
+                generation:             0
+            ))
             return
         }
 
+        // R35 PR1: this path (no goal filter: flag off, or full palette) is a literal "free right
+        // now" answer, so it must use the real instant, not the grid floor.
         // perf/map-lag: see `OverlayClassificationCache`.
-        let currentStateKey = OverlayClassificationKey(now: now, mode: .currentState)
+        let currentStateKey = OverlayClassificationKey(now: requestedNow, mode: .currentState)
         var freeComfortably:        [[CLLocationCoordinate2D]] = []
         var freeButRestrictionSoon: [[CLLocationCoordinate2D]] = []
         var meteredActive:          [[CLLocationCoordinate2D]] = []
@@ -3248,8 +3277,8 @@ struct ContentView: View {
             if segment.id == selectedSegmentID { continue }
             let state = currentStateCache.value(for: segment.id, key: currentStateKey, compute: {
                 AppConstants.designSystemV2Enabled
-                    ? WPCurbVerdict.currentState(segment: segment, engine: engine, at: now)
-                    : engine.currentState(for: segment, at: now)
+                    ? WPCurbVerdict.currentState(segment: segment, engine: engine, at: requestedNow)
+                    : engine.currentState(for: segment, at: requestedNow)
             })
             switch state {
             case .freeComfortably:        freeComfortably.append(coords)
@@ -3269,15 +3298,14 @@ struct ContentView: View {
                 selectedCoords = coords
                 selectedState = AppConstants.designSystemV2Enabled
                     ? v2HighlightState(
-                        for: seg, now: now,
-                        base: WPCurbVerdict.currentState(segment: seg, engine: engine, at: now)
+                        for: seg, now: requestedNow,
+                        base: WPCurbVerdict.currentState(segment: seg, engine: engine, at: requestedNow)
                     )
-                    : engine.currentState(for: seg, at: now)
+                    : engine.currentState(for: seg, at: requestedNow)
             }
         }
 
-        overlayGeneration += 1
-        overlayPayload = MapViewRepresentable.OverlayPayload(
+        commitOverlayPayload(MapViewRepresentable.OverlayPayload(
             freeComfortably:        freeComfortably,
             freeButRestrictionSoon: freeButRestrictionSoon,
             meteredActive:          meteredActive,
@@ -3285,8 +3313,34 @@ struct ContentView: View {
             unknown:                unknown,
             selectedCoords:         selectedCoords,
             selectedState:          selectedState,
-            generation:             overlayGeneration
-        )
+            generation:             0
+        ))
+    }
+
+    /// Publishes a rebuilt overlay payload. Flag off: always (bumps the generation, exactly as
+    /// before). Stoop (R35 PR1): skipped when the payload would draw exactly what is already on
+    /// screen, so a recolor in which no curb changed colour never tears down and re-adds the
+    /// polylines. The signature folds in Drive Mode (the width toggle relies on a forced swap).
+    private func commitOverlayPayload(_ payload: MapViewRepresentable.OverlayPayload) {
+        if AppConstants.designSystemV2Enabled {
+            let signature = WPOverlaySignature.make(
+                groups: [
+                    payload.freeComfortably, payload.freeButRestrictionSoon, payload.meteredActive,
+                    payload.restrictedNow, payload.unknown
+                ],
+                selected: payload.selectedCoords,
+                context: WPOverlaySignature.mix(
+                    UInt64(truncatingIfNeeded: payload.selectedState.hashValue)
+                    &+ (driveModeActive ? 0x51 : 0)
+                    &+ (signDetailsOn ? 0xA3 : 0)
+                )
+            )
+            guard overlaySignatureBox.shouldPublish(signature) else { return }
+        }
+        overlayGeneration += 1
+        var published = payload
+        published.generation = overlayGeneration
+        overlayPayload = published
     }
 
     // MARK: - Map layer stack
@@ -3970,6 +4024,23 @@ struct ContentView: View {
             .onChange(of: notificationsMuted) { _, newValue in handleNotificationsMutedChange(newValue) }
             .onChange(of: driveModeActive) { _, active in handleDriveModeAndCamera(active) }
             .onReceive(Timer.publish(every: 60, on: .main, in: .common).autoconnect()) { _ in handleTimerTick() }
+            // R35 PR1 (Stoop): the inline Timer above is rebuilt on every body pass, so it never got
+            // to fire. This `.task` is identity-stable across body re-evaluation and sleeps to the
+            // next wall-clock minute so the countdown flips on the minute.
+            .task(id: AppConstants.designSystemV2Enabled) {
+                guard AppConstants.designSystemV2Enabled else { return }
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: .seconds(WPWindowClock.secondsToNextMinute(from: Date())))
+                    if Task.isCancelled { break }
+                    handleMinuteTick()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)) { _ in
+                handleMinuteTick()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .NSSystemClockDidChange)) { _ in
+                handleMinuteTick()
+            }
     }
 
     /// mapLayerStack + overlay/event modifiers (second 6).
@@ -4481,7 +4552,9 @@ struct ContentView: View {
     }
 
     private var v2GoalInput: WPGoalSheetInput {
-        let now = lastEvaluatedAt
+        // R35 PR1: the window instant the map is coloured for (never `lastEvaluatedAt`, which only
+        // moves on the minute tick and disagreed with the green). Countdowns alone use the live clock.
+        let now = windowInstant
         let daysEnd: Date
         if let manual = forDaysState {
             daysEnd = manual.effective
@@ -4512,7 +4585,8 @@ struct ContentView: View {
             morningHour: overnightMorningHour,
             forDaysPick: forDaysState == nil ? nil : forDaysPick,
             forDaysState: forDaysState,
-            forDaysClampNote: forDaysClampNote
+            forDaysClampNote: forDaysClampNote,
+            liveNow: lastEvaluatedAt
         )
     }
 
@@ -5129,7 +5203,8 @@ struct ContentView: View {
             rebuildOverlays(at: .nowET)
             return
         }
-        let now = Date.nowET
+        // R35 PR1: the picker's minimum is computed from the same grid instant the map is coloured for.
+        let now = AppConstants.designSystemV2Enabled ? WPWindowClock.instant(Date.nowET) : Date.nowET
         let snapped = ForDaysUntil.applyPick(date, now: now, morningHour: overnightMorningHour)
         forDaysClampNote = snapped.clamped
         storedForDaysUntil = snapped.date.timeIntervalSince1970
@@ -7035,7 +7110,11 @@ struct ContentView: View {
         // FT-6: Re-sync reminder offsets on foreground (mirrors mute sync pattern).
         reminderOffsets = ReminderOffsets.load(from: .standard)
         // DT35-1: a stale For-days pick never lingers across a foreground.
-        if AppConstants.designSystemV2Enabled { resetStaleForDaysPick(now: .nowET) }
+        if AppConstants.designSystemV2Enabled {
+            resetStaleForDaysPick(now: .nowET)
+            // R35 PR1: refresh the live clock and recolor now if the window moved while away.
+            handleMinuteTick()
+        }
         // W7.5: Stale-target guard — clear the Park Until filter if the target has passed.
         // This covers the case where the user backgrounded the app past their departure time.
         if let target = parkUntilTarget, target < .nowET {
@@ -8394,8 +8473,24 @@ struct ContentView: View {
     // MARK: - Timer / overlay rebuild handlers (extracted for type-checker budget)
 
     private func handleTimerTick() {
+        // R35 PR1: Stoop is ticked by the wall-clock `.task` loop (`handleMinuteTick`); this inline
+        // Timer is only the legacy path. Early return so Stoop is never double-ticked.
+        if AppConstants.designSystemV2Enabled { return }
         lastEvaluatedAt = .now
         rebuildOverlays(at: lastEvaluatedAt)
+    }
+
+    /// R35 PR1 (Stoop): the once-a-minute wall-clock tick, the foreground hook and the clock-change
+    /// hook all land here. Refreshes the live clock (the countdown), and recolors only when the 5
+    /// minute grid cell changed or the displayed end has arrived. Inside a cell this is a state
+    /// write and nothing else: no classification, no overlay swap.
+    private func handleMinuteTick() {
+        guard AppConstants.designSystemV2Enabled else { return }
+        lastEvaluatedAt = Date.nowET
+        let displayedEnd: Date? = tripPlan?.departure ?? parkUntilTarget
+        if WPWindowClock.needsRecolor(applied: windowInstant, now: lastEvaluatedAt, displayedEnd: displayedEnd) {
+            rebuildOverlays(at: lastEvaluatedAt)
+        }
     }
 
     private func handleSegmentsChanged() {
