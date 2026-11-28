@@ -48,7 +48,23 @@ enum WPParkFlowNotice: Equatable {
     case dropOnCurb
 }
 
+/// The outcome of a VoiceOver nudge.
+enum WPNudgeResult: Equatable {
+    case moved
+    /// The car is at the end of its block (same street and side); it did not move.
+    case endOfBlock
+    /// No draft, or no curb at the new spot.
+    case noCurb
+}
+
+/// Where a nudge goes (pure, see `WPParkFlowController.nudgeTarget`).
+enum WPNudgeTarget {
+    case move(CLLocationCoordinate2D)
+    case endOfBlock
+}
+
 enum WPParkFlowCopy {
+    static let endOfBlock = "End of block"
     static let notSavedYet = "Not saved yet"
     static let notSavedHint = "Drag the car to adjust it."
     static let notSavedSpoken = "Not saved yet. Your car is saved only when you tap Park here."
@@ -101,6 +117,9 @@ final class WPParkFlowController {
     /// Bumps on every landing, side switch and restore so the layer can animate the car gliding to
     /// its curb (an animation keyed on this, not on the per-frame position of a pan).
     private(set) var landingTick = 0
+    /// Bumps on every frame the map moves while a draft is pending (see `mapMoved`), so only the
+    /// views that read it re-project the car. Never bumped otherwise.
+    private(set) var mapMoveTick = 0
     private(set) var notice: WPParkFlowNotice?
     /// Where the drag started (drawn as the dashed "came from" ring).
     private(set) var originPoint: CGPoint?
@@ -141,8 +160,23 @@ final class WPParkFlowController {
     /// How far one VoiceOver "Move forward / back" action moves the car along the block.
     nonisolated static let nudgeMeters: Double = 5
 
-    /// The snap rule for the token: 40 m reach, a 1.5 m dead-band.
+    /// How far from a curb line a DRAGGED car still gets that curb's verdict: about half a street
+    /// width plus a little tolerance. Past it the car is not on the street (a building, a lot), so
+    /// there is no verdict ("Not on a curb"). Never a verdict for a spot the car isn't on.
+    nonisolated static let dragReachMeters: Double = 10
+
+    /// The snap rule while a finger drags the car: `dragReachMeters` reach (kept a little further
+    /// once snapped, so the verdict does not flicker at the edge), a 1.5 m dead-band.
     nonisolated static var tokenSnapConfig: CurbSnapConfig {
+        CurbSnapConfig(
+            acquireRadius: dragReachMeters, releaseRadius: dragReachMeters + 2,
+            hysteresisMinMeters: tokenHysteresisMeters, hysteresisMaxMeters: tokenHysteresisMeters
+        )
+    }
+
+    /// The wider rule for placing the car at a known position that is not a finger (the user's GPS
+    /// location, a block-end nudge): the 40 m foot-point rule.
+    nonisolated static var entrySnapConfig: CurbSnapConfig {
         CurbSnapConfig(
             acquireRadius: snapMeters, releaseRadius: snapMeters + 8,
             hysteresisMinMeters: tokenHysteresisMeters, hysteresisMaxMeters: tokenHysteresisMeters
@@ -200,7 +234,8 @@ final class WPParkFlowController {
         now: Date,
         windowEnd: Date?,
         trip: TripPlan?,
-        reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() }
+        reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() },
+        config: CurbSnapConfig = WPParkFlowController.tokenSnapConfig
     ) {
         tokenPoint = point
         guard let coordinate, let index else {
@@ -211,7 +246,7 @@ final class WPParkFlowController {
             coordinate,
             incumbent: snap?.blockfaceKey,
             metersPerPoint: metersPerPoint,
-            config: Self.tokenSnapConfig
+            config: config
         )
         switch outcome {
         case .snapped(let result):
@@ -246,7 +281,8 @@ final class WPParkFlowController {
         beginDrag(from: point)
         update(
             point: point, coordinate: coordinate, metersPerPoint: metersPerPoint,
-            engine: engine, now: now, windowEnd: windowEnd, trip: trip, reports: reports
+            engine: engine, now: now, windowEnd: windowEnd, trip: trip, reports: reports,
+            config: Self.entrySnapConfig
         )
         return endDrag(landingPoint: point)
     }
@@ -343,22 +379,77 @@ final class WPParkFlowController {
     }
 
     /// VoiceOver "Move forward / back along the block": nudges the pending car `meters` along the
-    /// curb (negative = back), carrying on to the next piece of the block at a piece end. Same snap,
-    /// verdict and card as a drag. Returns false when there is no draft or no curb at the new spot.
+    /// curb (negative = back), carrying on to the next piece of the SAME block (same street, side and
+    /// cross streets) at a piece end. At the end of the block it stops: it never moves onto another
+    /// street. Same snap, verdict and card as a drag.
     @discardableResult
     func nudge(
         meters: Double, point: CGPoint,
         metersPerPoint: Double, engine: ParkingRulesEngine, now: Date, windowEnd: Date?, trip: TripPlan?,
         reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() }
-    ) -> Bool {
-        guard phase == .placed, let snap,
-              let target = Self.nudgedCoordinate(
-                on: snap.segment.coordinates, fraction: snap.positionFraction, meters: meters
-              ) else { return false }
-        return placeAt(
-            coordinate: target, point: point, metersPerPoint: metersPerPoint,
-            engine: engine, now: now, windowEnd: windowEnd, trip: trip, reports: reports
-        )
+    ) -> WPNudgeResult {
+        guard phase == .placed, let snap else { return .noCurb }
+        switch Self.nudgeTarget(
+            on: snap.segment, fraction: snap.positionFraction, meters: meters, in: knownSegments
+        ) {
+        case .endOfBlock:
+            return .endOfBlock
+        case .move(let coordinate):
+            let landed = placeAt(
+                coordinate: coordinate, point: point, metersPerPoint: metersPerPoint,
+                engine: engine, now: now, windowEnd: windowEnd, trip: trip, reports: reports
+            )
+            return landed ? .moved : .noCurb
+        }
+    }
+
+    /// Where a nudge of `meters` from `fraction` on `segment` goes. Within the piece: along it. Past a
+    /// piece end: onto the neighbouring piece of the same block when there is one, else to the end of
+    /// the piece, and `.endOfBlock` once it is already there.
+    nonisolated static func nudgeTarget(
+        on segment: Segment, fraction: Double, meters: Double, in segments: [Segment]
+    ) -> WPNudgeTarget {
+        let line = segment.coordinates
+        guard line.count >= 2,
+              let beyond = nudgedCoordinate(on: line, fraction: fraction, meters: meters),
+              let here = CandidateSegmentSearch.coordinate(atFraction: fraction, along: line) else {
+            return .endOfBlock
+        }
+        var length = 0.0
+        for index in 1..<line.count {
+            length += metersBetween(line[index - 1], line[index])
+        }
+        guard length > 1 else { return .endOfBlock }
+        let target = min(1, max(0, fraction)) * length + meters
+        if target >= 0, target <= length { return .move(beyond) }
+
+        let pastEnd = target > length
+        let endpoint = pastEnd ? line[line.count - 1] : line[0]
+        let distanceToEnd = metersBetween(here, endpoint)
+        var bestDistance = Double.infinity
+        var bestCoordinate: CLLocationCoordinate2D?
+        for piece in segments where piece.id != segment.id && isSameBlock(piece, segment) {
+            guard let foot = CandidateSegmentSearch.nearestPointOnPolyline(from: beyond, polyline: piece.coordinates),
+                  foot.distanceMeters <= 8,
+                  // Genuinely further on, not the piece behind us.
+                  metersBetween(here, foot.coordinate) >= distanceToEnd - 0.5 else { continue }
+            if foot.distanceMeters < bestDistance {
+                bestDistance = foot.distanceMeters
+                bestCoordinate = foot.coordinate
+            }
+        }
+        if let bestCoordinate { return .move(bestCoordinate) }
+        return distanceToEnd < 0.5 ? .endOfBlock : .move(endpoint)
+    }
+
+    /// Same blockface: street, side and both cross streets.
+    nonisolated static func isSameBlock(_ a: Segment, _ b: Segment) -> Bool {
+        a.street == b.street && a.side == b.side && a.fromStreet == b.fromStreet && a.to == b.to
+    }
+
+    nonisolated private static func metersBetween(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        CLLocation(latitude: a.latitude, longitude: a.longitude)
+            .distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
     }
 
     /// The point `meters` along `polyline` from `fraction`. Past either end it continues straight on
@@ -448,6 +539,12 @@ final class WPParkFlowController {
         clearNotice()
     }
 
+    /// The map moved (pan, pinch, camera animation) while a draft is pending.
+    func mapMoved() {
+        guard phase == .placed else { return }
+        mapMoveTick &+= 1
+    }
+
     private func showNotice(_ value: WPParkFlowNotice) {
         notice = value
         noticeTask?.cancel()
@@ -462,6 +559,20 @@ final class WPParkFlowController {
         noticeTask?.cancel()
         noticeTask = nil
         notice = nil
+    }
+}
+
+// MARK: - Map-move reader
+
+/// Re-runs `content` whenever the map moves while a draft is pending (`flow.mapMoveTick`). A separate
+/// view so the per-frame work is just the token layer, not the card.
+struct WPMapMoveReader<Content: View>: View {
+    let flow: WPParkFlowController
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        let _ = flow.mapMoveTick
+        content()
     }
 }
 
@@ -512,9 +623,9 @@ struct WPParkLayerV2: View {
                         .gesture(DragGesture(minimumDistance: 0))
                 }
                 if visible {
-                    // Re-evaluated every frame while pending so the car follows the map. Paused (one
-                    // render, re-rendered on state change) in every other phase.
-                    TimelineView(.animation(minimumInterval: nil, paused: flow.phase != .placed)) { _ in
+                    // Re-projects the car when the map moves (the seam fires only while a draft is
+                    // open) and on any state change. Zero work when the map is idle.
+                    WPMapMoveReader(flow: flow) {
                         tokenLayer(origin: origin, width: proxy.size.width)
                     }
                 }
@@ -530,6 +641,12 @@ struct WPParkLayerV2: View {
         .ignoresSafeArea()
         .allowsHitTesting(visible)
         .onChange(of: flow.landingTick) { _, _ in revealIfHidden() }
+        .onChange(of: flow.notice) { _, notice in
+            // The bubble is hidden at accessibility sizes: say it instead.
+            if notice == .dropOnCurb {
+                UIAccessibility.post(notification: .announcement, argument: WPParkFlowCopy.dropOnCurb)
+            }
+        }
         .onChange(of: cardHeight) { _, _ in revealIfHidden() }
     }
 
@@ -634,11 +751,16 @@ struct WPParkLayerV2: View {
 
     private func nudge(_ meters: Double) {
         let ctx = resolveContext()
-        let moved = flow.nudge(
+        let result = flow.nudge(
             meters: meters, point: windowPoint() ?? restingPoint, metersPerPoint: metersPerPoint(),
             engine: ctx.engine, now: ctx.now, windowEnd: ctx.windowEnd, trip: ctx.trip, reports: ctx.reports
         )
-        let spoken = moved ? (flow.model?.title ?? "Moved") : WPParkFlowCopy.dropOnCurb
+        let spoken: String
+        switch result {
+        case .moved: spoken = flow.model?.title ?? "Moved"
+        case .endOfBlock: spoken = WPParkFlowCopy.endOfBlock
+        case .noCurb: spoken = WPParkFlowCopy.dropOnCurb
+        }
         UIAccessibility.post(notification: .announcement, argument: spoken)
     }
 
@@ -694,11 +816,20 @@ struct WPParkLayerV2: View {
         return flow.phase == .dragging ? .noCurb : nil
     }
 
+    /// Where the bubble sits: above the car, unless that would cover the status pill at the top, then
+    /// below it.
+    nonisolated static func bubbleCenterY(carY: CGFloat) -> CGFloat {
+        let above = carY - 84
+        return above >= 170 ? above : carY + 84
+    }
+
     @ViewBuilder
     private func bubble(at p: CGPoint, width: CGFloat) -> some View {
-        if let content = bubbleContent() {
+        // At accessibility sizes the card already names the street, side and verdict, and the bubble
+        // would cover the car it is describing.
+        if !typeSize.isAccessibilitySize, let content = bubbleContent() {
             WPDragBubbleView(bubble: content)
-                .position(x: min(max(p.x, 148), max(148, width - 148)), y: p.y - 84)
+                .position(x: min(max(p.x, 148), max(148, width - 148)), y: Self.bubbleCenterY(carY: p.y))
                 .allowsHitTesting(false)
                 .accessibilityElement(children: .combine)
         }

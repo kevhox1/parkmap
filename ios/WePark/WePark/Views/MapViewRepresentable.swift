@@ -967,6 +967,17 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// auto-tightening the look - never fight a gesture the user just made.
         var onAmbientUserAdjusted: (() -> Void)?
 
+        /// DT35-3 follow-up: fired from `mapViewDidChangeVisibleRegion` (every frame of a pan, pinch or
+        /// camera animation, unlike `regionDidChange`, which fires once at the end). nil = no cost.
+        /// ContentView installs it ONLY while a pending car placement is open, so the car token can
+        /// stay glued to its ground point; it is removed again when the draft ends.
+        var onVisibleRegionMoved: (() -> Void)?
+
+        /// DT35-3 follow-up: pans the map so `coordinate` is the center, keeping zoom, heading and
+        /// pitch (`MKMapView.setCenter`, unlike `setRegion`, which resets them). Called from
+        /// ContentView handlers outside `updateUIView` (#31 invariant).
+        var panToCenter: ((CLLocationCoordinate2D) -> Void)?
+
         // MARK: - A2 curb-pin placement (SEAM: self-contained block; all inert unless called)
         //
         // Called from ContentView `.onChange` handlers, OUTSIDE `updateUIView` (#31). The
@@ -1637,6 +1648,9 @@ struct MapViewRepresentable: UIViewRepresentable {
             // Single combined setCamera (center + pitch + heading + zoom): one
             // regionDidChangeAnimated, and no `setRegion` (which would flatten the pitch).
             mapView.setCamera(camera, animated: animated)
+        }
+        coordinatorActions.panToCenter = { [weak mapView] coordinate in
+            mapView?.setCenter(coordinate, animated: true)
         }
         coordinatorActions.screenPointForCoordinate = { [weak mapView] coordinate in
             guard let mapView, mapView.window != nil,
@@ -3168,6 +3182,12 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
 
         // MARK: - MKMapViewDelegate: camera
+
+        /// Continuous (every frame of a gesture or animation). Only forwards to the optional seam,
+        /// which is nil unless a pending car placement is open: no work at all otherwise.
+        func mapViewDidChangeVisibleRegion(_ mapView: MKMapView) {
+            parent.coordinatorActions.onVisibleRegionMoved?()
+        }
 
         func mapView(_ mapView: MKMapView, regionWillChangeAnimated animated: Bool) {
             // A2: placement session hook. FIRST statement on purpose - the guard below returns

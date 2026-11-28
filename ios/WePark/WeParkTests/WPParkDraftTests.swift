@@ -280,7 +280,7 @@ final class WPParkFlowFreeDragTests: XCTestCase {
         let moved = flow.nudge(
             meters: 10, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil
         )
-        XCTAssertTrue(moved)
+        XCTAssertEqual(moved, .moved)
         XCTAssertEqual(flow.snap?.segment.id, "S_2", "past the piece end the car continues on the next piece")
         let ground = try XCTUnwrap(flow.groundCoordinate)
         XCTAssertLessThan(Pr2DragTestTiles.meters(ground, CurbSnapTestFixtures.coordinate(x: 35, y: 0)), 1.0)
@@ -289,9 +289,9 @@ final class WPParkFlowFreeDragTests: XCTestCase {
 
     func testNudge_withoutADraft_doesNothing() async {
         let flow = await readyFlow(ParkSidePieceFixtures.block())
-        XCTAssertFalse(flow.nudge(
+        XCTAssertEqual(flow.nudge(
             meters: 5, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil
-        ))
+        ), .noCurb)
     }
 }
 
@@ -325,7 +325,7 @@ final class WPParkMiniMapClipTests: XCTestCase {
         XCTAssertEqual(clipped.last?.up ?? -1, 6.5, accuracy: 1e-9)
     }
 
-    func testBarelyOverlappingCurbs_arentClipped() throws {
+    func testBarelyOverlappingCurbs_areDrawnOverTheCarsPieceSpan() throws {
         let north = [CurbSnapTestFixtures.coordinate(x: 0, y: 12), CurbSnapTestFixtures.coordinate(x: 50, y: 12)]
         let south = [CurbSnapTestFixtures.coordinate(x: 47, y: 0), CurbSnapTestFixtures.coordinate(x: 100, y: 0)]
         let northRun: [(x: Double, up: Double)] = [(x: 0.0, up: 0.0), (x: 50.0, up: 0.0)]
@@ -335,8 +335,9 @@ final class WPParkMiniMapClipTests: XCTestCase {
             first: north, second: south, car: CurbSnapTestFixtures.coordinate(x: 48, y: 6),
             travelBearing: nil, size: size
         ))
-        XCTAssertEqual(layout.first.count, 2)
-        XCTAssertEqual(layout.second.count, 2)
+        // Below the 5 m floor, both are drawn over the span of the curb the car is on (follow-up F1).
+        XCTAssertEqual(layout.first.first?.x ?? 0, layout.second.first?.x ?? -999, accuracy: 0.05)
+        XCTAssertEqual(layout.first.last?.x ?? 0, layout.second.last?.x ?? -999, accuracy: 0.05)
     }
 
     /// Real Stanton Bowery-Chrystie: the north and south pieces cover different ranges (the PR1 QA F1).

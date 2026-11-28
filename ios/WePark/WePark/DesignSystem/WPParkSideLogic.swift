@@ -345,9 +345,12 @@ nonisolated enum WPParkSideMiniMapLayout {
         }
         var a = first.map(project)
         var b = second.map(project)
+        let carPoint = project(car)
         // DT35-3 F1: real blocks are cut into pieces per side, so the two curbs can start and end at
         // different places along the street. Draw only the span both curbs share, so the two lines
-        // read as aligned (no trapezoid). Skipped when they barely overlap.
+        // read as aligned (no trapezoid). When they overlap by less than the floor, draw both over the
+        // span of the curb the car is on (the other one is carried on along its own end direction,
+        // schematically), so the picture is still two parallel lines.
         if let span = commonSpan(a, b) {
             let clippedA = clip(a, lo: span.lo, hi: span.hi)
             let clippedB = clip(b, lo: span.lo, hi: span.hi)
@@ -355,8 +358,14 @@ nonisolated enum WPParkSideMiniMapLayout {
                 a = clippedA
                 b = clippedB
             }
+        } else if let carSpan = carCurbSpan(a, b, car: carPoint) {
+            let extendedA = clip(extend(a, lo: carSpan.lo, hi: carSpan.hi), lo: carSpan.lo, hi: carSpan.hi)
+            let extendedB = clip(extend(b, lo: carSpan.lo, hi: carSpan.hi), lo: carSpan.lo, hi: carSpan.hi)
+            if extendedA.count >= 2, extendedB.count >= 2 {
+                a = extendedA
+                b = extendedB
+            }
         }
-        let carPoint = project(car)
         let all = a + b + [carPoint]
         guard let minX = all.map(\.x).min(), let maxX = all.map(\.x).max(),
               let minUp = all.map(\.up).min(), let maxUp = all.map(\.up).max() else { return nil }
@@ -404,6 +413,47 @@ nonisolated enum WPParkSideMiniMapLayout {
         let hi = min(aMax, bMax)
         guard hi - lo >= minimumCommonSpanMeters else { return nil }
         return (lo, hi)
+    }
+
+    /// The along-street range of the curb the car is on: the one whose range holds the car's
+    /// along-street position and sits closer to it across the street (else the nearer range).
+    static func carCurbSpan(
+        _ a: [(x: Double, up: Double)], _ b: [(x: Double, up: Double)], car: (x: Double, up: Double)
+    ) -> (lo: Double, hi: Double)? {
+        guard let aMin = a.map(\.x).min(), let aMax = a.map(\.x).max(),
+              let bMin = b.map(\.x).min(), let bMax = b.map(\.x).max(),
+              !a.isEmpty, !b.isEmpty else { return nil }
+        func outside(_ lo: Double, _ hi: Double) -> Double { max(lo - car.x, 0, car.x - hi) }
+        func meanUp(_ points: [(x: Double, up: Double)]) -> Double {
+            points.map(\.up).reduce(0, +) / Double(points.count)
+        }
+        let aOutside = outside(aMin, aMax)
+        let bOutside = outside(bMin, bMax)
+        if aOutside != bOutside { return aOutside < bOutside ? (aMin, aMax) : (bMin, bMax) }
+        return abs(meanUp(a) - car.up) <= abs(meanUp(b) - car.up) ? (aMin, aMax) : (bMin, bMax)
+    }
+
+    /// Carries a polyline on along the direction of its end edges until it covers `[lo, hi]`. Schematic
+    /// only (the mini map is a drawing, not a map). Ends with no usable direction stay as they are.
+    static func extend(
+        _ points: [(x: Double, up: Double)], lo: Double, hi: Double
+    ) -> [(x: Double, up: Double)] {
+        guard points.count >= 2, let firstX = points.first?.x, let lastX = points.last?.x else { return points }
+        let reversed = firstX > lastX
+        var line = reversed ? Array(points.reversed()) : points
+        func carry(from p: (x: Double, up: Double), along q: (x: Double, up: Double), to x: Double) -> (x: Double, up: Double)? {
+            let dx = q.x - p.x
+            guard abs(dx) > 1e-9 else { return nil }
+            return (x, p.up + (q.up - p.up) / dx * (x - p.x))
+        }
+        if line[0].x > lo, let start = carry(from: line[0], along: line[1], to: lo) {
+            line.insert(start, at: 0)
+        }
+        let n = line.count
+        if line[n - 1].x < hi, let end = carry(from: line[n - 1], along: line[n - 2], to: hi) {
+            line.append(end)
+        }
+        return reversed ? Array(line.reversed()) : line
     }
 
     /// The part of the polyline whose along-street coordinate is inside `[lo, hi]`, with the cut

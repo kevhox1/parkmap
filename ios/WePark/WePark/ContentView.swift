@@ -4871,6 +4871,9 @@ struct ContentView: View {
             if active, v2ParkFlow.phase != .idle { v2ParkFlow.reset() }
         }
         .onChange(of: v2ParkFlow.phase) { _, phase in
+            // The map reports every frame of a pan or pinch ONLY while a draft is pending, so the car
+            // stays glued to its ground point; otherwise the seam is nil and costs nothing.
+            coordinatorActions.onVisibleRegionMoved = phase == .placed ? { v2ParkFlow.mapMoved() } : nil
             // Starting the drag IS mark 3's real control (drag-to-park): the lesson is done.
             if phase != .idle, onboardingCoachMark == .tapABlock { finishOnboardingCoach() }
             if phase == .idle {
@@ -4889,7 +4892,8 @@ struct ContentView: View {
         guard let center = coordinatorActions.coordinateForWindowPoint?(
             CGPoint(x: screen.width / 2, y: screen.height / 2 + shift)
         ) else { return }
-        recenterMap(on: center)
+        // Pan only: keeps the user's zoom, rotation and pitch (recenterMap would reset them).
+        coordinatorActions.panToCenter?(center)
     }
 
     /// Confirm card "Park here" / "Park here anyway": the existing `confirmPinDrop` (park, save,
