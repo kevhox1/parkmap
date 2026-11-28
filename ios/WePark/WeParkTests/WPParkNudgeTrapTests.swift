@@ -137,28 +137,47 @@ enum Pr2NudgeTrapTiles {
     /// The whole contract for one block. Returns the first problem, or nil.
     static func check(_ block: (key: String, pieces: [Segment])) -> String? {
         for run in runs(of: block.pieces) {
-            var forwardEnds: [CLLocationCoordinate2D] = []
-            var backEnds: [CLLocationCoordinate2D] = []
+            // Starts that share a spine share their ends. A real curb of another kind is its own run
+            // (its spine is just itself), so group the starts by the pieces their spine runs through.
+            var groups: [String: (starts: [Segment], spine: [Segment])] = [:]
             for start in run {
-                for fraction in [0.0, 0.5, 1.0] {
-                    for step in [5.0, -5.0] {
-                        let result = walk(block: block.pieces, start: start, fraction: fraction, meters: step)
-                        if let failure = result.failure { return "\(block.key): \(failure)" }
-                        guard let end = result.end else { return "\(block.key): no end" }
-                        if step > 0 { forwardEnds.append(end) } else { backEnds.append(end) }
+                guard let spine = WPBlockSpine(around: start, in: block.pieces) else {
+                    return "\(block.key): no spine around \(start.id)"
+                }
+                let signature = spine.legs.map { $0.segment.id }.sorted().joined(separator: ",")
+                var entry = groups[signature] ?? (starts: [], spine: spine.legs.map { $0.segment })
+                entry.starts.append(start)
+                groups[signature] = entry
+            }
+            for group in groups.values {
+                var forwardEnds: [CLLocationCoordinate2D] = []
+                var backEnds: [CLLocationCoordinate2D] = []
+                let onSpine = Set(group.spine.map { $0.id })
+                for start in group.starts {
+                    for fraction in [0.0, 0.5, 1.0] {
+                        for step in [5.0, -5.0] {
+                            let result = walk(block: block.pieces, start: start, fraction: fraction, meters: step)
+                            if let failure = result.failure { return "\(block.key): \(failure)" }
+                            guard let end = result.end else { return "\(block.key): no end" }
+                            // A satellite (a covered stub off the spine) answers "End of block" where it
+                            // stands when the car is already at the block end: that is the stub, not
+                            // the block's end, so only spine pieces vote on where the ends are.
+                            guard onSpine.contains(start.id) else { continue }
+                            if step > 0 { forwardEnds.append(end) } else { backEnds.append(end) }
+                        }
                     }
                 }
-            }
-            // One end for forward, the other for back, whichever piece the walk started on.
-            if let f = forwardEnds.first, let b = backEnds.first {
-                if let stray = forwardEnds.first(where: { meters($0, f) > 3 }) {
-                    return "\(block.key): forward ends differ by \(meters(stray, f)) m depending on the start"
-                }
-                if let stray = backEnds.first(where: { meters($0, b) > 3 }) {
-                    return "\(block.key): back ends differ by \(meters(stray, b)) m depending on the start"
-                }
-                if extent(of: run) > 20, meters(f, b) < 10 {
-                    return "\(block.key): forward and back ended at the same place"
+                // One end for forward, the other for back, whichever piece the walk started on.
+                if let f = forwardEnds.first, let b = backEnds.first {
+                    if let stray = forwardEnds.first(where: { meters($0, f) > 3 }) {
+                        return "\(block.key): forward ends differ by \(meters(stray, f)) m depending on the start"
+                    }
+                    if let stray = backEnds.first(where: { meters($0, b) > 3 }) {
+                        return "\(block.key): back ends differ by \(meters(stray, b)) m depending on the start"
+                    }
+                    if extent(of: group.spine) > 20, meters(f, b) < 10 {
+                        return "\(block.key): forward and back ended at the same place"
+                    }
                 }
             }
         }

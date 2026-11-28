@@ -157,9 +157,15 @@ final class WPParkFlowController {
     @ObservationIgnored private var knownSegments: [Segment] = [] {
         didSet { blockPieces = [:]; streetPieces = [:] }
     }
+    /// Content version of `knownSegments` (`contentVersion`), so a different set is noticed even with
+    /// the same count and first and last id.
+    @ObservationIgnored private var knownVersion = 0
     /// Pieces of a blockface / street, filled on first use while a draft is active, so a nudge does not
     /// scan every loaded segment each time.
     @ObservationIgnored private var blockPieces: [String: [Segment]] = [:]
+    /// How many piece lists are cached right now. Read-only and internal ONLY so a test can check that
+    /// `reset()` clears the caches (no production code reads it).
+    var cachedPieceListCount: Int { blockPieces.count + streetPieces.count }
     @ObservationIgnored private var streetPieces: [String: [Segment]] = [:]
     @ObservationIgnored private let selection = UISelectionFeedbackGenerator()
     @ObservationIgnored private let impact = UIImpactFeedbackGenerator(style: .light)
@@ -205,13 +211,20 @@ final class WPParkFlowController {
     }
 
     /// Builds (or reuses) the snap index for the loaded segments, off the main thread.
+    /// A hash of the count and every segment id, so a changed set is always a different version.
+    nonisolated static func contentVersion(_ segments: [Segment]) -> Int {
+        var hasher = Hasher()
+        hasher.combine(segments.count)
+        for segment in segments { hasher.combine(segment.id) }
+        return hasher.finalize()
+    }
+
     func prepareIndex(segments: [Segment]) {
-        let key = CurbPlacementPolicy.segmentsVersion(
-            count: segments.count, firstID: segments.first?.id, lastID: segments.last?.id
-        )
+        let key = Self.contentVersion(segments)
         if indexKey == key, index != nil { return }
         indexKey = key
         knownSegments = segments
+        knownVersion = key
         Task { @MainActor in
             let built = await Task.detached(priority: .userInitiated) { CurbSnapIndex(segments: segments) }.value
             guard indexKey == key else { return }
@@ -350,14 +363,27 @@ final class WPParkFlowController {
         trip: TripPlan?,
         reports: (Segment) -> WPNeighborReports = { _ in WPNeighborReports() }
     ) {
-        // Only a different set resets the caches (a nudge passes the same set every time).
-        if !segments.isEmpty,
-           CurbPlacementPolicy.segmentsVersion(count: segments.count, firstID: segments.first?.id, lastID: segments.last?.id)
-            != CurbPlacementPolicy.segmentsVersion(
-                count: knownSegments.count, firstID: knownSegments.first?.id, lastID: knownSegments.last?.id
-            ) {
-            knownSegments = segments
+        // Only a different set (by content) resets the caches.
+        if !segments.isEmpty {
+            let version = Self.contentVersion(segments)
+            if version != knownVersion {
+                knownSegments = segments
+                knownVersion = version
+            }
         }
+        placeDraft(at: result, engine: engine, now: now, windowEnd: windowEnd, trip: trip, reports: reports)
+    }
+
+    /// Puts the draft on `result` using the segments already known (no set comparison): what a nudge
+    /// does on every call.
+    private func placeDraft(
+        at result: CurbSnapResult,
+        engine: ParkingRulesEngine,
+        now: Date,
+        windowEnd: Date?,
+        trip: TripPlan?,
+        reports: (Segment) -> WPNeighborReports
+    ) {
         phase = .placed
         tokenPoint = nil
         originPoint = nil
@@ -421,13 +447,12 @@ final class WPParkFlowController {
         case .move(let step):
             // Put the draft straight on the chosen piece: no re-snap, so the incumbent dead-band can
             // never undo a crossing to the next piece.
-            enterPending(
+            placeDraft(
                 at: CurbSnapResult(
                     segment: step.segment, positionFraction: step.fraction,
                     distanceMeters: 0, snappedCoordinate: step.coordinate
                 ),
-                segments: knownSegments, engine: engine, now: now, windowEnd: windowEnd, trip: trip,
-                reports: reports
+                engine: engine, now: now, windowEnd: windowEnd, trip: trip, reports: reports
             )
             return .moved
         }
@@ -579,6 +604,8 @@ final class WPParkFlowController {
         lastSegmentID = nil
         alternateSnap = nil
         lastLanding = nil
+        blockPieces = [:]
+        streetPieces = [:]
         clearNotice()
     }
 
