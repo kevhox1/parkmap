@@ -129,6 +129,52 @@ final class AmbientDrivingLookTests: XCTestCase {
         XCTAssertGreaterThan(wideAltitude, tightAltitude)
     }
 
+    // MARK: Stoop spans (R35 PR3)
+
+    func testStoopSpans_areTheSpecValues() {
+        let tight = AmbientDrivingLook.stoopTightSpan
+        let wide = AmbientDrivingLook.stoopWideSpan
+        XCTAssertEqual(tight, 0.008, accuracy: 0.0000001)
+        XCTAssertEqual(wide, 0.012, accuracy: 0.0000001)
+        XCTAssertLessThan(tight, wide, "poor-fix opens wider, a good fix tightens")
+    }
+
+    func testStoopSpan_forSteps_ignoresTheCruiseSpan() {
+        let cruiseSpan = MapViewRepresentable.driveModeCameraSpan
+        let tight = AmbientDrivingLook.span(for: .tight, cruiseSpan: cruiseSpan, stoop: true)
+        let wide = AmbientDrivingLook.span(for: .wide, cruiseSpan: cruiseSpan, stoop: true)
+        XCTAssertEqual(tight, 0.008, accuracy: 0.0000001)
+        XCTAssertEqual(wide, 0.012, accuracy: 0.0000001)
+    }
+
+    func testStoopSpan_flagOff_isByteIdenticalToTheCruiseSpans() {
+        let cruiseSpan = MapViewRepresentable.driveModeCameraSpan
+        let tight = AmbientDrivingLook.span(for: .tight, cruiseSpan: cruiseSpan, stoop: false)
+        let wide = AmbientDrivingLook.span(for: .wide, cruiseSpan: cruiseSpan, stoop: false)
+        let legacyTight = AmbientDrivingLook.span(for: .tight, cruiseSpan: cruiseSpan)
+        let legacyWide = AmbientDrivingLook.span(for: .wide, cruiseSpan: cruiseSpan)
+        XCTAssertEqual(tight, legacyTight)
+        XCTAssertEqual(wide, legacyWide)
+        XCTAssertEqual(tight, 0.003, accuracy: 0.0000001)
+        XCTAssertEqual(wide, 0.006, accuracy: 0.0000001)
+    }
+
+    func testStoopSpans_bothInsideTheFullRedAndGreenBand() {
+        let fullMax = WPCurbZoomConstants.fullMaxDelta
+        XCTAssertLessThanOrEqual(AmbientDrivingLook.stoopTightSpan, fullMax)
+        XCTAssertLessThanOrEqual(AmbientDrivingLook.stoopWideSpan, fullMax)
+    }
+
+    func testStoopTightAltitude_isAbout1657Meters() {
+        let altitude = MapViewRepresentable.altitudeForSpan(AmbientDrivingLook.stoopTightSpan)
+        XCTAssertEqual(altitude, 1657, accuracy: 2)
+    }
+
+    func testStoopDoesNotChangeDriveModeCameraSpan() {
+        let driveSpan = MapViewRepresentable.driveModeCameraSpan
+        XCTAssertEqual(driveSpan, 0.003, accuracy: 0.0000001)
+    }
+
     func testHeading_isNorthUp() {
         XCTAssertEqual(AmbientDrivingLook.heading, 0, accuracy: 0.0001,
             "A3.6.1: heading fixed at 0 - heading-up needs a GPS course the cheap posture lacks.")
