@@ -1305,3 +1305,5 @@ The spot was free until Tuesday morning, so no short reminder could be set. Not 
 ### Follow-ups queued (2026-11-28)
 - **R35-6 🟡** Since #230, in Stoop the legacy Drive Mode goal pill and `goalWindowLabel` count down from the 5-minute window instant, so the countdown may step every 5 min instead of every minute. Should be `max(live, instant)` like the dock (PR #230 QA finding 3).
 - **R35-7 ℹ️** The #230 zoom-out lag fix was verified by code reading only. The Mac was too loaded to measure. Check on the device in build 36: zoom out past about 2 km and see whether the map hangs.
+- **R35-8 🟡** With the goal set to Overnight and a leftover For-days Free-until pick, the drive pill says "Until 7:00 AM" but the verdict cards say "Park until Mon 11/30 midnight". The cards should follow the active goal. Probably pre-existing (PR #228 QA re-verification 2, finding #8).
+- **R35-9 🟢** At AX the drive street pill middle-truncates long names ("Adam C...well Blvd"). Consider a known-abbreviation table (e.g. "ACP Jr Blvd", "F Douglass Blvd").
