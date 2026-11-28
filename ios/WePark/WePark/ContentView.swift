@@ -2198,6 +2198,7 @@ struct ContentView: View {
                     initialPlan: tripPlan,
                     mapCenter: region.center,
                     userLocation: locationService.userLocation,
+                    tileCoverage: tileLoader.tileCoverage,
                     onConfirm: { plan in
                         activeSheet = dismissTargetOutsideBrowseNav
                         // R35 F-1: frame the destination, but only when it is a new one (Change

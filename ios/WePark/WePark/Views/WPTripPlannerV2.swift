@@ -30,6 +30,9 @@ struct WPTripPlannerV2: View {
     var mapCenter: CLLocationCoordinate2D? = nil
     /// Used only for the "0.3 mi away" line under the destination.
     var userLocation: CLLocationCoordinate2D? = nil
+    /// R35-12 follow-up: the loaded tile index, so the destination row says the same thing as the
+    /// trip card (outside coverage vs. no curbs right at the spot). nil: the bounding box decides.
+    var tileCoverage: WPTileCoverage? = nil
     let onConfirm: (TripPlan) -> Void
     let onCancel: () -> Void
 
@@ -53,12 +56,14 @@ struct WPTripPlannerV2: View {
         initialPlan: TripPlan?,
         mapCenter: CLLocationCoordinate2D? = nil,
         userLocation: CLLocationCoordinate2D? = nil,
+        tileCoverage: WPTileCoverage? = nil,
         onConfirm: @escaping (TripPlan) -> Void,
         onCancel: @escaping () -> Void
     ) {
         self.initialPlan = initialPlan
         self.mapCenter = mapCenter
         self.userLocation = userLocation
+        self.tileCoverage = tileCoverage
         self.onConfirm = onConfirm
         self.onCancel = onCancel
         if let initialPlan {
@@ -99,9 +104,13 @@ struct WPTripPlannerV2: View {
         onConfirm(currentPlan)
     }
 
-    private var isOutsideCoverage: Bool {
-        guard let destination else { return false }
-        return !AppConstants.isInManhattanCoverage(destination.coordinate)
+    /// The same classification the trip card uses (real tile data, then the bounding box).
+    private var coverageClass: WPTripDestinationSummary.CoverageClass? {
+        guard let destination else { return nil }
+        return WPTripDestinationSummary.coverageClass(
+            of: destination.coordinate, coverage: tileCoverage,
+            isInsideCoverage: { AppConstants.isInManhattanCoverage($0) }
+        )
     }
 
     private var validation: TripPlanValidation {
@@ -177,7 +186,17 @@ struct WPTripPlannerV2: View {
     private var destinationCard: some View {
         VStack(alignment: .leading, spacing: WP.Space.s2) {
             WPListCard { destinationRow }
-            if isOutsideCoverage { outsideCoverageCard }
+            if coverageClass == .outside {
+                coverageCard(
+                    title: WPTripDestinationPickerLogic.notCoveredTitle,
+                    detail: WPTripDestinationPickerLogic.notCoveredDetail
+                )
+            } else if coverageClass == .noCurbsHere {
+                coverageCard(
+                    title: WPTripDestinationPickerLogic.noCurbsTitle,
+                    detail: WPTripDestinationPickerLogic.noCurbsDetail
+                )
+            }
             recentChips
         }
         .padding(.top, WP.Space.s2)
@@ -256,13 +275,13 @@ struct WPTripPlannerV2: View {
         return parts.isEmpty ? nil : parts.joined(separator: " \u{00B7} ")
     }
 
-    private var outsideCoverageCard: some View {
+    private func coverageCard(title: String, detail: String) -> some View {
         let shape = RoundedRectangle(cornerRadius: WP.Radius.card, style: .continuous)
         return VStack(alignment: .leading, spacing: WP.Space.s1) {
-            Text(WPTripDestinationPickerLogic.notCoveredTitle)
+            Text(title)
                 .font(WP.Font.fredoka(17, .semibold, relativeTo: .headline))
                 .foregroundStyle(WP.text)
-            Text(WPTripDestinationPickerLogic.notCoveredDetail)
+            Text(detail)
                 .font(WP.Font.fredoka(14, .medium, relativeTo: .callout))
                 .foregroundStyle(WP.muted)
         }

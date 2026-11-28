@@ -63,6 +63,10 @@ nonisolated enum WPTripDestinationPickerLogic {
         return shown
     }
 
+    /// R35-12 follow-up: inside Manhattan, but the spot itself has no curbs (a park, plaza or pier).
+    static let noCurbsTitle = "No street parking right here"
+    static let noCurbsDetail = "This spot has no curbs of its own. The trip map shows the free curbs nearby."
+
     static func content(query: String, completionCount: Int, settled: Bool) -> Content {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return .recents }

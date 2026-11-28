@@ -29,6 +29,42 @@ nonisolated enum WPTripDestinationSummary {
         /// `free` curbs within 2 blocks that are free for the whole trip. `nearestMeters` is the
         /// closest such curb within the 400 m look (nil when none that close, or not fully loaded).
         case counted(free: Int, nearestMeters: Double?)
+        /// Inside Manhattan, but no curb tile within 160 m (a park, plaza or pier). Counts nothing at
+        /// the spot itself. `nearestMeters` / `street` describe the closest curb that is free for the
+        /// whole trip within the 400 m look (nil: none that close).
+        case noCurbsHere(nearestMeters: Double?, street: String?)
+    }
+
+    /// What the tile index says about a point. Decided from real tile data, not just the Manhattan
+    /// bounding box (R35-12 follow-up).
+    enum CoverageClass: Equatable {
+        /// Outside the box, or no tile even within 400 m (DUMBO, Brooklyn, Randall's Island).
+        case outside
+        /// A tile within 400 m but none within 160 m (Central Park, a pier, a plaza).
+        case noCurbsHere
+        /// A tile within 160 m: counted normally.
+        case covered
+        /// The tile index has not parsed yet: nothing can be claimed.
+        case unknown
+    }
+
+    static func coverageClass(
+        of point: CLLocationCoordinate2D,
+        coverage: WPTileCoverage?,
+        isInsideCoverage: (CLLocationCoordinate2D) -> Bool
+    ) -> CoverageClass {
+        guard isInsideCoverage(point) else { return .outside }
+        guard let coverage else { return .unknown }
+        if coverage.hasTiles(near: point, radiusMeters: WPFreeCurbCounter.radiusMeters) { return .covered }
+        if coverage.hasTiles(near: point, radiusMeters: WPFreeCurbCounter.coverageProbeMeters) { return .noCurbsHere }
+        return .outside
+    }
+
+    /// "600 ft" / "0.2 mi" for the nearest-curb sentence.
+    static func distanceText(_ meters: Double) -> String {
+        let feet = meters * 3.28084
+        if feet < 1000 { return "\(max(10, Int((feet / 10).rounded()) * 10)) ft" }
+        return String(format: "%.1f mi", meters / 1609.344)
     }
 
     static let checkingPrefix = "Checking curbs near "
@@ -50,11 +86,32 @@ nonisolated enum WPTripDestinationSummary {
         strictSigns: Bool
     ) -> Outcome? {
         let point = destination.coordinate
-        guard isInsideCoverage(point) else { return .outsideCoverage }
-        // R35-12: inside the Manhattan box is not enough. No tile within the counting radius means
-        // there is no curb data here (DUMBO, Downtown Brooklyn): say so now, never "Checking...".
-        if let coverage, !coverage.hasTiles(near: point, radiusMeters: WPFreeCurbCounter.radiusMeters) {
+        // R35-12: inside the Manhattan box is not enough. Real tile data decides: no tile even within
+        // 400 m is outside coverage (DUMBO), a tile within 400 m but none within 160 m is a spot with
+        // no curbs of its own (Central Park). Neither ever says "Checking...".
+        switch coverageClass(of: point, coverage: coverage, isInsideCoverage: isInsideCoverage) {
+        case .outside:
             return .outsideCoverage
+        case .noCurbsHere:
+            // Only claim something once every tile out to the 400 m look is loaded.
+            guard let coverage, coverage.covers(point, radiusMeters: WPFreeCurbCounter.coverageProbeMeters) else { return nil }
+            var closest: (distance: Double, street: String)?
+            for segment in segments {
+                if let first = segment.line.first, first.count >= 2,
+                   abs(first[0] - point.latitude) > 0.012 || abs(first[1] - point.longitude) > 0.016 {
+                    continue
+                }
+                let distance = WPFreeCurbCounter.distance(from: point, to: segment)
+                guard distance <= WPFreeCurbCounter.coverageProbeMeters else { continue }
+                guard TripPlanning.isFree(segment: segment, plan: plan, engine: engine, strictSigns: strictSigns) else { continue }
+                if closest == nil || distance < closest!.distance { closest = (distance, segment.street) }
+            }
+            return .noCurbsHere(
+                nearestMeters: closest?.distance,
+                street: closest.map { WPDriveVerdict.streetTitle($0.street) }
+            )
+        case .covered, .unknown:
+            break
         }
         guard let coverage, coverage.covers(point, radiusMeters: WPFreeCurbCounter.radiusMeters) else { return nil }
         let nearestCovered = coverage.covers(point, radiusMeters: WPFreeCurbCounter.coverageProbeMeters)
@@ -84,6 +141,13 @@ nonisolated enum WPTripDestinationSummary {
         case .outsideCoverage:
             // Same plain words as the destination picker's "Not covered yet" row.
             return WPTripDestinationPickerLogic.notCoveredTitle + ". " + WPTripDestinationPickerLogic.notCoveredDetail
+        case .noCurbsHere(let nearest, let street):
+            let head = destination.name == WPPlaceResolver.unnamedMapPoint
+                ? "No street parking right here." : "No street parking right at \(subject(destination))."
+            guard let nearest else { return head + " No curbs free for your whole trip within a quarter mile." }
+            let away = distanceText(nearest)
+            if let street { return head + " The nearest free curbs for your whole trip are on \(street), \(away) away." }
+            return head + " The nearest free curbs for your whole trip are \(away) away."
         case .counted(let free, let nearest):
             let prefix = nearPrefix(destination)
             if free == 0 {
