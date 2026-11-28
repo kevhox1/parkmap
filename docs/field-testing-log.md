@@ -1335,3 +1335,11 @@ The spot was free until Tuesday morning, so no short reminder could be set. Not 
   - `contentVersion` hashes ids only.
 
   These are low priority and only reachable through VoiceOver.
+
+## Build 37 phone review (2026-11-28, in progress)
+
+Kevin is reviewing build 37 through the day. Everything from this review goes into **build 38** together; nothing is built or shipped until the review is complete.
+
+- **R37-1. Searched place has no marker.** Searching "Penn Station" moves the map there, but nothing shows which building it is. Wanted: an Apple-Maps-style blue balloon pin with the place's category glyph, a dot at the exact point, and the bold name underneath. Must not use parking colors and must not curb-snap. Kevin likes the new Locate/search zoom: keep it.
+  - A started-then-paused draft exists, uncommitted, in worktree `.claude/worktrees/agent-a0583a03815db4676` (`WPSearchedPlaceMarker.swift`, tests, edits to the map representable and search sheet). Resume or redo it when the build 38 batch starts.
+- Confirmed good on 37: Locate zoom (2–3 blocks) and the search-result zoom.
