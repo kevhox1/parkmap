@@ -19,10 +19,10 @@ final class MapBottomInsetTests: XCTestCase {
         )
     }
 
-    func testInsetClampsToSixtyPercentOfMapHeight() {
+    func testInsetClampsToSeventyFivePercentOfMapHeight() {
         XCTAssertEqual(
             MapBottomInsetPolicy.inset(measuredFromBottom: 700, mapHeight: 852, driving: true),
-            852 * 0.6, accuracy: 0.001
+            852 * 0.75, accuracy: 0.001
         )
     }
 
@@ -55,6 +55,25 @@ final class MapBottomInsetTests: XCTestCase {
         map.insetsLayoutMarginsFromSafeArea = false
         XCTAssertEqual(map.layoutMargins, rawBefore)
         XCTAssertNil(controller.snapshot)
+    }
+
+    /// The top margin mirrors the extra bottom margin so the camera centre (puck) does not move.
+    @MainActor
+    func testTopMarginMirrorsBottomSoTheCentreDoesNotMove() {
+        let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
+        map.insetsLayoutMarginsFromSafeArea = false
+        map.layoutMargins = UIEdgeInsets(top: 10, left: 5, bottom: 20, right: 5)
+        let controller = MapBottomInsetController()
+        controller.apply(inset: 320, to: map)
+        XCTAssertEqual(map.layoutMargins.bottom, 320)
+        XCTAssertEqual(map.layoutMargins.top, 10 + (320 - 20))
+        // Centre of the visible area is offset by (top - bottom) / 2: unchanged.
+        XCTAssertEqual(
+            (map.layoutMargins.top - map.layoutMargins.bottom) / 2, (10 - 20) / 2, accuracy: 0.001
+        )
+        controller.apply(inset: 0, to: map)
+        XCTAssertEqual(map.layoutMargins.top, 10)
+        XCTAssertEqual(map.layoutMargins.bottom, 20)
     }
 
     @MainActor
@@ -91,10 +110,12 @@ final class MapBottomInsetTests: XCTestCase {
 
     func testCoordinatorActionsSeamIsCallable() {
         let actions = MapViewRepresentable.CoordinatorActions()
-        var received: CGFloat?
+        var received: CGFloat? = 1
         actions.onSetBottomChromeInset = { received = $0 }
-        actions.setBottomChromeInset(208)
-        XCTAssertEqual(received, 208)
+        actions.setBottomChromeInset(stackTopInWindow: 640)
+        XCTAssertEqual(received, 640)
+        actions.setBottomChromeInset(stackTopInWindow: nil)
+        XCTAssertNil(received)
     }
 
     /// #31: `updateUIView` runs during SwiftUI's update cycle and must not write layout margins.

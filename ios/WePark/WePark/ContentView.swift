@@ -4405,10 +4405,12 @@ struct ContentView: View {
                     ) {
                         clearParkUntilFilter()
                     }
+                    .wpDrivePillLayout(stoop: v2DriveActive && driveModeActive)
                 } else {
                     ParkUntilPill(targetDate: target) {
                         clearParkUntilFilter()
                     }
+                    .wpDrivePillLayout(stoop: v2DriveActive && driveModeActive)
                 }
             }
             // W8.5c row 4: Drive Mode bottom card (AC-W85c.25) — the anchored "ground truth"
@@ -4439,8 +4441,8 @@ struct ContentView: View {
         // The map runs under the bottom safe-area inset, so without this MapKit pins the
         // attribution beneath the Report / Park here / Voice row. A no-op outside Stoop drive.
         .onGeometryChange(for: CGFloat.self, of: { proxy in
-            UIScreen.main.bounds.height - proxy.frame(in: .global).minY
-        }) { applyDriveBottomInset(measuredFromBottom: $0) }
+            proxy.frame(in: .global).minY
+        }) { applyDriveBottomInset(stackTop: $0) }
     }
 
     // MARK: - Design system Phase 2a: flag-on map chrome
@@ -4617,21 +4619,15 @@ struct ContentView: View {
 
     /// Hops one run-loop turn: this mutates UIKit layout state and must never run inside a
     /// SwiftUI update (the #31 rule).
-    private func applyDriveBottomInset(measuredFromBottom: CGFloat) {
+    private func applyDriveBottomInset(stackTop: CGFloat) {
         DispatchQueue.main.async {
             guard v2DriveActive, driveModeActive else { return }
-            coordinatorActions.setBottomChromeInset(
-                MapBottomInsetPolicy.inset(
-                    measuredFromBottom: measuredFromBottom,
-                    mapHeight: UIScreen.main.bounds.height,
-                    driving: true
-                )
-            )
+            coordinatorActions.setBottomChromeInset(stackTopInWindow: stackTop)
         }
     }
 
     private func clearDriveBottomInset() {
-        DispatchQueue.main.async { coordinatorActions.setBottomChromeInset(0) }
+        DispatchQueue.main.async { coordinatorActions.setBottomChromeInset(stackTopInWindow: nil) }
     }
 
     // MARK: - Design system Phase 2b: curb sheet, search, parking (flag on only)

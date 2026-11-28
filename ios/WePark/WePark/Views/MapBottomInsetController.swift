@@ -22,7 +22,7 @@ enum MapBottomInsetPolicy {
     nonisolated static let gapPoints: CGFloat = 8
     /// The inset never exceeds this share of the map height, so a tall AX card cannot push the
     /// attribution to the middle of the screen.
-    nonisolated static let maxHeightFraction: CGFloat = 0.6
+    nonisolated static let maxHeightFraction: CGFloat = 0.75
 
     /// - Parameters:
     ///   - measuredFromBottom: distance from the screen bottom up to the card's top edge (the
@@ -71,6 +71,11 @@ final class MapBottomInsetController {
         }
         var applied = snap.effectiveMargins
         applied.bottom = max(snap.effectiveMargins.bottom, inset)
+        // MapKit centres the camera in the margin-inset area, so a lone bottom margin would lift
+        // the follow-camera puck (less road ahead). Mirror the extra bottom margin at the top so
+        // the centre of the visible area, and so the puck, stays where it was. Only the
+        // attribution (which hangs off the bottom margin) moves.
+        applied.top = snap.effectiveMargins.top + (applied.bottom - snap.effectiveMargins.bottom)
         mapView.insetsLayoutMarginsFromSafeArea = false
         mapView.layoutMargins = applied
     }

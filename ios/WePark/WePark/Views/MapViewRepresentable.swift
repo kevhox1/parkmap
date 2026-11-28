@@ -978,7 +978,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onCyclePlacementCurb: (() -> Void)?
         var onSetPlacementBottomInset: ((CGFloat) -> Void)?
         /// DT35-6: general bottom inset (Stoop drive card). Independent of placement.
-        var onSetBottomChromeInset: ((CGFloat) -> Void)?
+        var onSetBottomChromeInset: ((CGFloat?) -> Void)?
         var onFocusPlacement: ((CLLocationCoordinate2D) -> Void)?
         var onQueryPlacementActive: (() -> Bool)?
         var onQueryPlacementPin: (() -> CLLocationCoordinate2D?)?
@@ -1055,8 +1055,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// DT35-6: lifts the Apple logo / Legal link by `inset` points (already includes the gap
         /// and any safe area); 0 restores the original margins exactly. Call from outside the
         /// SwiftUI update cycle (a run-loop hop), never from `updateUIView`.
-        func setBottomChromeInset(_ inset: CGFloat) {
-            onSetBottomChromeInset?(inset)
+        ///
+        /// - Parameter stackTopInWindow: top edge (window coordinates) of the bottom chrome to
+        ///   clear, or nil to restore. The map's own bounds convert it to an inset.
+        func setBottomChromeInset(stackTopInWindow: CGFloat?) {
+            onSetBottomChromeInset?(stackTopInWindow)
         }
 
     }
@@ -1691,9 +1694,19 @@ struct MapViewRepresentable: UIViewRepresentable {
         coordinatorActions.onSetPlacementBottomInset = { [weak coordinator] cardHeight in
             coordinator?.placementController?.setBottomInset(cardHeight)
         }
-        coordinatorActions.onSetBottomChromeInset = { [weak coordinator] inset in
+        coordinatorActions.onSetBottomChromeInset = { [weak coordinator] stackTop in
             guard let coordinator, let mapView = coordinator.mapView else { return }
-            coordinator.bottomInsetController.apply(inset: inset, to: mapView)
+            guard let stackTop else {
+                coordinator.bottomInsetController.apply(inset: 0, to: mapView)
+                return
+            }
+            let measured = mapView.bounds.maxY - mapView.convert(CGPoint(x: 0, y: stackTop), from: nil).y
+            coordinator.bottomInsetController.apply(
+                inset: MapBottomInsetPolicy.inset(
+                    measuredFromBottom: measured, mapHeight: mapView.bounds.height, driving: true
+                ),
+                to: mapView
+            )
         }
         coordinatorActions.onFocusPlacement = { [weak coordinator] coordinate in
             coordinator?.placementController?.focus(on: coordinate)
