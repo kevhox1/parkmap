@@ -4843,7 +4843,8 @@ struct ContentView: View {
             address: addressCoordinator.placementAddress.map(ParkingAddressCopy.line),
             onConfirm: { confirmV2Park() },
             placeAtUser: { v2PlaceCarAtUser() },
-            restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28)
+            restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28),
+            onRevealCar: { ground, targetY in v2RevealPendingCar(ground, targetY: targetY) }
         )
         .task(id: tileLoader.segments.count) {
             // Build the snap index ahead of the first drag (a quick drag must not beat it).
@@ -4870,6 +4871,18 @@ struct ContentView: View {
                 addressCoordinator.clearPlacement()
             }
         }
+    }
+
+    /// The pending card covers the lower part of the map: slide the map so the car sits at `targetY`
+    /// (window points) in the open part. Screen-space shift, so a rotated map works too.
+    private func v2RevealPendingCar(_ ground: CLLocationCoordinate2D, targetY: CGFloat) {
+        let screen = UIScreen.main.bounds
+        guard let current = coordinatorActions.screenPointForCoordinate?(ground) else { return }
+        let shift = current.y - targetY
+        guard let center = coordinatorActions.coordinateForWindowPoint?(
+            CGPoint(x: screen.width / 2, y: screen.height / 2 + shift)
+        ) else { return }
+        recenterMap(on: center)
     }
 
     /// Confirm card "Park here" / "Park here anyway": the existing `confirmPinDrop` (park, save,

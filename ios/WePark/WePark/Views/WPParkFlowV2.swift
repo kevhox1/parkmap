@@ -490,9 +490,15 @@ struct WPParkLayerV2: View {
     let placeAtUser: () -> Bool
     /// Resting position of the token in window coordinates.
     let restingPoint: CGPoint
+    /// The pending car is hidden behind the card: bring `coordinate` up into the visible map, with
+    /// the car at `targetY` (window points from the top). Called outside the map's update cycle.
+    var onRevealCar: ((CLLocationCoordinate2D, CGFloat) -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
     @State private var grabOffset: CGSize = .zero
+    @State private var cardHeight: CGFloat = 0
+    @State private var revealedTick = -1
+    @State private var screenHeight: CGFloat = 0
 
     private var visible: Bool { flow.phase != .idle || showsRestingToken }
 
@@ -519,9 +525,23 @@ struct WPParkLayerV2: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .onAppear { screenHeight = proxy.size.height }
         }
         .ignoresSafeArea()
         .allowsHitTesting(visible)
+        .onChange(of: flow.landingTick) { _, _ in revealIfHidden() }
+        .onChange(of: cardHeight) { _, _ in revealIfHidden() }
+    }
+
+    /// Once per landing: if the card would cover the car, move the map so the car sits in the open
+    /// area above the card (the user must always see where the car is).
+    private func revealIfHidden() {
+        guard flow.phase == .placed, cardHeight > 0, screenHeight > 0, revealedTick != flow.landingTick,
+              let ground = flow.groundCoordinate, let point = pointForCoordinate(ground) else { return }
+        revealedTick = flow.landingTick
+        let visibleBottom = screenHeight - cardHeight - 120
+        guard point.y > visibleBottom || point.y < 120 else { return }
+        onRevealCar?(ground, max(160, (screenHeight - cardHeight) * 0.55))
     }
 
     // MARK: Token
@@ -701,6 +721,13 @@ struct WPParkLayerV2: View {
                     onCancel: { flow.reset() },
                     onSwitchSide: flow.alternateSnap == nil ? nil : { switchSide() }
                 )
+                .background(GeometryReader { geo in
+                    Color.clear
+                        .onAppear { cardHeight = geo.size.height }
+                        .onChange(of: geo.size.height) { _, h in cardHeight = h }
+                })
+            } else {
+                Color.clear.frame(height: 0).onAppear { cardHeight = 0 }
             }
         }
     }
@@ -788,6 +815,25 @@ struct WPParkConfirmCard: View {
     var body: some View {
         WPSheetShell {
             VStack(alignment: .leading, spacing: WP.Space.s3) {
+                // At accessibility sizes the verdict would push Park here off the screen: the
+                // information scrolls in the upper part, the actions stay pinned below it.
+                if typeSize.isAccessibilitySize {
+                    ScrollView { VStack(alignment: .leading, spacing: WP.Space.s3) { info } }
+                        .frame(maxHeight: UIScreen.main.bounds.height * 0.36)
+                } else {
+                    info
+                }
+                actions
+                if let onSwitchSide {
+                    Button(action: onSwitchSide) { Text(WPParkSideCopy.otherSide) }
+                        .buttonStyle(WPParkSideSecondaryStyle())
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var info: some View {
                 WPNotSavedChip()
                 VStack(alignment: .leading, spacing: 2) {
                     Text(address ?? model.title)
@@ -812,13 +858,6 @@ struct WPParkConfirmCard: View {
                         .foregroundStyle(WP.noParkText)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                actions
-                if let onSwitchSide {
-                    Button(action: onSwitchSide) { Text(WPParkSideCopy.otherSide) }
-                        .buttonStyle(WPParkSideSecondaryStyle())
-                }
-            }
-        }
     }
 
     private var actions: some View {
@@ -826,9 +865,17 @@ struct WPParkConfirmCard: View {
             ? AnyLayout(VStackLayout(spacing: WP.Space.s3))
             : AnyLayout(HStackLayout(spacing: WP.Space.s3))
         return layout {
-            Button(action: onCancel) { Text(WPParkFlowCopy.cancel) }
-                .buttonStyle(.wpRound)
-                .accessibilityHint("Discards this placement. Nothing was saved.")
+            // The round button is a fixed disc: at accessibility sizes the word would overflow it.
+            Group {
+                if typeSize.isAccessibilitySize {
+                    Button(action: onCancel) { Text(WPParkFlowCopy.cancel) }
+                        .buttonStyle(.wpSecondary)
+                } else {
+                    Button(action: onCancel) { Text(WPParkFlowCopy.cancel) }
+                        .buttonStyle(.wpRound)
+                }
+            }
+            .accessibilityHint("Discards this placement. Nothing was saved.")
             if model.offersPrimaryPark {
                 Button(model.ctaTitle, action: onPark)
                     .buttonStyle(RaisedButtonStyle(size: .commitment))
