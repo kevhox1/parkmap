@@ -316,7 +316,7 @@ nonisolated enum WPParkSideMiniMapLayout {
         car: CLLocationCoordinate2D,
         travelBearing: Double?,
         size: CGSize,
-        padding: CGFloat = 20
+        padding: CGFloat = 30
     ) -> Layout? {
         guard first.count >= 2, second.count >= 2, size.width > 0, size.height > 0 else { return nil }
 

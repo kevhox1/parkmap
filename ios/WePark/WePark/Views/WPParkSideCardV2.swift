@@ -92,7 +92,17 @@ struct WPParkSideCardV2: View {
     // MARK: Header
 
     private func header(_ title: String, subtitle: String? = nil) -> some View {
-        HStack(alignment: .top, spacing: WP.Space.s3) {
+        // At accessibility sizes the Cancel pill moves above the title so the title keeps the full
+        // width (beside it, a long street name broke mid-word).
+        let stacked = typeSize.isAccessibilitySize
+        let layout = stacked
+            ? AnyLayout(VStackLayout(alignment: .trailing, spacing: WP.Space.s2))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: WP.Space.s3))
+        return layout {
+            if stacked {
+                Button(WPParkSideCopy.cancel, action: onCancel)
+                    .buttonStyle(WPClosePillStyle())
+            }
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(WP.Font.fredoka(24, .bold, relativeTo: .title2))
@@ -106,9 +116,11 @@ struct WPParkSideCardV2: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
-            Spacer(minLength: 0)
-            Button(WPParkSideCopy.cancel, action: onCancel)
-                .buttonStyle(WPClosePillStyle())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            if !stacked {
+                Button(WPParkSideCopy.cancel, action: onCancel)
+                    .buttonStyle(WPClosePillStyle())
+            }
         }
     }
 
@@ -125,7 +137,7 @@ struct WPParkSideCardV2: View {
         if let choice = model.choice {
             WPParkSideMiniMap(
                 choice: choice,
-                height: typeSize.isAccessibilitySize ? 120 : 168,
+                height: typeSize.isAccessibilitySize ? 150 : 168,
                 onChoose: { option in model.choose(option) }
             )
         }
@@ -301,9 +313,11 @@ struct WPParkSideMiniMap: View {
 
     private func curbLabel(_ side: String, points: [CGPoint], upper: Bool, size: CGSize) -> some View {
         let meanY = points.map(\.y).reduce(0, +) / CGFloat(max(points.count, 1))
-        let y = upper ? meanY - 14 : meanY + 14
+        let y = upper ? meanY - 16 : meanY + 16
         return Text(WPCurbCopy.sideLabel(side))
             .font(WP.Font.fredoka(12, .semibold, relativeTo: .caption))
+            // The map is a fixed-size picture: its labels stay small at accessibility sizes.
+            .dynamicTypeSize(...DynamicTypeSize.large)
             .foregroundStyle(WP.text)
             .position(x: size.width / 2, y: min(max(y, 10), size.height - 10))
     }
