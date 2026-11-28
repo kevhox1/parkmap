@@ -919,6 +919,12 @@ struct ContentView: View {
     @State private var driveDirectionGate = WPDriveDirectionGate()
     @State private var driveDirectionExpiry: Task<Void, Never>? = nil
 
+    /// DT35-6b: measured layout for the Apple Maps attribution strip (Stoop drive, AX sizes).
+    @State private var driveTopChromeBottom: CGFloat = 0
+    @State private var driveStackTop: CGFloat = 0
+    @State private var driveSidesHeight: CGFloat = 0
+    @State private var driveSidesCap: CGFloat? = nil
+
     // MARK: - CM-3: Drive Mode style (destination / cruise / inactive)
 
     /// Explicit mode discriminant for Drive Mode variants.
@@ -3318,6 +3324,7 @@ struct ContentView: View {
                                     }) { onboardingTopChromeBottom = $0 }
                             } else {
                                 ASPBanner(state: bannerState)
+                                    .wpDriveBannerOneLine(stoopDrive: driveModeActive && v2DriveActive)
                                     .onGeometryChange(for: CGFloat.self, of: { proxy in
                                         proxy.frame(in: .named(onboardingCoachCoordinateSpaceName)).maxY
                                     }) { onboardingTopChromeBottom = $0 }
@@ -4447,7 +4454,11 @@ struct ContentView: View {
         // attribution beneath the Report / Park here / Voice row. A no-op outside Stoop drive.
         .onGeometryChange(for: CGFloat.self, of: { proxy in
             proxy.frame(in: .global).minY
-        }) { applyDriveBottomInset(stackTop: $0) }
+        }) {
+            driveStackTop = $0
+            updateDriveSidesCap()
+            applyDriveBottomInset(stackTop: $0)
+        }
     }
 
     // MARK: - Design system Phase 2a: flag-on map chrome
@@ -4605,6 +4616,13 @@ struct ContentView: View {
         )
         .frame(maxWidth: .infinity, alignment: .top)
         .padding(.top, endDrivePillTopPadding)
+        // DT35-6b: the real bottom of the top chrome (street pill, End, destination line).
+        .onGeometryChange(for: CGFloat.self, of: { proxy in
+            proxy.frame(in: .global).maxY
+        }) {
+            driveTopChromeBottom = $0
+            updateDriveSidesCap()
+        }
     }
 
     /// Both sides, Report, Park here and Voice. Report and Park here run the same actions as the
@@ -4615,7 +4633,9 @@ struct ContentView: View {
             muted: drivingVoice.isMuted,
             onReport: { driveReportTapped() },
             onPark: { driveParkHereTapped() },
-            onToggleVoice: { drivingVoice.isMuted.toggle() }
+            onToggleVoice: { drivingVoice.isMuted.toggle() },
+            maxSidesHeight: driveSidesCap,
+            onSidesHeight: { driveSidesHeight = $0; updateDriveSidesCap() }
         )
         // DT35-6: the inset itself is measured on the whole bottom stack (`bottomSafeAreaContent`)
         // so the Park Until pill and Recenter row above the card are cleared too.
@@ -4633,6 +4653,29 @@ struct ContentView: View {
 
     private func clearDriveBottomInset() {
         DispatchQueue.main.async { coordinatorActions.setBottomChromeInset(stackTopInWindow: nil) }
+        driveSidesCap = nil
+        driveSidesHeight = 0
+        driveStackTop = 0
+        driveTopChromeBottom = 0
+    }
+
+    /// DT35-6b: keeps a clear strip for the Apple Maps logo and Legal link between the measured
+    /// bottom of the top chrome and the measured top of the drive stack by shrinking the verdict
+    /// budget when the gap is too small (and growing it back when there is room). Accessibility
+    /// sizes only; the budget is nil (the fraction default) otherwise.
+    private func updateDriveSidesCap() {
+        guard v2DriveActive, driveModeActive,
+              UIApplication.shared.preferredContentSizeCategory.isAccessibilityCategory,
+              driveTopChromeBottom > 0, driveStackTop > 0, driveSidesHeight > 0 else { return }
+        let base = UIScreen.main.bounds.height
+            * WPDriveStackBudget.sidesMaxHeightFraction(accessibilitySize: true)
+        let next = WPDriveAttributionStrip.adjustedSidesCap(
+            currentCap: driveSidesCap ?? base,
+            sidesHeight: driveSidesHeight,
+            base: base,
+            gap: driveStackTop - driveTopChromeBottom
+        )
+        if abs(next - (driveSidesCap ?? base)) > 0.5 { driveSidesCap = next }
     }
 
     // MARK: - Design system Phase 2b: curb sheet, search, parking (flag on only)

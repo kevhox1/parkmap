@@ -80,4 +80,42 @@ final class WPDriveStackBudgetTests: XCTestCase {
         let end = etDate(2026, 11, 30, 21, 30)
         XCTAssertEqual(ParkingGoals.windowEndLabel(for: .parkAndForget, end: end, from: now), "Mon 11/30 9:30 PM")
     }
+
+    // MARK: Attribution strip from measured layout
+
+    private func cap(_ current: CGFloat, sides: CGFloat, gap: CGFloat, base: CGFloat = 332) -> CGFloat {
+        WPDriveAttributionStrip.adjustedSidesCap(currentCap: current, sidesHeight: sides, base: base, gap: gap)
+    }
+
+    func testStripKeepsTheBudgetWhenTheGapIsEnough() {
+        XCTAssertEqual(cap(332, sides: 300, gap: 48), 332)
+        XCTAssertEqual(cap(332, sides: 300, gap: 48 + WPDriveAttributionStrip.tolerance), 332)
+    }
+
+    func testStripShrinksTheBudgetByTheShortfall() {
+        // Gap 20 pt against a 48 pt strip: the verdicts give up 28 pt.
+        XCTAssertEqual(cap(332, sides: 300, gap: 20), 272, accuracy: 0.001)
+        // Works even when the budget was well above the verdicts' actual height.
+        XCTAssertEqual(cap(332, sides: 200, gap: 0), 152, accuracy: 0.001)
+    }
+
+    func testStripNeverShrinksBelowTheFloor() {
+        XCTAssertEqual(cap(332, sides: 150, gap: -200), WPDriveAttributionStrip.floorSidesHeight)
+    }
+
+    func testStripGrowsBackTowardTheBaseWhenThereIsRoom() {
+        XCTAssertEqual(cap(200, sides: 200, gap: 48 + 60), 260, accuracy: 0.001)
+        XCTAssertEqual(cap(200, sides: 200, gap: 48 + 900), 332)   // never above the base
+    }
+
+    func testStripConvergesInOneStepWhenScrollLimited() {
+        // The verdict frame equals its cap once content exceeds it, so one correction lands on the strip.
+        var capNow: CGFloat = 332
+        var gap: CGFloat = 10
+        let next = cap(capNow, sides: capNow, gap: gap)
+        gap += capNow - next            // the stack top moves down by exactly the cap change
+        capNow = next
+        XCTAssertEqual(gap, WPDriveAttributionStrip.stripHeight, accuracy: 0.001)
+        XCTAssertEqual(cap(capNow, sides: capNow, gap: gap), capNow)
+    }
 }
