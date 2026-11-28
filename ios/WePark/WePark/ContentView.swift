@@ -906,6 +906,12 @@ struct ContentView: View {
     /// to `nil` in `endDriveMode()`).
     @State private var effectiveDriveHeading: Double? = nil
 
+    /// DT35-5 (Stoop only): "Eastbound" etc. for the drive street pill. Nil when the speed gate
+    /// is closed, the heading is held, mid-turn or on an ambiguous diagonal.
+    @State private var driveDirectionLabel: String? = nil
+    @State private var driveDirectionGate = WPDriveDirectionGate()
+    @State private var driveDirectionExpiry: Task<Void, Never>? = nil
+
     // MARK: - CM-3: Drive Mode style (destination / cruise / inactive)
 
     /// Explicit mode discriminant for Drive Mode variants.
@@ -4555,7 +4561,8 @@ struct ContentView: View {
             },
             approaching: finalApproachState == .approaching,
             endAccessibilityLabel: driveModeStyle == .cruise ? "End Cruise Mode" : "End Drive Mode",
-            onEnd: { endDriveMode() }
+            onEnd: { endDriveMode() },
+            direction: driveDirectionLabel
         )
         .frame(maxWidth: .infinity, alignment: .top)
         .padding(.top, endDrivePillTopPadding)
@@ -6372,6 +6379,7 @@ struct ContentView: View {
             // TF2-16: reset heading-snap state for the new session.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
+            resetDriveDirection()
             // currentDriveAltitude initialized in handleDriveModeAndCamera (after the entry
             // setCamera has applied so we don't capture the pre-transition altitude here).
             // Create DrivingContextService and wire the voice service.
@@ -6412,6 +6420,7 @@ struct ContentView: View {
             // TF2-16: reset heading-snap state on exit.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
+            resetDriveDirection()
             // Deactivate audio session.
             AudioSessionManager.shared.deactivateDriveSession()
             // W8.5d: Reset final-approach state for the next session.
@@ -6572,6 +6581,7 @@ struct ContentView: View {
                     parkUntilIgnoresMeteredPayment: parkUntilIgnoresMeteredPayment
                 )
                 drivingContext = service.currentContext
+                refreshDriveDirection(service: service, coordinate: coord)
 
                 // TF2-16: heading-source selection (hysteresis) + street-snap bearing.
                 // Runs here — inside the existing .onChange(of: locationUpdateCount)-driven,
@@ -6620,6 +6630,44 @@ struct ContentView: View {
         // matters when no car is parked (the parked car's zone always wins when one exists),
         // but the function itself already encodes that priority, so this call is unconditional.
         updatePushZoneFromParkedCarOrLocation()
+    }
+
+    // MARK: - DT35-5 drive direction label
+
+    private func resetDriveDirection() {
+        driveDirectionExpiry?.cancel()
+        driveDirectionExpiry = nil
+        driveDirectionGate.reset()
+        driveDirectionLabel = nil
+    }
+
+    /// Recomputes the pill's direction suffix from the RAW GPS course (never the snapped heading).
+    /// Stoop only. A GPS stream can go quiet when the car stops, so a one-shot task re-checks the
+    /// gate just after its 3 s grace would end.
+    private func refreshDriveDirection(service: DrivingContextService, coordinate: CLLocationCoordinate2D) {
+        guard v2DriveActive else {
+            if driveDirectionLabel != nil { resetDriveDirection() }
+            return
+        }
+        driveDirectionGate.update(speed: locationService.driveSpeed, now: Date.timeIntervalSinceReferenceDate)
+        driveDirectionLabel = WPDriveDirection.label(
+            segment: service.matchedSegment,
+            coordinate: coordinate,
+            heading: locationService.driveHeading,
+            moving: driveDirectionGate.isOpen,
+            headingHeld: locationService.driveHeadingHeld,
+            courseAccuracy: locationService.driveCourseAccuracy
+        )
+        driveDirectionExpiry?.cancel()
+        driveDirectionExpiry = nil
+        if driveDirectionGate.slowSince != nil, driveDirectionGate.isOpen {
+            driveDirectionExpiry = Task { @MainActor in
+                try? await Task.sleep(for: .seconds(WPDriveDirectionGate.closeAfterSeconds + 0.1))
+                guard !Task.isCancelled else { return }
+                driveDirectionGate.update(speed: locationService.driveSpeed, now: Date.timeIntervalSinceReferenceDate)
+                if !driveDirectionGate.isOpen { driveDirectionLabel = nil }
+            }
+        }
     }
 
     // MARK: - Launch setup
