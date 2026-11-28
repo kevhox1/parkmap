@@ -41,3 +41,36 @@ The Park Until pill now reads "Until <end>" at AX sizes, never truncates itself,
 
 ## What's working
 The compact pill is clean and wraps instead of cutting; VoiceOver keeps the full sentence (`"A Few Hours goal active, now -> 4:15 am..."`); default size is unchanged; the 38% cap leaves the logo clear above the stack and the buttons stay pinned and full size; suite and merges are clean.
+
+---
+
+# Re-verification (QA pass 2), 2026-11-28
+
+**Reviewed:** `ios/dt35-6b-drive-stack-ax` at `7eadb986`. Sim `wepark-qa228b-sim` (iPhone 17 Pro, iOS 26.5), Stoop and drive-mode flags flipped locally only (reverted), 12 m/s simulated route heading north, For days goal with a **Free until Mon 9 AM pick, driven live**. Screenshots in `docs/qa/pr228b-assets/`.
+
+**Verdict: FAIL** on the Maps logo / Legal criterion. The street pill is now correctly bounded (no mid-word breaks, at most two lines) and the full end time is always visible, but a two-line street name still sits on top of the Maps logo, and for "Adam C Powell Blvd" it covers the logo and Legal entirely.
+
+## Result per check
+1. **AX3/AX5 moving, long names + direction, Free-until pick with a time.**
+   - Orchard St, Ludlow St, Ave B (AX5): pill is one line, direction dropped (VoiceOver label is "Street: Orchard St, northbound"). Logo, Legal, "Until Mon 11/30 9:00 AM" all visible, no overlap. PASS (`orchard2-ax5.png`, `aveb-ax5.png`).
+   - Frederick Douglass Blvd (AX5 and AX3): pill wraps by words to two lines ("Frederick / Douglass Blvd"), correct. But its bottom edge sits on the top of the Maps logo and the "Legal" line: the logo is clipped/touching. FAIL (`fd-ax5.png`, `fd-ax3.png`).
+   - "Adam C Powell Blvd" (the name the app shows for Adam Clayton Powell Jr Blvd) (AX5 and AX3): two-line pill covers the Maps logo and Legal completely, only an Apple glyph sliver shows at the left edge. FAIL (`acp-ax5.png`, `acp-ax3.png`).
+   - "Avenue of the Americas" did not appear: the app labels that street "6th Ave" (not a long name). Not reproducible.
+   - End time "Until Mon 11/30 / 9:00 AM": wraps to two lines by words, no ellipsis, fully visible in every shot. PASS.
+   - The AX5 ASP banner still wraps to two lines ("Today" runs under the street pill), same as before. At AX3 it is one line; AX3 chrome is otherwise identical to AX5, so the collision is the same at both sizes.
+2. **Default size**: pill "Park & Forget · Now → Mon 11/30 9:00 AM" (wraps to two lines at default with a long pick, time fully shown), puck at about 51.6% of the screen height, logo and Legal above the stack and clear (`default-pick.png`). Direction not shown while static; with Allen St (no direction) the street pill is unchanged. PASS.
+3. **For days Auto** at default: card and chip read "until Sun 11/29", "Until midnight" wording unchanged. A pick at a time: Mon 9 AM shows "Now → Mon 11/30 9:00 AM" at default and "Until Mon 11/30 9:00 AM" at AX3/AX5. Picking Mon + Midnight reads the date-only "Tue 12/1" (midnight, expected by the rule). PASS. (Side note: the verdict card itself says "Park until Mon 11/30 9:30 AM" for a 9 AM window; that is the sign's own time, not this PR.)
+4. **35% verdict budget**: could not force a tall verdict. The tallest I got was two cards of about 30 to 36% of the screen (a "Park until Mon 11/30 9:30 AM" two-line card plus a one-line card); nothing scrolled. Code path read: `WPDriveStackBudget.sidesMaxHeightFraction(accessibilitySize:)` returns 0.35 at AX. At AX5 the visible road between the top chrome and the Park Until pill is about 3 to 9% of the screen height (for example about 100 px of 2576 in `orchard2-ax5.png`, and about zero around the stack in `acp-ax5.png`). The reserve is what failed: see finding.
+5. **Tests** (shipped flags, `-parallel-testing-enabled NO -jobs 4`): 3384 tests, 1 skipped, 0 failures, no flakes. **Merge dry-run** vs `main` (`04ece88b`) with `git merge-tree --write-tree`: clean.
+
+## Findings
+### 🔴 #6: At AX3 and AX5, a two-line street pill covers or clips the Maps logo and Legal
+- Where: `WPDriveTopChromeV2` street pill and the attribution position (anchored above the measured stack). The 35% constant reserves height for the pill, but the logo still lands at the pill's bottom edge.
+- What: with a street that wraps ("Frederick Douglass Blvd", "Adam C Powell Blvd") and goal pick on, moving: the two-line pill ends at about y 745 to 795 of 2576, the logo sits at about 735 to 775 and Legal at 750. FD: logo/Legal touched and partly clipped. ACP: fully covered, Legal gone. The attribution is a legal requirement and was the point of #228.
+- Expected: logo and Legal clear at AX3 and AX5 regardless of street length.
+- Repro: Stoop + drive flags, For days with Free until Mon 9 AM, Start driving, set AX5 (or AX3), simulate `xcrun simctl location <udid> start --speed=12 40.8110,-73.9475 40.8150,-73.9445` (Adam C Powell Blvd northbound) or start at `40.8110,-73.9505` (Frederick Douglass Blvd). Cards on those blocks show "Park until Mon 11/30 9:30 AM" (two lines) plus a second card.
+- Direction (not a fix by me): the street pill's two-line worst case also has to move the stack/logo, or the pill should be capped at one line (scale or truncate with `minimumScaleFactor`, since the street can still be read via VoiceOver), or the stack budget must account for the real chrome height including the wrapped ASP banner.
+- Owner: `@ios-engineer`.
+
+### 🟢 Notes
+- I did not re-run the builder's `r6/` shots, so I do not know why they looked clean. A likely difference is the shorter verdict cards under an Auto pick (unverified).
