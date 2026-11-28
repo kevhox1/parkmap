@@ -53,3 +53,39 @@ Pure policy plus separate snapshot object is clean and well tested; the run-loop
 - Where the blue puck sits on screen while moving (higher than before?) and whether it ever hides behind End at the start. Tell us whether the higher puck is fine.
 - Tap End: map and Legal behave normally in browse; then Start driving again to confirm no leftover margin.
 - If you use large text: the Legal link is likely still hidden behind the Park Until pill (known, DT35-8).
+
+---
+
+# Re-verification (head `178ccf27`) — 2026-11-27
+
+**Verdict: FAIL** (puck and DT35-8 fixed; the equal top margin now makes MapKit drop the Apple "Maps" logo in the common moving case and at every AX size)
+
+Diff since last QA (`7a31fe09..178ccf27`): 5 files only (ContentView, MapBottomInsetController, MapViewRepresentable, WPDriveV2, MapBottomInsetTests). The merge of `main` (#221/#222) is clean and adds nothing else. Spec deviation (60% to 75% clamp) confirmed in code.
+
+## Results
+1. **Puck position: fixed.** Static drive entry: puck centre at 51.6% of screen height (y 1328/2576), identical to the browse map and to `main`. Moving (simulated 12 m/s route): PR about 51% (`reverify/pr-moving.png`), `main` about 51.5% (`reverify/main-moving.png`). Puck is no longer behind End on entry (`reverify/pr-entry-default.png`).
+2. **Top-anchored items:** compass is constrained to `safeAreaLayoutGuide` (not layout margins), street pill, End and ASP banner did not move versus `main` in any screenshot. `CurbPlacementController` untouched; placement is excluded during drive. Placement margins not exercised live.
+3. **Margin reset: pass.** After End the browse map is pixel-identical to the pre-drive browse map (puck y 1328). Start again: Maps logo and Legal back at the default position, puck at 51.6% (`reverify/pr-restart-default.png`), no accumulated margin.
+4. **Attribution: FAIL.** See finding #1.
+5. **DT35-8: pass.** Park Until pill wraps to two lines at AX, sits clear of street pill, End and Legal (`pr-ax3.png`, `pr-ax5.png`). Flag-off path is a no-op by code (`...accessibility5` is the max, `fixedSize(vertical:false)`); not run live with the flag off in drive.
+6. **Full suite, shipped flags, head `178ccf27`:** 3354 tests, 1 skipped, 0 failures, no flakes.
+7. Note on AX: the sim applied `accessibility-large` (AX2) and the layout changed, but AX2, AX3 (`accessibility-extra-large`) and AX5 render the same drive layout (the drive stack is capped), so they are one result.
+
+## Findings
+### 🔴 #1: Apple "Maps" logo disappears; only Legal remains (moving at default size, and AX2/AX3/AX5)
+- Where: `MapBottomInsetController.apply` (bottom inset plus mirrored top margin).
+- What: with the mirrored top margin, top plus bottom margins approach or exceed the map height once the card stack is tall. MapKit then renders only the "Legal" link and omits the "Maps" logo. Static default entry (shorter card) shows "Maps Legal" correctly (`pr-entry-default.png`, `pr-restart-default.png`). While moving at default size the cards grow to three lines and the logo is gone (`pr-moving.png`, two frames about 3 s apart, Legal at y 1285/2576 with no logo). At AX2/AX3/AX5 only Legal shows, at y 815 (`pr-ax3.png`, `pr-ax5.png`). On `main` the logo is present while moving (`main-moving.png`). The cause (margin sum exceeding the map height) is my inference from the pattern; I did not rebuild to prove it.
+- Expected: "Maps logo and Legal visible and not covered" (DT35-6, Apple requirement). Legal alone is not enough.
+- Repro: Stoop flags on, Start driving, simulate movement (`simctl location start --speed=12 ...`), or set AX2+ text and look bottom-left.
+- Owner: `@ios-engineer`. Suggested direction (not a fix by me): keep top margin smaller than needed to centre exactly, or cap the sum of top and bottom margins below the map height, or recentre the camera with `edgePadding` instead of mirrored margins.
+
+### 🟢 Minor
+- #2: At AX5 the ASP banner grows to two lines and "Today" runs under the street pill. Not part of this PR (the banner is pre-existing); logging only.
+- #3: At AX the Park Until pill and the two side cards cover the puck (puck stays at about 52%). Same on `main` by construction; the road strip visible between the street pill and the Park Until pill is about 11% of screen height at AX, which is the card stack's size, not the 75% clamp.
+
+## Smoke tests run
+- Own sim `wepark-qa223b-sim` (iPhone 17 Pro, iOS 26.5), flags flipped locally only (StoopFlag, driveModeDefault; reverted, nothing committed). Built and screenshot-inspected `main` (`4783d03b`) and PR head: static entry, moving, End, restart, AX2/AX3/AX5. Sim and derived data deleted.
+- Mount-chain rule satisfied (live app inspected, not tests alone).
+
+## What's working
+Puck framing fix is exact, margins reset cleanly, the DT35-8 pill layout is clean, and the window-coordinate measurement removed the `UIScreen.main` dependence. One more rework round (attribution logo) should close it.
