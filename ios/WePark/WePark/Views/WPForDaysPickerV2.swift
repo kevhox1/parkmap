@@ -90,7 +90,7 @@ struct WPForDaysPicker: View {
     let value: Date
     let isAuto: Bool
     let showClampNote: Bool
-    /// The caller clamps, stores and recolors.
+    /// Receives the raw (unsnapped) end; the caller snaps, clamps (with the note), stores, recolors.
     let onPick: (Date) -> Void
     let onAuto: () -> Void
 
@@ -120,17 +120,16 @@ struct WPForDaysPicker: View {
     private func dayChips(grid: [Date]) -> some View {
         let columns = typeSize.isAccessibilitySize
             ? [GridItem(.flexible())]
-            : Array(repeating: GridItem(.flexible(), spacing: WP.Space.s2), count: 4)
+            : Array(repeating: GridItem(.flexible(), spacing: WP.Space.s2), count: 3)
         return LazyVGrid(columns: columns, spacing: 0) {
             ForEach(0...(ForDaysUntilConstants.lastDayOffset - 1), id: \.self) { offset in
                 WPChoiceChip(
                     title: WPForDaysCopy.dayTitle(offset: offset, now: now),
                     isSelected: !isAuto && offset == selectedDay,
                     height: WP.Target.standard,
-                    singleLine: !typeSize.isAccessibilitySize
+                    singleLine: false
                 ) {
-                    let picked = ForDaysUntil.retarget(value, toDay: offset, now: now, grid: grid)
-                    onPick(picked.date)
+                    onPick(ForDaysUntil.retargetRaw(value, toDay: offset, now: now))
                 }
             }
         }
@@ -212,7 +211,7 @@ struct WPForDaysPicker: View {
                     height: WP.Target.standard,
                     singleLine: true
                 ) {
-                    onPick(ForDaysUntil.quick(hour: hour, onDay: selectedDay, now: now, grid: grid).date)
+                    onPick(ForDaysUntil.quickRaw(hour: hour, onDay: selectedDay, now: now))
                 }
                 .frame(minWidth: 84)
             }

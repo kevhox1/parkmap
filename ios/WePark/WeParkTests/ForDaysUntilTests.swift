@@ -167,8 +167,41 @@ final class ForDaysUntilTests: XCTestCase {
         XCTAssertNil(ForDaysUntil.restoredPick(stored: 0, now: now, morningHour: 7))
         let past = etDate(2026, 6, 1, 17, 0).timeIntervalSince1970
         XCTAssertNil(ForDaysUntil.restoredPick(stored: past, now: now, morningHour: 7))
-        let atMin = etDate(2026, 6, 5, 7, 0).timeIntervalSince1970
-        XCTAssertNil(ForDaysUntil.restoredPick(stored: atMin, now: now, morningHour: 7), "at the minimum resets")
+        let beforeMin = etDate(2026, 6, 5, 6, 30).timeIntervalSince1970
+        XCTAssertNil(ForDaysUntil.restoredPick(stored: beforeMin, now: now, morningHour: 7), "before the minimum resets")
+    }
+
+    func testRestoredPick_equalToMinimum_survives() {
+        let now = etDate(2026, 6, 4, 10, 0)
+        let atMin = etDate(2026, 6, 5, 7, 0)
+        XCTAssertEqual(
+            ForDaysUntil.restoredPick(stored: atMin.timeIntervalSince1970, now: now, morningHour: 7), atMin,
+            "picking the Overnight end exactly is valid and must not reset to Auto"
+        )
+    }
+
+    // MARK: Picker pick path (raw chip target -> applyPick) carries the clamp flag
+
+    func testPickPath_todayNineAM_clampsAndSaysSo() {
+        let now = etDate(2026, 6, 4, 10, 0)
+        let raw = ForDaysUntil.quickRaw(hour: 9, onDay: 0, now: now)
+        let result = ForDaysUntil.applyPick(raw, now: now, morningHour: 7)
+        XCTAssertTrue(result.clamped, "Today 9 AM is already past Overnight's start: the note must show")
+        XCTAssertEqual(result.date, etDate(2026, 6, 5, 7, 0))
+    }
+
+    func testPickPath_dayChipEarlierThanMinimum_clamps() {
+        let now = etDate(2026, 6, 4, 10, 0)
+        let raw = ForDaysUntil.retargetRaw(etDate(2026, 6, 9, 9, 30), toDay: 0, now: now)
+        XCTAssertTrue(ForDaysUntil.applyPick(raw, now: now, morningHour: 7).clamped)
+    }
+
+    func testPickPath_laterPick_isNotClamped() {
+        let now = etDate(2026, 6, 4, 10, 0)
+        let raw = ForDaysUntil.quickRaw(hour: 17, onDay: 4, now: now)
+        let result = ForDaysUntil.applyPick(raw, now: now, morningHour: 7)
+        XCTAssertFalse(result.clamped)
+        XCTAssertEqual(result.date, etDate(2026, 6, 8, 17, 0))
     }
 
     func testRestoredPick_validPick_survives() {

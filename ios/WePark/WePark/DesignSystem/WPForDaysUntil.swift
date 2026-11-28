@@ -116,47 +116,54 @@ nonisolated enum ForDaysUntil {
         return max(0, WPGoalCopy.dayDiff(from: now, to: reference))
     }
 
-    /// The same time of day on another chip day, clamped to the range. Midnight stays midnight
+    /// The same time of day on another chip day, NOT yet snapped or clamped (the single entry
+    /// point `applyPick` does that, so the clamp note is never lost). Midnight stays midnight
     /// (the night of the new day).
+    static func retargetRaw(_ current: Date, toDay day: Int, now: Date) -> Date {
+        let cal = Calendar.easternTime
+        if isMidnight(current) { return now.startOfDayET(offsetDays: day + 1) }
+        let parts = cal.dateComponents([.hour, .minute], from: current)
+        return cal.date(
+            bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0,
+            of: now.startOfDayET(offsetDays: day)
+        ) ?? now.startOfDayET(offsetDays: day)
+    }
+
+    /// A quick time on a chip day, unsnapped. `hour == nil` is midnight (the night of that day).
+    static func quickRaw(hour: Int?, onDay day: Int, now: Date) -> Date {
+        let cal = Calendar.easternTime
+        guard let hour else { return now.startOfDayET(offsetDays: day + 1) }
+        return cal.date(
+            bySettingHour: hour, minute: 0, second: 0, of: now.startOfDayET(offsetDays: day)
+        ) ?? now.startOfDayET(offsetDays: day)
+    }
+
     static func retarget(
         _ current: Date, toDay day: Int, now: Date, grid: [Date]
     ) -> (date: Date, clamped: Bool) {
-        let cal = Calendar.easternTime
-        let target: Date
-        if isMidnight(current) {
-            target = now.startOfDayET(offsetDays: day + 1)
-        } else {
-            let parts = cal.dateComponents([.hour, .minute], from: current)
-            target = cal.date(
-                bySettingHour: parts.hour ?? 0, minute: parts.minute ?? 0, second: 0,
-                of: now.startOfDayET(offsetDays: day)
-            ) ?? now.startOfDayET(offsetDays: day)
-        }
-        return snap(target, grid: grid)
+        snap(retargetRaw(current, toDay: day, now: now), grid: grid)
     }
 
-    /// A quick time on a chip day. `hour == nil` is midnight (the night of that day).
     static func quick(
         hour: Int?, onDay day: Int, now: Date, grid: [Date]
     ) -> (date: Date, clamped: Bool) {
-        let cal = Calendar.easternTime
-        let target: Date
-        if let hour {
-            target = cal.date(
-                bySettingHour: hour, minute: 0, second: 0, of: now.startOfDayET(offsetDays: day)
-            ) ?? now.startOfDayET(offsetDays: day)
-        } else {
-            target = now.startOfDayET(offsetDays: day + 1)
-        }
-        return snap(target, grid: grid)
+        snap(quickRaw(hour: hour, onDay: day, now: now), grid: grid)
     }
 
-    /// A stored pick, or nil (Auto) when there is none or it is at or before the current minimum.
+    /// The one place every picker tap lands: snaps to the grid and reports whether the pick was
+    /// clamped up to the Overnight end (drives the "Overnight already covers this" note).
+    static func applyPick(
+        _ raw: Date, now: Date, morningHour: Int
+    ) -> (date: Date, clamped: Bool) {
+        snap(raw, grid: grid(now: now, morningHour: morningHour))
+    }
+
+    /// A stored pick, or nil (Auto) when there is none or it is before the current minimum (a pick equal to the minimum is valid).
     /// Run on launch and on foreground so a stale "Monday 5 PM" never lingers.
     static func restoredPick(stored: TimeInterval, now: Date, morningHour: Int) -> Date? {
         guard stored > 0 else { return nil }
         let date = Date(timeIntervalSince1970: stored)
-        return date > minEnd(now: now, morningHour: morningHour) ? date : nil
+        return date >= minEnd(now: now, morningHour: morningHour) ? date : nil
     }
 }
 

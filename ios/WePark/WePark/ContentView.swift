@@ -4968,8 +4968,7 @@ struct ContentView: View {
             return
         }
         let now = Date.nowET
-        let grid = ForDaysUntil.grid(now: now, morningHour: overnightMorningHour)
-        let snapped = ForDaysUntil.snap(date, grid: grid)
+        let snapped = ForDaysUntil.applyPick(date, now: now, morningHour: overnightMorningHour)
         forDaysClampNote = snapped.clamped
         storedForDaysUntil = snapped.date.timeIntervalSince1970
         rebuildOverlays(at: now)
