@@ -2995,6 +2995,11 @@ struct ContentView: View {
             now = requestedNow
         }
         let signpostState = WPOverlayPerf.signposter.beginInterval("rebuildOverlays")
+        // R35 PR2b (Stoop): zoomed out past the cutoff nothing is drawn, so nothing below may do
+        // work for curbs nobody can see: no For-days ladder (3 rungs over every loaded segment),
+        // no manual For-days fallback count, no classification.
+        let zoomBand = WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta)
+        let zoomedOutOff = AppConstants.designSystemV2Enabled && zoomBand == .off
         defer { WPOverlayPerf.signposter.endInterval("rebuildOverlays", signpostState) }
         // DM-2 (`docs/drive-mode-default-spec.md` §0.8.6/§0.8.9): when the goal-first
         // ambient dock owns the filter (flag on, not toggled to full-palette), (re)resolve
@@ -3044,7 +3049,13 @@ struct ContentView: View {
                     for: selectedGoal, from: now, overnightMorningHour: overnightMorningHour
                 )
                 parkAndForgetGuardState = nil
-                if AppConstants.designSystemV2Enabled {
+                if zoomedOutOff {
+                    // Nothing is drawn, so nothing is resolved. Dropping the stale resolution means
+                    // the dock never describes curbs that are not on screen; zooming back in
+                    // recomputes it fresh (the next rebuild runs with `zoomedOutOff` false).
+                    if forDaysState != nil { forDaysState = nil }
+                    if forDaysResolution != nil { forDaysResolution = nil }
+                } else if AppConstants.designSystemV2Enabled {
                     // The "For days" tile always shows the real end date the ladder picks, or
                     // the user's own pick (DT35-1) when there is one.
                     resolveForDaysManual(now: now)
@@ -3055,6 +3066,15 @@ struct ContentView: View {
                     }
                 }
             case .parkAndForget:
+                if zoomedOutOff {
+                    // Same as above: no ladder, no fallback count. The top rung is the goal's own
+                    // ceiling and costs nothing.
+                    if forDaysState != nil { forDaysState = nil }
+                    if forDaysResolution != nil { forDaysResolution = nil }
+                    parkAndForgetGuardState = nil
+                    parkUntilTarget = ParkingGoals.target(for: .parkAndForget, from: now)
+                    break
+                }
                 if AppConstants.designSystemV2Enabled { resolveForDaysManual(now: now) }
                 if let manual = forDaysState {
                     // DT35-1: the map is coloured for the EFFECTIVE end only (the pick, or the
@@ -3100,7 +3120,6 @@ struct ContentView: View {
         // out too far to draw any polylines at all.
         // R35 PR2 (Stoop): the cutoff is the zoom band (green only up to 0.020, nothing above),
         // not the legacy 0.04 `polylineHideSpanThreshold`. Flag off: unchanged.
-        let zoomBand = WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta)
         let hideOverlays = AppConstants.designSystemV2Enabled
             ? zoomBand == .off
             : region.span.latitudeDelta > AppConstants.polylineHideSpanThreshold
@@ -4508,7 +4527,9 @@ struct ContentView: View {
             // overlay and this pill (inside the bottom safe-area inset) would sit behind/under it.
             if parkUntilMode, let target = parkUntilTarget, !goalTilesVisible, curbPlacement == nil, tripPlan == nil {
                 if let activeGoal {
-                    let content = ContentView.goalPillContent(for: activeGoal, target: target, now: lastEvaluatedAt)
+                    let content = ContentView.goalPillContent(
+                        for: activeGoal, target: target, now: goalClockNow
+                    )
                     GoalParkUntilPill(
                         icon: content.icon,
                         shortName: content.shortName,
@@ -4576,11 +4597,15 @@ struct ContentView: View {
     /// No tile has produced a segment yet, and the camera is close enough that curbs should be
     /// drawing: show the loading pill and draw no lines.
     private var v2Loading: Bool {
-        tileLoader.segments.isEmpty
-            && (AppConstants.designSystemV2Enabled
-                ? WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta) != .off
-                : region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold)
-            && !v2OutsideCoverage
+        let inRange = AppConstants.designSystemV2Enabled
+            ? WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta) != .off
+            : region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold
+        // R35 PR2b (Stoop): after zoom out, pan far, zoom in, the tile set is still the old area, so
+        // `segments` is not empty but nothing under the view is loaded yet. Say "loading" until the
+        // tile under the view centre lands (a view over no tiles at all is not loading).
+        let tilesPending = AppConstants.designSystemV2Enabled
+            && (tileLoader.tileCoverage?.hasPendingTile(atCenter: region.center) ?? false)
+        return (tileLoader.segments.isEmpty || tilesPending) && inRange && !v2OutsideCoverage
     }
 
     private var v2Pill: WPTopPill {
@@ -4644,7 +4669,8 @@ struct ContentView: View {
             forDaysPick: forDaysState == nil ? nil : forDaysPick,
             forDaysState: forDaysState,
             forDaysClampNote: forDaysClampNote,
-            liveNow: lastEvaluatedAt
+            liveNow: lastEvaluatedAt,
+            zoomedOut: WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta) == .off
         )
     }
 
@@ -5242,9 +5268,15 @@ struct ContentView: View {
     private var goalWindowLabel: String? {
         guard AppConstants.driveModeDefaultEnabled, !fullPaletteMode else { return nil }
         let end = parkUntilTarget ?? ParkingGoals.target(
-            for: selectedGoal, from: lastEvaluatedAt, overnightMorningHour: overnightMorningHour
+            for: selectedGoal, from: goalClockNow, overnightMorningHour: overnightMorningHour
         )
-        return ParkingGoals.windowLabel(for: selectedGoal, end: end, from: lastEvaluatedAt)
+        return ParkingGoals.windowLabel(for: selectedGoal, end: end, from: goalClockNow)
+    }
+
+    /// R35 PR2b: the instant goal copy counts from. Stoop: the window instant the map is coloured
+    /// for (the end comes from it, so the "from" must too). Flag off: unchanged `lastEvaluatedAt`.
+    private var goalClockNow: Date {
+        AppConstants.designSystemV2Enabled ? windowInstant : lastEvaluatedAt
     }
 
     /// Plan a Trip: leaves trip mode and returns the map to the live goal/palette. `toast`

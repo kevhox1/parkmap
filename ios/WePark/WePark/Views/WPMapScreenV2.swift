@@ -40,6 +40,9 @@ struct WPGoalSheetInput: Equatable {
     /// (it feeds the end labels, the search count and the picker); only the countdowns read this,
     /// so "2 h 57 min from now" ticks every minute while the end stays on its grid. nil = `now`.
     var liveNow: Date? = nil
+    /// R35 PR2b: zoomed past the curb cutoff (Stoop). Nothing is drawn and nothing is resolved, so
+    /// the lead says so instead of claiming what the green means for curbs that are not on screen.
+    var zoomedOut: Bool = false
 
     /// The instant a countdown counts down from.
     /// Never earlier than the window instant, so an end can never read more than its window.
@@ -80,7 +83,9 @@ struct WPGoalSheetInput: Equatable {
         guard selectedGoal == .parkAndForget, let state = forDaysState, state.kind != nil else { return nil }
         return state
     }
-    var lead: String { WPGoalCopy.lead(detailMode: detailMode, loading: loading) }
+    var lead: String {
+        zoomedOut ? WPGoalCopy.zoomedOutLead : WPGoalCopy.lead(detailMode: detailMode, loading: loading)
+    }
 
     /// The flat fact line shown under the headline: the sparse / stepped-down message (with the
     /// real span), else the caller's note.
