@@ -41,20 +41,43 @@ final class WPZoomOutFollowUpTests: XCTestCase {
         XCTAssertFalse(coverage(loaded: []).hasPendingTile(atCenter: bad))
     }
 
+    private func input(zoomedOut: Bool, selected: ParkingGoal = .freeOvernight, pick: Date? = nil) -> WPGoalSheetInput {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        return WPGoalSheetInput(
+            selectedGoal: selected, now: now,
+            fewHoursEnd: now.addingTimeInterval(3 * 3600),
+            overnightEnd: now.addingTimeInterval(8 * 3600),
+            forDaysEnd: now.addingTimeInterval(7 * 86_400),
+            detailMode: false, loading: false, guardKind: nil, note: nil,
+            morningHour: ParkingGoals.defaultOvernightMorningHour,
+            forDaysPick: pick,
+            zoomedOut: zoomedOut
+        )
+    }
+
     func testZoomedOutDockLeadDoesNotClaimWhatTheGreenMeans() {
-        func input(zoomedOut: Bool) -> WPGoalSheetInput {
-            let now = Date(timeIntervalSince1970: 1_800_000_000)
-            return WPGoalSheetInput(
-                selectedGoal: .freeOvernight, now: now,
-                fewHoursEnd: now.addingTimeInterval(3 * 3600),
-                overnightEnd: now.addingTimeInterval(8 * 3600),
-                forDaysEnd: now.addingTimeInterval(7 * 86_400),
-                detailMode: false, loading: false, guardKind: nil, note: nil,
-                morningHour: ParkingGoals.defaultOvernightMorningHour,
-                zoomedOut: zoomedOut
-            )
-        }
         XCTAssertEqual(input(zoomedOut: false).lead, "Green curbs are free from now until")
-        XCTAssertEqual(input(zoomedOut: true).lead, "Zoom in to see which curbs are free until")
+        XCTAssertEqual(input(zoomedOut: true).lead, "Zoom in to see which curbs are free")
+    }
+
+    func testZoomedOutStatesNoEndForAnyGoal() {
+        for goal in [ParkingGoal.freeFewHours, .freeOvernight, .parkAndForget] {
+            let sheet = input(zoomedOut: true, selected: goal)
+            XCTAssertEqual(sheet.headlineEnd, "\u{2014}", "\(goal)")
+            for tile in [ParkingGoal.freeFewHours, .freeOvernight, .parkAndForget] {
+                XCTAssertEqual(sheet.tileUntil(tile), "\u{2014}")
+            }
+        }
+        // Zoomed in is unchanged.
+        let normal = input(zoomedOut: false, selected: .freeFewHours)
+        XCTAssertNotEqual(normal.headlineEnd, "\u{2014}")
+        XCTAssertTrue(normal.tileUntil(.freeFewHours).hasPrefix("until"))
+    }
+
+    func testManualPickStillReachesTheRowWhileZoomedOut() {
+        let pick = Date(timeIntervalSince1970: 1_800_100_000)
+        let sheet = input(zoomedOut: true, selected: .parkAndForget, pick: pick)
+        XCTAssertEqual(sheet.forDaysPick, pick)
+        XCTAssertNil(sheet.forDaysBanner, "no fallback banner (it describes curbs) while zoomed out")
     }
 }

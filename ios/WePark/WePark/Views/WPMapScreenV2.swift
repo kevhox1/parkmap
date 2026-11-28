@@ -61,6 +61,8 @@ struct WPGoalSheetInput: Equatable {
     var isManualForDays: Bool { forDaysState != nil }
 
     var headlineEnd: String {
+        // R35 PR2b: zoomed out nothing is computed, so no goal states an end (no parking claim).
+        if zoomedOut { return WPGoalCopy.zoomedOutEnd }
         if selectedGoal == .parkAndForget, isManualForDays { return WPForDaysCopy.headline(end: selectedEnd) }
         return WPGoalCopy.headlineEnd(goal: selectedGoal, end: selectedEnd, now: now)
     }
@@ -74,6 +76,7 @@ struct WPGoalSheetInput: Equatable {
 
     /// Tile sub-line for a goal ("until Tue 9 AM" for a manual For-days end).
     func tileUntil(_ goal: ParkingGoal) -> String {
+        if zoomedOut { return WPGoalCopy.zoomedOutEnd }
         if goal == .parkAndForget, isManualForDays { return WPForDaysCopy.tile(end: forDaysEnd) }
         return WPGoalCopy.tileUntil(goal: goal, end: end(for: goal))
     }
@@ -262,7 +265,7 @@ struct WPGoalSheetV2: View {
         WPEndTimeHeadline(
             lead: input.lead,
             end: input.headlineEnd,
-            sub: (leverOpen && input.selectedGoal == .freeOvernight) ? nil : input.countdown,
+            sub: ((leverOpen && input.selectedGoal == .freeOvernight) || input.zoomedOut) ? nil : input.countdown,
             lever: leverState,
             onLever: { withAnimation(.easeOut(duration: 0.18)) { leverOpen.toggle() } }
         )

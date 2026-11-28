@@ -4635,6 +4635,7 @@ struct ContentView: View {
     }
 
     private var v2GoalInput: WPGoalSheetInput {
+        let zoomedOutNow = WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta) == .off
         // R35 PR1: the window instant the map is coloured for (never `lastEvaluatedAt`, which only
         // moves on the minute tick and disagreed with the green). Countdowns alone use the live clock.
         let now = windowInstant
@@ -4666,11 +4667,13 @@ struct ContentView: View {
             guardKind: emptyMapGuardKind,
             note: note,
             morningHour: overnightMorningHour,
-            forDaysPick: forDaysState == nil ? nil : forDaysPick,
+            // Zoomed out the resolved state is dropped, but the user's own pick still shows (their
+            // choice must not look lost); nothing is computed or coloured for it.
+            forDaysPick: (forDaysState == nil && !zoomedOutNow) ? nil : forDaysPick,
             forDaysState: forDaysState,
             forDaysClampNote: forDaysClampNote,
             liveNow: lastEvaluatedAt,
-            zoomedOut: WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta) == .off
+            zoomedOut: zoomedOutNow
         )
     }
 

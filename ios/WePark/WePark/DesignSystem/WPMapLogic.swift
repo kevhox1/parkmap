@@ -189,7 +189,9 @@ enum WPGoalCopy {
     }
 
     /// R35 PR2b: the lead while the map is zoomed out past the curb cutoff.
-    nonisolated static let zoomedOutLead = "Zoom in to see which curbs are free until"
+    nonisolated static let zoomedOutLead = "Zoom in to see which curbs are free"
+    /// The end shown for every goal while zoomed out: no end is computed, so none is claimed.
+    nonisolated static let zoomedOutEnd = "\u{2014}"
 
     nonisolated static func goalName(_ goal: ParkingGoal) -> String {
         switch goal {
