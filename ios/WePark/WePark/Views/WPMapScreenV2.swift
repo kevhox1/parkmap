@@ -29,6 +29,13 @@ struct WPGoalSheetInput: Equatable {
     /// Flat fact line under the headline (e.g. the street-cleaning holiday note).
     var note: String?
     var morningHour: Int
+    /// DT35-1 (Stoop): the user's exact For-days pick (requested end), nil = Auto ladder.
+    var forDaysPick: Date? = nil
+    /// DT35-1: the resolved manual window (effective end + fallback). nil = Auto ladder; when
+    /// set, `forDaysEnd` is already the effective end the map is coloured for.
+    var forDaysState: WPForDaysState? = nil
+    /// DT35-1: the pick was clamped up to the Overnight end; show the one-line why.
+    var forDaysClampNote: Bool = false
 
     nonisolated func end(for goal: ParkingGoal) -> Date {
         switch goal {
@@ -39,14 +46,36 @@ struct WPGoalSheetInput: Equatable {
     }
 
     var selectedEnd: Date { end(for: selectedGoal) }
-    var headlineEnd: String { WPGoalCopy.headlineEnd(goal: selectedGoal, end: selectedEnd, now: now) }
-    var countdown: String { WPGoalCopy.countdown(goal: selectedGoal, end: selectedEnd, now: now) }
+    /// True when the For-days goal is showing the user's own pick (not the Auto ladder).
+    var isManualForDays: Bool { forDaysState != nil }
+
+    var headlineEnd: String {
+        if selectedGoal == .parkAndForget, isManualForDays { return WPForDaysCopy.headline(end: selectedEnd) }
+        return WPGoalCopy.headlineEnd(goal: selectedGoal, end: selectedEnd, now: now)
+    }
+    var countdown: String {
+        if selectedGoal == .parkAndForget, isManualForDays { return WPForDaysCopy.countdown(end: selectedEnd, now: now) }
+        return WPGoalCopy.countdown(goal: selectedGoal, end: selectedEnd, now: now)
+    }
+
+    /// Tile sub-line for a goal ("until Tue 9 AM" for a manual For-days end).
+    func tileUntil(_ goal: ParkingGoal) -> String {
+        if goal == .parkAndForget, isManualForDays { return WPForDaysCopy.tile(end: forDaysEnd) }
+        return WPGoalCopy.tileUntil(goal: goal, end: end(for: goal))
+    }
+
+    /// The dashed banner box for a manual For-days pick that did not get its time. nil otherwise.
+    var forDaysBanner: WPForDaysState? {
+        guard selectedGoal == .parkAndForget, let state = forDaysState, state.kind != nil else { return nil }
+        return state
+    }
     var lead: String { WPGoalCopy.lead(detailMode: detailMode, loading: loading) }
 
     /// The flat fact line shown under the headline: the sparse / stepped-down message (with the
     /// real span), else the caller's note.
     var factLine: String? {
-        if selectedGoal == .parkAndForget, let guardKind {
+        // A manual For-days pick shows its own banner box instead of this line.
+        if selectedGoal == .parkAndForget, forDaysState == nil, let guardKind {
             return WPGoalCopy.guardLine(kind: guardKind, forDaysEnd: forDaysEnd, now: now)
         }
         return note
@@ -108,6 +137,10 @@ struct WPGoalSheetV2: View {
     /// Stoop Phase 6a: the goal tile row's frame in the onboarding coach space, so the first coach
     /// card can ring it. Not reported at accessibility sizes (the tiles become rows there).
     var onTileRowFrame: ((CGRect) -> Void)? = nil
+    /// DT35-1: the For-days picker is open (owned by the caller, like `leverOpen`).
+    var forDaysPickerOpen: Binding<Bool> = .constant(false)
+    /// DT35-1: sets the exact For-days end (nil = back to Auto). nil hides the picker entirely.
+    var onSetForDaysUntil: ((Date?) -> Void)? = nil
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
@@ -125,31 +158,87 @@ struct WPGoalSheetV2: View {
             accessibilityBody
         } else {
             WPSheetShell(toolbar: AnyView(toolbar)) {
+                forDaysBannerView
                 headline
                 if leverOpen && input.selectedGoal == .freeOvernight { chips.padding(.top, WP.Space.s3) }
-                if let fact = input.factLine, !(leverOpen && input.selectedGoal == .freeOvernight) {
+                if let fact = input.factLine, !(leverOpen && input.selectedGoal == .freeOvernight), !pickerOpen {
                     factText(fact).padding(.top, WP.Space.s3)
                 }
-                HStack(spacing: WP.Space.s2) {
-                    ForEach(WPGoalCopy.tileOrder, id: \.rawValue) { goal in
-                        WPGoalTile(
-                            title: WPGoalCopy.goalName(goal),
-                            subtitle: WPGoalCopy.tileUntil(goal: goal, end: input.end(for: goal)),
-                            isSelected: goal == input.selectedGoal
-                        ) { select(goal) }
+                // Open picker: the bottom Done closes it, so the row steps aside to save height.
+                if !pickerOpen { forDaysRow.padding(.top, showsForDays ? WP.Space.s3 : 0) }
+                if pickerOpen {
+                    forDaysPickerSection.padding(.top, WP.Space.s3)
+                    forDaysDone.padding(.top, WP.Space.s3)
+                } else {
+                    HStack(spacing: WP.Space.s2) {
+                        ForEach(WPGoalCopy.tileOrder, id: \.rawValue) { goal in
+                            WPGoalTile(
+                                title: WPGoalCopy.goalName(goal),
+                                subtitle: input.tileUntil(goal),
+                                isSelected: goal == input.selectedGoal
+                            ) { select(goal) }
+                        }
                     }
+                    .padding(.top, WP.Space.s3)
+                    .onGeometryChange(for: CGRect.self, of: { proxy in
+                        proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
+                    }) { onTileRowFrame?($0) }
+                    startDriving.padding(.top, WP.Space.s3)
                 }
-                .padding(.top, WP.Space.s3)
-                .onGeometryChange(for: CGRect.self, of: { proxy in
-                    proxy.frame(in: .named(onboardingCoachCoordinateSpaceName))
-                }) { onTileRowFrame?($0) }
-                startDriving.padding(.top, WP.Space.s3)
             }
         }
     }
 
+    // MARK: DT35-1 For-days "Free until" (Stoop)
+
+    private var showsForDays: Bool {
+        onSetForDaysUntil != nil && input.selectedGoal == .parkAndForget
+    }
+
+    private var pickerOpen: Bool { showsForDays && forDaysPickerOpen.wrappedValue }
+
+    @ViewBuilder private var forDaysBannerView: some View {
+        if let banner = input.forDaysBanner {
+            WPForDaysBanner(state: banner).padding(.bottom, WP.Space.s3)
+        }
+    }
+
+    @ViewBuilder private var forDaysRow: some View {
+        if showsForDays {
+            let state = input.forDaysState
+            let pick = input.forDaysPick
+            WPForDaysRow(
+                isFallback: state?.isFallback ?? false,
+                value: pick.map { WPForDaysCopy.stamp($0) } ?? WPForDaysCopy.autoValue,
+                spokenValue: pick.map { WPForDaysCopy.spokenStamp($0) } ?? WPForDaysCopy.autoValue,
+                isOpen: pickerOpen
+            ) {
+                withAnimation(.easeOut(duration: 0.18)) { forDaysPickerOpen.wrappedValue.toggle() }
+            }
+        }
+    }
+
+    private var forDaysPickerSection: some View {
+        WPForDaysPicker(
+            now: input.now,
+            morningHour: input.morningHour,
+            value: input.forDaysPick ?? input.forDaysEnd,
+            isAuto: input.forDaysPick == nil,
+            showClampNote: input.forDaysClampNote,
+            onPick: { onSetForDaysUntil?($0) },
+            onAuto: { onSetForDaysUntil?(nil) }
+        )
+    }
+
+    private var forDaysDone: some View {
+        Button("Done") { forDaysPickerOpen.wrappedValue = false }
+            .buttonStyle(.wpInkPill)
+            .accessibilityHint("Closes the end time picker")
+    }
+
     private func select(_ goal: ParkingGoal) {
         leverOpen = false
+        forDaysPickerOpen.wrappedValue = false
         onSelectGoal(goal)
     }
 
@@ -189,14 +278,42 @@ struct WPGoalSheetV2: View {
     private var accessibilityBody: some View {
         let cap = UIScreen.main.bounds.height * 0.78
         return WPSheetShell {
+            if pickerOpen {
+                // The picker takes the full-height sheet, uncapped, so AX5 text and the 72 pt
+                // stepper buttons are real. Done stays pinned below.
+                ScrollView {
+                    VStack(alignment: .leading, spacing: WP.Space.s3) {
+                        // Banner + headline stay readable but capped, so the controls are on
+                        // screen at AX5; the picker below is uncapped.
+                        VStack(alignment: .leading, spacing: WP.Space.s3) {
+                            forDaysBannerView
+                            headline
+                        }
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility1)
+                        forDaysPickerSection
+                    }
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                .frame(maxHeight: cap)
+                forDaysDone.padding(.top, WP.Space.s3)
+            } else {
+                accessibilityGoalRows(cap: cap)
+            }
+        }
+    }
+
+    private func accessibilityGoalRows(cap: CGFloat) -> some View {
+        Group {
             ScrollView {
                 VStack(alignment: .leading, spacing: WP.Space.s3) {
+                    forDaysBannerView
                     headline
                     if leverOpen && input.selectedGoal == .freeOvernight { chips }
                     if let fact = input.factLine { factText(fact) }
+                    forDaysRow
                     ForEach(WPGoalCopy.tileOrder, id: \.rawValue) { goal in
                         Button { select(goal) } label: {
-                            Text("\(WPGoalCopy.goalName(goal)), \(WPGoalCopy.tileUntil(goal: goal, end: input.end(for: goal)))")
+                            Text("\(WPGoalCopy.goalName(goal)), \(input.tileUntil(goal))")
                                 .font(WP.Font.fredoka(17, .semibold, relativeTo: .body))
                                 .multilineTextAlignment(.leading)
                                 .fixedSize(horizontal: false, vertical: true)
