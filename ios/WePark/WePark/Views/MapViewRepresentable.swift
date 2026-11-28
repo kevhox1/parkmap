@@ -3114,9 +3114,9 @@ struct MapViewRepresentable: UIViewRepresentable {
                let multi = overlay as? TaggedMultiPolyline,
                let kind = CurbLineStyleV2.kind(for: multi.overlayTag, detailMode: parent.curbLineDetailMode) {
                 let renderer = MKMultiPolylineRenderer(multiPolyline: multi)
-                CurbLineStyleV2.apply(
+                applyCurbStyle(
                     CurbLineStyleV2.style(for: kind), to: renderer,
-                    scale: CurbLineStyleV2.zoomScale(latitudeDelta: mapView.region.span.latitudeDelta)
+                    latitudeDelta: mapView.region.span.latitudeDelta
                 )
                 return renderer
             }
@@ -3177,7 +3177,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let renderer = MKPolylineRenderer(polyline: under)
                 Self.styleSelectedUnderlay(
                     renderer, role: under.role,
-                    scale: CurbLineStyleV2.zoomScale(latitudeDelta: mapView.region.span.latitudeDelta),
+                    scale: curbRenderScale(latitudeDelta: mapView.region.span.latitudeDelta),
                     dark: mapView.traitCollection.userInterfaceStyle == .dark
                 )
                 return renderer
@@ -3188,7 +3188,7 @@ struct MapViewRepresentable: UIViewRepresentable {
                 let kind = CurbLineStyleV2.kind(for: sel.currentState, detailMode: parent.curbLineDetailMode)
                 Self.styleSelectedLine(
                     renderer, kind: kind,
-                    scale: CurbLineStyleV2.zoomScale(latitudeDelta: mapView.region.span.latitudeDelta)
+                    scale: curbRenderScale(latitudeDelta: mapView.region.span.latitudeDelta)
                 )
                 return renderer
             }
@@ -3372,7 +3372,7 @@ struct MapViewRepresentable: UIViewRepresentable {
         private var lastCurbLineScale: CGFloat = 1
         private func rescaleCurbLines(on mapView: MKMapView, latitudeDelta: Double) {
             guard AppConstants.designSystemV2Enabled else { return }
-            let scale = CurbLineStyleV2.zoomScale(latitudeDelta: latitudeDelta)
+            let scale = curbRenderScale(latitudeDelta: latitudeDelta)
             guard scale != lastCurbLineScale else { return }
             lastCurbLineScale = scale
             for overlay in mapView.overlays {
@@ -3394,8 +3394,31 @@ struct MapViewRepresentable: UIViewRepresentable {
                 guard let multi = overlay as? TaggedMultiPolyline,
                       let kind = CurbLineStyleV2.kind(for: multi.overlayTag, detailMode: parent.curbLineDetailMode)
                 else { continue }
-                CurbLineStyleV2.apply(CurbLineStyleV2.style(for: kind), to: renderer, scale: scale)
+                applyCurbStyle(
+                    CurbLineStyleV2.style(for: kind), to: renderer, latitudeDelta: latitudeDelta
+                )
                 renderer.setNeedsDisplay()
+            }
+        }
+
+        /// R35 PR2: width scale for curb lines (flag on). Drive Mode keeps the legacy zoom scale;
+        /// browse uses the zoom-band width (`WPCurbZoomBand`).
+        private func curbRenderScale(latitudeDelta: Double) -> CGFloat {
+            parent.driveModeActive
+                ? CurbLineStyleV2.zoomScale(latitudeDelta: latitudeDelta)
+                : WPCurbZoomBand.renderScale(latitudeDelta: latitudeDelta)
+        }
+
+        /// R35 PR2: styles one parking-state curb renderer (flag on).
+        private func applyCurbStyle(_ style: CurbLineStyle, to renderer: MKOverlayPathRenderer, latitudeDelta: Double) {
+            if parent.driveModeActive {
+                CurbLineStyleV2.apply(
+                    style, to: renderer, scale: CurbLineStyleV2.zoomScale(latitudeDelta: latitudeDelta)
+                )
+            } else {
+                CurbLineStyleV2.applyZoomBand(
+                    style, to: renderer, scale: WPCurbZoomBand.renderScale(latitudeDelta: latitudeDelta)
+                )
             }
         }
 

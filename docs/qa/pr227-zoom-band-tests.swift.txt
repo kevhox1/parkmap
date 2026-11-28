@@ -1,0 +1,49 @@
+//  QA-owned checks for R35 PR2 (not the builder's tests).
+import XCTest
+@testable import WePark
+
+final class QA227ZoomBandTests: XCTestCase {
+    func testBoundaries() {
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: 0.012), .full)
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: 0.0120001), .greenOnly)
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: 0.020), .greenOnly)
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: 0.0200001), .off)
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: 90), .off)
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: .infinity), .full)  // unusable input = full (flag)
+        XCTAssertEqual(WPCurbZoomBand.band(latitudeDelta: .nan), .full)
+    }
+    func testWidthsSweep() {
+        var d = 0.0005
+        var prevBand = WPCurbZoomBand.full
+        while d < 0.05 {
+            let b = WPCurbZoomBand.band(latitudeDelta: d)
+            let w = WPCurbZoomBand.width(latitudeDelta: d, band: b)
+            XCTAssertGreaterThanOrEqual(w, 1.5); XCTAssertLessThanOrEqual(w, 4.5)
+            if b == .greenOnly { XCTAssertGreaterThanOrEqual(w, 2.0) }
+            // bands never go backwards as we zoom out
+            XCTAssertTrue(!(prevBand == .off && b != .off) && !(prevBand == .greenOnly && b == .full))
+            prevBand = b
+            // dashed lineWidth after inflation correction stays positive and below 2x intended
+            XCTAssertGreaterThan(w / WPCurbZoomConstants.dashedRenderInflation, 0.5)
+            d += 0.0001
+        }
+    }
+    func testFilterNeverAddsGreen() {
+        let g = WPCurbZoomBand.Groups(free: [1, 2], soon: [3], metered: [4], restricted: [5, 6], unknown: [7])
+        let f = WPCurbZoomBand.filter(payloadGroups: g, band: .greenOnly)
+        XCTAssertEqual(f.free, [1, 2]); XCTAssertTrue(f.soon.isEmpty && f.metered.isEmpty && f.restricted.isEmpty && f.unknown.isEmpty)
+        let full = WPCurbZoomBand.filter(payloadGroups: g, band: .full)
+        XCTAssertEqual(full.restricted, [5, 6])
+        let off = WPCurbZoomBand.filter(payloadGroups: g, band: .off)
+        XCTAssertTrue(off.free.isEmpty)
+    }
+    func testHints() {
+        XCTAssertNil(WPCurbZoomBand.hint(for: .full))
+        XCTAssertEqual(WPCurbZoomBand.hint(for: .greenOnly), "Green curbs only. Zoom in to see the rest.")
+        XCTAssertEqual(WPCurbZoomBand.hint(for: .off), "Zoom in to see parking")
+    }
+    func testLaunchRegionInsideCutoff() {
+        XCTAssertLessThanOrEqual(ContentView.initialLaunchRegion(driveModeDefaultEnabled: true).span.latitudeDelta,
+                                 WPCurbZoomConstants.fullMaxDelta)
+    }
+}

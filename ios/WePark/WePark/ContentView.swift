@@ -217,6 +217,7 @@
 import SwiftUI
 import MapKit
 import Combine
+import os
 
 // MARK: - ActiveSheet
 
@@ -2993,6 +2994,8 @@ struct ContentView: View {
         } else {
             now = requestedNow
         }
+        let signpostState = WPOverlayPerf.signposter.beginInterval("rebuildOverlays")
+        defer { WPOverlayPerf.signposter.endInterval("rebuildOverlays", signpostState) }
         // DM-2 (`docs/drive-mode-default-spec.md` §0.8.6/§0.8.9): when the goal-first
         // ambient dock owns the filter (flag on, not toggled to full-palette), (re)resolve
         // the active goal's target FRESH on every single rebuild — Free Overnight/Few
@@ -3095,7 +3098,13 @@ struct ContentView: View {
         // polyline payload now, never `parkUntilMode`/`parkUntilTarget`/
         // `parkAndForgetGuardState`, which must stay truthful even while the map is zoomed
         // out too far to draw any polylines at all.
-        guard region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold else {
+        // R35 PR2 (Stoop): the cutoff is the zoom band (green only up to 0.020, nothing above),
+        // not the legacy 0.04 `polylineHideSpanThreshold`. Flag off: unchanged.
+        let zoomBand = WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta)
+        let hideOverlays = AppConstants.designSystemV2Enabled
+            ? zoomBand == .off
+            : region.span.latitudeDelta > AppConstants.polylineHideSpanThreshold
+        guard !hideOverlays else {
             commitOverlayPayload(MapViewRepresentable.OverlayPayload())
             return
         }
@@ -3146,11 +3155,17 @@ struct ContentView: View {
                 )
                     ? .freeComfortably : .restrictedNow
             }
+            let tripGroups = WPCurbZoomBand.filter(
+                payloadGroups: WPCurbZoomBand.Groups(
+                    free: freeCoords, soon: [], metered: [], restricted: notFreeCoords, unknown: []
+                ),
+                band: AppConstants.designSystemV2Enabled ? zoomBand : .full
+            )
             commitOverlayPayload(MapViewRepresentable.OverlayPayload(
-                freeComfortably:        freeCoords,
+                freeComfortably:        tripGroups.free,
                 freeButRestrictionSoon: [],
                 meteredActive:          [],
-                restrictedNow:          notFreeCoords,
+                restrictedNow:          tripGroups.restricted,
                 unknown:                [],
                 selectedCoords:         selectedCoords,
                 selectedState:          selectedState,
@@ -3246,12 +3261,20 @@ struct ContentView: View {
                 }
             }
 
+            // R35 PR2: in the green-only band drop every non-green group (green is untouched).
+            let goalGroups = WPCurbZoomBand.filter(
+                payloadGroups: WPCurbZoomBand.Groups(
+                    free: freeCoords, soon: soonCoords, metered: meteredCoords,
+                    restricted: notFreeCoords, unknown: noDataCoords
+                ),
+                band: AppConstants.designSystemV2Enabled ? zoomBand : .full
+            )
             commitOverlayPayload(MapViewRepresentable.OverlayPayload(
-                freeComfortably:        freeCoords,
-                freeButRestrictionSoon: soonCoords,
-                meteredActive:          meteredCoords,
-                restrictedNow:          notFreeCoords,
-                unknown:                noDataCoords,
+                freeComfortably:        goalGroups.free,
+                freeButRestrictionSoon: goalGroups.soon,
+                meteredActive:          goalGroups.metered,
+                restrictedNow:          goalGroups.restricted,
+                unknown:                goalGroups.unknown,
                 selectedCoords:         selectedCoords,
                 selectedState:          selectedState,
                 generation:             0
@@ -3305,12 +3328,19 @@ struct ContentView: View {
             }
         }
 
+        let stateGroups = WPCurbZoomBand.filter(
+            payloadGroups: WPCurbZoomBand.Groups(
+                free: freeComfortably, soon: freeButRestrictionSoon, metered: meteredActive,
+                restricted: restrictedNow, unknown: unknown
+            ),
+            band: AppConstants.designSystemV2Enabled ? zoomBand : .full
+        )
         commitOverlayPayload(MapViewRepresentable.OverlayPayload(
-            freeComfortably:        freeComfortably,
-            freeButRestrictionSoon: freeButRestrictionSoon,
-            meteredActive:          meteredActive,
-            restrictedNow:          restrictedNow,
-            unknown:                unknown,
+            freeComfortably:        stateGroups.free,
+            freeButRestrictionSoon: stateGroups.soon,
+            meteredActive:          stateGroups.metered,
+            restrictedNow:          stateGroups.restricted,
+            unknown:                stateGroups.unknown,
             selectedCoords:         selectedCoords,
             selectedState:          selectedState,
             generation:             0
@@ -3333,10 +3363,13 @@ struct ContentView: View {
                     UInt64(truncatingIfNeeded: payload.selectedState.hashValue)
                     &+ (driveModeActive ? 0x51 : 0)
                     &+ (signDetailsOn ? 0xA3 : 0)
+                    &+ UInt64(truncatingIfNeeded: WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta).hashValue)
                 )
             )
             guard overlaySignatureBox.shouldPublish(signature) else { return }
         }
+        let publishState = WPOverlayPerf.signposter.beginInterval("applyOverlayPayload")
+        defer { WPOverlayPerf.signposter.endInterval("applyOverlayPayload", publishState) }
         overlayGeneration += 1
         var published = payload
         published.generation = overlayGeneration
@@ -4122,7 +4155,14 @@ struct ContentView: View {
     /// `loadTiles` call on this same callback.
     private func handleRegionChanged(_ newRegion: MKCoordinateRegion) {
         region = newRegion
-        tileLoader.loadTiles(forRegion: newRegion)
+        // R35 PR2 (Stoop): above the zoom cutoff no curb is drawn, so do not decode ~10,000
+        // segments nobody can see. Measured on the sim: the rebuild over that wide tile set cost
+        // 0.9 to 1.4 s of main thread per zoom step, and the set stayed loaded (so the zoom back in
+        // paid it again) until tiles were evicted. Flag off: unchanged.
+        if !(AppConstants.designSystemV2Enabled
+             && WPCurbZoomBand.band(latitudeDelta: newRegion.span.latitudeDelta) == .off) {
+            tileLoader.loadTiles(forRegion: newRegion)
+        }
         // Community 1.0 / Tier 1: debounced fetch for community pins (800ms debounce).
         pinService.onRegionChanged(newRegion)
         if ContentView.shouldRebuildOverlaysOnRegionChange(driveModeActive: driveModeActive) {
@@ -4537,13 +4577,21 @@ struct ContentView: View {
     /// drawing: show the loading pill and draw no lines.
     private var v2Loading: Bool {
         tileLoader.segments.isEmpty
-            && region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold
+            && (AppConstants.designSystemV2Enabled
+                ? WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta) != .off
+                : region.span.latitudeDelta <= AppConstants.polylineHideSpanThreshold)
             && !v2OutsideCoverage
     }
 
     private var v2Pill: WPTopPill {
         if v2Loading { return .loading }
         if v2LocationOff { return .info("Showing Manhattan") }
+        // R35 PR2: zoomed out, say plainly what the map is (and is not) showing. It replaces the
+        // street-cleaning pill while zoomed out; that fact returns on zoom in. Not in Drive Mode.
+        if !driveModeActive,
+           let hint = WPCurbZoomBand.hint(for: WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta)) {
+            return .info(hint)
+        }
         return wpStreetCleaningPill(state: bannerState, now: lastEvaluatedAt)
     }
 
@@ -4552,7 +4600,8 @@ struct ContentView: View {
         WPTopChromeV2(
             pill: v2OutsideCoverage ? .none : v2Pill,
             offlineAsOf: networkStatus.isOffline ? networkStatus.lastOnlineLabel : nil,
-            showLegend: signDetailsOn && !v2OutsideCoverage,
+            showLegend: signDetailsOn && !v2OutsideCoverage
+                && WPCurbZoomBand.band(latitudeDelta: region.span.latitudeDelta) == .full,
             onHideDetails: {
                 signDetailsOn = false
                 rebuildOverlays(at: .nowET)

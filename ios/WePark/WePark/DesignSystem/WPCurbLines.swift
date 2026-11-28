@@ -113,6 +113,22 @@ enum CurbLineStyleV2 {
         renderer.lineDashPattern = style.dashPattern?.map { NSNumber(value: Double($0 * scale)) }
     }
 
+    /// R35 PR2 (Stoop browse, not Drive Mode): applies `style` at the zoom-band width. `scale` is
+    /// the width relative to the 6 pt design width (`WPCurbZoomBand.renderScale`). Dash and dot
+    /// patterns scale by it (floored), and a dashed line's `lineWidth` is divided by the measured
+    /// MapKit dash inflation so the width ON SCREEN is the intended one (see
+    /// `WPCurbZoomConstants.dashedRenderInflation`).
+    @MainActor
+    static func applyZoomBand(_ style: CurbLineStyle, to renderer: MKOverlayPathRenderer, scale: CGFloat) {
+        let dashScale = WPCurbZoomBand.dashScale(forRenderScale: scale)
+        let dashed = style.dashPattern != nil
+        renderer.strokeColor = UIColor(wpHex: style.colorHex)
+        renderer.lineWidth = style.width * scale / (dashed ? WPCurbZoomConstants.dashedRenderInflation : 1)
+        renderer.lineCap = style.roundCaps ? .round : .butt
+        renderer.lineJoin = .round
+        renderer.lineDashPattern = style.dashPattern?.map { NSNumber(value: Double($0 * dashScale)) }
+    }
+
     // MARK: Zoom scaling (Phase 2b, Phase 2a QA gap: "curb dashes read heavy at close zoom")
 
     /// The spec widths (6pt line, [10, 8] dash) are drawn at a typical street-level zoom, about
