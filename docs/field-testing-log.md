@@ -1276,3 +1276,28 @@ Colors are right, but the dotted lines sit mid-road, and on some blocks there ar
 
 ### DT35-8 🟡 AX5 drive mode: the Park Until pill is squeezed (found by the PR #223 builder)
 In AX5 drive mode with Stoop on, the Park Until pill gets a tiny layout frame. Its text renders three lines tall and overlaps the street pill and End, and it partly covers the Maps logo. Reproduces on `main`. It's the same compression family as the street-cleaning pill (fixed in #223). In AX5 the drive card already takes about 55% of the screen. Follow-up PR queued.
+
+---
+
+## 2026-11-27 (evening) — Build 35 phone review, Midtown (Penn Station / W 33rd)
+
+Kevin went through checklist sections 3–9 on his phone. **Passed:** 3a, 3c, 3d (green doesn't grow), 4b, 5a–5c, 6a, 6c, 8a–8c, 9a (nothing cut off). **Not run:** 4c (no unclear signs nearby), 7 (Gersi not there). 4a: the card says "Free until …" rather than "yes", which is fine by design.
+
+### R35-1 🔴 "A few hours" end time goes stale while the app stays open
+At 10:05 PM it said "until 1:04 AM · 3 h from now". Twenty minutes later it still said 1:04 AM. The window and countdown only recompute on a map rebuild (pan or zoom), not over time. Both the countdown and the window, including the green it drives, must stay current while the app is open, and refresh on foreground.
+
+### R35-2 🟡 Unused space in the sheets
+The search-result card (e.g. "Penn Station · No free curbs within 2 blocks") has a large empty gap between the goal tiles and "Drive here". The sheet could be shorter and show more map.
+
+### R35-3 🟡 Locate zooms in too close
+Locate lands at building level (W 33rd St fills the screen). It should zoom out a bit, enough to see the surrounding blocks' curbs.
+
+### R35-4 🟡 Zoomed out: red curbs merge into a blanket and the map lags
+At neighborhood zoom (W 29th–50th) the red curb lines are so thick they merge and cover almost the whole map. Zoomed in near Penn Station, red curbs read like salmon building blocks. Zooming out a lot still lags. The overlay already turns off at far zoom ("smart"); Kevin suggests turning it off earlier, which may also help the lag. Ideas: zoom-scaled line widths; above a zoom level, drop red and show only green; an earlier overlay cutoff.
+
+### R35-5 ℹ️ Reminders are hard to test on a long window
+The spot was free until Tuesday morning, so no short reminder could be set. Not a bug, but a "test reminder" or a short-window spot is needed to check 6b.
+
+### New feature requests (Kevin, same session)
+- **F-1 Plan a Trip needs a destination address.** Today it only takes arrival and departure times (`Views/WPTripPlannerV2.swift`). Kevin wants to enter an address and see that destination's parking for the trip window.
+- **F-2 Optimal parking route ("Parking Hunt").** Set a destination, and the app plans the best route or loop to find free parking near it, either with in-app directions or handed off to Apple Maps. Stickier for new users. "Optimal" needs workshopping. Builds on `docs/smart-parking-route-2.0-concept.md` (June 2026) and the cruise-guidance docs.
