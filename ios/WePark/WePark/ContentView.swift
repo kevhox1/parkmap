@@ -4707,10 +4707,33 @@ struct ContentView: View {
         .presentationBackgroundInteraction(.enabled(upThrough: .medium))
     }
 
-    /// Curb sheet "Park here" / "Park here anyway": the EXISTING save path (`confirmPinDrop`),
-    /// reminders on by default, same ordering as the placement commit (rest sheet first so a
-    /// first-ever park's priming sheet is not overwritten).
+    /// Curb sheet "Park here" / "Park here anyway" (DT35-3): does NOT save. It closes the sheet and puts
+    /// the car on the tapped curb as a pending draft ("Not saved yet"): at the foot point of the user's
+    /// fix when it is within 40 m of that curb, else at the curb's midpoint. The side is the tapped curb
+    /// (certain). The user can drag the car, flip with "Other side of the street", then confirm, which
+    /// runs the EXISTING save path (`confirmV2Park` -> `confirmPinDrop`).
+    ///
+    /// The pending card needs the rest state to be "no sheet" (the goal-sheet world,
+    /// `driveModeDefaultEnabled`). With the browse sheet as the rest state it would cover the card, so
+    /// that configuration keeps the earlier one-tap save (`v2ParkOnCurbNow`).
     private func v2ParkOnCurb(_ segment: Segment) {
+        guard AppConstants.driveModeDefaultEnabled, tripPlan == nil else {
+            v2ParkOnCurbNow(segment)
+            return
+        }
+        guard let snap = WPParkFlowController.pendingSnap(on: segment, near: locationService.userLocation) else { return }
+        activeSheet = dismissTargetOutsideBrowseNav
+        v2ParkFlow.prepareIndex(segments: tileLoader.segments)
+        v2ParkFlow.enterPending(
+            at: snap, segments: tileLoader.segments,
+            engine: engine, now: .nowET, windowEnd: v2WindowEnd, trip: tripPlan,
+            reports: { v2NeighborReports(for: $0, now: .nowET) }
+        )
+        selectedSegmentID = segment.id
+    }
+
+    /// The one-tap save at the curb's midpoint (browse-sheet rest state only; see `v2ParkOnCurb`).
+    private func v2ParkOnCurbNow(_ segment: Segment) {
         guard let coord = segment.midpoint ?? segment.coordinates.first else { return }
         selectedSegmentID = nil
         activeSheet = dismissTargetOutsideBrowseNav
@@ -4827,7 +4850,8 @@ struct ContentView: View {
             address: addressCoordinator.placementAddress.map(ParkingAddressCopy.line),
             onConfirm: { confirmV2Park() },
             placeAtUser: { v2PlaceCarAtUser() },
-            restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28)
+            restingPoint: CGPoint(x: screen.width / 2, y: screen.height * 0.28),
+            onRevealCar: { ground, targetY in v2RevealPendingCar(ground, targetY: targetY) }
         )
         .task(id: tileLoader.segments.count) {
             // Build the snap index ahead of the first drag (a quick drag must not beat it).
@@ -4842,6 +4866,10 @@ struct ContentView: View {
                 addressCoordinator.placementSnapChanged(v2ParkFlow.snap.map { ParkingAddressRequest(snap: $0) })
             }
         }
+        .onChange(of: driveModeActive) { _, active in
+            // Entering Drive Mode discards a pending placement (a draft is never kept).
+            if active, v2ParkFlow.phase != .idle { v2ParkFlow.reset() }
+        }
         .onChange(of: v2ParkFlow.phase) { _, phase in
             // Starting the drag IS mark 3's real control (drag-to-park): the lesson is done.
             if phase != .idle, onboardingCoachMark == .tapABlock { finishOnboardingCoach() }
@@ -4850,6 +4878,18 @@ struct ContentView: View {
                 addressCoordinator.clearPlacement()
             }
         }
+    }
+
+    /// The pending card covers the lower part of the map: slide the map so the car sits at `targetY`
+    /// (window points) in the open part. Screen-space shift, so a rotated map works too.
+    private func v2RevealPendingCar(_ ground: CLLocationCoordinate2D, targetY: CGFloat) {
+        let screen = UIScreen.main.bounds
+        guard let current = coordinatorActions.screenPointForCoordinate?(ground) else { return }
+        let shift = current.y - targetY
+        guard let center = coordinatorActions.coordinateForWindowPoint?(
+            CGPoint(x: screen.width / 2, y: screen.height / 2 + shift)
+        ) else { return }
+        recenterMap(on: center)
     }
 
     /// Confirm card "Park here" / "Park here anyway": the existing `confirmPinDrop` (park, save,
@@ -4862,7 +4902,7 @@ struct ContentView: View {
             detectedSegment: snap.segment, detectedSegmentDistance: snap.distanceMeters,
             alternativeCandidates: []
         )
-        v2ParkFlow.reset()
+        v2ParkFlow.commit()
         selectedSegmentID = nil
         addressCoordinator.clearPlacement()
         confirmPinDrop(result: PinConfirmResult(intent: intent, notifyOnRestriction: true), address: address)

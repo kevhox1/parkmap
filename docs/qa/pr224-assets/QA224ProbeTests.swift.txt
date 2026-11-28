@@ -1,0 +1,240 @@
+import XCTest
+import CoreLocation
+@testable import WePark
+
+/// QA-only probe (PR #224). Independent cases over REAL bundled tiles; ground truth is brute-force
+/// geometry (ENU maths + nearestPointOnPolyline), not the controller's own logic.
+@MainActor
+final class QA224ProbeTests: XCTestCase {
+    static var all: [Segment] = []
+    let now = Date(timeIntervalSinceReferenceDate: 800_000_000)
+    let engine = ParkingRulesEngine()
+
+    override func setUpWithError() throws {
+        if !Self.all.isEmpty { return }
+        let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("WePark/Resources/tiles")
+        let files = try FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix("tile_") && $0.pathExtension == "json" }
+        for f in files { Self.all += (try? JSONDecoder().decode([Segment].self, from: Data(contentsOf: f))) ?? [] }
+    }
+
+    struct Blk { let tag: String; let street: String; let ends: [Set<String>] }
+    let blocks: [Blk] = [
+        Blk(tag: "Stanton Bowery-Chrystie", street: "STANTON STREET", ends: [["BOWERY", "CHRYSTIE STREET"]]),
+        Blk(tag: "Lexington E105-106", street: "LEXINGTON AVENUE", ends: [["EAST 105TH STREET", "EAST 106TH STREET"]]),
+        Blk(tag: "Madison E74-75", street: "MADISON AVENUE", ends: [["EAST 74TH STREET", "EAST 75TH STREET"]]),
+        Blk(tag: "Broadway W101-102", street: "BROADWAY", ends: [["WEST 101ST STREET", "WEST 102ND STREET"]]),
+        Blk(tag: "Broadway E10-12 differing", street: "BROADWAY", ends: [["EAST 10TH STREET", "EAST 12TH STREET"], ["EAST 10TH STREET", "EAST 11TH STREET"], ["EAST 11TH STREET", "EAST 12TH STREET"]]),
+    ]
+
+    func pieces(_ b: Blk) -> [Segment] {
+        Self.all.filter { $0.street == b.street && b.ends.contains(Set([$0.fromStreet, $0.to])) }
+    }
+    func local(_ ps: [Segment]) -> [Segment] {
+        guard let o = ps.first?.coordinates.first else { return [] }
+        return Self.all.filter {
+            guard let c = $0.coordinates.first else { return false }
+            return abs(c.latitude - o.latitude) < 0.004 && abs(c.longitude - o.longitude) < 0.005
+        }
+    }
+    func ready(_ segs: [Segment]) async -> WPParkFlowController {
+        let f = WPParkFlowController(); f.prepareIndex(segments: segs)
+        let end = Date().addingTimeInterval(20)
+        while !f.indexReady && Date() < end { try? await Task.sleep(for: .milliseconds(20)) }
+        return f
+    }
+    func m(_ a: CLLocationCoordinate2D, _ b: CLLocationCoordinate2D) -> Double {
+        CLLocation(latitude: a.latitude, longitude: a.longitude).distance(from: CLLocation(latitude: b.latitude, longitude: b.longitude))
+    }
+    func off(_ c: CLLocationCoordinate2D, east: Double, north: Double) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: c.latitude + north / 110_540, longitude: c.longitude + east / (111_320 * cos(c.latitude * .pi / 180)))
+    }
+    func upd(_ f: WPParkFlowController, _ c: CLLocationCoordinate2D) {
+        f.update(point: .zero, coordinate: c, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil)
+    }
+    func nearest(_ c: CLLocationCoordinate2D, in segs: [Segment]) -> (Segment, Double)? {
+        var best: (Segment, Double)?
+        for s in segs { if let p = CandidateSegmentSearch.nearestPointOnPolyline(from: c, polyline: s.coordinates), best == nil || p.distanceMeters < best!.1 { best = (s, p.distanceMeters) } }
+        return best
+    }
+
+    /// 1. Drag along each curb piece at 2 m off the curb toward the street.
+    func testDragAlongBlocks() async throws {
+        for b in blocks {
+            let ps = pieces(b); let loc = local(ps)
+            let flow = await ready(loc)
+            XCTAssertTrue(flow.indexReady, b.tag)
+            var steps = 0, bad = 0, staleModel = 0, maxJump = 0.0, pieceChanges = 0
+            for p in ps {
+                let c = p.coordinates; guard c.count >= 2 else { continue }
+                flow.reset()
+                flow.beginDrag(from: .zero)
+                var len = 0.0; for i in 1..<c.count { len += m(c[i-1], c[i]) }
+                var prev: CLLocationCoordinate2D?; var prevID: String?
+                for d in stride(from: 0.0, through: len, by: 1.0) {
+                    guard let on = CandidateSegmentSearch.coordinate(atFraction: d / len, along: c) else { continue }
+                    let facing = loc.filter { $0.side != p.side && $0.street == p.street }
+                    guard let fnear = nearest(on, in: facing), let fp = CandidateSegmentSearch.nearestPointOnPolyline(from: on, polyline: fnear.0.coordinates) else { continue }
+                    let dx = (fp.coordinate.longitude - on.longitude) * 111_320 * cos(on.latitude * .pi / 180)
+                    let dy = (fp.coordinate.latitude - on.latitude) * 110_540
+                    let n = hypot(dx, dy); if n < 2 { continue }
+                    let finger = off(on, east: dx / n * 2, north: dy / n * 2)
+                    upd(flow, finger); steps += 1
+                    guard let snap = flow.snap, let model = flow.model else { bad += 1; continue }
+                    guard let truth = nearest(finger, in: loc) else { continue }
+                    let foot = CandidateSegmentSearch.nearestPointOnPolyline(from: finger, polyline: snap.segment.coordinates)!
+                    if m(foot.coordinate, snap.snappedCoordinate) > 0.5 { bad += 1 }
+                    if foot.distanceMeters > truth.1 + 1.6 { bad += 1 }
+                    let fresh = WPNeighborVerdict.resolve(segment: snap.segment, engine: engine, now: now, windowEnd: nil, trip: nil, reports: WPNeighborReports())
+                    if fresh.title != model.title || fresh.variant != model.variant || fresh.big != model.big { staleModel += 1 }
+                    if let prev { maxJump = max(maxJump, m(prev, snap.snappedCoordinate)) }
+                    if let prevID, prevID != snap.segment.id { pieceChanges += 1 }
+                    prev = snap.snappedCoordinate; prevID = snap.segment.id
+                }
+            }
+            print("QA224 DRAG \(b.tag): pieces=\(ps.count) steps=\(steps) bad=\(bad) staleModel=\(staleModel) maxJump=\(Int(maxJump))m pieceChanges=\(pieceChanges)")
+            XCTAssertGreaterThan(steps, 20, b.tag)
+            XCTAssertEqual(bad, 0, b.tag); XCTAssertEqual(staleModel, 0, b.tag)
+        }
+    }
+
+    /// 2. Cross the street at fixed along position; flip must be within the 1.5 m dead-band of the centre line.
+    func testCrossStreetFlip() async throws {
+        for b in blocks {
+            let ps = pieces(b); let loc = local(ps)
+            let flow = await ready(loc)
+            var cases = 0, bad = 0; var worstLate = 0.0; var worstEarly = 0.0
+            for a in ps {
+                for f in [0.2, 0.5, 0.8] {
+                    guard let on = CandidateSegmentSearch.coordinate(atFraction: f, along: a.coordinates) else { continue }
+                    let facing = loc.filter { $0.side != a.side && $0.street == a.street }
+                    guard let fnear = nearest(on, in: facing), fnear.1 < 30,
+                          let fp = CandidateSegmentSearch.nearestPointOnPolyline(from: on, polyline: fnear.0.coordinates) else { continue }
+                    let dx = (fp.coordinate.longitude - on.longitude) * 111_320 * cos(on.latitude * .pi / 180)
+                    let dy = (fp.coordinate.latitude - on.latitude) * 110_540
+                    let w = hypot(dx, dy); if w < 6 { continue }
+                    func pt(_ t: Double) -> CLLocationCoordinate2D { off(on, east: dx * t / w, north: dy * t / w) }
+                    flow.reset(); flow.beginDrag(from: .zero)
+                    upd(flow, pt(0.3))
+                    guard let startSnap = flow.snap else { continue }
+                    cases += 1
+                    var flipAt: Double?
+                    var t = 0.3
+                    while t < w - 0.3 {
+                        upd(flow, pt(t))
+                        if let s = flow.snap, s.segment.side != startSnap.segment.side { flipAt = t; break }
+                        t += 0.2
+                    }
+                    guard let fa = flipAt, let s = flow.snap else { bad += 1; continue }
+                    let dStart = CandidateSegmentSearch.nearestPointOnPolyline(from: pt(fa), polyline: startSnap.segment.coordinates)!.distanceMeters
+                    let lag = dStart - s.distanceMeters
+                    worstLate = max(worstLate, lag); worstEarly = min(worstEarly, lag)
+                    if lag < -0.3 || lag > 1.5 + 0.8 { bad += 1 }
+                }
+            }
+            print("QA224 FLIP \(b.tag): cases=\(cases) bad=\(bad) flipLag(max,min)=\(String(format: "%.2f", worstLate)),\(String(format: "%.2f", worstEarly))")
+            XCTAssertEqual(bad, 0, b.tag)
+        }
+    }
+
+    /// 3. Over no curb: cleared, never stale; off-curb release restores the last curb. Verdict reach.
+    func testOffCurb() async throws {
+        let b = blocks[0]; let ps = pieces(b); let loc = local(ps)
+        let flow = await ready(loc)
+        let a = ps[0]
+        let on = CandidateSegmentSearch.coordinate(atFraction: 0.5, along: a.coordinates)!
+        let snap = WPParkFlowController.pendingSnap(on: a, near: on)!
+        flow.enterPending(at: snap, segments: loc, engine: engine, now: now, windowEnd: nil, trip: nil)
+        let before = flow.snap!.segment.id, ground = flow.groundCoordinate!
+        flow.beginDrag(from: .zero)
+        upd(flow, off(on, east: 0, north: -900))
+        XCTAssertNil(flow.snap); XCTAssertNil(flow.model, "no stale verdict over no curb")
+        XCTAssertFalse(flow.endDrag(landingPoint: .zero))
+        XCTAssertEqual(flow.phase, .placed); XCTAssertEqual(flow.snap?.segment.id, before)
+        XCTAssertEqual(flow.notice, .dropOnCurb)
+        XCTAssertLessThan(m(flow.groundCoordinate!, ground), 0.01)
+        flow.beginDrag(from: .zero); upd(flow, off(on, east: 900, north: 0)); _ = flow.endDrag(landingPoint: .zero)
+        XCTAssertEqual(flow.snap?.segment.id, before)
+        var reachN = 0.0
+        for d in stride(from: 0.0, through: 150, by: 2.0) {
+            flow.beginDrag(from: .zero); upd(flow, off(on, east: 0, north: d))
+            if let s = flow.snap { reachN = max(reachN, s.distanceMeters) }
+            _ = flow.endDrag(landingPoint: .zero)
+        }
+        print("QA224 REACH: max distance finger->curb with a verdict shown = \(reachN) m")
+    }
+
+    /// 4. Nudges of +-5 m continue onto the next piece and stop at the block end.
+    func testNudges() async throws {
+        for b in blocks {
+            let ps = pieces(b); let loc = local(ps)
+            let flow = await ready(loc)
+            for side in ["N", "S", "E", "W"] {
+                let sp = ps.filter { $0.side == side }; guard let first = sp.first else { continue }
+                let c0 = first.coordinates[0], c1 = first.coordinates.last!
+                let ax = (c1.longitude - c0.longitude) * 111_320 * cos(c0.latitude * .pi / 180), ay = (c1.latitude - c0.latitude) * 110_540
+                let al = hypot(ax, ay); let u = (ax / al, ay / al)
+                func along(_ c: CLLocationCoordinate2D) -> Double { ((c.longitude - c0.longitude) * 111_320 * cos(c0.latitude * .pi / 180)) * u.0 + ((c.latitude - c0.latitude) * 110_540) * u.1 }
+                let all = sp.flatMap { $0.coordinates }.map(along)
+                let lo = all.min()!, hi = all.max()!
+                let startPiece = sp.min { along($0.coordinates.first!) + along($0.coordinates.last!) < along($1.coordinates.first!) + along($1.coordinates.last!) }!
+                let startC = startPiece.coordinates.min { along($0) < along($1) }!
+                let snap = WPParkFlowController.pendingSnap(on: startPiece, near: startC)!
+                flow.reset()
+                flow.enterPending(at: snap, segments: loc, engine: engine, now: now, windowEnd: nil, trip: nil)
+                let sign: Double = (along(startPiece.coordinates.last!) - along(startPiece.coordinates.first!)) >= 0 ? 1 : -1
+                var positions: [Double] = [along(flow.groundCoordinate!)]
+                var sideFlips = 0, ids: [String] = [flow.snap!.segment.id]
+                for _ in 0..<80 {
+                    let ok = flow.nudge(meters: 5 * sign, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil)
+                    if !ok { break }
+                    positions.append(along(flow.groundCoordinate!))
+                    if flow.snap!.segment.side != side { sideFlips += 1 }
+                    if (b.tag.hasPrefix("Lexington") || b.tag.hasPrefix("Madison")) && positions.count < 30 { print("QA224 TRACE \(b.tag) \(side) step=\(positions.count) along=\(Int(positions.last!)) seg=\(flow.snap!.segment.id) side=\(flow.snap!.segment.side) from=\(flow.snap!.segment.fromStreet) to=\(flow.snap!.segment.to)") }
+                    if ids.last != flow.snap!.segment.id { ids.append(flow.snap!.segment.id) }
+                }
+                let steps = zip(positions.dropFirst(), positions).map { $0 - $1 }
+                let overshoot = max(0, positions.max()! - hi)
+                let maxStep = steps.map { abs($0) }.max() ?? 0
+                print("QA224 NUDGE \(b.tag) side=\(side): pieces visited=\(ids.count)/\(sp.count) sideFlips=\(sideFlips) overshoot=\(String(format: "%.1f", overshoot))m maxStep=\(String(format: "%.1f", maxStep)) lo=\(Int(lo)) hi=\(Int(hi)) final=\(Int(positions.last!))")
+                XCTAssertEqual(sideFlips, 0, "\(b.tag) \(side)")
+                XCTAssertLessThan(overshoot, 1.5, "stops at block end")
+                for _ in 0..<90 { if !flow.nudge(meters: -5 * sign, point: .zero, metersPerPoint: 0.1, engine: engine, now: now, windowEnd: nil, trip: nil) { break } }
+                let back = along(flow.groundCoordinate!)
+                print("QA224 NUDGEBACK \(b.tag) side=\(side): back to \(Int(back)) (lo=\(Int(lo)))")
+                XCTAssertLessThan(abs(back - lo), 2.5)
+            }
+        }
+    }
+
+    /// 5. F1 aligned curbs, 6. F2 exact flip back.
+    func testF1F2() async throws {
+        for b in blocks {
+            let ps = pieces(b); let loc = local(ps)
+            var checked = 0, unaligned = 0, flips = 0, flipBad = 0, reproj = 0
+            for a in ps {
+                for f in [0.1, 0.3, 0.5, 0.7, 0.9] {
+                    guard let car = CandidateSegmentSearch.coordinate(atFraction: f, along: a.coordinates),
+                          let foot = CandidateSegmentSearch.nearestPointOnPolyline(from: car, polyline: a.coordinates) else { continue }
+                    let here = ParkSideOption(segment: a, coordinate: car, fraction: foot.fraction)
+                    let fo = ParkSideOption(segment: a, coordinate: foot.coordinate, fraction: foot.fraction)
+                    guard let target = ParkSideResolver.switched(from: fo, in: loc) else { continue }
+                    if let layout = WPParkSideMiniMapLayout.make(first: a.coordinates, second: target.segment.coordinates, car: car, travelBearing: nil, size: CGSize(width: 320, height: 200)) {
+                        checked += 1
+                        let ax = layout.first.map(\.x), bx = layout.second.map(\.x)
+                        if abs(ax.min()! - bx.min()!) > 0.5 || abs(ax.max()! - bx.max()!) > 0.5 { unaligned += 1; print("QA224 F1DETAIL \(b.tag) \(a.id)@\(f) vs \(target.segment.id) ax=[\(Int(ax.min()!)),\(Int(ax.max()!))] bx=[\(Int(bx.min()!)),\(Int(bx.max()!))]") }
+                    }
+                    flips += 1
+                    var mem = WPSideFlipMemory(); mem.recordFlip(from: here, to: target)
+                    guard let back = mem.pair(segmentID: target.segment.id, coordinate: target.coordinate) else { flipBad += 1; continue }
+                    if back.target.segment.id != a.id || m(back.target.coordinate, car) > 0.001 { flipBad += 1 }
+                    if let re = ParkSideResolver.switched(from: ParkSideOption(segment: target.segment, coordinate: target.coordinate, fraction: target.fraction), in: loc),
+                       re.segment.id != a.id || m(re.coordinate, car) > 1.5 { reproj += 1 }
+                }
+            }
+            print("QA224 F1F2 \(b.tag): F1 checked=\(checked) unaligned=\(unaligned) | F2 flips=\(flips) memBad=\(flipBad) (old re-projection would have drifted in \(reproj))")
+            XCTAssertEqual(flipBad, 0, b.tag)
+        }
+    }
+}
