@@ -189,16 +189,14 @@ nonisolated enum ParkSideResolver {
                 ? bearing : nil
         }
 
-        guard let oppositeSegment = CandidateSegmentSearch.oppositeSideCandidate(of: nearest.segment, in: segments),
-              let oppositeSnap = CandidateSegmentSearch.nearestPointOnPolyline(
-                from: position, polyline: oppositeSegment.coordinates
-              ) else {
+        guard let facing = facingOpposite(of: nearest.segment, near: position, in: segments) else {
             return .onlyCurb(ParkSidePick(
                 option: optionA, basis: .onlyCurb, position: position, travelBearing: travelBearing
             ))
         }
+        let oppositeSnap = facing.snap
         let optionB = ParkSideOption(
-            segment: oppositeSegment, coordinate: oppositeSnap.coordinate, fraction: oppositeSnap.fraction
+            segment: facing.segment, coordinate: oppositeSnap.coordinate, fraction: oppositeSnap.fraction
         )
 
         // 4. Geometry vote. A is the nearest curb by construction, so z >= 0 favours A.
@@ -246,11 +244,63 @@ nonisolated enum ParkSideResolver {
     /// The opposite curb of `option`'s block at the same position along the street (the current
     /// foot point projected onto the other curb). Nil when the data has no opposite curb.
     static func switched(from option: ParkSideOption, in segments: [Segment]) -> ParkSideOption? {
-        guard let opposite = CandidateSegmentSearch.oppositeSideCandidate(of: option.segment, in: segments),
-              let snap = CandidateSegmentSearch.nearestPointOnPolyline(
-                from: option.coordinate, polyline: opposite.coordinates
-              ) else { return nil }
-        return ParkSideOption(segment: opposite, coordinate: snap.coordinate, fraction: snap.fraction)
+        guard let facing = facingOpposite(of: option.segment, near: option.coordinate, in: segments) else {
+            return nil
+        }
+        return ParkSideOption(
+            segment: facing.segment, coordinate: facing.snap.coordinate, fraction: facing.snap.fraction
+        )
+    }
+
+    /// The piece of the opposite curb that actually FACES `point`. Real blockfaces are split into
+    /// several pieces per side (94% of sides in the bundled tiles; Stanton Bowery-Chrystie is N_0..N_3
+    /// and S_0..S_3), so "the other side" of a block is not one segment: `oppositeSideCandidate`
+    /// returns the first piece it finds, which can sit 20 to 90 m along the street. Here the point is
+    /// projected onto every candidate piece; the winner is the nearest piece whose projection lands
+    /// inside it, else (exact-pair pieces only) the nearest piece. Same position along the street,
+    /// so a flip never slides the car. Candidates are same-street, other-side, roughly parallel
+    /// pieces within 60 m, preferring those with the SAME cross-street pair; with none, any such
+    /// piece (DOT labels the two sides of some blocks with different cross streets), interior
+    /// projections only so a piece of the next block is never picked. Stoop path only: legacy callers
+    /// of `oppositeSideCandidate` are untouched.
+    static func facingOpposite(
+        of segment: Segment, near point: CLLocationCoordinate2D, in segments: [Segment]
+    ) -> (segment: Segment, snap: (distanceMeters: Double, fraction: Double, coordinate: CLLocationCoordinate2D))? {
+        let base = segment.coordinates
+        guard base.count >= 2, let baseFirst = base.first, let baseLast = base.last else { return nil }
+        let baseAxis = localDelta(from: baseFirst, to: baseLast)
+        let baseLength = hypot(baseAxis.east, baseAxis.north)
+        guard baseLength > 1 else { return nil }
+        let crossPair: Set<String> = [segment.fromStreet, segment.to]
+
+        typealias Candidate = (segment: Segment, snap: (distanceMeters: Double, fraction: Double, coordinate: CLLocationCoordinate2D), interior: Bool, exact: Bool)
+        var candidates: [Candidate] = []
+        for piece in segments where piece.street == segment.street && piece.side != segment.side && piece.id != segment.id {
+            let coords = piece.coordinates
+            guard coords.count >= 2, let first = coords.first, let last = coords.last else { continue }
+            let axis = localDelta(from: first, to: last)
+            let length = hypot(axis.east, axis.north)
+            guard length > 1 else { continue }
+            let cosine = abs((axis.east * baseAxis.east + axis.north * baseAxis.north) / (length * baseLength))
+            guard cosine >= CandidateSegmentSearch.oppositeSideMinParallelCosine,
+                  let snap = CandidateSegmentSearch.nearestPointOnPolyline(from: point, polyline: coords),
+                  snap.distanceMeters <= CandidateSegmentSearch.oppositeSideMaxLateralMeters else { continue }
+            let interior = snap.fraction > 0.001 && snap.fraction < 0.999
+            let exact = Set([piece.fromStreet, piece.to]) == crossPair
+            candidates.append((piece, snap, interior, exact))
+        }
+        func best(_ pool: [Candidate]) -> Candidate? {
+            pool.min { $0.snap.distanceMeters < $1.snap.distanceMeters }
+        }
+        let exactPieces = candidates.filter { $0.exact }
+        let chosen: Candidate?
+        if !exactPieces.isEmpty {
+            chosen = best(exactPieces.filter { $0.interior }) ?? best(exactPieces)
+        } else {
+            chosen = best(candidates.filter { $0.interior })
+        }
+        guard let chosen else { return nil }
+        return (chosen.segment, chosen.snap)
     }
 
     /// A user's explicit choice of `option`.
