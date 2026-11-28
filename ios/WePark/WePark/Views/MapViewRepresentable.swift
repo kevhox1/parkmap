@@ -977,6 +977,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onRefreshPlacement: (() -> Void)?
         var onCyclePlacementCurb: (() -> Void)?
         var onSetPlacementBottomInset: ((CGFloat) -> Void)?
+        /// DT35-6: general bottom inset (Stoop drive card). Independent of placement.
+        var onSetBottomChromeInset: ((CGFloat) -> Void)?
         var onFocusPlacement: ((CLLocationCoordinate2D) -> Void)?
         var onQueryPlacementActive: (() -> Bool)?
         var onQueryPlacementPin: (() -> CLLocationCoordinate2D?)?
@@ -1048,6 +1050,13 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// height changes (never per frame); 0 clears it. Restored by `endPlacement`.
         func setPlacementBottomInset(_ cardHeight: CGFloat) {
             onSetPlacementBottomInset?(cardHeight)
+        }
+
+        /// DT35-6: lifts the Apple logo / Legal link by `inset` points (already includes the gap
+        /// and any safe area); 0 restores the original margins exactly. Call from outside the
+        /// SwiftUI update cycle (a run-loop hop), never from `updateUIView`.
+        func setBottomChromeInset(_ inset: CGFloat) {
+            onSetBottomChromeInset?(inset)
         }
 
     }
@@ -1682,6 +1691,10 @@ struct MapViewRepresentable: UIViewRepresentable {
         coordinatorActions.onSetPlacementBottomInset = { [weak coordinator] cardHeight in
             coordinator?.placementController?.setBottomInset(cardHeight)
         }
+        coordinatorActions.onSetBottomChromeInset = { [weak coordinator] inset in
+            guard let coordinator, let mapView = coordinator.mapView else { return }
+            coordinator.bottomInsetController.apply(inset: inset, to: mapView)
+        }
         coordinatorActions.onFocusPlacement = { [weak coordinator] coordinate in
             coordinator?.placementController?.focus(on: coordinate)
         }
@@ -1881,6 +1894,8 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         var parent: MapViewRepresentable
         weak var mapView: MKMapView?
+        /// DT35-6: owns the drive-mode bottom margin (separate from placement's snapshot).
+        let bottomInsetController = MapBottomInsetController()
 
         /// Open item #36 / `docs/design/drive-puck-chevron-review.md` candidate A: reference
         /// to the repositioned `MKCompassButton` created in `makeUIView`, captured there so

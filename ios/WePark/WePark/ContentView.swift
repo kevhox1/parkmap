@@ -4403,6 +4403,13 @@ struct ContentView: View {
             // `.sheet` presentation layer problem, not a `bottomSafeAreaContent` layout
             // problem) and where it lives now.
         }
+        // DT35-6: Stoop drive only. Measure the stack (the card plus anything stacked above it,
+        // plus the home-indicator band under it) and lift the Apple logo / Legal link above it.
+        // The map runs under the bottom safe-area inset, so without this MapKit pins the
+        // attribution beneath the Report / Park here / Voice row. A no-op outside Stoop drive.
+        .onGeometryChange(for: CGFloat.self, of: { proxy in
+            UIScreen.main.bounds.height - proxy.frame(in: .global).minY
+        }) { applyDriveBottomInset(measuredFromBottom: $0) }
     }
 
     // MARK: - Design system Phase 2a: flag-on map chrome
@@ -4571,6 +4578,28 @@ struct ContentView: View {
             onPark: { driveParkHereTapped() },
             onToggleVoice: { drivingVoice.isMuted.toggle() }
         )
+        // DT35-6: the inset itself is measured on the whole bottom stack (`bottomSafeAreaContent`)
+        // so the Park Until pill and Recenter row above the card are cleared too.
+        .onDisappear { clearDriveBottomInset() }
+    }
+
+    /// Hops one run-loop turn: this mutates UIKit layout state and must never run inside a
+    /// SwiftUI update (the #31 rule).
+    private func applyDriveBottomInset(measuredFromBottom: CGFloat) {
+        DispatchQueue.main.async {
+            guard v2DriveActive, driveModeActive else { return }
+            coordinatorActions.setBottomChromeInset(
+                MapBottomInsetPolicy.inset(
+                    measuredFromBottom: measuredFromBottom,
+                    mapHeight: UIScreen.main.bounds.height,
+                    driving: true
+                )
+            )
+        }
+    }
+
+    private func clearDriveBottomInset() {
+        DispatchQueue.main.async { coordinatorActions.setBottomChromeInset(0) }
     }
 
     // MARK: - Design system Phase 2b: curb sheet, search, parking (flag on only)
@@ -6409,6 +6438,7 @@ struct ContentView: View {
             // Option A: clear follow state on Drive Mode exit.
             followPaused = false
             currentDriveAltitude = 0
+            clearDriveBottomInset()  // DT35-6: restore the map margins (no-op if never applied)
             // TF2-16: reset heading-snap state on exit.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
