@@ -977,6 +977,11 @@ struct MapViewRepresentable: UIViewRepresentable {
         var onRefreshPlacement: (() -> Void)?
         var onCyclePlacementCurb: (() -> Void)?
         var onSetPlacementBottomInset: ((CGFloat) -> Void)?
+        /// DT35-6: general bottom inset (Stoop drive card). Independent of placement.
+        var onSetBottomChromeInset: ((CGFloat?) -> Void)?
+        /// DT35-6: mirrors ContentView's `followPaused` (user panned or pinched). While true the
+        /// bottom-inset re-frame never moves the camera. Reset on drive start and end.
+        var driveFollowPaused = false
         var onFocusPlacement: ((CLLocationCoordinate2D) -> Void)?
         var onQueryPlacementActive: (() -> Bool)?
         var onQueryPlacementPin: (() -> CLLocationCoordinate2D?)?
@@ -1048,6 +1053,16 @@ struct MapViewRepresentable: UIViewRepresentable {
         /// height changes (never per frame); 0 clears it. Restored by `endPlacement`.
         func setPlacementBottomInset(_ cardHeight: CGFloat) {
             onSetPlacementBottomInset?(cardHeight)
+        }
+
+        /// DT35-6: lifts the Apple logo / Legal link by `inset` points (already includes the gap
+        /// and any safe area); 0 restores the original margins exactly. Call from outside the
+        /// SwiftUI update cycle (a run-loop hop), never from `updateUIView`.
+        ///
+        /// - Parameter stackTopInWindow: top edge (window coordinates) of the bottom chrome to
+        ///   clear, or nil to restore. The map's own bounds convert it to an inset.
+        func setBottomChromeInset(stackTopInWindow: CGFloat?) {
+            onSetBottomChromeInset?(stackTopInWindow)
         }
 
     }
@@ -1604,7 +1619,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         coordinatorActions.setDriveCamera = { [weak coordinator] coordinate, heading, altitude in
             guard let c = coordinator, let mapView = c.mapView else { return }
             let camera = mapView.camera.copy() as! MKMapCamera
-            camera.centerCoordinate = coordinate
+            // DT35-6: with the drive bottom inset applied, keep the puck where it sat without it.
+            camera.centerCoordinate = c.bottomInsetController.compensatedCenter(for: coordinate, on: mapView)
             if let h = heading {
                 camera.heading = h
             }
@@ -1681,6 +1697,41 @@ struct MapViewRepresentable: UIViewRepresentable {
         }
         coordinatorActions.onSetPlacementBottomInset = { [weak coordinator] cardHeight in
             coordinator?.placementController?.setBottomInset(cardHeight)
+        }
+        coordinatorActions.onSetBottomChromeInset = { [weak coordinator, weak actions = coordinatorActions] stackTop in
+            guard let coordinator, let mapView = coordinator.mapView else { return }
+            guard let stackTop else {
+                coordinator.bottomInsetController.apply(inset: 0, to: mapView)
+                return
+            }
+            let measured = mapView.bounds.maxY - mapView.convert(CGPoint(x: 0, y: stackTop), from: nil).y
+            let controller = coordinator.bottomInsetController
+            let hadInset = controller.snapshot != nil
+            controller.apply(
+                inset: MapBottomInsetPolicy.inset(
+                    measuredFromBottom: measured, mapHeight: mapView.bounds.height, driving: true
+                ),
+                to: mapView
+            )
+            // First inset of a drive: re-frame on the puck now, so a static entry (no further GPS
+            // fix) does not leave it riding high behind the top chrome.
+            if !hadInset, controller.snapshot != nil {
+                let reframe: () -> Void = { [weak mapView, weak controller, weak actions] in
+                    guard let mapView, let controller, controller.snapshot != nil,
+                          MapBottomInsetReframePolicy.shouldReframe(followPaused: actions?.driveFollowPaused ?? true)
+                    else { return }
+                    let puck = mapView.userLocation.coordinate
+                    guard CLLocationCoordinate2DIsValid(puck), puck.latitude != 0 || puck.longitude != 0 else { return }
+                    mapView.layoutIfNeeded()
+                    let camera = mapView.camera.copy() as! MKMapCamera
+                    camera.centerCoordinate = controller.compensatedCenter(for: puck, on: mapView)
+                    mapView.setCamera(camera, animated: false)
+                }
+                reframe()
+                // The drive-entry camera (pitch, zoom, heading) is still animating now; once it has
+                // settled, reframe again so a static entry (no further GPS fix) lands on the puck.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: reframe)
+            }
         }
         coordinatorActions.onFocusPlacement = { [weak coordinator] coordinate in
             coordinator?.placementController?.focus(on: coordinate)
@@ -1881,6 +1932,8 @@ struct MapViewRepresentable: UIViewRepresentable {
 
         var parent: MapViewRepresentable
         weak var mapView: MKMapView?
+        /// DT35-6: owns the drive-mode bottom margin (separate from placement's snapshot).
+        let bottomInsetController = MapBottomInsetController()
 
         /// Open item #36 / `docs/design/drive-puck-chevron-review.md` candidate A: reference
         /// to the repositioned `MKCompassButton` created in `makeUIView`, captured there so

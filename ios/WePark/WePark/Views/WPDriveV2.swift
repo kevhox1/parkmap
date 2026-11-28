@@ -519,3 +519,17 @@ struct WPArrivalPromptV2: View {
         .background(Color(wpHex: WP.Hex.darkBackground))
     }
 }
+
+// MARK: - Park Until pill in the Stoop drive stack (DT35-8)
+
+extension View {
+    /// Stoop drive only: caps the Park Until pill's type at AX1 and lets it grow to its wrapped
+    /// height. At AX5 the pill was squeezed into a one-line frame while its text rendered three
+    /// lines tall, overlapping the street pill and the Apple Maps attribution. With `stoop`
+    /// false this is a no-op (range up to AX5, no fixed size), so flag-off layout is unchanged.
+    func wpDrivePillLayout(stoop: Bool) -> some View {
+        self
+            .dynamicTypeSize(...(stoop ? DynamicTypeSize.accessibility1 : DynamicTypeSize.accessibility5))
+            .fixedSize(horizontal: false, vertical: stoop)
+    }
+}

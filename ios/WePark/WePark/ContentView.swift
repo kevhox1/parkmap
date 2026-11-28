@@ -4405,10 +4405,12 @@ struct ContentView: View {
                     ) {
                         clearParkUntilFilter()
                     }
+                    .wpDrivePillLayout(stoop: v2DriveActive && driveModeActive)
                 } else {
                     ParkUntilPill(targetDate: target) {
                         clearParkUntilFilter()
                     }
+                    .wpDrivePillLayout(stoop: v2DriveActive && driveModeActive)
                 }
             }
             // W8.5c row 4: Drive Mode bottom card (AC-W85c.25) — the anchored "ground truth"
@@ -4434,6 +4436,13 @@ struct ContentView: View {
             // `.sheet` presentation layer problem, not a `bottomSafeAreaContent` layout
             // problem) and where it lives now.
         }
+        // DT35-6: Stoop drive only. Measure the stack (the card plus anything stacked above it,
+        // plus the home-indicator band under it) and lift the Apple logo / Legal link above it.
+        // The map runs under the bottom safe-area inset, so without this MapKit pins the
+        // attribution beneath the Report / Park here / Voice row. A no-op outside Stoop drive.
+        .onGeometryChange(for: CGFloat.self, of: { proxy in
+            proxy.frame(in: .global).minY
+        }) { applyDriveBottomInset(stackTop: $0) }
     }
 
     // MARK: - Design system Phase 2a: flag-on map chrome
@@ -4603,6 +4612,22 @@ struct ContentView: View {
             onPark: { driveParkHereTapped() },
             onToggleVoice: { drivingVoice.isMuted.toggle() }
         )
+        // DT35-6: the inset itself is measured on the whole bottom stack (`bottomSafeAreaContent`)
+        // so the Park Until pill and Recenter row above the card are cleared too.
+        .onDisappear { clearDriveBottomInset() }
+    }
+
+    /// Hops one run-loop turn: this mutates UIKit layout state and must never run inside a
+    /// SwiftUI update (the #31 rule).
+    private func applyDriveBottomInset(stackTop: CGFloat) {
+        DispatchQueue.main.async {
+            guard v2DriveActive, driveModeActive else { return }
+            coordinatorActions.setBottomChromeInset(stackTopInWindow: stackTop)
+        }
+    }
+
+    private func clearDriveBottomInset() {
+        DispatchQueue.main.async { coordinatorActions.setBottomChromeInset(stackTopInWindow: nil) }
     }
 
     // MARK: - Design system Phase 2b: curb sheet, search, parking (flag on only)
@@ -6127,6 +6152,7 @@ struct ContentView: View {
         )
         // Resume custom follow — future GPS ticks re-center via setDriveCamera.
         followPaused = false
+        coordinatorActions.driveFollowPaused = false
 
         if let coord = locationService.userLocation {
             // Immediately center + apply pitch/altitude in a single setCamera call — the
@@ -6576,6 +6602,7 @@ struct ContentView: View {
             locationService.startDriveMode()
             // Option A: followPaused starts false — follow is active from the first GPS tick.
             followPaused = false
+            coordinatorActions.driveFollowPaused = false
             // TF2-16: reset heading-snap state for the new session.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
@@ -6616,7 +6643,9 @@ struct ContentView: View {
             drivingContext = nil
             // Option A: clear follow state on Drive Mode exit.
             followPaused = false
+            coordinatorActions.driveFollowPaused = false
             currentDriveAltitude = 0
+            clearDriveBottomInset()  // DT35-6: restore the map margins (no-op if never applied)
             // TF2-16: reset heading-snap state on exit.
             driveHeadingSource = .course
             effectiveDriveHeading = nil
@@ -8403,6 +8432,7 @@ struct ContentView: View {
     private func handleDrivePanDetected() {
         guard driveModeActive else { return }
         followPaused = true
+        coordinatorActions.driveFollowPaused = true  // DT35-6: stops the inset re-frame yanking the map back
     }
 
     /// Called by MapViewRepresentable's `onDrivePinchZoomed` when a pure pinch (no pan

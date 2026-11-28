@@ -487,6 +487,9 @@ struct WPInfoPill: View {
         .padding(.horizontal, WP.Space.s4)
         .padding(.vertical, WP.Space.s3)
         .frame(minHeight: WP.Target.minimum)
+        // DT35-6: grow with the wrapped text at AX sizes instead of keeping the one-line height
+        // (QA saw the text spill out of the pill box at AX5).
+        .fixedSize(horizontal: false, vertical: true)
         .background(shape.fill(good ? WP.park : WP.card))
         .overlay(shape.strokeBorder(good ? WP.ink : WP.line, lineWidth: WP.Border.fact))
         .accessibilityElement(children: .combine)
