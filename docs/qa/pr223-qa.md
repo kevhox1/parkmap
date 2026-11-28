@@ -89,3 +89,58 @@ Diff since last QA (`7a31fe09..178ccf27`): 5 files only (ContentView, MapBottomI
 
 ## What's working
 Puck framing fix is exact, margins reset cleanly, the DT35-8 pill layout is clean, and the window-coordinate measurement removed the `UIScreen.main` dependence. One more rework round (attribution logo) should close it.
+
+---
+
+# Re-verification 2 (head `6bc8679c`) — 2026-11-27
+
+**Verdict: FAIL** (Maps logo and Legal are clear at default size and AX2, static and moving, and the puck matches `main`. But at AX3 and AX5 while moving, the logo is covered by the street pill and Overnight pill, because the 70% clamp parks the attribution behind top chrome. Plus a yank after user interaction.)
+
+Screenshots: `docs/qa/pr223-assets/reverify2/`. Text sizes were set with `simctl ui content_size` and read back after each set (large, accessibility-large, accessibility-extra-large, accessibility-extra-extra-extra-large). Flags flipped locally only and reverted; nothing committed besides this doc.
+
+## Results
+1. **Maps logo + Legal visible**
+   - Default, static entry: yes, y about 1505 of 2576 (`pr-entry-default2.png`).
+   - Default, moving 12 m/s: yes, "Maps Legal" at y about 1360 (`pr-mov-1.png`, `pr-mov-3.png`).
+   - AX2 moving: yes, y about 810 (`pr-accessibility-large.png`).
+   - **AX3 moving: NO.** Street pill wraps to two lines, so the logo at y about 720 is covered by the street pill and the Overnight pill; only a sliver of the Apple glyph shows (`pr-accessibility-extra-large.png`). The AX tree still lists "Legal" (a frame exists), but it is not visible.
+   - **AX5 moving: NO.** Same, only a glyph fragment left of the Overnight pill (`pr-accessibility-extra-extra-extra-large.png`).
+   - AX5 static with one-line cards (Park / Not free): yes, logo and Legal at y about 905, clear of the Overnight pill (`pr-ax5-static.png`). So the failure is the tall-card case (two-line "Park until Mon 11/30 ..." cards), which is realistic.
+   - Cause (inference from the layout): at AX3/AX5 the stack is taller than 70% of the map, so the 0.70 clamp holds the attribution at about 30% from the top, where the street pill and Overnight pill (and at AX5 the two-line ASP banner) sit. The clamp trades "logo dropped" for "logo covered". Either way Apple's attribution is not visibly unobscured.
+2. **Puck position (paired with `main`, my own run)**
+   - PR static: 51.6% (1328/2576).
+   - PR moving: 51.4% and 50.8% in two frames. After Recenter: 52.2%.
+   - `main` moving: 52.3% (`main-mov-3.png`). Within 2 pts. Pass.
+   - On `main` the Maps logo sits under the Report button (the original bug); on the PR it is above the stack.
+3. **Camera behaviour**
+   - Jitter moving: puck y moved at most about 0.7 pt between frames, no visible jump. Pass. Not measured: the inset-change path (card growth while stationary). Note `compensatedCenter` converts with the current camera, then `setDriveCamera` changes heading and altitude afterwards, so a small per-tick error on turns is possible. After Recenter the puck sat at x about 59% (vs about 50% elsewhere) 3 s after the tap while the route was turning; not conclusively attributable.
+   - Pan during a drive: allowed. A swipe pauses follow, shows Recenter, and the map stays where the user put it across 6 s of GPS ticks (`pan-2.png`). Logo stays visible. Pass. Recenter re-centres the puck (`recenter.png`).
+   - **1.5 s re-frame is not guarded (finding #2).** The closure in `onSetBottomChromeInset` checks only `snapshot != nil`. It does not check `followPaused` or any gesture. I tapped Start driving and swiped immediately: the Recenter button was showing (gesture registered) yet the puck sat exactly centred at 51.6% afterwards (`race-3.png`), i.e. consistent with the reframe overriding the pan. My tool latency means I cannot pin the order of events to the 1.5 s window, so this is code-confirmed and observation-consistent, not proven.
+   - Clears: End returns to the browse layout; Start again gives the normal static entry (puck 51.6%, logo above the stack). Browse mode has `centreShift == 0` by code (`restore` zeroes it; `compensatedCenter` returns the puck unchanged). Full suite covers the clear paths.
+4. **No regressions seen:** compass (appears top-left when the map rotates) and street pill / End / ASP banner positions are unchanged vs `main` at default size. Curb placement and the #224 free-drag draft are not touched by the diff, and drive is mutually exclusive with placement; not exercised live. DT35-8: the Park Until pill wraps cleanly at AX; not re-driven live with a goal pill this pass (no Park Until filter on in my run), unchanged code since last pass.
+5. **Tests, shipped flags, head `6bc8679c`:** `xcodebuild test -only-testing:WeParkTests -parallel-testing-enabled NO -jobs 4`: **3355 tests, 1 skipped, 0 failures**, no flakes.
+6. **Merge check:** `git merge-tree --write-tree origin/main HEAD` (main at `3dbd7c93`, includes #224): clean, no conflicts. Nothing pushed.
+
+## Findings
+### 🔴 #1: Attribution covered at AX3 and AX5 while moving
+- Where: `MapBottomInsetPolicy.maxHeightFraction` (0.70) with `MapBottomInsetController.apply`.
+- What: when the bottom stack exceeds 70% of the map height, the attribution is held at about 30% from the top, under the street pill and the Overnight pill.
+- Expected: Maps logo and Legal visible and not covered in every case.
+- Repro: Stoop flags on, Start driving, `simctl location start --speed=12 ...`, `simctl ui content_size accessibility-extra-large` (or AX5).
+- Owner: `@ios-engineer`. Direction (not a fix by me): at these sizes the stack has to give way (cap the cards, or reflow the Overnight pill), or the attribution has to be allowed to sit somewhere unobstructed; a clamp alone cannot satisfy both "above the stack" and "not under top chrome".
+
+### 🟡 #2: 1.5 s re-frame ignores user interaction
+- Where: `onSetBottomChromeInset` reframe closure (`MapViewRepresentable.swift`).
+- What: no `followPaused` / gesture check, so a pan within the first 1.5 s of a drive (or after the first inset) can be undone by a delayed `setCamera`.
+- Owner: `@ios-engineer`. Small guard.
+
+### 🟢 Minor
+- #3: At AX5 the ASP banner wraps to two lines and runs under the street pill (pre-existing, logged last pass).
+- #4: At AX the cards cover the puck (same as `main`).
+
+## Smoke tests run
+- Own sim `wepark-qa223c-sim`, iPhone 17 Pro iOS 26.5, deleted with derived data at the end. Built and live-inspected PR head and `main` (flags local only): static entry, moving at 12 m/s, AX2/AX3/AX5, pan, Recenter, End, restart, race swipe. Mount-chain rule satisfied.
+- Machine load was very high (other processes) during part of the run; I waited for the 1-minute load to fall below 40 before building `main`. The first PR build started at a load of 48.
+
+## What's working
+The bottom-only margin plus compensation fixed the original puck problem exactly (51.4% vs 52.3% on `main`), the logo now survives the default and AX2 moving cases that failed last pass, margins reset cleanly, and the suite is green. One more round on the tall-stack case should close it.
