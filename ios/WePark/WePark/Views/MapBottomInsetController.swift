@@ -14,6 +14,7 @@
 
 import UIKit
 import MapKit
+import CoreLocation
 
 /// Pure policy for the drive-mode bottom inset (mirrors `CurbPlacementMapPolicy.bottomMargin`).
 enum MapBottomInsetPolicy {
@@ -22,7 +23,7 @@ enum MapBottomInsetPolicy {
     nonisolated static let gapPoints: CGFloat = 8
     /// The inset never exceeds this share of the map height, so a tall AX card cannot push the
     /// attribution to the middle of the screen.
-    nonisolated static let maxHeightFraction: CGFloat = 0.75
+    nonisolated static let maxHeightFraction: CGFloat = 0.70
 
     /// - Parameters:
     ///   - measuredFromBottom: distance from the screen bottom up to the card's top edge (the
@@ -50,6 +51,10 @@ final class MapBottomInsetController {
 
     private(set) var snapshot: MapMarginSnapshot?
 
+    /// How far (points, upwards) the bottom margin has moved the centre of the visible area, so
+    /// MapKit now draws the camera centre that far above where it used to. 0 when no inset.
+    private(set) var centreShift: CGFloat = 0
+
     /// Sets the bottom margin to `inset` points (the policy already added the gap); `inset <= 0`
     /// restores the pre-drive margins exactly. Main thread, outside any SwiftUI update.
     func apply(inset: CGFloat, to mapView: MKMapView) {
@@ -71,13 +76,29 @@ final class MapBottomInsetController {
         }
         var applied = snap.effectiveMargins
         applied.bottom = max(snap.effectiveMargins.bottom, inset)
-        // MapKit centres the camera in the margin-inset area, so a lone bottom margin would lift
-        // the follow-camera puck (less road ahead). Mirror the extra bottom margin at the top so
-        // the centre of the visible area, and so the puck, stays where it was. Only the
-        // attribution (which hangs off the bottom margin) moves.
-        applied.top = snap.effectiveMargins.top + (applied.bottom - snap.effectiveMargins.bottom)
+        // Bottom only. A mirrored top margin keeps the puck framed but makes MapKit drop the Apple
+        // "Maps" logo once top + bottom approach the map height (QA, DT35-6). The camera centre
+        // shift this causes is compensated in `compensatedCenter` instead.
+        centreShift = (applied.bottom - snap.effectiveMargins.bottom) / 2
         mapView.insetsLayoutMarginsFromSafeArea = false
         mapView.layoutMargins = applied
+    }
+
+    /// The camera centre that makes `puck` appear where it did before the inset (the follow
+    /// camera otherwise rides `centreShift` points higher, showing less road ahead). Translates
+    /// the puck by the ground vector between where MapKit now draws the centre and where it
+    /// used to. Returns `puck` unchanged when no inset is applied.
+    func compensatedCenter(for puck: CLLocationCoordinate2D, on mapView: MKMapView) -> CLLocationCoordinate2D {
+        guard centreShift > 0 else { return puck }
+        let drawn = CGPoint(x: mapView.bounds.midX, y: (mapView.layoutMargins.top + mapView.bounds.height - mapView.layoutMargins.bottom) / 2)
+        let original = CGPoint(x: drawn.x, y: drawn.y + centreShift)
+        let current = mapView.convert(drawn, toCoordinateFrom: mapView)
+        let target = mapView.convert(original, toCoordinateFrom: mapView)
+        guard CLLocationCoordinate2DIsValid(current), CLLocationCoordinate2DIsValid(target) else { return puck }
+        return CLLocationCoordinate2D(
+            latitude: puck.latitude + (current.latitude - target.latitude),
+            longitude: puck.longitude + (current.longitude - target.longitude)
+        )
     }
 
     func restore(on mapView: MKMapView) {
@@ -85,5 +106,6 @@ final class MapBottomInsetController {
         mapView.insetsLayoutMarginsFromSafeArea = snap.insetsFromSafeArea
         mapView.layoutMargins = snap.rawMargins
         snapshot = nil
+        centreShift = 0
     }
 }

@@ -7,6 +7,7 @@
 
 import XCTest
 import MapKit
+import CoreLocation
 @testable import WePark
 
 final class MapBottomInsetTests: XCTestCase {
@@ -19,10 +20,10 @@ final class MapBottomInsetTests: XCTestCase {
         )
     }
 
-    func testInsetClampsToSeventyFivePercentOfMapHeight() {
+    func testInsetClampsToSeventyPercentOfMapHeight() {
         XCTAssertEqual(
             MapBottomInsetPolicy.inset(measuredFromBottom: 700, mapHeight: 852, driving: true),
-            852 * 0.75, accuracy: 0.001
+            852 * 0.7, accuracy: 0.001
         )
     }
 
@@ -57,23 +58,43 @@ final class MapBottomInsetTests: XCTestCase {
         XCTAssertNil(controller.snapshot)
     }
 
-    /// The top margin mirrors the extra bottom margin so the camera centre (puck) does not move.
+    /// Top stays put: a mirrored top margin made MapKit drop the Apple "Maps" logo. The summed
+    /// margins stay a safe fraction of the map height whatever the measured stack height.
     @MainActor
-    func testTopMarginMirrorsBottomSoTheCentreDoesNotMove() {
+    func testSummedMarginsStayWellBelowMapHeight() {
+        let height: CGFloat = 852
+        for measured in stride(from: CGFloat(100), through: 1200, by: 50) {
+            let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 393, height: height))
+            map.insetsLayoutMarginsFromSafeArea = false
+            map.layoutMargins = UIEdgeInsets(top: 10, left: 5, bottom: 20, right: 5)
+            let controller = MapBottomInsetController()
+            controller.apply(
+                inset: MapBottomInsetPolicy.inset(measuredFromBottom: measured, mapHeight: height, driving: true),
+                to: map
+            )
+            XCTAssertEqual(map.layoutMargins.top, 10, "top must not change (measured \(measured))")
+            XCTAssertLessThanOrEqual(
+                map.layoutMargins.top + map.layoutMargins.bottom, height * 0.75,
+                "summed margins at measured \(measured)"
+            )
+        }
+    }
+
+    @MainActor
+    func testCentreShiftIsHalfTheExtraBottomMarginAndClears() {
         let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 393, height: 852))
         map.insetsLayoutMarginsFromSafeArea = false
         map.layoutMargins = UIEdgeInsets(top: 10, left: 5, bottom: 20, right: 5)
         let controller = MapBottomInsetController()
+        XCTAssertEqual(controller.centreShift, 0)
         controller.apply(inset: 320, to: map)
-        XCTAssertEqual(map.layoutMargins.bottom, 320)
-        XCTAssertEqual(map.layoutMargins.top, 10 + (320 - 20))
-        // Centre of the visible area is offset by (top - bottom) / 2: unchanged.
-        XCTAssertEqual(
-            (map.layoutMargins.top - map.layoutMargins.bottom) / 2, (10 - 20) / 2, accuracy: 0.001
-        )
+        XCTAssertEqual(controller.centreShift, 150, accuracy: 0.001)
+        let puck = CLLocationCoordinate2D(latitude: 40.72, longitude: -73.98)
+        let centre = controller.compensatedCenter(for: puck, on: map)
+        XCTAssertTrue(CLLocationCoordinate2DIsValid(centre))
         controller.apply(inset: 0, to: map)
-        XCTAssertEqual(map.layoutMargins.top, 10)
-        XCTAssertEqual(map.layoutMargins.bottom, 20)
+        XCTAssertEqual(controller.centreShift, 0)
+        XCTAssertEqual(controller.compensatedCenter(for: puck, on: map).latitude, puck.latitude)
     }
 
     @MainActor

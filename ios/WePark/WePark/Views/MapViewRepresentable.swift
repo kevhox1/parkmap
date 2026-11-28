@@ -1616,7 +1616,8 @@ struct MapViewRepresentable: UIViewRepresentable {
         coordinatorActions.setDriveCamera = { [weak coordinator] coordinate, heading, altitude in
             guard let c = coordinator, let mapView = c.mapView else { return }
             let camera = mapView.camera.copy() as! MKMapCamera
-            camera.centerCoordinate = coordinate
+            // DT35-6: with the drive bottom inset applied, keep the puck where it sat without it.
+            camera.centerCoordinate = c.bottomInsetController.compensatedCenter(for: coordinate, on: mapView)
             if let h = heading {
                 camera.heading = h
             }
@@ -1701,12 +1702,31 @@ struct MapViewRepresentable: UIViewRepresentable {
                 return
             }
             let measured = mapView.bounds.maxY - mapView.convert(CGPoint(x: 0, y: stackTop), from: nil).y
-            coordinator.bottomInsetController.apply(
+            let controller = coordinator.bottomInsetController
+            let hadInset = controller.snapshot != nil
+            controller.apply(
                 inset: MapBottomInsetPolicy.inset(
                     measuredFromBottom: measured, mapHeight: mapView.bounds.height, driving: true
                 ),
                 to: mapView
             )
+            // First inset of a drive: re-frame on the puck now, so a static entry (no further GPS
+            // fix) does not leave it riding high behind the top chrome.
+            if !hadInset, controller.snapshot != nil {
+                let reframe: () -> Void = { [weak mapView, weak controller] in
+                    guard let mapView, let controller, controller.snapshot != nil else { return }
+                    let puck = mapView.userLocation.coordinate
+                    guard CLLocationCoordinate2DIsValid(puck), puck.latitude != 0 || puck.longitude != 0 else { return }
+                    mapView.layoutIfNeeded()
+                    let camera = mapView.camera.copy() as! MKMapCamera
+                    camera.centerCoordinate = controller.compensatedCenter(for: puck, on: mapView)
+                    mapView.setCamera(camera, animated: false)
+                }
+                reframe()
+                // The drive-entry camera (pitch, zoom, heading) is still animating now; once it has
+                // settled, reframe again so a static entry (no further GPS fix) lands on the puck.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: reframe)
+            }
         }
         coordinatorActions.onFocusPlacement = { [weak coordinator] coordinate in
             coordinator?.placementController?.focus(on: coordinate)
