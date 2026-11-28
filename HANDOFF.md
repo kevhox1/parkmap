@@ -2,7 +2,50 @@
 
 This document is the operating manual for any future Claude session working on WePark. **Read this first, then any spec doc in `docs/` for the feature in flight, then continue.** Don't reload chat history — the docs + git log are the source of truth.
 
-## ▶ RESUME HERE: Stoop status, 2026-11-26 early morning
+## ▶ RESUME HERE: 2026-11-28 morning, build 37 live (internal)
+
+**Builds:** 36 and 37 are in TestFlight, Internal group only (Kevin + Gersi, Head of QA, Developer role). External stays on 33 until Stoop is complete. **The orchestrator now uploads itself** via the ASC API key (see memory `testflight-upload-path`; helpers in `~/.appstoreconnect/`). Stoop-on build recipe unchanged: flip `StoopFlag` + 8 Constants flags + `isDiscoverable` + delete the SpotPassShortcuts `#if`/`#endif`, archive from a detached worktree, verify, then export with `ExportOptions-internal.plist`. Merge QA-passed PRs without asking (Kevin 2026-11-27).
+
+**Merged 2026-11-27/28 (drive test DT35 + phone review R35):**
+- #219 Houston/Delancey/Bowery curb offsets
+- #220 Free-until picker
+- #221 park side resolver + "Curb on my right/left"
+- #222 drive direction label
+- #223 Maps legal above drive buttons
+- #224 free drag / Not saved yet
+- #225 stale window clock
+- #226 drag follow-ups
+- #227 zoom bands + dash width
+- #228 drive stack at AX
+- #229 VoiceOver nudge fix
+- #230 zoom-out lag
+- #231 content-sized search sheet
+- #232 Plan a Trip destination
+- #233 Locate span
+- #234 nudge spine
+- #235 spine categories
+- #236 polish batch
+- #237 trip coverage copy
+
+**Waiting on Kevin:**
+- Build 36/37 phone checks (list in chat, and `docs/field-testing-log.md` DT35/R35 sections).
+- Parking Hunt brief: 5 questions in `docs/company/product/2026-11-27-parking-hunt-brief.md`.
+- "merge the web preview" (#216).
+- Phase 7 community SQL.
+- Revoke ASC keys `5ZBBW5FM77` and `CMG824J6L3`.
+
+**Next candidates:**
+- Park Ave curb offsets (next street after Houston, see `docs/dt35-7-houston-curb-offset-investigation.md`).
+- E Houston east of Ave A ~3 m shortfall, plus 9 Delancey/Bowery faces worse after #219.
+- DT35-4 Stoop park-flow redesign (spec PR3 in `docs/specs/dt35-park-flow-and-drive-fixes.md`).
+- R35-15 trip coverage edge cases.
+- Parked VoiceOver nudge minors.
+
+**Also new:** 7 business agents (`docs/company/README.md`); revenue brainstorm + checks (`docs/product/revenue-concepts-brainstorm.md`).
+
+---
+
+## (older) Stoop status, 2026-11-26 early morning
 
 The redesign workstream is called **"Stoop"**: flag `designSystemV2Enabled`, font Fredoka. Decisions are in `docs/design/wepark-design-system-v0.1/DECISIONS.md`.
 
